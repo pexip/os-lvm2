@@ -1,0 +1,17 @@
+Description: default to not monitoring so that regular LVM operation does not
+ require dmeventd running.
+Author: Kees Cook <kees@ubuntu.com>
+
+Index: lvm2-2.02.66/lib/config/defaults.h
+===================================================================
+--- lvm2-2.02.66.orig/lib/config/defaults.h	2010-05-20 09:47:21.000000000 -0400
++++ lvm2-2.02.66/lib/config/defaults.h	2010-11-12 10:26:19.000000000 -0500
+@@ -45,7 +45,7 @@
+ #define DEFAULT_MIRROR_IMAGE_FAULT_POLICY "remove"
+ #define DEFAULT_MIRROR_MAX_IMAGES 8 /* limited by kernel DM_KCOPYD_MAX_REGIONS */
+ #define DEFAULT_DMEVENTD_MIRROR_LIB "libdevmapper-event-lvm2mirror.so"
+-#define DEFAULT_DMEVENTD_MONITOR 1
++#define DEFAULT_DMEVENTD_MONITOR -1
+ #define DEFAULT_BACKGROUND_POLLING 1
+ 
+ #define DEFAULT_UMASK 0077

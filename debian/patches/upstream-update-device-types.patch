@@ -1,0 +1,15 @@
+Description: cherry pick new device types from upstream
+--- a/lib/filters/filter.c
++++ b/lib/filters/filter.c
+@@ -113,6 +113,11 @@
+ 	{"virtblk", 8},		/* VirtIO disk */
+ 	{"mmc", 16},		/* MMC block device */
+ 	{"blkext", 1},		/* Extended device partitions */
++ 	{"fio", 16},		/* Fusion */
++	{"mtip32xx", 16},	/* Micron PCIe SSDs */
++	{"vtms", 16},		/* Violin Memory */
++	{"skd", 16},		/* STEC */
++	{"scm", 8},		/* Storage Class Memory (IBM S/390) */
+ 	{NULL, 0}
+ };
+ 

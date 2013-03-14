@@ -1,0 +1,22 @@
+Description: Honour monitoring=1 config option in /etc/lvm/lvm.conf when using
+ clustered VGs (LP: #833368).
+Author: Dmitrijs Ledkovs <dmitrij.ledkov@ubuntu.com>
+Bug-Ubuntu: https://launchpad.net/bugs/833368
+Last-Update: 2013-02-06
+
+=== modified file 'tools/toollib.c'
+--- old/tools/toollib.c	2010-12-07 08:08:45 +0000
++++ new/tools/toollib.c	2013-02-06 10:03:50 +0000
+@@ -1388,6 +1388,11 @@
+ 		*monitoring_mode = DMEVENTD_MONITOR_IGNORE;
+ 
+ 	if (vg && vg_is_clustered(vg) &&
++	    find_config_tree_bool(cmd, "activation/monitoring",
++				  DEFAULT_DMEVENTD_MONITOR))
++		*monitoring_mode = 1;
++
++	if (vg && vg_is_clustered(vg) &&
+ 	    *monitoring_mode == DMEVENTD_MONITOR_IGNORE) {
+ 		log_error("%s is incompatible with clustered Volume Group "
+ 			  "\"%s\": Skipping.",
+
