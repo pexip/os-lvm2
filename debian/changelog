@@ -1,3 +1,9 @@
+lvm2 (2.02.66-4ubuntu7.3pexip1) pexip; urgency=low
+
+  * Prepare Pexip packaging
+
+ -- John-Mark Bell <jmb@pexip.com>  Tue, 24 Dec 2013 23:34:04 +0000
+
 lvm2 (2.02.66-4ubuntu7.3) precise; urgency=low
 
   * Add more supported device-types (Micon PCIe SSD and others).

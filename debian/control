@@ -1,14 +1,16 @@
 Source: lvm2
 Section: admin
 Priority: optional
-Maintainer: Ubuntu Core Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Maintainer: Pexip AS <packaging@pexip.com>
+XSBC-Pexip-Original-Maintainer: Ubuntu Core Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 XSBC-Original-Maintainer: Debian LVM Team <pkg-lvm-maintainers@lists.alioth.debian.org>
-Uploaders: Bastian Blank <waldi@debian.org>
+XSBC-Pexip-Original-Uploaders: Bastian Blank <waldi@debian.org>
 Build-Depends: debhelper (>> 4.2), automake, libcman-dev (>> 2), libcorosync-dev, openais-dev, libdlm-dev (>> 2), libreadline-dev, libselinux1-dev, libudev-dev, pkg-config, quilt
 Standards-Version: 3.7.3
 Homepage: http://sources.redhat.com/lvm2/
 Vcs-Svn: svn://svn.debian.org/pkg-lvm/lvm2/trunk/
 Vcs-Browser: http://svn.debian.org/wsvn/pkg-lvm/lvm2/trunk/
+XS-Pexip-Upstream: http://archive.ubuntu.com/ubuntu/ precise
 
 Package: lvm2
 Architecture: any
