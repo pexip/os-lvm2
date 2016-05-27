@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2009 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2009-2012 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -15,35 +15,48 @@ srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 top_builddir = @top_builddir@
 
-ifeq ("@DEBUG@", "yes")
-	DEFS += -DDEBUG
+TARGETS =
+ifeq ("@APPLIB@", "yes")
+TARGETS += test
+SOURCES = test.c
+
+TARGETS += \
+	lvtest.t \
+	vglist.t \
+	percent.t \
+	pe_start.t \
+	thin_percent.t \
+	vgtest.t
+
+SOURCES2 = \
+	lvtest.c \
+	vglist.c \
+	percent.c \
+	pe_start.c \
+	thin_percent.c \
+	vgtest.c
+
 endif
-
-TARGETS = vgtest
-test_SOURCES = test.c
-vgtest_SOURCES = vgtest.c
-INCLUDES += -I../../include
-
-LVMLIBS = @LVM2APP_LIB@ -ldevmapper
-DEPLIBS = $(top_builddir)/liblvm/liblvm2app.so $(top_builddir)/libdm/libdevmapper.so
-
-DEFS += -D_REENTRANT
 
 include $(top_builddir)/make.tmpl
 
-LDFLAGS = -L$(top_builddir)/libdm -L$(top_builddir)/liblvm
+DEFS += -D_REENTRANT
+DEPLIBS += $(top_builddir)/liblvm/liblvm2app.so $(top_builddir)/libdm/libdevmapper.so
+LDFLAGS += -L$(top_builddir)/liblvm
+LVMLIBS = @LVM2APP_LIB@ -ldevmapper
 
 ifeq ("@DMEVENTD@", "yes")
-	LVMLIBS += -ldevmapper-event
-	LDFLAGS += -L$(top_builddir)/daemons/dmeventd
+       LVMLIBS += -ldevmapper-event
+       LDFLAGS += -L$(top_builddir)/daemons/dmeventd
 endif
 
-test_OBJECTS = $(test_SOURCES:.c=.o)
-vgtest_OBJECTS = $(vgtest_SOURCES:.c=.o)
-OBJECTS = $(test_OBJECTS) $(vgtest_OBJECTS)
+LVMLIBS += $(LIBS)
 
-test: $(test_OBJECTS) $(DEPLIBS)
-	$(CC) -o test $(test_OBJECTS) $(CFLAGS) $(LDFLAGS) $(LVMLIBS) $(LIBS) $(READLINE_LIBS)
+%.t: %.o $(DEPLIBS)
+	$(CC) -o $@ $(<) $(LDFLAGS) $(LVMLIBS)
 
-vgtest: $(vgtest_OBJECTS) $(DEPLIBS)
-	$(CC) -o vgtest $(vgtest_OBJECTS) $(CFLAGS) $(LDFLAGS) $(LVMLIBS) $(LIBS)
+test: $(OBJECTS) $(DEPLIBS)
+	$(CC) -o $@ $(OBJECTS) $(LDFLAGS) $(LVMLIBS) $(READLINE_LIBS)
+
+Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
+	cd $(top_builddir) && $(SHELL) ./config.status test/api/Makefile

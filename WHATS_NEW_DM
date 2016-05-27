@@ -1,3 +1,471 @@
+Version 1.02.90 - 1st September 2014
+====================================
+  Restore proper buffer size for parsing mountinfo line (1.02.89)
+
+Version 1.02.89 - 26th August 2014
+==================================
+  Improve libdevmapper-event select() error handling.
+  Add extra check for matching transation_id after message submitting.
+  Add dm_report_field_string_list_unsorted for str. list report without sorting.
+  Support --deferred with dmsetup remove to defer removal of open devices.
+  Update dm-ioctl.h to include DM_DEFERRED_REMOVE flag.
+  Add support for selection to match string list subset, recognize { } operator.
+  Fix string list selection with '[value]' to not match list that's superset.
+  Fix string list selection to match whole words only, not prefixes.
+
+Version 1.02.88 - 5th August 2014
+=================================
+  Add dm_tree_set_optional_uuid_suffixes to handle upgrades.
+
+Version 1.02.87 - 23rd July 2014
+================================
+  Fix dm_report_field_string_list to handle delimiter with multiple chars.
+  Add dm_report_field_reserved_value for per-field reserved value definition.
+
+Version 1.02.86 - 23rd June 2014
+================================
+  Make "help" and "?" reporting fields implicit.
+  Recognize implicit "selected" field if using dm_report_init_with_selection.
+  Add support for implicit reporting fields which are predefined in libdm.
+  Add DM_REPORT_FIELD_TYPE_PERCENT: separate number and percent fields.
+  Add dm_percent_range_t,dm_percent_to_float,dm_make_percent to libdm for reuse.
+  Add dm_report_reserved_value to libdevmapper for reserved value definition.
+  Also display field types when listing all fields in selection help.
+  Recognize "help" keyword in selection string to show brief help for selection.
+  Always order items reported as string list field lexicographically.
+  Add dm_report_field_string_list to libdevmapper for direct string list report.
+  Add DM_REPORT_FIELD_TYPE_STRING_LIST: separate string and string list fields.
+  Add dm_str_list to libdevmapper for string list type definition and its reuse.
+  Add dmsetup -S/--select to define selection criteria for dmsetup reports.
+  Add dm_report_init_with_selection to intialize report with selection criteria.
+  Add DM_REPORT_FIELD_TYPE_SIZE: separate number and size reporting fields.
+  Use RemoveOnStop for dm-event.socket systemd unit.
+  Document env var 'DM_DEFAULT_NAME_MANGLING_MODE' in dmsetup man page.
+  Warn user about incorrect use of cookie with 'dmsetup remove --force'.
+  Also recognize 'help'/'?' as reserved sort key name to show help.
+  Add dm_units_to_factor for size unit parsing.
+  Increase bitset size for minors for thin dmeventd plugin.
+
+Version 1.02.85 - 10th April 2014
+=================================
+  Check for sprintf error when building internal device path.
+  Check for sprintf error when creating path for dm control node.
+  When buffer for dm_get_library_version() is too small, return error code.
+  Always reinitialize _name_mangling_mode in dm_lib_init().
+  Add tracking flag about implicitly added devices into dm_tree.
+  Stop timeout thread immediately when the last worker thread is finished.
+  Fix dmeventd logging with parallel wait event processing.
+  Reuse _node_send_messages() for validation of transaction_id in preload.
+  Transaction_id could be lower by one only when messages are prepared.
+  Do not call callback when preload fails.
+  Wrap is_selinux_enabled() to be called just once.
+  Use correctly signed 64b constant when working with raid volumes.
+  Exit dmeventd with pidfile cleanup instead of raising SIGKILL on DIE request.
+  Add new DM_EVENT_GET_PARAMETERS request to dmeventd protocol.
+  Do not use systemd's reload for dmeventd restart, use dmeventd -R instead.
+  Drop cryptsetup rules from 10-dm.rules - cryptsetup >= 1.1.3 sets them.
+
+Version 1.02.84 - 20th January 2014
+===================================
+  Revert activation of activated nodes if a node preload callback fails.
+  Avoid busy looping on CPU when dmeventd reads event DM_WAIT_RETRY.
+  Ensure global mutex is held when working with dmeventd thread.
+  Drop taking timeout mutex for un/registering dmeventd monitor.
+  Allow section names in config file data to be quoted strings.
+  Close fifos before exiting in dmeventd restart() error path.
+  Move printf format string directly into dm_asprintf args list.
+  Catch invalid use of string sort values when reporting numerical fields.
+
+Version 1.02.83 - 13th November 2013
+====================================
+  Consistently report on stderr when device is not found for dmsetup info.
+  Skip race errors when non-udev dmsetup build runs on udev-enabled system.
+  Skip error message when holders are not present in sysfs.
+  Use __linux__ instead of linux define to make libdevmapper.h C compliant.
+  Use mutex to avoid possible race while creating/destroying memory pools.
+  Require libpthread to build now.
+
+Version 1.02.82 - 4th October 2013
+==================================
+  Define symbolic names for subsystem udev flags in libdevmapper for easier use.
+  Make subsystem udev rules responsible for importing DM_SUBSYSTEM_UDEV_FLAG*.
+
+Version 1.02.81 - 23rd September 2013
+=====================================
+  Tidy dmeventd fifo initialisation.
+
+Version 1.02.80 - 20th September 2013
+=====================================
+  Detect invalid sector supplied to 'dmsetup message'.
+  Free any previously-set string if a dm_task_set_* function is called again.
+  Do not allow passing empty new name for dmsetup rename.
+  Display any output returned by 'dmsetup message'.
+  Add dm_task_get_message_response to libdevmapper.
+
+Version 1.02.79 - 13th August 2013
+==================================
+  Create dmeventd timeout threads as "detached" so exit status is freed.
+  Add DM_ABORT_ON_INTERNAL_ERRORS env var support to abort on internal errors.
+
+Version 1.02.78 - 24th July 2013
+================================
+  Process thin messages once to active thin pool target for dm_tree.
+  Optimize out setting the same value or read_ahead.
+  Add DM_ARRAY_SIZE public macro.
+  Move syslog code out of signal handle in dmeventd.
+  Add DM_TO_STRING public macro.
+  Always return success on dmeventd -V command call.
+  Fix parsing of 64bit snapshot status in dmeventd snapshot plugin.
+  Add dm_get_status_snapshot() for parsing snapshot status.
+  Detecte mounted fs also via reading /proc/self/mountinfo.
+  Add dm_mountinfo_read() for parsing /proc/self/mountinfo.
+  Report error for nonexisting devices in dmeventd communication.
+  Prevent double free error after dmeventd call of _fill_device_data().
+  Update dmevent structure message_data to simplify/fix error path handling.
+  Validate passed params to dm_get_status_raid/thin/thin_pool(). 
+  Fix 'dmsetup splitname -o' to not fail if used without '-c' switch (1.02.68).
+  Add dm_config_write_{node_out/one_node_out} for enhanced config output.
+  Add dm_config_value_is_bool to check for boolean value in supported formats.
+  Fix config node lookup inside empty sections to not return the section itself.
+  Append discards and read-only fields to exported struct dm_status_thin_pool.
+  Fix segfault for truncated string token in config file after the first '"'.
+  Close open dmeventd FIFO file descriptors on exec (FD_CLOEXEC).
+  Fix resource leak in error path of dmeventd's umount of thin volume.
+  Automatically deactivate failed preloaded dm tree node.
+  Add DM_DISABLE_UDEV environment variable to manage dev nodes by libdm only.
+  Fix dm_task_set_cookie to properly process udev flags if udev_sync disabled.
+
+Version 1.02.77 - 15th October 2012
+===================================
+  Support unmount of thin volumes from pool above thin pool threshold.
+  Update man page to reflect that dm UUIDs are being mangled as well.
+  Apply 'dmsetup mangle' for dm UUIDs besides dm names.
+  Add 'mangled_uuid' and 'unmangled_uuid' fields to dmsetup info -c -o.
+  Mangle device UUID on dm_task_set_uuid/newuuid call if necessary.
+  Add dm_task_get_uuid_mangled/unmangled to libdevmapper.
+  Always reset delay_resume_if_new flag when stacking thin pool over anything.
+  Don't create value for dm_config_node and require dm_config_create_value call.
+  Check for existing new_name for dmsetup rename.
+  Fix memory leak in dmsetup _get_split_name() error path.
+
+Version 1.02.76 - 7th August 2012
+=================================
+  Add dm_vasprintf to libdevmapper.
+  Allow --noflush with dmsetup status and wait (for thin target).
+  Add dm_config_write_one_node to libdevmapper.
+  Support thin pool message release/reserve_metadata_snap in libdevmapper.
+  Support thin pool discards and external origin features in libdevmapper.
+  Add configure --enable-udev-rule-exec-detection to detect exec path in rules.
+  Use sbindir in udev rules by default and remove executable path detection.
+  Remove hard-coded paths for dmeventd fifos and use default-dm-run-dir.
+  Add configure --with-lvmetad-pidfile to remove hard-coded value.
+  Add configure --with-default-pid-dir for common directory with pid files.
+  Add configure --with-default-dm-run-dir to set run directory for dm tools.
+  Detect kernel_send() errors in cmirrord.
+  Add __attribute__ instrumentation to libdevmapper.h.
+  Print clean_bits instead of sync_bits in pull_state in cmirrord.
+  Add tests for errors from closedir(), close() in cmirrord.
+  Add documentation references in systemd units.
+  Remove veritysetup.  Now maintained with cryptsetup.
+
+Version 1.02.75 - 8th June 2012
+===============================
+  Upstream source repo now fedorahosted.org git not sources.redhat.com CVS.
+  Remove unsupported udev_get_dev_path libudev call used for checking udev dir.
+  Set delay_resume_if_new on deptree snapshot origin.
+  Log value chosen in _find_config_bool like other variable types do.
+  Wait for dmeventd to exit after sending it DM_EVENT_CMD_DIE when restarting.
+  Append 'Used' to {Blk}DevNames/DevNos dmsetup report headers for clarity.
+  Add configure --with-veritysetup for independent veritysetup tool.
+  Properly support supplied dmevent path in dm_event_register_handler().
+  Remove dmeventd fifos on exit if they are not managed by systemd.
+  Use SD_ACTIVATION environment variable in systemd units to detect systemd.
+  Only start a new dmeventd instance on restart if one was already running.
+  Extend the time waited for input from dmeventd fifo to 5 secs. (1.02.73)
+
+Version 1.02.74 - 6th March 2012
+================================
+  Check for multiply-mangled names in auto mangling mode.
+  Fix dm_task_get_name_unmangled to not unmangle already unmangled name.
+  Check whether device names are properly mangled on ioctl return.
+  Deactivation of failed thin check on thin pool returns success.
+
+Version 1.02.73 - 3rd March 2012
+================================
+  Test _thread_registry list with holding mutex in dmeventd.
+  Add dm_tree_node_set_callback() for preload and deactivation hooks.
+  Drop unsupported TRIM message for thin pool.
+  Improve logging for fifo startup in dmeventd.
+  Better detection of missing dmeventd fifo connection (1.02.71).
+  Add a few pointer validations in dmsetup.
+  Support dm_task_get_driver_version() query without version string.
+  Log failure of pthread_join when cleaning unused threads in dmeventd.
+  Fix empty string warning logic in _find_config_str. (1.02.68)
+  Fix dm_task_set_name to properly resolve path to dm name (1.02.71).
+  Add dm_strncpy() function as a faster strncpy() replacement.
+
+Version 1.02.72 - 23rd February 2012
+====================================
+  Avoid memory reallocation for dm_asprintf.
+
+Version 1.02.71 - 20th February 2012
+====================================
+  Switch to using built-in blkid in 13-dm-disk.rules.
+  Add "watch" rule to 13-dm-disk.rules.
+  Detect failing fifo and skip 20s retry communication period.
+  Add DM_DEFAULT_NAME_MANGLING_MODE environment variable as an override.
+  Add dm_lib_init to automatically initialise device-mapper library on load.
+  Replace any '\' char with '\\' in dm table specification on input.
+  Add mangle command to dmsetup to provide renaming to correct mangled form.
+  Add 'mangled_name' and 'unmangled_name' fields to dmsetup info -c -o.
+  Add --manglename option to dmsetup to select the name mangling mode.
+  Add dm_task_get_name_mangled/unmangled to libdevmapper.
+  Mangle device name on dm_task_set_name/newname call if necessary.
+  Add dm_set/get_name_mangling_mode to set/get name mangling in libdevmapper.
+  Add configure --with-default-name-mangling for udev-friendly dev name charset.
+  Test for parsed words in _umount() dmeventd snapshot plugin.
+  Fix memory leak in fail path of parse_loop_device_name() in dmsetup.
+  Check for missing reply_uuid in dm_event_get_registered_device().
+  Check for allocation failure in dmeventd restart().
+  Add few missing allocation failures tests in dmsetup.
+  Fix potential risk of writing in front of buffer in _sysfs_get_dm_name().
+
+Version 1.02.70 - 12th February 2012
+====================================
+  Fix dm_event_get_version() check.
+  Add pointer test for dependency check in _add_dev().
+  Validate name and uuid params of dm_tree_add_new_dev_with_udev_flags().
+  Do not crash for dm_report_init() sort_key == NULL and behave like "".
+  Return error for failing allocation in dm_asprintf().
+  Add missing test for failing allocation in dm_realloc() code.
+  Add test for memory allocation failures in regex matcher code.
+  Simplify dm_task_set_geometry() and use dm_asprintf().
+  Set all parameters to 0 for dm_get_next_target() for NULL return.
+  Fix fd resource leak in error path for _udev_notify_sem_create().
+  Leave space for '\0' for readline() call in _sysfs_get_kernel_name().
+
+Version 1.02.69 - 1st February 2012
+===================================
+  Clean up dmeventd systemd unit ordering and requirements.
+
+Version 1.02.68 - 26th January 2012
+===================================
+  Reset all members of info struct in dm_tree_add_new_dev_with_udev_flags.
+  Add dmsetup wipe_table to replace table with one that uses error target.
+  Add 'blkdevname' and 'blkdevs_used' fields to dmsetup info -c -o.
+  Add 'blkdevname' option to dmsetup ls --tree to see block device names.
+  Add -o devno/blkdevname/devname to dmsetup deps and ls.
+  Add dm_device_get_name to get map name or block device name for given devno.
+  Remove empty devices when clearing left-over inactive tables in deptree.
+  Add dm_uuid_prefix/dm_set_uuid_prefix to override hard-coded LVM- prefix.
+  Improve dmsetup man page description of readahead parameter.
+  Use sysfs to set/get readahead if possible.
+  Fix lvm2-monitor init script to use normalized output when using vgs.
+  Add test for max length (DM_MAX_TYPE_NAME) of target type name.
+  Include a copy of kernel DM documentation in doc/kernel.
+  Improve man page style for dmsetup and mention more targets.
+  Fix _get_proc_number to be tolerant of malformed /proc/misc entries.
+  Fix missing thread list manipulation protection in dmeventd.
+  Add ExecReload to dm-event.service for systemd to reload dmeventd properly.
+  Add dm_config_tree_find_str_allow_empty and dm_config_find_str_allow_empty.
+  Fix compile-time pool memory locking with DEBUG_MEM.
+  Fix valgrind error reports in free of pool chunks with DEBUG_MEM.
+  Align size of structure chunk for fast pool allocator to 8 bytes.
+  Simplify some pointer operations in dm_free_aux() debug code.
+  Remove unused dbg_malloc.h file from source tree.
+  Cleanup backtraces for _create_and_load_v4().
+  Fix alignment warning in bitcount calculation for raid segment.
+  Allocate dm_tree structure from dm_tree pool.
+  Update debug logging for _resume_node.
+  Add functions to support thin provisioning target.
+  Improve libdm-config error path reporting.
+  Update dmsetup resume man with --addnodeonresume/create options.
+  Add dependency for dm man pages to man subdirectory make all target.
+  Add dm_tree_retry_remove to use retry logic for device removal in a dm_tree.
+  Add dm_device_has_mounted_fs fn to check mounted filesystem on a device.
+  Add dm_device_has_holders fn to to check use of the device by another device.
+  Add dm_sysfs_dir to libdevmapper to retrieve sysfs location set.
+  Add dm_set_sysfs_dir to libdevmapper to set sysfs location.
+  Add --retry option for dmsetup remove to retry removal if not successful.
+  Add dm_task_retry_remove fn to use retry logic for device removal.
+  Remove unused passed parameters for _mirror_emit_segment_line().
+  Add dm_config and string character escaping functions to libdevmapper.
+  Mark unreleased memory pools as internal error.
+
+Version 1.02.67 - 19th August 2011
+==================================
+  Add dm_tree_node_add_null_area for temporarily-missing raid devs tracked.
+
+Version 1.02.66 - 12th August 2011
+==================================
+  Release geometry buffer in dm_task_destroy.
+  Update udev rules to skip DM flags decoding for removed devices.
+  Add compile-time pool memory locking options (to debug shared VG structs).
+  Remove device name prefix from dmsetup line output if -j & -m or -u supplied.
+  Remove support for the original version 1 dm ioctls.
+  Add missing check for allocation failure _create_dir_recursive().
+  Add support for systemd file descriptor handover in dmeventd.
+  Fix memory leak in dmsetup _message() memory allocation error path.
+  Use new oom killer adjustment interface (oom_score_adj) when available.
+  Add systemd unit files for dmeventd.
+  Fix read-only identical table reload supression.
+
+Version 1.02.65 - 8th July 2011
+===============================
+  Remove dev name prefix from dmsetup line output if exactly one dev requested.
+  Report internal error if suspending a device using an already-suspended dev.
+  Report error if a table load requiring target parameters has none supplied.
+  Add dmsetup --checks and dm_task_enable_checks framework to validate ioctls.
+  Add age_in_minutes parameter to dmsetup udevcomplete_all.
+  Return immediately from dm_lib_exit() if called more than once.
+  Disable udev fallback by default and add --verifyudev option to dmsetup.
+  Report internal error if any table is loaded while any dev is known suspended.
+  Add dm_get_suspended_counter() for number of devs in suspended state by lib.
+  Fix "all" report field prefix matching to include label fields with pv_all.
+  Delay resuming new preloaded mirror devices with core logs in deptree code.
+  Accept new kernel version 3 uname formats in initialisation.
+
+Version 1.02.64 - 29th April 2011
+==================================
+  Require libudev >= 143 when compiling with udev support.
+  Use word alignment for dm_pool_strdup() and dm_pool_strndup().
+  Use dm_snprintf() to fix signedness warning in dm_set_dev_dir().
+  Use unsigned loop counter to fix signedness warning in _other_node_ops().
+  Fix const cast in dmsetup calls of dm_report_field_string().
+  Streamline /dev/mapper/control node code for common cases.
+  Use hard-coded dm control node device number for 2.6.36 kernels and above.
+  Improve stack debug reporting in dm_task_create().
+  Fallback to control node creation only if node doesn't exist yet.
+  Change dm_hash binary functions to take void *key instead of char *.
+  Fix uninitialised memory use with empty params in _reload_with_suppression_v4.
+  Lower severity of selabel_lookup and matchpathcon failure to log_debug.
+  Add test for failed allocation from dm_task_set_uuid() in dmeventd.
+  Add dm_event_get_version to dmeventd for use with -R.
+  Avoid dmeventd core dumps when handling request with unknown command ID.
+  Have dmeventd -R start up even when no existing copy is running.
+  Accept multiple mapped device names on many dmsetup command lines.
+  Fix dm_udev_wait calls in dmsetup to occur before readahead display not after.
+  Include an implicit dm_task_update_nodes() within dm_udev_wait().
+  Fix _create_and_load_v4 not to lose the --addnodeoncreate setting (1.02.62).
+  Add inactive table query support for kernel driver >= 4.11.6 (RHEL 5.7).
+  Log debug open_count in _node_has_closed_parents().
+  Add a const to dm_report_field_string() data parameter.
+
+Version 1.02.63 - 9th February 2011
+===================================
+  Reinstate DEBUG_MEM as it's part of the API. (1.02.62)
+
+Version 1.02.62 - 4th February 2011
+===================================
+  Add configure --with-device-nodes-on=create for previous behaviour.
+  Move creation of device nodes from 'create' to 'resume'.
+  Add --addnodeonresume and --addnodeoncreate options to dmsetup.
+  Add dm_task_set_add_node to libdevmapper to control dev node creation time.
+  Add dm_task_secure_data to libdevmapper to wipe ioctl buffers in kernel.
+  Log debug message when expected uevent is not generated.
+  Only compile memory debugging code when DEBUG_MEM is set.
+  Set DM_UDEV_DISABLE_OTHER_RULES_FLAG for suspended DM devices in udev rules.
+  Begin a new pool object for each row in _output_as_rows() correctly.
+
+Version 1.02.61 - 10th January 2011
+===================================
+  Add DM_COOKIE_AUTO_CREATE to libdevmapper.h.
+  Export DM_CONTROL_NODE_UMASK and use it while creating /dev/mapper/control.
+
+Version 1.02.60 - 20th December 2010
+====================================
+  Check for unlink failure in remove_lockfile() in dmeventd.
+  Use dm_free for dm_malloc-ed areas in _clog_ctr/_clog_dtr in cmirrord.
+  Use char* arithmetic in _process_all() & _targets() in dmsetup.
+  Change dm_regex_create() API to accept const char * const *patterns.
+  Add new dm_prepare_selinux_context fn to libdevmapper and use it throughout.
+  Detect existence of new SELinux selabel interface during configure.
+
+Version 1.02.59 - 6th December 2010
+===================================
+  Add backtraces to _process_mapper_dir and  _create_and_load_v4 error paths.
+  Remove superfluous checks for NULL before calling dm_free.
+
+Version 1.02.58 - 22nd November 2010
+====================================
+  Fix _output_field crash from field_id free with DEBUG_MEM. (1.02.57)
+
+Version 1.02.57 - 8th November 2010
+===================================
+  Fix regex optimiser not to ignore RHS of OR nodes in _find_leftmost_common.
+  Add dmeventd -R to restart dmeventd without losing monitoring state. (1.02.56)
+  Fix memory leak of field_id in _output_field function.
+  Allocate buffer for reporting functions dynamically to support long outputs.
+
+Version 1.02.56 - 25th October 2010
+===================================
+  Return const pointer from dm_basename() in libdevmapper.
+  Implement dmeventd -R to restart without state loss.
+  Add dm_zalloc and use it and dm_pool_zalloc throughout.
+  Add --setuuid to dmsetup rename.
+  Add dm_task_set_newuuid to set uuid of mapped device post-creation.
+
+Version 1.02.55 - 24th September 2010
+=====================================
+  Fix the way regions are marked complete to avoid slow --nosync cmirror I/O.
+  Add DM_REPORT_FIELD_TYPE_ID_LEN to libdevmapper.h.
+
+Version 1.02.54 - 18th August 2010
+==================================
+  Fix dm-mod autoloading logic to not assume control node is set correctly.
+  Add dmeventd/executable to lvm.conf to test alternative dmeventd.
+  Export dm_event_handler_set_dmeventd_path to override built-in dmeventd path.
+  Generate libdevmapper-event exported symbols.
+  Remove superfluous NULL pointer tests before dm_free from dmeventd.
+  Assume dm-mod autoloading support is in kernel 2.6.36 and higher, not 2.6.35.
+  Fix udev rules to support udev database content generated by older rules.
+  Reinstate detection of inappropriate uevent with DISK_RO set and suppress it.
+  Fix regex ttree off-by-one error.
+  Add --enable-valgrind-pool to configure.
+  Fix segfault in regex matcher with characters of ordinal value > 127.
+  Fix 'void*' arithmetic warnings in dbg_malloc.c and libdm-iface.c.
+  Wait for node creation before displaying debug info in dmsetup.
+  Fix return status 0 for "dmsetup info -c -o help".
+  Add check for kernel semaphore support and disable udev_sync if not available.
+
+Version 1.02.53 - 28th July 2010
+================================
+  Revert failed table load preparation after "create, load and resume".
+  Switch dmeventd to use dm_create_lockfile and drop duplicate code.
+  Add dm_create_lockfile to libdm to handle pidfiles for all daemons.
+  Replace lookup with next in struct dfa_state & calculate states on demand.
+  Improve the regex matcher, reducing the number of charset nodes used.
+  Add dm_regex_fingerprint to facilitate regex testing.
+  Skip ffs(0) in _test_word in bitset functions.
+  Use "nowatch" udev rule for inappropriate devices.
+
+Version 1.02.52 - 6th July 2010
+===============================
+  Fix dmlosetup snprintf %llu compiler warning.
+  Add parentheses to some libdevmapper.h macro arguments.
+  Add printf format attributes to dm_{sn,as}printf and fix a caller.
+  Move dmeventd man page from install_lvm2 to install_device-mapper. (1.02.50)
+
+Version 1.02.51 - 30th June 2010
+================================
+  Generate libdevmapper exported symbols from header file.
+
+Version 1.02.50 - 23rd June 2010
+================================
+  Fix INTERNAL_ERROR typo in ioctl iface unknown task message.
+  Fix udev rules to handle spurious events properly.
+  Use C99 [] not [0] in dm_ulog_request struct to avoid abort when fortified.
+  Allow use of devmapper header file in C++ mode (extern "C" and __typeof__).
+  Add dmeventd man page.
+
+Version 1.02.49 - 4th June 2010
+===============================
+  Support autoloading of dm-mod module for kernels from 2.6.35.
+  Document 'clear' in dmsetup man page.
+  Fix semctl parameter (union) to avoid misaligned parameter on some arches.
+  Add dm_tree_node_set_presuspend_node() to presuspend child when deactivating.
+  Initial support for replicator target.
+
 Version 1.02.48 - 17th May 2010
 ================================
   Use -d to control level of messages sent to syslog by dmeventd.

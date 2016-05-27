@@ -20,9 +20,6 @@
 #define CLVMD_MINOR_VERSION 2
 #define CLVMD_PATCH_VERSION 1
 
-/* Name of the cluster LVM admin lock */
-#define ADMIN_LOCK_NAME "CLVMD_ADMIN"
-
 /* Default time (in seconds) we will wait for all remote commands to execute
    before declaring them dead */
 #define DEFAULT_CMD_TIMEOUT 60
@@ -56,13 +53,12 @@ struct localsock_bits {
 	int finished;		/* Flag to tell subthread to exit */
 	int all_success;	/* Set to 0 if any node (or the pre_command)
 				   failed */
+	int cleanup_needed;     /* helper for cleanup_zombie */
 	struct local_client *pipe_client;
 	pthread_t threadid;
-	enum { PRE_COMMAND, POST_COMMAND, QUIT } state;
+	enum { PRE_COMMAND, POST_COMMAND } state;
 	pthread_mutex_t mutex;	/* Main thread and worker synchronisation */
 	pthread_cond_t cond;
-
-	pthread_mutex_t reply_mutex;	/* Protect reply structure */
 };
 
 /* Entries for PIPE clients */
@@ -98,7 +94,7 @@ struct local_client {
 	} bits;
 };
 
-#define DEBUGLOG(fmt, args...) debuglog(fmt, ## args);
+#define DEBUGLOG(fmt, args...) debuglog(fmt, ## args)
 
 #ifndef max
 #define max(a,b) ((a)>(b)?(a):(b))
@@ -115,10 +111,14 @@ extern void cmd_client_cleanup(struct local_client *client);
 extern int add_client(struct local_client *new_client);
 
 extern void clvmd_cluster_init_completed(void);
-extern void process_message(struct local_client *client, const char *buf,
+extern void process_message(struct local_client *client, char *buf,
 			    int len, const char *csid);
 extern void debuglog(const char *fmt, ... )
   __attribute__ ((format(printf, 1, 2)));
+
+void clvmd_set_debug(debug_t new_de);
+debug_t clvmd_get_debug(void);
+int clvmd_get_foreground(void);
 
 int sync_lock(const char *resource, int mode, int flags, int *lockid);
 int sync_unlock(const char *resource, int lockid);

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2012 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -15,6 +15,7 @@
 
 #include "lib.h"
 #include "fs.h"
+#include "activate.h"
 #include "toolcontext.h"
 #include "lvm-string.h"
 #include "lvm-file.h"
@@ -26,9 +27,16 @@
 #include <limits.h>
 #include <dirent.h>
 
+/*
+ * Library cookie to combine multiple fs transactions.
+ * Supports to wait for udev device settle only when needed.
+ */
+static uint32_t _fs_cookie = DM_COOKIE_AUTO_CREATE;
+static int _fs_create = 0;
+
 static int _mk_dir(const char *dev_dir, const char *vg_name)
 {
-	char vg_path[PATH_MAX];
+	static char vg_path[PATH_MAX];
 	mode_t old_umask;
 
 	if (dm_snprintf(vg_path, sizeof(vg_path), "%s%s",
@@ -43,20 +51,23 @@ static int _mk_dir(const char *dev_dir, const char *vg_name)
 
 	log_very_verbose("Creating directory %s", vg_path);
 
+	(void) dm_prepare_selinux_context(vg_path, S_IFDIR);
 	old_umask = umask(DM_DEV_DIR_UMASK);
 	if (mkdir(vg_path, 0777)) {
 		log_sys_error("mkdir", vg_path);
 		umask(old_umask);
+		(void) dm_prepare_selinux_context(NULL, 0);
 		return 0;
 	}
 	umask(old_umask);
+	(void) dm_prepare_selinux_context(NULL, 0);
 
 	return 1;
 }
 
 static int _rm_dir(const char *dev_dir, const char *vg_name)
 {
-	char vg_path[PATH_MAX];
+	static char vg_path[PATH_MAX];
 
 	if (dm_snprintf(vg_path, sizeof(vg_path), "%s%s",
 			 dev_dir, vg_name) == -1) {
@@ -76,7 +87,7 @@ static int _rm_dir(const char *dev_dir, const char *vg_name)
 static void _rm_blks(const char *dir)
 {
 	const char *name;
-	char path[PATH_MAX];
+	static char path[PATH_MAX];
 	struct dirent *dirent;
 	struct stat buf;
 	DIR *d;
@@ -105,13 +116,16 @@ static void _rm_blks(const char *dir)
 				log_sys_error("unlink", path);
 		}
 	}
+
+	if (closedir(d))
+		log_sys_error("closedir", dir);
 }
 
 static int _mk_link(const char *dev_dir, const char *vg_name,
 		    const char *lv_name, const char *dev, int check_udev)
 {
-	char lv_path[PATH_MAX], link_path[PATH_MAX], lvm1_group_path[PATH_MAX];
-	char vg_path[PATH_MAX];
+	static char lv_path[PATH_MAX], link_path[PATH_MAX], lvm1_group_path[PATH_MAX];
+	static char vg_path[PATH_MAX];
 	struct stat buf, buf_lp;
 
 	if (dm_snprintf(vg_path, sizeof(vg_path), "%s%s",
@@ -191,18 +205,19 @@ static int _mk_link(const char *dev_dir, const char *vg_name,
 			return 0;
 		}
 	} else if (dm_udev_get_sync_support() && udev_checking() && check_udev)
-		log_warn("The link %s should had been created by udev "
+		log_warn("The link %s should have been created by udev "
 			  "but it was not found. Falling back to "
 			  "direct link creation.", lv_path);
 
 	log_very_verbose("Linking %s -> %s", lv_path, link_path);
+
+	(void) dm_prepare_selinux_context(lv_path, S_IFLNK);
 	if (symlink(link_path, lv_path) < 0) {
 		log_sys_error("symlink", lv_path);
+		(void) dm_prepare_selinux_context(NULL, 0);
 		return 0;
 	}
-
-	if (!dm_set_selinux_context(lv_path, S_IFLNK))
-		return_0;
+	(void) dm_prepare_selinux_context(NULL, 0);
 
 	return 1;
 }
@@ -211,7 +226,7 @@ static int _rm_link(const char *dev_dir, const char *vg_name,
 		    const char *lv_name, int check_udev)
 {
 	struct stat buf;
-	char lv_path[PATH_MAX];
+	static char lv_path[PATH_MAX];
 
 	if (dm_snprintf(lv_path, sizeof(lv_path), "%s%s/%s",
 			 dev_dir, vg_name, lv_name) == -1) {
@@ -219,9 +234,12 @@ static int _rm_link(const char *dev_dir, const char *vg_name,
 		return 0;
 	}
 
-	if (lstat(lv_path, &buf) && errno == ENOENT)
-		return 1;
-	else if (dm_udev_get_sync_support() && udev_checking() && check_udev)
+	if (lstat(lv_path, &buf)) {
+		if (errno == ENOENT)
+			return 1;
+		log_sys_error("lstat", lv_path);
+		return 0;
+	} else if (dm_udev_get_sync_support() && udev_checking() && check_udev)
 		log_warn("The link %s should have been removed by udev "
 			 "but it is still present. Falling back to "
 			 "direct link removal.", lv_path);
@@ -243,7 +261,8 @@ static int _rm_link(const char *dev_dir, const char *vg_name,
 typedef enum {
 	FS_ADD,
 	FS_DEL,
-	FS_RENAME
+	FS_RENAME,
+	NUM_FS_OPS
 } fs_op_t;
 
 static int _do_fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
@@ -269,12 +288,19 @@ static int _do_fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 
 		if (!_mk_link(dev_dir, vg_name, lv_name, dev, check_udev))
 			stack;
+	default:
+		; /* NOTREACHED */
 	}
 
 	return 1;
 }
 
 static DM_LIST_INIT(_fs_ops);
+/*
+ * Count number of stacked fs_op_t operations to allow to skip dm_list search.
+ * FIXME: handling of FS_RENAME
+ */
+static int _count_fs_ops[NUM_FS_OPS];
 
 struct fs_op_parms {
 	struct dm_list list;
@@ -295,14 +321,83 @@ static void _store_str(char **pos, char **ptr, const char *str)
 	*pos += strlen(*ptr) + 1;
 }
 
+static void _del_fs_op(struct fs_op_parms *fsp)
+{
+	_count_fs_ops[fsp->type]--;
+	dm_list_del(&fsp->list);
+	dm_free(fsp);
+}
+
+/* Check if there is other the type of fs operation stacked */
+static int _other_fs_ops(fs_op_t type)
+{
+	unsigned i;
+
+	for (i = 0; i < NUM_FS_OPS; i++)
+		if (type != i && _count_fs_ops[i])
+			return 1;
+	return 0;
+}
+
+/* Check if udev is supposed to create nodes */
+static int _check_udev(int check_udev)
+{
+    return check_udev && dm_udev_get_sync_support() && dm_udev_get_checking();
+}
+
+/* FIXME: duplication of the  code from libdm-common.c */
 static int _stack_fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 			const char *lv_name, const char *dev,
 			const char *old_lv_name, int check_udev)
 {
+	struct dm_list *fsph, *fspht;
 	struct fs_op_parms *fsp;
 	size_t len = strlen(dev_dir) + strlen(vg_name) + strlen(lv_name) +
 	    strlen(dev) + strlen(old_lv_name) + 5;
 	char *pos;
+
+	if ((type == FS_DEL) && _other_fs_ops(type))
+		/*
+		 * Ignore any outstanding operations on the fs_op if deleting it.
+		 */
+		dm_list_iterate_safe(fsph, fspht, &_fs_ops) {
+			fsp = dm_list_item(fsph, struct fs_op_parms);
+			if (!strcmp(lv_name, fsp->lv_name) &&
+			    !strcmp(vg_name, fsp->vg_name)) {
+				_del_fs_op(fsp);
+				if (!_other_fs_ops(type))
+					break; /* no other non DEL ops */
+			}
+		}
+	else if ((type == FS_ADD) && _count_fs_ops[FS_DEL] && _check_udev(check_udev))
+		/*
+		 * If udev is running ignore previous DEL operation on added fs_op.
+		 * (No other operations for this device then DEL could be stacked here).
+		 */
+		dm_list_iterate_safe(fsph, fspht, &_fs_ops) {
+			fsp = dm_list_item(fsph, struct fs_op_parms);
+			if ((fsp->type == FS_DEL) &&
+			    !strcmp(lv_name, fsp->lv_name) &&
+			    !strcmp(vg_name, fsp->vg_name)) {
+				_del_fs_op(fsp);
+				break; /* no other DEL ops */
+			}
+		}
+	else if ((type == FS_RENAME) && _check_udev(check_udev))
+		/*
+		 * If udev is running ignore any outstanding operations if renaming it.
+		 *
+		 * Currently RENAME operation happens through 'suspend -> resume'.
+		 * On 'resume' device is added with read_ahead settings, so it
+		 * safe to remove any stacked ADD, RENAME, READ_AHEAD operation
+		 * There cannot be any DEL operation on the renamed device.
+		 */
+		dm_list_iterate_safe(fsph, fspht, &_fs_ops) {
+			fsp = dm_list_item(fsph, struct fs_op_parms);
+			if (!strcmp(old_lv_name, fsp->lv_name) &&
+			    !strcmp(vg_name, fsp->vg_name))
+				_del_fs_op(fsp);
+		}
 
 	if (!(fsp = dm_malloc(sizeof(*fsp) + len))) {
 		log_error("No space to stack fs operation");
@@ -319,6 +414,7 @@ static int _stack_fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 	_store_str(&pos, &fsp->dev, dev);
 	_store_str(&pos, &fsp->old_lv_name, old_lv_name);
 
+	_count_fs_ops[type]++;
 	dm_list_add(&_fs_ops, &fsp->list);
 
 	return 1;
@@ -333,16 +429,17 @@ static void _pop_fs_ops(void)
 		fsp = dm_list_item(fsph, struct fs_op_parms);
 		_do_fs_op(fsp->type, fsp->dev_dir, fsp->vg_name, fsp->lv_name,
 			  fsp->dev, fsp->old_lv_name, fsp->check_udev);
-		dm_list_del(&fsp->list);
-		dm_free(fsp);
+		_del_fs_op(fsp);
 	}
+
+	_fs_create = 0;
 }
 
 static int _fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 		  const char *lv_name, const char *dev, const char *old_lv_name,
 		  int check_udev)
 {
-	if (memlock()) {
+	if (critical_section()) {
 		if (!_stack_fs_op(type, dev_dir, vg_name, lv_name, dev,
 				  old_lv_name, check_udev))
 			return_0;
@@ -388,8 +485,33 @@ int fs_rename_lv(struct logical_volume *lv, const char *dev,
 
 void fs_unlock(void)
 {
-	if (!memlock()) {
+	if (!critical_section()) {
+		log_debug_activation("Syncing device names");
+		/* Wait for all processed udev devices */
+		if (!dm_udev_wait(_fs_cookie))
+			stack;
+		_fs_cookie = DM_COOKIE_AUTO_CREATE; /* Reset cookie */
 		dm_lib_release();
 		_pop_fs_ops();
 	}
+}
+
+uint32_t fs_get_cookie(void)
+{
+	return _fs_cookie;
+}
+
+void fs_set_cookie(uint32_t cookie)
+{
+	_fs_cookie = cookie;
+}
+
+void fs_set_create(void)
+{
+	_fs_create = 1;
+}
+
+int fs_has_non_delete_ops(void)
+{
+	return _fs_create || _other_fs_ops(FS_DEL);
 }

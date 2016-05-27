@@ -27,7 +27,7 @@
 #define CN_VAL_DM_USERSPACE_LOG         0x1
 #endif
 
-static int cn_fd;  /* Connector (netlink) socket fd */
+static int cn_fd = -1;  /* Connector (netlink) socket fd */
 static char recv_buf[2048];
 static char send_buf[2048];
 
@@ -214,7 +214,7 @@ static int kernel_send_helper(void *data, uint16_t out_size)
  *
  * Returns: 0 on success, -EXXX on failure
  */
-static int do_local_work(void *data __attribute((unused)))
+static int do_local_work(void *data __attribute__((unused)))
 {
 	int r;
 	struct clog_request *rq;
@@ -237,7 +237,6 @@ static int do_local_work(void *data __attribute((unused)))
 	case DM_ULOG_GET_REGION_SIZE:
 	case DM_ULOG_IN_SYNC:
 	case DM_ULOG_GET_SYNC_COUNT:
-	case DM_ULOG_STATUS_INFO:
 	case DM_ULOG_STATUS_TABLE:
 	case DM_ULOG_PRESUSPEND:
 		/* We do not specify ourselves as server here */
@@ -249,7 +248,7 @@ static int do_local_work(void *data __attribute((unused)))
 		if (r)
 			LOG_ERROR("Failed to respond to kernel [%s]",
 				  RQ_TYPE(u_rq->request_type));
-			
+
 		break;
 	case DM_ULOG_RESUME:
 		/*
@@ -273,13 +272,16 @@ static int do_local_work(void *data __attribute((unused)))
 	case DM_ULOG_MARK_REGION:
 	case DM_ULOG_GET_RESYNC_WORK:
 	case DM_ULOG_SET_REGION_SYNC:
+	case DM_ULOG_STATUS_INFO:
 	case DM_ULOG_IS_REMOTE_RECOVERING:
 	case DM_ULOG_POSTSUSPEND:
 		r = cluster_send(rq);
 		if (r) {
 			u_rq->data_size = 0;
 			u_rq->error = r;
-			kernel_send(u_rq);
+			if (kernel_send(u_rq))
+				LOG_ERROR("Failed to respond to kernel [%s]",
+					  RQ_TYPE(u_rq->request_type));
 		}
 
 		break;
@@ -384,14 +386,18 @@ int init_local(void)
 
 	r = bind(cn_fd, (struct sockaddr *) &addr, sizeof(addr));
 	if (r < 0) {
-		close(cn_fd);
+		if (close(cn_fd))
+			LOG_ERROR("Failed to close socket: %s",
+				  strerror(errno));
 		return EXIT_KERNEL_BIND;
 	}
 
 	opt = addr.nl_groups;
 	r = setsockopt(cn_fd, 270, NETLINK_ADD_MEMBERSHIP, &opt, sizeof(opt));
 	if (r) {
-		close(cn_fd);
+		if (close(cn_fd))
+			LOG_ERROR("Failed to close socket: %s",
+				  strerror(errno));
 		return EXIT_KERNEL_SETSOCKOPT;
 	}
 
@@ -412,5 +418,7 @@ int init_local(void)
 void cleanup_local(void)
 {
 	links_unregister(cn_fd);
-	close(cn_fd);
+	if (cn_fd >= 0 && close(cn_fd))
+		LOG_ERROR("Failed to close socket: %s",
+			  strerror(errno));
 }

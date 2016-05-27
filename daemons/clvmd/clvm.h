@@ -22,37 +22,40 @@
 #ifndef _CLVM_H
 #define _CLVM_H
 
+#include "configure.h"
+#include <inttypes.h>
+
 struct clvm_header {
 	uint8_t  cmd;	        /* See below */
 	uint8_t  flags;	        /* See below */
 	uint16_t xid;	        /* Transaction ID */
 	uint32_t clientid;	/* Only used in Daemon->Daemon comms */
 	int32_t  status;	/* For replies, whether request succeeded */
-	uint32_t arglen;	/* Length of argument below. 
-				   If >1500 then it will be passed 
+	uint32_t arglen;	/* Length of argument below.
+				   If >1500 then it will be passed
 				   around the cluster in the system LV */
 	char node[1];		/* Actually a NUL-terminated string, node name.
-				   If this is empty then the command is 
-				   forwarded to all cluster nodes unless 
-				   FLAG_LOCAL is also set. */
-	char args[1];		/* Arguments for the command follow the 
+				   If this is empty then the command is
+				   forwarded to all cluster nodes unless
+				   FLAG_LOCAL or FLAG_REMOTE is also set. */
+	char args[1];		/* Arguments for the command follow the
 				   node name, This member is only
 				   valid if the node name is empty */
 } __attribute__ ((packed));
 
 /* Flags */
-#define CLVMD_FLAG_LOCAL        1	/* Only do this on the local node */
-#define CLVMD_FLAG_SYSTEMLV     2	/* Data in system LV under my node name */
-#define CLVMD_FLAG_NODEERRS     4       /* Reply has errors in node-specific portion */
+#define CLVMD_FLAG_LOCAL	1	/* Only do this on the local node */
+#define CLVMD_FLAG_SYSTEMLV	2	/* Data in system LV under my node name */
+#define CLVMD_FLAG_NODEERRS	4	/* Reply has errors in node-specific portion */
+#define CLVMD_FLAG_REMOTE	8	/* Do this on all nodes except for the local node */
 
-/* Name of the local socket to communicate between libclvm and clvmd */
-//static const char CLVMD_SOCKNAME[]="/var/run/clvmd";
-static const char CLVMD_SOCKNAME[] = "\0clvmd";
+/* Name of the local socket to communicate between lvm and clvmd */
+static const char CLVMD_SOCKNAME[]= DEFAULT_RUN_DIR "/clvmd.sock";
 
 /* Internal commands & replies */
 #define CLVMD_CMD_REPLY    1
 #define CLVMD_CMD_VERSION  2	/* Send version around cluster when we start */
-#define CLVMD_CMD_GOAWAY   3	/* Die if received this - we are running 
+#define CLVMD_CMD_GOAWAY   3	/* Die if received this - we are running
 				   an incompatible version */
 #define CLVMD_CMD_TEST     4	/* Just for mucking about */
 
@@ -70,4 +73,11 @@ static const char CLVMD_SOCKNAME[] = "\0clvmd";
 #define CLVMD_CMD_SET_DEBUG	    42
 #define CLVMD_CMD_VG_BACKUP	    43
 #define CLVMD_CMD_RESTART	    44
+#define CLVMD_CMD_SYNC_NAMES	    45
+
+/* Used internally by some callers, but not part of the protocol.*/
+#define NODE_ALL	"*"
+#define NODE_LOCAL	"."
+#define NODE_REMOTE	"^"
+
 #endif

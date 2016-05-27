@@ -48,7 +48,7 @@
 #    along with this program; if not, write to the Free Software
 #    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #
-# $Id: lvm2create_initrd,v 1.2 2006/11/21 22:41:56 agk Exp $
+# $Id$
 
 TMPMNT=/tmp/mnt.$$
 DEVRAM=/tmp/initrd.$$
@@ -74,7 +74,7 @@ usage () {
 	echo "      -e|--extra     extra files to add to initrd"
 	echo "      -r|--raid      raid devices to start in initrd"
 	echo "      -R|--raidconf  location of mdadm.conf file to include"
-	echo "      -M|--makedev   set MAKEDEV type (debian or redhat)"
+	echo "      -M|--makedev   set MAKEDEV type (debian, redhat, gentoo)"
 }
 
 verbose () {
@@ -379,7 +379,7 @@ redhat)
     RETCODE=$?
     ;;
 gentoo)
-    (cd $TMPMNT/dev; /usr/sbin/MAKEDEV $OPT_Q $BASICDEVICES $BLOCKDEVICES)
+    (cd $TMPMNT/dev; /sbin/MAKEDEV $OPT_Q $BASICDEVICES $BLOCKDEVICES)
     RETCODE=$?
     ;;
 *)

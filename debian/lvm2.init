@@ -1,14 +1,14 @@
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          lvm2 lvm
-# Required-Start:    mountdevsubfs udev
+# Required-Start:    mountdevsubfs
 # Required-Stop:
-# Should-Start:      mdadm-raid cryptdisks-early multipath-tools-boot
+# Should-Start:      udev mdadm-raid cryptdisks-early multipath-tools-boot
 # Should-Stop:       umountroot mdadm-raid
 # X-Start-Before:    checkfs mountall
 # X-Stop-After:      umountfs
 # Default-Start:     S
-# Default-Stop:      0 6
+# Default-Stop:
 ### END INIT INFO
 
 SCRIPTNAME=/etc/init.d/lvm2
@@ -17,39 +17,16 @@ SCRIPTNAME=/etc/init.d/lvm2
 
 [ -x /sbin/vgchange ] || exit 0
 
-do_start()
-{
-	modprobe dm-mod 2> /dev/null || :
-	/sbin/vgscan --ignorelockingfailure --mknodes || :
-	/sbin/vgchange -aly --ignorelockingfailure || return 2
-}
-
-do_stop()
-{
-	/sbin/vgchange -aln --ignorelockingfailure || return 2
-}
-
 case "$1" in
   start)
-	log_begin_msg "Setting up LVM Volume Groups"
-	do_start
-	case "$?" in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
-	esac
+	log_action_begin_msg "Setting up LVM Volume Groups"
+	/sbin/lvm vgchange -aay --sysinit >/dev/null
+	log_action_end_msg "$?"
 	;;
-  stop)
-	log_begin_msg "Shutting down LVM Volume Groups"
-	do_stop
-	case "$?" in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
-	esac
-	;;
-  restart|force-reload)
+  stop|restart|force-reload|status)
 	;;
   *)
-	echo "Usage: $SCRIPTNAME {start|stop}" >&2
+	echo "Usage: $SCRIPTNAME start" >&2
 	exit 3
 	;;
 esac

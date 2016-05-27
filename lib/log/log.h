@@ -16,8 +16,6 @@
 #ifndef _LVM_LOG_H
 #define _LVM_LOG_H
 
-#include <errno.h>
-
 /*
  * printf()-style macros to use for messages:
  *
@@ -56,7 +54,30 @@
 #define _LOG_FATAL 2
 #define INTERNAL_ERROR "Internal error: "
 
+/*
+ * Classes available for debug log messages.
+ * These are also listed in doc/example.conf
+ * and lib/commands/toolcontext.c:_parse_debug_classes()
+ */
+#define LOG_CLASS_MEM		0x0001	/* "memory" */
+#define LOG_CLASS_DEVS		0x0002	/* "devices" */
+#define LOG_CLASS_ACTIVATION	0x0004	/* "activation" */
+#define LOG_CLASS_ALLOC		0x0008	/* "allocation" */
+#define LOG_CLASS_LVMETAD	0x0010	/* "lvmetad" */
+#define LOG_CLASS_METADATA	0x0020	/* "metadata" */
+#define LOG_CLASS_CACHE		0x0040	/* "cache" */
+#define LOG_CLASS_LOCKING	0x0080	/* "locking" */
+
 #define log_debug(x...) LOG_LINE(_LOG_DEBUG, x)
+#define log_debug_mem(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_MEM, x)
+#define log_debug_devs(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_DEVS, x)
+#define log_debug_activation(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_ACTIVATION, x)
+#define log_debug_alloc(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_ALLOC, x)
+#define log_debug_lvmetad(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_LVMETAD, x)
+#define log_debug_metadata(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_METADATA, x)
+#define log_debug_cache(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_CACHE, x)
+#define log_debug_locking(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_LOCKING, x)
+
 #define log_info(x...) LOG_LINE(_LOG_INFO, x)
 #define log_notice(x...) LOG_LINE(_LOG_NOTICE, x)
 #define log_warn(x...) LOG_LINE(_LOG_WARN | _LOG_STDERR, x)
@@ -70,6 +91,7 @@
 #define log_very_verbose(args...) log_info(args)
 #define log_verbose(args...) log_notice(args)
 #define log_print(args...) LOG_LINE(_LOG_WARN, args)
+#define log_print_unless_silent(args...) LOG_LINE(silent_mode() ? _LOG_NOTICE : _LOG_WARN, args)
 #define log_error(args...) log_err(args)
 #define log_error_suppress(s, args...) log_err_suppress(s, args)
 #define log_error_once(args...) log_err_once(args)
@@ -77,7 +99,9 @@
 
 /* System call equivalents */
 #define log_sys_error(x, y) \
-		log_err("%s: %s failed: %s", y, x, strerror(errno))
+		log_err("%s%s%s failed: %s", y, *y ? ": " : "", x, strerror(errno))
+#define log_sys_error_suppress(s, x, y) \
+		log_err_suppress(s, "%s%s%s failed: %s", y, *y ? ": " : "", x, strerror(errno))
 #define log_sys_very_verbose(x, y) \
 		log_info("%s: %s failed: %s", y, x, strerror(errno))
 #define log_sys_debug(x, y) \
@@ -85,6 +109,7 @@
 
 #define return_0	do { stack; return 0; } while (0)
 #define return_NULL	do { stack; return NULL; } while (0)
+#define return_ECMD_FAILED do { stack; return ECMD_FAILED; } while (0)
 #define goto_out	do { stack; goto out; } while (0)
 #define goto_bad	do { stack; goto bad; } while (0)
 

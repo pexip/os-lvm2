@@ -32,7 +32,7 @@ static void daemonize(void);
 static void init_all(void);
 static void cleanup_all(void);
 
-int main(int argc __attribute((unused)), char *argv[] __attribute((unused)))
+int main(int argc __attribute__((unused)), char *argv[] __attribute__((unused)))
 {
 	daemonize();
 
@@ -60,52 +60,9 @@ int main(int argc __attribute((unused)), char *argv[] __attribute((unused)))
  * @sig: the signal
  *
  */
-static void parent_exit_handler(int sig __attribute((unused)))
+static void parent_exit_handler(int sig __attribute__((unused)))
 {
 	exit_now = 1;
-}
-
-/*
- * create_lockfile - create and lock a lock file
- * @lockfile: location of lock file
- *
- * Returns: 0 on success, -1 otherwise
- */
-static int create_lockfile(const char *lockfile)
-{
-	int fd;
-	struct flock lock;
-	char buffer[50];
-
-	if((fd = open(lockfile, O_CREAT | O_WRONLY,
-		      (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH))) < 0)
-		return -errno;
-
-	lock.l_type = F_WRLCK;
-	lock.l_start = 0;
-	lock.l_whence = SEEK_SET;
-	lock.l_len = 0;
-
-	if (fcntl(fd, F_SETLK, &lock) < 0) {
-		close(fd);
-		return -errno;
-	}
-
-	if (ftruncate(fd, 0) < 0) {
-		close(fd);
-		return -errno;
-	}
-
-	sprintf(buffer, "%d\n", getpid());
-
-	/* FIXME Handle other non-error returns without aborting */
-	if (write(fd, buffer, strlen(buffer)) < strlen(buffer)){
-		close(fd);
-		unlink(lockfile);
-		return -errno;
-	}
-
-	return 0;
 }
 
 static void sig_handler(int sig)
@@ -162,6 +119,12 @@ static void process_signals(void)
 	}
 }
 
+static void remove_lockfile(void)
+{
+	if (unlink(CMIRRORD_PIDFILE))
+		LOG_ERROR("Unable to remove \"" CMIRRORD_PIDFILE "\" %s", strerror(errno));
+}
+
 /*
  * daemonize
  *
@@ -171,6 +134,12 @@ static void daemonize(void)
 {
 	int pid;
 	int status;
+	int devnull;
+
+	if ((devnull = open("/dev/null", O_RDWR)) == -1) {
+		LOG_ERROR("Can't open /dev/null: %s", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	signal(SIGTERM, &parent_exit_handler);
 
@@ -216,18 +185,37 @@ static void daemonize(void)
 	}
 
 	setsid();
-	chdir("/");
+	if (chdir("/")) {
+		LOG_ERROR("Failed to chdir /: %s", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
 	umask(0);
 
-	close(0); close(1); close(2);
-	open("/dev/null", O_RDONLY); /* reopen stdin */
-	open("/dev/null", O_WRONLY); /* reopen stdout */
-	open("/dev/null", O_WRONLY); /* reopen stderr */
+	if (close(0) || close(1) || close(2)) {
+		LOG_ERROR("Failed to close terminal FDs");
+		exit(EXIT_FAILURE);
+	}
+
+	if ((dup2(devnull, 0) < 0) || /* reopen stdin */
+	    (dup2(devnull, 1) < 0) || /* reopen stdout */
+	    (dup2(devnull, 2) < 0))   /* reopen stderr */
+		exit(EXIT_FAILURE);
+
+	if ((devnull > STDERR_FILENO) && close(devnull)) {
+		LOG_ERROR("Failed to close descriptor %d: %s",
+			  devnull, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	LOG_OPEN("cmirrord", LOG_PID, LOG_DAEMON);
 
-	if (create_lockfile(CMIRRORD_PIDFILE))
+	(void) dm_prepare_selinux_context(CMIRRORD_PIDFILE, S_IFREG);
+	if (dm_create_lockfile(CMIRRORD_PIDFILE) == 0)
 		exit(EXIT_LOCKFILE);
+	(void) dm_prepare_selinux_context(NULL, 0);
+
+	atexit(remove_lockfile);
 
 	/* FIXME Replace with sigaction. (deprecated) */
 	signal(SIGINT, &sig_handler);

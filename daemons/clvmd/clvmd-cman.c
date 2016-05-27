@@ -17,37 +17,18 @@
  * CMAN communication layer for clvmd.
  */
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
+#include "clvmd-common.h"
 
-#include <configure.h>
 #include <pthread.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/socket.h>
-#include <sys/uio.h>
-#include <sys/un.h>
-#include <sys/time.h>
-#include <sys/ioctl.h>
-#include <sys/utsname.h>
-#include <syslog.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stddef.h>
-#include <signal.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <getopt.h>
-#include <errno.h>
-#include <libdevmapper.h>
-#include <libdlm.h>
 
 #include "clvmd-comms.h"
 #include "clvm.h"
-#include "lvm-logging.h"
 #include "clvmd.h"
 #include "lvm-functions.h"
+
+#include <libdlm.h>
+
+#include <syslog.h>
 
 #define LOCKSPACE_NAME "clvmd"
 
@@ -108,16 +89,17 @@ static int _init_cluster(void)
 	DEBUGLOG("CMAN initialisation complete\n");
 
 	/* Create a lockspace for LV & VG locks to live in */
-	lockspace = dlm_create_lockspace(LOCKSPACE_NAME, 0600);
+	lockspace = dlm_open_lockspace(LOCKSPACE_NAME);
 	if (!lockspace) {
-		if (errno == EEXIST) {
-			lockspace = dlm_open_lockspace(LOCKSPACE_NAME);
-		}
+		lockspace = dlm_create_lockspace(LOCKSPACE_NAME, 0600);
 		if (!lockspace) {
-			syslog(LOG_ERR, "Unable to create lockspace for CLVM: %m");
+			syslog(LOG_ERR, "Unable to create DLM lockspace for CLVM: %m");
 			return -1;
 		}
-	}
+		DEBUGLOG("Created DLM lockspace for CLVMD.\n");
+	} else
+		DEBUGLOG("Opened existing DLM lockspace for CLVMD.\n");
+
 	dlm_ls_pthread_init(lockspace);
 	DEBUGLOG("DLM initialisation complete\n");
 	return 0;
@@ -128,12 +110,12 @@ static void _cluster_init_completed(void)
 	clvmd_cluster_init_completed();
 }
 
-static int _get_main_cluster_fd()
+static int _get_main_cluster_fd(void)
 {
 	return cman_get_fd(c_handle);
 }
 
-static int _get_num_nodes()
+static int _get_num_nodes(void)
 {
 	int i;
 	int nnodes = 0;
@@ -261,9 +243,8 @@ static void _add_up_node(const char *csid)
 	DEBUGLOG("Added new node %d to updown list\n", nodeid);
 }
 
-static void _cluster_closedown()
+static void _cluster_closedown(void)
 {
-	destroy_lvhash();
 	dlm_release_lockspace(LOCKSPACE_NAME, lockspace, 1);
 	cman_finish(c_handle);
 }
@@ -301,7 +282,7 @@ static void count_clvmds_running(void)
 }
 
 /* Get a list of active cluster members */
-static void get_members()
+static void get_members(void)
 {
 	int retnodes;
 	int status;
@@ -399,7 +380,7 @@ static int nodeid_from_csid(const char *csid)
 	return nodeid;
 }
 
-static int _is_quorate()
+static int _is_quorate(void)
 {
 	return cman_is_quorate(c_handle);
 }
@@ -497,6 +478,7 @@ static int _get_cluster_name(char *buf, int buflen)
 }
 
 static struct cluster_ops _cluster_cman_ops = {
+	.name                     = "cman",
 	.cluster_init_completed   = _cluster_init_completed,
 	.cluster_send_message     = _cluster_send_message,
 	.name_from_csid           = _name_from_csid,

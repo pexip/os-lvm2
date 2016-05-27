@@ -57,45 +57,45 @@ static void _striped_display(const struct lv_segment *seg)
 	log_print(" ");
 }
 
-static int _striped_text_import_area_count(struct config_node *sn, uint32_t *area_count)
+static int _striped_text_import_area_count(const struct dm_config_node *sn, uint32_t *area_count)
 {
-	if (!get_config_uint32(sn, "stripe_count", area_count)) {
+	if (!dm_config_get_uint32(sn, "stripe_count", area_count)) {
 		log_error("Couldn't read 'stripe_count' for "
-			  "segment '%s'.", config_parent_name(sn));
+			  "segment '%s'.", dm_config_parent_name(sn));
 		return 0;
 	}
 
 	return 1;
 }
 
-static int _striped_text_import(struct lv_segment *seg, const struct config_node *sn,
+static int _striped_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
 			struct dm_hash_table *pv_hash)
 {
-	struct config_node *cn;
+	const struct dm_config_value *cv;
 
 	if ((seg->area_count != 1) &&
-	    !get_config_uint32(sn, "stripe_size", &seg->stripe_size)) {
+	    !dm_config_get_uint32(sn, "stripe_size", &seg->stripe_size)) {
 		log_error("Couldn't read stripe_size for segment %s "
-			  "of logical volume %s.", config_parent_name(sn), seg->lv->name);
+			  "of logical volume %s.", dm_config_parent_name(sn), seg->lv->name);
 		return 0;
 	}
 
-	if (!(cn = find_config_node(sn, "stripes"))) {
+	if (!dm_config_get_list(sn, "stripes", &cv)) {
 		log_error("Couldn't find stripes array for segment %s "
-			  "of logical volume %s.", config_parent_name(sn), seg->lv->name);
+			  "of logical volume %s.", dm_config_parent_name(sn), seg->lv->name);
 		return 0;
 	}
 
 	seg->area_len /= seg->area_count;
 
-	return text_import_areas(seg, sn, cn, pv_hash, 0);
+	return text_import_areas(seg, sn, cv, pv_hash, 0);
 }
 
 static int _striped_text_export(const struct lv_segment *seg, struct formatter *f)
 {
 
-	outf(f, "stripe_count = %u%s", seg->area_count,
-	     (seg->area_count == 1) ? "\t# linear" : "");
+	outfc(f, (seg->area_count == 1) ? "# linear" : NULL,
+	      "stripe_count = %u", seg->area_count);
 
 	if (seg->area_count > 1)
 		outsize(f, (uint64_t) seg->stripe_size,
@@ -160,12 +160,13 @@ static int _striped_merge_segments(struct lv_segment *seg1, struct lv_segment *s
 
 #ifdef DEVMAPPER_SUPPORT
 static int _striped_add_target_line(struct dev_manager *dm,
-				struct dm_pool *mem __attribute((unused)),
-				struct cmd_context *cmd __attribute((unused)),
-				void **target_state __attribute((unused)),
+				struct dm_pool *mem __attribute__((unused)),
+				struct cmd_context *cmd __attribute__((unused)),
+				void **target_state __attribute__((unused)),
 				struct lv_segment *seg,
+				const struct lv_activate_opts *laopts __attribute__((unused)),
 				struct dm_tree_node *node, uint64_t len,
-				uint32_t *pvmove_mirror_count __attribute((unused)))
+				uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
 	if (!seg->area_count) {
 		log_error(INTERNAL_ERROR "striped add_target_line called "
@@ -173,7 +174,9 @@ static int _striped_add_target_line(struct dev_manager *dm,
 		return 0;
 	}
 	if (seg->area_count == 1) {
-		if (!dm_tree_node_add_linear_target(node, len))
+		if (!add_linear_area_to_dtree(node, len, seg->lv->vg->extent_size,
+					      cmd->use_linear_target,
+					      seg->lv->vg->name, seg->lv->name))
 			return_0;
 	} else if (!dm_tree_node_add_striped_target(node, len,
 						  seg->stripe_size))
@@ -183,8 +186,8 @@ static int _striped_add_target_line(struct dev_manager *dm,
 }
 
 static int _striped_target_present(struct cmd_context *cmd,
-				   const struct lv_segment *seg __attribute((unused)),
-				   unsigned *attributes __attribute((unused)))
+				   const struct lv_segment *seg __attribute__((unused)),
+				   unsigned *attributes __attribute__((unused)))
 {
 	static int _striped_checked = 0;
 	static int _striped_present = 0;
@@ -199,9 +202,9 @@ static int _striped_target_present(struct cmd_context *cmd,
 }
 #endif
 
-static void _striped_destroy(const struct segment_type *segtype)
+static void _striped_destroy(struct segment_type *segtype)
 {
-	dm_free((void *)segtype);
+	dm_free(segtype);
 }
 
 static struct segtype_handler _striped_ops = {
@@ -220,7 +223,7 @@ static struct segtype_handler _striped_ops = {
 
 struct segment_type *init_striped_segtype(struct cmd_context *cmd)
 {
-	struct segment_type *segtype = dm_malloc(sizeof(*segtype));
+	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
 
 	if (!segtype)
 		return_NULL;

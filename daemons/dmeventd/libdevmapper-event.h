@@ -46,7 +46,9 @@ enum dm_event_mask {
 };
 
 #define DM_EVENT_ALL_ERRORS DM_EVENT_ERROR_MASK
+#define DM_EVENT_PROTOCOL_VERSION 2
 
+struct dm_task;
 struct dm_event_handler;
 
 struct dm_event_handler *dm_event_handler_create(void);
@@ -55,11 +57,16 @@ void dm_event_handler_destroy(struct dm_event_handler *dmevh);
 /*
  * Path of shared library to handle events.
  *
- * All of dso, device_name and uuid strings are duplicated, you do not
- * need to keep the pointers valid after the call succeeds. Thes may
- * return -ENOMEM though.
+ * All of dmeventd, dso, device_name and uuid strings are duplicated so
+ * you do not need to keep the pointers valid after the call succeeds.
+ * They may return -ENOMEM though.
  */
 int dm_event_handler_set_dso(struct dm_event_handler *dmevh, const char *path);
+
+/*
+ * Path of dmeventd binary.
+ */
+int dm_event_handler_set_dmeventd_path(struct dm_event_handler *dmevh, const char *dmeventd_path);
 
 /*
  * Identify the device to monitor by exactly one of device_name, uuid or
@@ -76,6 +83,7 @@ void dm_event_handler_set_timeout(struct dm_event_handler *dmevh, int timeout);
 /*
  * Specify mask for events to monitor.
  */
+// FIXME  misuse of bitmask as enum
 void dm_event_handler_set_event_mask(struct dm_event_handler *dmevh,
 				     enum dm_event_mask evmask);
 
@@ -85,6 +93,7 @@ const char *dm_event_handler_get_uuid(const struct dm_event_handler *dmevh);
 int dm_event_handler_get_major(const struct dm_event_handler *dmevh);
 int dm_event_handler_get_minor(const struct dm_event_handler *dmevh);
 int dm_event_handler_get_timeout(const struct dm_event_handler *dmevh);
+// FIXME  misuse of bitmask as enum
 enum dm_event_mask dm_event_handler_get_event_mask(const struct dm_event_handler *dmevh);
 
 /* FIXME Review interface (what about this next thing?) */
@@ -98,6 +107,7 @@ int dm_event_unregister_handler(const struct dm_event_handler *dmevh);
 
 /* Prototypes for DSO interface, see dmeventd.c, struct dso_data for
    detailed descriptions. */
+// FIXME  misuse of bitmask as enum
 void process_event(struct dm_task *dmt, enum dm_event_mask evmask, void **user);
 int register_device(const char *device_name, const char *uuid, int major, int minor, void **user);
 int unregister_device(const char *device_name, const char *uuid, int major,

@@ -16,8 +16,6 @@
 #include "log.h"
 
 #include "lvm2cmd.h"
-#include "errors.h"
-#include "libdevmapper-event.h"
 #include "dmeventd_lvm.h"
 
 #include <pthread.h>
@@ -49,9 +47,9 @@ static pthread_mutex_t _event_mutex = PTHREAD_MUTEX_INITIALIZER;
  * configurable and we don't have that option yet
  */
 static void _temporary_log_fn(int level,
-			      const char *file __attribute((unused)),
-			      int line __attribute((unused)),
-			      int dm_errno __attribute((unused)),
+			      const char *file __attribute__((unused)),
+			      int line __attribute__((unused)),
+			      int dm_errno __attribute__((unused)),
 			      const char *message)
 {
 	level &= ~(_LOG_STDERR | _LOG_ONCE);
@@ -82,10 +80,7 @@ static void _temporary_log_fn(int level,
 
 void dmeventd_lvm2_lock(void)
 {
-	if (pthread_mutex_trylock(&_event_mutex)) {
-		syslog(LOG_NOTICE, "Another thread is handling an event. Waiting...");
-		pthread_mutex_lock(&_event_mutex);
-	}
+	pthread_mutex_lock(&_event_mutex);
 }
 
 void dmeventd_lvm2_unlock(void)
@@ -113,6 +108,7 @@ int dmeventd_lvm2_init(void)
 			_mem_pool = NULL;
 			goto out;
 		}
+		lvm2_disable_dmeventd_monitoring(_lvm_handle);
 		/* FIXME Temporary: move to dmeventd core */
 		lvm2_run(_lvm_handle, "_memlock_inc");
 	}
@@ -131,10 +127,10 @@ void dmeventd_lvm2_exit(void)
 
 	if (!--_register_count) {
 		lvm2_run(_lvm_handle, "_memlock_dec");
-		lvm2_exit(_lvm_handle);
-		_lvm_handle = NULL;
 		dm_pool_destroy(_mem_pool);
 		_mem_pool = NULL;
+		lvm2_exit(_lvm_handle);
+		_lvm_handle = NULL;
 	}
 
 	pthread_mutex_unlock(&_register_mutex);
@@ -147,6 +143,34 @@ struct dm_pool *dmeventd_lvm2_pool(void)
 
 int dmeventd_lvm2_run(const char *cmdline)
 {
-	return lvm2_run(_lvm_handle, cmdline);
+	return (lvm2_run(_lvm_handle, cmdline) == LVM2_COMMAND_SUCCEEDED);
 }
 
+int dmeventd_lvm2_command(struct dm_pool *mem, char *buffer, size_t size,
+			  const char *cmd, const char *device)
+{
+	char *vg = NULL, *lv = NULL, *layer;
+	int r;
+
+	if (!dm_split_lvm_name(mem, device, &vg, &lv, &layer)) {
+		syslog(LOG_ERR, "Unable to determine VG name from %s.\n",
+		       device);
+		return 0;
+	}
+
+	/* strip off the mirror component designations */
+	if ((layer = strstr(lv, "_mimagetmp")) ||
+	    (layer = strstr(lv, "_mlog")))
+		*layer = '\0';
+
+	r = dm_snprintf(buffer, size, "%s %s/%s", cmd, vg, lv);
+
+	dm_pool_free(mem, vg);
+
+	if (r < 0) {
+		syslog(LOG_ERR, "Unable to form LVM command. (too long).\n");
+		return 0;
+	}
+
+	return 1;
+}

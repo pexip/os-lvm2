@@ -16,16 +16,13 @@
 #include "lib.h"
 #include "metadata.h"
 #include "import-export.h"
-#include "display.h"
-#include "toolcontext.h"
-#include "lvmcache.h"
 
 /* FIXME Use tidier inclusion method */
 static struct text_vg_version_ops *(_text_vsn_list[2]);
 
 static int _text_import_initialised = 0;
 
-static void _init_text_import()
+static void _init_text_import(void)
 {
 	if (_text_import_initialised)
 		return;
@@ -43,18 +40,18 @@ const char *text_vgname_import(const struct format_type *fmt,
 			       struct id *vgid, uint64_t *vgstatus,
 			       char **creation_host)
 {
-	struct config_tree *cft;
+	struct dm_config_tree *cft;
 	struct text_vg_version_ops **vsn;
 	const char *vgname = NULL;
 
 	_init_text_import();
 
-	if (!(cft = create_config_tree(NULL, 0)))
+	if (!(cft = config_open(CONFIG_FILE_SPECIAL, NULL, 0)))
 		return_NULL;
 
-	if ((!dev && !read_config_file(cft)) ||
-	    (dev && !read_config_fd(cft, dev, offset, size,
-				    offset2, size2, checksum_fn, checksum)))
+	if ((!dev && !config_file_read(cft)) ||
+	    (dev && !config_file_read_fd(cft, dev, offset, size,
+					 offset2, size2, checksum_fn, checksum)))
 		goto_out;
 
 	/*
@@ -72,12 +69,13 @@ const char *text_vgname_import(const struct format_type *fmt,
 	}
 
       out:
-	destroy_config_tree(cft);
+	config_destroy(cft);
 	return vgname;
 }
 
 struct volume_group *text_vg_import_fd(struct format_instance *fid,
 				       const char *file,
+				       int single_device,
 				       struct device *dev,
 				       off_t offset, uint32_t size,
 				       off_t offset2, uint32_t size2,
@@ -86,7 +84,7 @@ struct volume_group *text_vg_import_fd(struct format_instance *fid,
 				       time_t *when, char **desc)
 {
 	struct volume_group *vg = NULL;
-	struct config_tree *cft;
+	struct dm_config_tree *cft;
 	struct text_vg_version_ops **vsn;
 
 	_init_text_import();
@@ -94,12 +92,12 @@ struct volume_group *text_vg_import_fd(struct format_instance *fid,
 	*desc = NULL;
 	*when = 0;
 
-	if (!(cft = create_config_tree(file, 0)))
+	if (!(cft = config_open(CONFIG_FILE_SPECIAL, file, 0)))
 		return_NULL;
 
-	if ((!dev && !read_config_file(cft)) ||
-	    (dev && !read_config_fd(cft, dev, offset, size,
-				    offset2, size2, checksum_fn, checksum))) {
+	if ((!dev && !config_file_read(cft)) ||
+	    (dev && !config_file_read_fd(cft, dev, offset, size,
+					 offset2, size2, checksum_fn, checksum))) {
 		log_error("Couldn't read volume group metadata.");
 		goto out;
 	}
@@ -111,7 +109,7 @@ struct volume_group *text_vg_import_fd(struct format_instance *fid,
 		if (!(*vsn)->check_version(cft))
 			continue;
 
-		if (!(vg = (*vsn)->read_vg(fid, cft, 0)))
+		if (!(vg = (*vsn)->read_vg(fid, cft, single_device)))
 			goto_out;
 
 		(*vsn)->read_desc(vg->vgmem, cft, when, desc);
@@ -119,7 +117,7 @@ struct volume_group *text_vg_import_fd(struct format_instance *fid,
 	}
 
       out:
-	destroy_config_tree(cft);
+	config_destroy(cft);
 	return vg;
 }
 
@@ -127,21 +125,18 @@ struct volume_group *text_vg_import_file(struct format_instance *fid,
 					 const char *file,
 					 time_t *when, char **desc)
 {
-	return text_vg_import_fd(fid, file, NULL, (off_t)0, 0, (off_t)0, 0, NULL, 0,
+	return text_vg_import_fd(fid, file, 0, NULL, (off_t)0, 0, (off_t)0, 0, NULL, 0,
 				 when, desc);
 }
 
-struct volume_group *import_vg_from_buffer(char *buf,
-                                           struct format_instance *fid)
+struct volume_group *import_vg_from_config_tree(const struct dm_config_tree *cft,
+						struct format_instance *fid)
 {
 	struct volume_group *vg = NULL;
-	struct config_tree *cft;
 	struct text_vg_version_ops **vsn;
+	int vg_missing;
 
 	_init_text_import();
-
-	if (!(cft = create_config_tree_from_string(fid->fmt->cmd, buf)))
-		return_NULL;
 
 	for (vsn = &_text_vsn_list[0]; *vsn; vsn++) {
 		if (!(*vsn)->check_version(cft))
@@ -152,9 +147,14 @@ struct volume_group *import_vg_from_buffer(char *buf,
 		 */
 		if (!(vg = (*vsn)->read_vg(fid, cft, 1)))
 			stack;
+		else if ((vg_missing = vg_missing_pv_count(vg))) {
+			log_verbose("There are %d physical volumes missing.",
+				    vg_missing);
+			vg_mark_partial_lvs(vg, 1);
+			/* FIXME: move this code inside read_vg() */
+		}
 		break;
 	}
 
-	destroy_config_tree(cft);
 	return vg;
 }

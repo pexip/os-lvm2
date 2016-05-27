@@ -2,8 +2,10 @@
 #
 ### BEGIN INIT INFO
 # Provides:          clvm
-# Required-Start:    $remote_fs lvm2 cman
-# Required-Stop:     $remote_fs lvm2 cman
+# Required-Start:    lvm2
+# Required-Stop:     lvm2
+# Should-Start:      cman corosync openais
+# Should-Stop:       cman corosync openais
 # Default-Start:     S
 # Default-Stop:      0 6
 # Short-Description: start and stop the lvm cluster locking daemon
@@ -44,9 +46,6 @@ DAEMON_OPTS="-T$CLVMDTIMEOUT"
 
 do_start()
 {
-	if [ ! -d "/var/run/lvm" ]; then
-        	mkdir /var/run/lvm
-	fi
 	start-stop-daemon --start --quiet --exec $DAEMON -- $DAEMON_OPTS || status="$?"
 	# flush cache
 	vgscan > /dev/null 2>&1 
@@ -132,7 +131,6 @@ case "$1" in
 			log_action_msg "$DESC is running" 
 		else
 			log_action_msg "$DESC is not running"
-			exit 3
 		fi
 		exit 0
 	;;

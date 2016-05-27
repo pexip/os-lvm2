@@ -18,10 +18,11 @@
 
 #include "metadata-exported.h"
 #include "locking.h"
+#include "lvm-string.h"
 
 #include <stdint.h>
 
-uint64_t units_to_bytes(const char *units, char *unit_type);
+const char *display_lvname(const struct logical_volume *lv);
 
 /* Specify size in KB */
 const char *display_size(const struct cmd_context *cmd, uint64_t size);
@@ -52,13 +53,19 @@ void vgdisplay_short(const struct volume_group *vg);
 
 void display_formats(const struct cmd_context *cmd);
 void display_segtypes(const struct cmd_context *cmd);
+void display_tags(const struct cmd_context *cmd);
+
+void display_name_error(name_error_t name_error);
 
 /*
  * Allocation policy display conversion routines.
  */
 const char *get_alloc_string(alloc_policy_t alloc);
+char alloc_policy_char(alloc_policy_t alloc);
 alloc_policy_t get_alloc_from_string(const char *str);
 
-char yes_no_prompt(const char *prompt, ...);
+const char *get_percent_string(percent_type_t def);
+
+char yes_no_prompt(const char *prompt, ...) __attribute__ ((format(printf, 1, 2)));
 
 #endif

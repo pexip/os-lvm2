@@ -14,71 +14,74 @@
  */
 
 #include "lib.h"
-#include "toolcontext.h"
 #include "metadata.h"
 #include "segtype.h"
 #include "text_export.h"
 #include "config.h"
 #include "activate.h"
 #include "str_list.h"
-#ifdef DMEVENTD
-#  include "sharedlib.h"
-#  include "libdevmapper-event.h"
-#endif
+
+#define SEG_LOG_ERROR(t, p...) \
+	log_error(t " segment %s of logical volume %s.", ## p, \
+		  dm_config_parent_name(sn), seg->lv->name), 0;
 
 static const char *_snap_name(const struct lv_segment *seg)
 {
 	return seg->segtype->name;
 }
 
-static int _snap_text_import(struct lv_segment *seg, const struct config_node *sn,
-			struct dm_hash_table *pv_hash __attribute((unused)))
+static const char *_snap_target_name(const struct lv_segment *seg,
+				     const struct lv_activate_opts *laopts)
+{
+	if (!laopts->no_merging && (seg->status & MERGING))
+		return "snapshot-merge";
+
+	return _snap_name(seg);
+}
+
+static int _snap_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
+			struct dm_hash_table *pv_hash __attribute__((unused)))
 {
 	uint32_t chunk_size;
-	const char *org_name, *cow_name;
 	struct logical_volume *org, *cow;
-	int old_suppress, merge = 0;
+	const char *org_name = NULL, *cow_name = NULL;
+	int merge = 0;
 
-	if (!get_config_uint32(sn, "chunk_size", &chunk_size)) {
+	if (!dm_config_get_uint32(sn, "chunk_size", &chunk_size)) {
 		log_error("Couldn't read chunk size for snapshot.");
 		return 0;
 	}
 
-	old_suppress = log_suppress(1);
-
-	if ((cow_name = find_config_str(sn, "merging_store", NULL))) {
-		if (find_config_str(sn, "cow_store", NULL)) {
-			log_suppress(old_suppress);
-			log_error("Both snapshot cow and merging storage were specified.");
-			return 0;
-		}
+	if (dm_config_has_node(sn, "merging_store")) {
+		if (!(cow_name = dm_config_find_str(sn, "merging_store", NULL)))
+			return SEG_LOG_ERROR("Merging store must be a string in");
 		merge = 1;
 	}
-	else if (!(cow_name = find_config_str(sn, "cow_store", NULL))) {
-		log_suppress(old_suppress);
-		log_error("Snapshot cow storage not specified.");
-		return 0;
+
+	if (dm_config_has_node(sn, "cow_store")) {
+		if (cow_name)
+			return SEG_LOG_ERROR("Both snapshot cow and merging storage were specified in");
+
+		if (!(cow_name = dm_config_find_str(sn, "cow_store", NULL)))
+			return SEG_LOG_ERROR("Cow store must be a string in");
 	}
 
-	if (!(org_name = find_config_str(sn, "origin", NULL))) {
-		log_suppress(old_suppress);
-		log_error("Snapshot origin not specified.");
-		return 0;
-	}
+	if (!cow_name)
+		return SEG_LOG_ERROR("Snapshot cow storage not specified in");
 
-	log_suppress(old_suppress);
+	if (!dm_config_has_node(sn, "origin"))
+		return SEG_LOG_ERROR("Snapshot origin not specified in");
 
-	if (!(cow = find_lv(seg->lv->vg, cow_name))) {
-		log_error("Unknown logical volume specified for "
-			  "snapshot cow store.");
-		return 0;
-	}
+	if (!(org_name = dm_config_find_str(sn, "origin", NULL)))
+		return SEG_LOG_ERROR("Snapshot origin must be a string in");
 
-	if (!(org = find_lv(seg->lv->vg, org_name))) {
-		log_error("Unknown logical volume specified for "
-			  "snapshot origin.");
-		return 0;
-	}
+	if (!(cow = find_lv(seg->lv->vg, cow_name)))
+		return SEG_LOG_ERROR("Unknown logical volume %s specified for "
+				     "snapshot cow store in", cow_name);
+
+	if (!(org = find_lv(seg->lv->vg, org_name)))
+		return SEG_LOG_ERROR("Unknown logical volume %s specified for "
+			  "snapshot origin in", org_name);
 
 	init_snapshot_seg(seg, org, cow, chunk_size, merge);
 
@@ -97,184 +100,104 @@ static int _snap_text_export(const struct lv_segment *seg, struct formatter *f)
 	return 1;
 }
 
+#ifdef DEVMAPPER_SUPPORT
 static int _snap_target_status_compatible(const char *type)
 {
 	return (strcmp(type, "snapshot-merge") == 0);
 }
 
-#ifdef DEVMAPPER_SUPPORT
-static int _snap_target_percent(void **target_state __attribute((unused)),
-				percent_range_t *percent_range,
-				struct dm_pool *mem __attribute((unused)),
-				struct cmd_context *cmd __attribute((unused)),
-				struct lv_segment *seg __attribute((unused)),
+static int _snap_target_percent(void **target_state __attribute__((unused)),
+				dm_percent_t *percent,
+				struct dm_pool *mem __attribute__((unused)),
+				struct cmd_context *cmd __attribute__((unused)),
+				struct lv_segment *seg __attribute__((unused)),
 				char *params, uint64_t *total_numerator,
 				uint64_t *total_denominator)
 {
-	uint64_t total_sectors, sectors_allocated, metadata_sectors;
-	int r;
+	struct dm_status_snapshot *s;
 
-	/*
-	 * snapshot target's percent format:
-	 * <= 1.7.0: <sectors_allocated>/<total_sectors>
-	 * >= 1.8.0: <sectors_allocated>/<total_sectors> <metadata_sectors>
-	 */
-	r = sscanf(params, "%" PRIu64 "/%" PRIu64 " %" PRIu64,
-		   &sectors_allocated, &total_sectors, &metadata_sectors);
-	if (r == 2 || r == 3) {
-		*total_numerator += sectors_allocated;
-		*total_denominator += total_sectors;
-		if (r == 3 && sectors_allocated == metadata_sectors)
-			*percent_range = PERCENT_0;
-		else if (sectors_allocated == total_sectors)
-			*percent_range = PERCENT_100;
+	if (!dm_get_status_snapshot(mem, params, &s))
+		return_0;
+
+	if (s->invalid)
+		*percent = DM_PERCENT_INVALID;
+	else if (s->merge_failed)
+		*percent = LVM_PERCENT_MERGE_FAILED;
+	else {
+		*total_numerator += s->used_sectors;
+		*total_denominator += s->total_sectors;
+		if (s->has_metadata_sectors &&
+		    s->used_sectors == s->metadata_sectors)
+			*percent = DM_PERCENT_0;
+		else if (s->used_sectors == s->total_sectors)
+			*percent = DM_PERCENT_100;
 		else
-			*percent_range = PERCENT_0_TO_100;
-	} else if (!strcmp(params, "Invalid") ||
-		   !strcmp(params, "Merge failed"))
-		*percent_range = PERCENT_INVALID;
-	else
-		return 0;
+			*percent = dm_make_percent(*total_numerator, *total_denominator);
+	}
 
 	return 1;
 }
 
 static int _snap_target_present(struct cmd_context *cmd,
 				const struct lv_segment *seg,
-				unsigned *attributes __attribute((unused)))
+				unsigned *attributes)
 {
 	static int _snap_checked = 0;
 	static int _snap_merge_checked = 0;
 	static int _snap_present = 0;
 	static int _snap_merge_present = 0;
+	static unsigned _snap_attrs = 0;
+	uint32_t maj, min, patchlevel;
 
 	if (!_snap_checked) {
+		_snap_checked = 1;
 		_snap_present = target_present(cmd, "snapshot", 1) &&
 		    target_present(cmd, "snapshot-origin", 0);
-		_snap_checked = 1;
+
+		if (_snap_present &&
+		    target_version("snapshot", &maj, &min, &patchlevel) &&
+		    (maj > 1 ||
+		     (maj == 1 && (min >= 12 || (min == 10 && patchlevel >= 2)))))
+			_snap_attrs |= SNAPSHOT_FEATURE_FIXED_LEAK;
+		else
+			log_very_verbose("Target snapshot may leak metadata.");
 	}
 
-	if (!_snap_merge_checked && seg && (seg->status & MERGING)) {
-		_snap_merge_present = target_present(cmd, "snapshot-merge", 0);
-		_snap_merge_checked = 1;
+	if (attributes)
+		*attributes = _snap_attrs;
+
+	/* TODO: test everything at once */
+	if (seg && (seg->status & MERGING)) {
+		if (!_snap_merge_checked) {
+			_snap_merge_present = target_present(cmd, "snapshot-merge", 0);
+			_snap_merge_checked = 1;
+		}
 		return _snap_present && _snap_merge_present;
 	}
 
 	return _snap_present;
 }
 
-#ifdef DMEVENTD
-static int _get_snapshot_dso_path(struct cmd_context *cmd, char **dso)
+#  ifdef DMEVENTD
+
+static const char *_get_snapshot_dso_path(struct cmd_context *cmd)
 {
-	char *path;
-	const char *libpath;
-
-	if (!(path = dm_pool_alloc(cmd->mem, PATH_MAX))) {
-		log_error("Failed to allocate dmeventd library path.");
-		return 0;
-	}
-
-	libpath = find_config_tree_str(cmd, "dmeventd/snapshot_library", NULL);
-	if (!libpath)
-		return 0;
-
-	get_shared_library_path(cmd, libpath, path, PATH_MAX);
-
-	*dso = path;
-
-	return 1;
+	return get_monitor_dso_path(cmd, find_config_tree_str(cmd, dmeventd_snapshot_library_CFG, NULL));
 }
 
-static struct dm_event_handler *_create_dm_event_handler(const char *dmuuid,
-							 const char *dso,
-							 const int timeout,
-							 enum dm_event_mask mask)
-{
-	struct dm_event_handler *dmevh;
-
-	if (!(dmevh = dm_event_handler_create()))
-		return_0;
-
-       if (dm_event_handler_set_dso(dmevh, dso))
-		goto fail;
-
-	if (dm_event_handler_set_uuid(dmevh, dmuuid))
-		goto fail;
-
-	dm_event_handler_set_timeout(dmevh, timeout);
-	dm_event_handler_set_event_mask(dmevh, mask);
-	return dmevh;
-
-fail:
-	dm_event_handler_destroy(dmevh);
-	return NULL;
-}
-
+/* FIXME Cache this */
 static int _target_registered(struct lv_segment *seg, int *pending)
 {
-	char *dso, *uuid;
-	struct logical_volume *lv;
-	struct volume_group *vg;
-	enum dm_event_mask evmask = 0;
-	struct dm_event_handler *dmevh;
-
-	lv = seg->lv;
-	vg = lv->vg;
-
-	*pending = 0;
-	if (!_get_snapshot_dso_path(vg->cmd, &dso))
-		return_0;
-
-	if (!(uuid = build_dm_uuid(vg->cmd->mem, seg->cow->lvid.s, NULL)))
-		return_0;
-
-	if (!(dmevh = _create_dm_event_handler(uuid, dso, 0, DM_EVENT_ALL_ERRORS)))
-		return_0;
-
-	if (dm_event_get_registered_device(dmevh, 0)) {
-		dm_event_handler_destroy(dmevh);
-		return 0;
-	}
-
-	evmask = dm_event_handler_get_event_mask(dmevh);
-	if (evmask & DM_EVENT_REGISTRATION_PENDING) {
-		*pending = 1;
-		evmask &= ~DM_EVENT_REGISTRATION_PENDING;
-	}
-
-	dm_event_handler_destroy(dmevh);
-
-	return evmask;
+	return target_registered_with_dmeventd(seg->lv->vg->cmd, _get_snapshot_dso_path(seg->lv->vg->cmd),
+					       seg->cow, pending);
 }
 
 /* FIXME This gets run while suspended and performs banned operations. */
-static int _target_set_events(struct lv_segment *seg,
-			      int events __attribute((unused)), int set)
+static int _target_set_events(struct lv_segment *seg, int evmask, int set)
 {
-	char *dso, *uuid;
-	struct volume_group *vg = seg->lv->vg;
-	struct dm_event_handler *dmevh;
-	int r;
-
-	if (!_get_snapshot_dso_path(vg->cmd, &dso))
-		return_0;
-
-	if (!(uuid = build_dm_uuid(vg->cmd->mem, seg->cow->lvid.s, NULL)))
-		return_0;
-
-	/* FIXME: make timeout configurable */
-	if (!(dmevh = _create_dm_event_handler(uuid, dso, 10,
-		DM_EVENT_ALL_ERRORS|DM_EVENT_TIMEOUT)))
-		return_0;
-
-	r = set ? dm_event_register_handler(dmevh) : dm_event_unregister_handler(dmevh);
-	dm_event_handler_destroy(dmevh);
-	if (!r)
-		return_0;
-
-	log_info("%s %s for events", set ? "Registered" : "Unregistered", uuid);
-
-	return 1;
+	/* FIXME Make timeout (10) configurable */
+	return target_register_events(seg->lv->vg->cmd, _get_snapshot_dso_path(seg->lv->vg->cmd),
+				      seg->cow, evmask, set, 10);
 }
 
 static int _target_register_events(struct lv_segment *seg,
@@ -289,11 +212,10 @@ static int _target_unregister_events(struct lv_segment *seg,
 	return _target_set_events(seg, events, 0);
 }
 
-#endif /* DMEVENTD */
-#endif
+#  endif /* DMEVENTD */
 
 static int _snap_modules_needed(struct dm_pool *mem,
-				const struct lv_segment *seg __attribute((unused)),
+				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
 	if (!str_list_add(mem, modules, "snapshot")) {
@@ -303,27 +225,29 @@ static int _snap_modules_needed(struct dm_pool *mem,
 
 	return 1;
 }
+#endif /* DEVMAPPER_SUPPORT */
 
-static void _snap_destroy(const struct segment_type *segtype)
+static void _snap_destroy(struct segment_type *segtype)
 {
-	dm_free((void *)segtype);
+	dm_free(segtype);
 }
 
 static struct segtype_handler _snapshot_ops = {
 	.name = _snap_name,
+	.target_name = _snap_target_name,
 	.text_import = _snap_text_import,
 	.text_export = _snap_text_export,
-	.target_status_compatible = _snap_target_status_compatible,
 #ifdef DEVMAPPER_SUPPORT
+	.target_status_compatible = _snap_target_status_compatible,
 	.target_percent = _snap_target_percent,
 	.target_present = _snap_target_present,
-#ifdef DMEVENTD
+	.modules_needed = _snap_modules_needed,
+#  ifdef DMEVENTD
 	.target_monitored = _target_registered,
 	.target_monitor_events = _target_register_events,
 	.target_unmonitor_events = _target_unregister_events,
+#  endif	/* DMEVENTD */
 #endif
-#endif
-	.modules_needed = _snap_modules_needed,
 	.destroy = _snap_destroy,
 };
 
@@ -334,10 +258,7 @@ struct segment_type *init_segtype(struct cmd_context *cmd);
 struct segment_type *init_segtype(struct cmd_context *cmd)
 #endif
 {
-	struct segment_type *segtype = dm_malloc(sizeof(*segtype));
-#ifdef DMEVENTD
-	char *dso;
-#endif
+	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
 
 	if (!segtype)
 		return_NULL;
@@ -348,9 +269,11 @@ struct segment_type *init_segtype(struct cmd_context *cmd)
 	segtype->private = NULL;
 	segtype->flags = SEG_SNAPSHOT;
 
-#ifdef DMEVENTD
-	if (_get_snapshot_dso_path(cmd, &dso))
+#ifdef DEVMAPPER_SUPPORT
+#  ifdef DMEVENTD
+	if (_get_snapshot_dso_path(cmd))
 		segtype->flags |= SEG_MONITORED;
+#  endif	/* DMEVENTD */
 #endif
 	log_very_verbose("Initialised segtype: %s", segtype->name);
 

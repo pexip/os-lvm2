@@ -22,10 +22,33 @@ static struct volume_group *_vgmerge_vg_read(struct cmd_context *cmd,
 	log_verbose("Checking for volume group \"%s\"", vg_name);
 	vg = vg_read_for_update(cmd, vg_name, NULL, 0);
 	if (vg_read_error(vg)) {
-		vg_release(vg);
+		release_vg(vg);
 		return NULL;
 	}
 	return vg;
+}
+
+/* Select bigger pool metadata spare volume */
+static int _vgmerge_select_pool_metadata_spare(struct cmd_context *cmd,
+					       struct volume_group *vg_to,
+					       struct volume_group *vg_from)
+{
+	struct volume_group *svg;
+
+	if (!vg_to->pool_metadata_spare_lv ||
+	    !vg_from->pool_metadata_spare_lv)
+		return 1; /* no problem */
+
+	/* Drop smaller pool metadata spare */
+	svg = (vg_to->pool_metadata_spare_lv->le_count <
+	       vg_from->pool_metadata_spare_lv->le_count) ? vg_to : vg_from;
+	vg_remove_pool_metadata_spare(svg);
+
+	/* Re-test lv name compatibility */
+	if (!vgs_are_compatible(cmd, vg_from, vg_to))
+		return_0;
+
+	return 1;
 }
 
 static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
@@ -46,29 +69,19 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 		lock_vg_from_first = 1;
 
 	if (lock_vg_from_first) {
-		vg_from = _vgmerge_vg_read(cmd, vg_name_from);
-		if (!vg_from) {
-			stack;
-			return ECMD_FAILED;
-		}
-		vg_to = _vgmerge_vg_read(cmd, vg_name_to);
-		if (!vg_to) {
-			stack;
+		if (!(vg_from = _vgmerge_vg_read(cmd, vg_name_from)))
+			return_ECMD_FAILED;
+		if (!(vg_to = _vgmerge_vg_read(cmd, vg_name_to))) {
 			unlock_and_release_vg(cmd, vg_from, vg_name_from);
-			return ECMD_FAILED;
+			return_ECMD_FAILED;
 		}
 	} else {
-		vg_to = _vgmerge_vg_read(cmd, vg_name_to);
-		if (!vg_to) {
-			stack;
-			return ECMD_FAILED;
-		}
+		if (!(vg_to = _vgmerge_vg_read(cmd, vg_name_to)))
+			return_ECMD_FAILED;
 
-		vg_from = _vgmerge_vg_read(cmd, vg_name_from);
-		if (!vg_from) {
-			stack;
+		if (!(vg_from = _vgmerge_vg_read(cmd, vg_name_from))) {
 			unlock_and_release_vg(cmd, vg_to, vg_name_to);
-			return ECMD_FAILED;
+			return_ECMD_FAILED;
 		}
 	}
 
@@ -80,7 +93,11 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 	if (!archive(vg_from) || !archive(vg_to))
 		goto_bad;
 
-	drop_cached_metadata(vg_from);
+	if (!drop_cached_metadata(vg_from))
+		stack;
+
+	if (!_vgmerge_select_pool_metadata_spare(cmd, vg_to, vg_from))
+		goto_bad;
 
 	/* Merge volume groups */
 	dm_list_iterate_items_safe(pvl, tpvl, &vg_from->pvs) {
@@ -92,7 +109,7 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 	/* Fix up LVIDs */
 	dm_list_iterate_items(lvl1, &vg_to->lvs) {
 		union lvid *lvid1 = &lvl1->lv->lvid;
-		char uuid[64] __attribute((aligned(8)));
+		char uuid[64] __attribute__((aligned(8)));
 
 		dm_list_iterate_items(lvl2, &vg_from->lvs) {
 			union lvid *lvid2 = &lvl2->lv->lvid;
@@ -114,17 +131,32 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 		}
 	}
 
+	dm_list_iterate_items(lvl1, &vg_from->lvs) {
+		lvl1->lv->vg = vg_to;
+		lvl1->lv->lvid.id[0] = lvl1->lv->vg->id;
+	}
+
 	while (!dm_list_empty(&vg_from->lvs)) {
 		struct dm_list *lvh = vg_from->lvs.n;
 
 		dm_list_move(&vg_to->lvs, lvh);
 	}
 
-	while (!dm_list_empty(&vg_from->fid->metadata_areas)) {
-		struct dm_list *mdah = vg_from->fid->metadata_areas.n;
+	while (!dm_list_empty(&vg_from->fid->metadata_areas_in_use)) {
+		struct dm_list *mdah = vg_from->fid->metadata_areas_in_use.n;
 
-		dm_list_move(&vg_to->fid->metadata_areas, mdah);
+		dm_list_move(&vg_to->fid->metadata_areas_in_use, mdah);
 	}
+
+	while (!dm_list_empty(&vg_from->fid->metadata_areas_ignored)) {
+		struct dm_list *mdah = vg_from->fid->metadata_areas_ignored.n;
+
+		dm_list_move(&vg_to->fid->metadata_areas_ignored, mdah);
+	}
+
+	if (!vg_to->pool_metadata_spare_lv)
+		vg_to->pool_metadata_spare_lv =
+			vg_from->pool_metadata_spare_lv;
 
 	vg_to->extent_count += vg_from->extent_count;
 	vg_to->free_count += vg_from->free_count;
@@ -137,23 +169,23 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 	/* FIXME Remove /dev/vgfrom */
 
 	backup(vg_to);
-	log_print("Volume group \"%s\" successfully merged into \"%s\"",
-		  vg_from->name, vg_to->name);
+	log_print_unless_silent("Volume group \"%s\" successfully merged into \"%s\"",
+				vg_from->name, vg_to->name);
 	r = ECMD_PROCESSED;
 bad:
-	if (lock_vg_from_first) {
-		unlock_and_release_vg(cmd, vg_to, vg_name_to);
-		unlock_and_release_vg(cmd, vg_from, vg_name_from);
-	} else {
-		unlock_and_release_vg(cmd, vg_from, vg_name_from);
-		unlock_and_release_vg(cmd, vg_to, vg_name_to);
-	}
+	/*
+	 * Note: as vg_to is referencing moved elements from vg_from
+	 * the order of release_vg calls is mandatory.
+	 */
+	unlock_and_release_vg(cmd, vg_to, vg_name_to);
+	unlock_and_release_vg(cmd, vg_from, vg_name_from);
+
 	return r;
 }
 
 int vgmerge(struct cmd_context *cmd, int argc, char **argv)
 {
-	char *vg_name_to, *vg_name_from;
+	const char *vg_name_to, *vg_name_from;
 	int opt = 0;
 	int ret = 0, ret_max = 0;
 

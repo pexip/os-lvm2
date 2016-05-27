@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2009-2012 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -17,46 +17,31 @@
  * and lock manager.
  */
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
+#include "clvmd-common.h"
 
-#include <configure.h>
 #include <pthread.h>
-#include <sys/types.h>
-#include <sys/utsname.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/file.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <signal.h>
-#include <fcntl.h>
-#include <string.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <unistd.h>
-#include <errno.h>
-#include <utmpx.h>
-#include <syslog.h>
-#include <assert.h>
-#include <libdevmapper.h>
 
-#include <corosync/corotypes.h>
-#include <corosync/cpg.h>
-#include <corosync/quorum.h>
-#include <corosync/confdb.h>
-#include <libdlm.h>
-
-#include "locking.h"
-#include "lvm-logging.h"
 #include "clvm.h"
 #include "clvmd-comms.h"
-#include "lvm-functions.h"
 #include "clvmd.h"
+#include "lvm-functions.h"
+
+#include "locking.h"
+
+#include <corosync/cpg.h>
+#include <corosync/quorum.h>
+
+#ifdef HAVE_COROSYNC_CONFDB_H
+#  include <corosync/confdb.h>
+#elif defined HAVE_COROSYNC_CMAP_H
+#  include <corosync/cmap.h>
+#else
+#  error "Either HAVE_COROSYNC_CONFDB_H or HAVE_COROSYNC_CMAP_H must be defined."
+#endif
+
+#include <libdlm.h>
+
+#include <syslog.h>
 
 /* Timeout value for several corosync calls */
 #define LOCKSPACE_NAME "clvmd"
@@ -104,7 +89,7 @@ quorum_callbacks_t quorum_callbacks = {
 
 struct node_info
 {
-	enum {NODE_UNKNOWN, NODE_DOWN, NODE_UP, NODE_CLVMD} state;
+	enum {NODE_DOWN, NODE_CLVMD} state;
 	int nodeid;
 };
 
@@ -270,32 +255,16 @@ static void corosync_cpg_confchg_callback(cpg_handle_t handle,
 			ninfo->state = NODE_DOWN;
 	}
 
-	for (i=0; i<member_list_entries; i++) {
-		if (member_list[i].nodeid == 0) continue;
-		ninfo = dm_hash_lookup_binary(node_hash,
-				(char *)&member_list[i].nodeid,
-				COROSYNC_CSID_LEN);
-		if (!ninfo) {
-			ninfo = malloc(sizeof(struct node_info));
-			if (!ninfo) {
-				break;
-			}
-			else {
-				ninfo->nodeid = member_list[i].nodeid;
-				dm_hash_insert_binary(node_hash,
-						(char *)&ninfo->nodeid,
-						COROSYNC_CSID_LEN, ninfo);
-			}
-		}
-		ninfo->state = NODE_CLVMD;
-	}
-
 	num_nodes = member_list_entries;
 }
 
 static int _init_cluster(void)
 {
 	cs_error_t err;
+
+#ifdef QUORUM_SET	/* corosync/quorum.h */
+	uint32_t quorum_type;
+#endif
 
 	node_hash = dm_hash_create(100);
 
@@ -308,8 +277,21 @@ static int _init_cluster(void)
 		return cs_to_errno(err);
 	}
 
+#ifdef QUORUM_SET
+	err = quorum_initialize(&quorum_handle,
+				&quorum_callbacks,
+				&quorum_type);
+
+	if (quorum_type != QUORUM_SET) {
+		syslog(LOG_ERR, "Corosync quorum service is not configured");
+		DEBUGLOG("Corosync quorum service is not configured");
+		return EINVAL;
+	}
+#else
 	err = quorum_initialize(&quorum_handle,
 				&quorum_callbacks);
+#endif
+
 	if (err != CS_OK) {
 		syslog(LOG_ERR, "Cannot initialise Corosync quorum service: %d",
 		       err);
@@ -317,19 +299,18 @@ static int _init_cluster(void)
 		return cs_to_errno(err);
 	}
 
-
 	/* Create a lockspace for LV & VG locks to live in */
-	lockspace = dlm_create_lockspace(LOCKSPACE_NAME, 0600);
+	lockspace = dlm_open_lockspace(LOCKSPACE_NAME);
 	if (!lockspace) {
-		if (errno == EEXIST) {
-			lockspace = dlm_open_lockspace(LOCKSPACE_NAME);
-		}
+		lockspace = dlm_create_lockspace(LOCKSPACE_NAME, 0600);
 		if (!lockspace) {
-			syslog(LOG_ERR, "Unable to create lockspace for CLVM: %m");
-			quorum_finalize(quorum_handle);
+			syslog(LOG_ERR, "Unable to create DLM lockspace for CLVM: %m");
 			return -1;
 		}
-	}
+		DEBUGLOG("Created DLM lockspace for CLVMD.\n");
+	} else
+		DEBUGLOG("Opened existing DLM lockspace for CLVMD.\n");
+
 	dlm_ls_pthread_init(lockspace);
 	DEBUGLOG("DLM initialisation complete\n");
 
@@ -364,9 +345,6 @@ static int _init_cluster(void)
 
 static void _cluster_closedown(void)
 {
-	DEBUGLOG("cluster_closedown\n");
-	destroy_lvhash();
-
 	dlm_release_lockspace(LOCKSPACE_NAME, lockspace, 1);
 	cpg_finalize(cpg_handle);
 	quorum_finalize(quorum_handle);
@@ -407,7 +385,7 @@ static int _name_from_csid(const char *csid, char *name)
 	return 0;
 }
 
-static int _get_num_nodes()
+static int _get_num_nodes(void)
 {
 	DEBUGLOG("num_nodes = %d\n", num_nodes);
 	return num_nodes;
@@ -439,7 +417,6 @@ static int _cluster_do_node_callback(struct local_client *master_client,
 {
 	struct dm_hash_node *hn;
 	struct node_info *ninfo;
-	int somedown = 0;
 
 	dm_hash_iterate(hn, node_hash)
 	{
@@ -451,12 +428,10 @@ static int _cluster_do_node_callback(struct local_client *master_client,
 		DEBUGLOG("down_callback. node %d, state = %d\n", ninfo->nodeid,
 			 ninfo->state);
 
-		if (ninfo->state != NODE_DOWN)
-			callback(master_client, csid, ninfo->state == NODE_CLVMD);
-		if (ninfo->state != NODE_CLVMD)
-			somedown = -1;
+		if (ninfo->state == NODE_CLVMD)
+			callback(master_client, csid, 1);
 	}
-	return somedown;
+	return 0;
 }
 
 /* Real locking */
@@ -527,7 +502,7 @@ static int _unlock_resource(const char *resource, int lockid)
 	return 0;
 }
 
-static int _is_quorate()
+static int _is_quorate(void)
 {
 	int quorate;
 	if (quorum_getquorate(quorum_handle, &quorate) == CS_OK)
@@ -575,6 +550,7 @@ static int _cluster_send_message(const void *buf, int msglen, const char *csid,
 	return cs_to_errno(err);
 }
 
+#ifdef HAVE_COROSYNC_CONFDB_H
 /*
  * We are not necessarily connected to a Red Hat Cluster system,
  * but if we are, this returns the cluster name from cluster.conf.
@@ -621,7 +597,40 @@ out:
 	return 0;
 }
 
+#elif defined HAVE_COROSYNC_CMAP_H
+
+static int _get_cluster_name(char *buf, int buflen)
+{
+	cmap_handle_t cmap_handle = 0;
+	int result;
+	char *name = NULL;
+
+	/* This is a default in case everything else fails */
+	strncpy(buf, "Corosync", buflen);
+
+	/* Look for a cluster name in cmap */
+	result = cmap_initialize(&cmap_handle);
+	if (result != CS_OK)
+		return 0;
+
+	result = cmap_get_string(cmap_handle, "totem.cluster_name", &name);
+	if (result != CS_OK)
+		goto out;
+
+	memset(buf, 0, buflen);
+	strncpy(buf, name, buflen - 1);
+
+out:
+	if (name)
+		free(name);
+	cmap_finalize(cmap_handle);
+	return 0;
+}
+
+#endif
+
 static struct cluster_ops _cluster_corosync_ops = {
+	.name                     = "corosync",
 	.cluster_init_completed   = NULL,
 	.cluster_send_message     = _cluster_send_message,
 	.name_from_csid           = _name_from_csid,

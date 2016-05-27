@@ -28,7 +28,7 @@ static char *_expand_filename(const char *template, const char *vg_name,
 		return NULL;
 	}
 
-	if (snprintf(filename, PATH_MAX, template, vg_name) < 0) {
+	if (dm_snprintf(filename, PATH_MAX, template, vg_name) < 0) {
 		log_error("Error processing filename template %s",
 			   template);
 		dm_free(filename);	
@@ -56,32 +56,26 @@ static int vg_backup_single(struct cmd_context *cmd, const char *vg_name,
 
 	if (arg_count(cmd, file_ARG)) {
 		if (!(filename = _expand_filename(arg_value(cmd, file_ARG),
-						  vg->name, last_filename))) {
-			stack;
-			return ECMD_FAILED;
-		}
+						  vg->name, last_filename)))
+			return_ECMD_FAILED;
 
-		if (!backup_to_file(filename, vg->cmd->cmd_line, vg)) {
-			stack;
-			return ECMD_FAILED;
-		}
+		if (!backup_to_file(filename, vg->cmd->cmd_line, vg))
+			return_ECMD_FAILED;
 	} else {
 		if (vg_read_error(vg) == FAILED_INCONSISTENT) {
 			log_error("No backup taken: specify filename with -f "
 				  "to backup an inconsistent VG");
-			stack;
 			return ECMD_FAILED;
 		}
 
 		/* just use the normal backup code */
 		backup_enable(cmd, 1);	/* force a backup */
-		if (!backup(vg)) {
-			stack;
-			return ECMD_FAILED;
-		}
+		if (!backup(vg))
+			return_ECMD_FAILED;
 	}
 
-	log_print("Volume group \"%s\" successfully backed up.", vg_name);
+	log_print_unless_silent("Volume group \"%s\" successfully backed up.", vg_name);
+
 	return ECMD_PROCESSED;
 }
 

@@ -16,14 +16,23 @@
 #include "tools.h"
 #include "report.h"
 
-static int _vgs_single(struct cmd_context *cmd __attribute((unused)),
+static int _process_each_devtype(struct cmd_context *cmd, int argc, void *handle)
+{
+	if (argc)
+		log_warn("WARNING: devtypes currently ignores command line arguments.");
+
+	if (!report_devtypes(handle))
+		return_ECMD_FAILED;
+
+	return ECMD_PROCESSED;
+}
+
+static int _vgs_single(struct cmd_context *cmd __attribute__((unused)),
 		       const char *vg_name, struct volume_group *vg,
 		       void *handle)
 {
-	if (!report_object(handle, vg, NULL, NULL, NULL, NULL)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!report_object(handle, vg, NULL, NULL, NULL, NULL, NULL, NULL))
+		return_ECMD_FAILED;
 
 	check_current_backup(vg);
 
@@ -33,40 +42,72 @@ static int _vgs_single(struct cmd_context *cmd __attribute((unused)),
 static int _lvs_single(struct cmd_context *cmd, struct logical_volume *lv,
 		       void *handle)
 {
-	if (!report_object(handle, lv->vg, lv, NULL, NULL, NULL)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!report_object(handle, lv->vg, lv, NULL, NULL, NULL, NULL, NULL))
+		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;
 }
 
-static int _segs_single(struct cmd_context *cmd __attribute((unused)),
+static void _get_lv_info_for_report(struct cmd_context *cmd,
+				   struct logical_volume *lv,
+				   struct lvinfo *lvinfo)
+{
+	if (!lv_info(cmd, lv, 0, lvinfo, 1, 1))
+		lvinfo->exists = 0;
+}
+
+static int _lvs_with_info_single(struct cmd_context *cmd, struct logical_volume *lv,
+				 void *handle)
+{
+	struct lvinfo lvinfo;
+
+	_get_lv_info_for_report(cmd, lv, &lvinfo);
+	if (!report_object(handle, lv->vg, lv, NULL, NULL, NULL, &lvinfo, NULL))
+		return_ECMD_FAILED;
+
+	return ECMD_PROCESSED;
+}
+
+static int _segs_single(struct cmd_context *cmd __attribute__((unused)),
 			struct lv_segment *seg, void *handle)
 {
-	if (!report_object(handle, seg->lv->vg, seg->lv, NULL, seg, NULL)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!report_object(handle, seg->lv->vg, seg->lv, NULL, seg, NULL, NULL, NULL))
+		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;
 }
 
-static int _pvsegs_sub_single(struct cmd_context *cmd,
-			      struct volume_group *vg,
-			      struct pv_segment *pvseg, void *handle)
+static int _segs_with_lv_info_single(struct cmd_context *cmd __attribute__((unused)),
+				     struct lv_segment *seg, void *handle)
+{
+	struct lvinfo lvinfo;
+
+	_get_lv_info_for_report(cmd, seg->lv, &lvinfo);
+	if (!report_object(handle, seg->lv->vg, seg->lv, NULL, seg, NULL, &lvinfo, NULL))
+		return_ECMD_FAILED;
+
+	return ECMD_PROCESSED;
+}
+
+static int _do_pvsegs_sub_single(struct cmd_context *cmd,
+				 struct volume_group *vg,
+				 struct pv_segment *pvseg,
+				 int lv_info_needed,
+				 void *handle)
 {
 	int ret = ECMD_PROCESSED;
 	struct lv_segment *seg = pvseg->lvseg;
+	struct lvinfo lvinfo;
 
 	struct volume_group _free_vg = {
 		.cmd = cmd,
-		.name = (char *)"",
+		.name = "",
+		.vgmem = NULL,
 	};
 
 	struct logical_volume _free_logical_volume = {
 		.vg = vg ?: &_free_vg,
-		.name = (char *) "",
+		.name = "",
 		.snapshot = NULL,
 		.status = VISIBLE_LV,
 		.major = -1,
@@ -101,13 +142,33 @@ static int _pvsegs_sub_single(struct cmd_context *cmd,
 	dm_list_init(&_free_logical_volume.segs_using_this_lv);
 	dm_list_init(&_free_logical_volume.snapshot_segs);
 
+	lvinfo.exists = 0;
+	if (seg && lv_info_needed)
+	    _get_lv_info_for_report(cmd, seg->lv, &lvinfo);
+
 	if (!report_object(handle, vg, seg ? seg->lv : &_free_logical_volume, pvseg->pv,
-			   seg ? : &_free_lv_segment, pvseg)) {
-		stack;
+			   seg ? : &_free_lv_segment, pvseg, &lvinfo, pv_label(pvseg->pv))) {
 		ret = ECMD_FAILED;
+		goto_out;
 	}
 
+ out:
 	return ret;
+}
+
+static int _pvsegs_sub_single(struct cmd_context *cmd,
+			      struct volume_group *vg,
+			      struct pv_segment *pvseg, void *handle)
+{
+	return _do_pvsegs_sub_single(cmd, vg, pvseg, 0, handle);
+}
+
+static int _pvsegs_with_lv_info_sub_single(struct cmd_context *cmd,
+					   struct volume_group *vg,
+					   struct pv_segment *pvseg,
+					   void *handle)
+{
+	return _do_pvsegs_sub_single(cmd, vg, pvseg, 1, handle);
 }
 
 static int _lvsegs_single(struct cmd_context *cmd, struct logical_volume *lv,
@@ -119,11 +180,30 @@ static int _lvsegs_single(struct cmd_context *cmd, struct logical_volume *lv,
 	return process_each_segment_in_lv(cmd, lv, handle, _segs_single);
 }
 
+static int _lvsegs_with_lv_info_single(struct cmd_context *cmd,
+				       struct logical_volume *lv,
+				       void *handle)
+{
+	if (!arg_count(cmd, all_ARG) && !lv_is_visible(lv))
+		return ECMD_PROCESSED;
+
+	return process_each_segment_in_lv(cmd, lv, handle, _segs_with_lv_info_single);
+}
+
 static int _pvsegs_single(struct cmd_context *cmd, struct volume_group *vg,
 			  struct physical_volume *pv, void *handle)
 {
 	return process_each_segment_in_pv(cmd, vg, pv, handle,
 					  _pvsegs_sub_single);
+}
+
+static int _pvsegs_with_lv_info_single(struct cmd_context *cmd,
+				       struct volume_group *vg,
+				       struct physical_volume *pv,
+				       void *handle)
+{
+	return process_each_segment_in_pv(cmd, vg, pv, handle,
+				_pvsegs_with_lv_info_sub_single);
 }
 
 static int _pvs_single(struct cmd_context *cmd, struct volume_group *vg,
@@ -133,16 +213,16 @@ static int _pvs_single(struct cmd_context *cmd, struct volume_group *vg,
 	int ret = ECMD_PROCESSED;
 	const char *vg_name = NULL;
 	struct volume_group *old_vg = vg;
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
 
 	if (is_pv(pv) && !is_orphan(pv) && !vg) {
 		vg_name = pv_vg_name(pv);
 
 		vg = vg_read(cmd, vg_name, (char *)&pv->vgid, 0);
-		if (vg_read_error(vg)) {
-			log_error("Skipping volume group %s", vg_name);
-			vg_release(vg);
-			return ECMD_FAILED;
+		if (ignore_vg(vg, vg_name, 0, &ret)) {
+			release_vg(vg);
+			stack;
+			return ret;
 		}
 
 		/*
@@ -171,7 +251,7 @@ static int _pvs_single(struct cmd_context *cmd, struct volume_group *vg,
 		pv = pvl->pv;
 	}
 
-	if (!report_object(handle, vg, NULL, pv, NULL, NULL)) {
+	if (!report_object(handle, vg, NULL, pv, NULL, NULL, NULL, NULL)) {
 		stack;
 		ret = ECMD_FAILED;
 	}
@@ -181,18 +261,16 @@ out:
 		unlock_vg(cmd, vg_name);
 
 	if (!old_vg)
-		vg_release(vg);
+		release_vg(vg);
 
 	return ret;
 }
 
-static int _label_single(struct cmd_context *cmd, struct volume_group *vg,
-		       struct physical_volume *pv, void *handle)
+static int _label_single(struct cmd_context *cmd, struct label *label,
+		         void *handle)
 {
-	if (!report_object(handle, vg, NULL, pv, NULL, NULL)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!report_object(handle, NULL, NULL, NULL, NULL, NULL, NULL, label))
+		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;
 }
@@ -201,9 +279,11 @@ static int _pvs_in_vg(struct cmd_context *cmd, const char *vg_name,
 		      struct volume_group *vg,
 		      void *handle)
 {
-	if (vg_read_error(vg)) {
+	int ret = ECMD_PROCESSED;
+
+	if (ignore_vg(vg, vg_name, 0, &ret)) {
 		stack;
-		return ECMD_FAILED;
+		return ret;
 	}
 
 	return process_each_pv_in_vg(cmd, vg, NULL, handle, &_pvs_single);
@@ -213,9 +293,11 @@ static int _pvsegs_in_vg(struct cmd_context *cmd, const char *vg_name,
 			 struct volume_group *vg,
 			 void *handle)
 {
-	if (vg_read_error(vg)) {
+	int ret = ECMD_PROCESSED;
+
+	if (ignore_vg(vg, vg_name, 0, &ret)) {
 		stack;
-		return ECMD_FAILED;
+		return ret;
 	}
 
 	return process_each_pv_in_vg(cmd, vg, NULL, handle, &_pvsegs_single);
@@ -227,93 +309,77 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	void *report_handle;
 	const char *opts;
 	char *str;
-	const char *keys = NULL, *options = NULL, *separator;
+	const char *keys = NULL, *options = NULL, *selection = NULL, *separator;
 	int r = ECMD_PROCESSED;
 	int aligned, buffered, headings, field_prefixes, quoted;
 	int columns_as_rows;
-	unsigned args_are_pvs;
+	unsigned args_are_pvs, lv_info_needed;
 
-	aligned = find_config_tree_int(cmd, "report/aligned",
-				  DEFAULT_REP_ALIGNED);
-	buffered = find_config_tree_int(cmd, "report/buffered",
-				   DEFAULT_REP_BUFFERED);
-	headings = find_config_tree_int(cmd, "report/headings",
-				   DEFAULT_REP_HEADINGS);
-	separator = find_config_tree_str(cmd, "report/separator",
-				    DEFAULT_REP_SEPARATOR);
-	field_prefixes = find_config_tree_int(cmd, "report/prefixes",
-					      DEFAULT_REP_PREFIXES);
-	quoted = find_config_tree_int(cmd, "report/quoted",
-				     DEFAULT_REP_QUOTED);
-	columns_as_rows = find_config_tree_int(cmd, "report/columns_as_rows",
-					       DEFAULT_REP_COLUMNS_AS_ROWS);
+	aligned = find_config_tree_bool(cmd, report_aligned_CFG, NULL);
+	buffered = find_config_tree_bool(cmd, report_buffered_CFG, NULL);
+	headings = find_config_tree_bool(cmd, report_headings_CFG, NULL);
+	separator = find_config_tree_str(cmd, report_separator_CFG, NULL);
+	field_prefixes = find_config_tree_bool(cmd, report_prefixes_CFG, NULL);
+	quoted = find_config_tree_bool(cmd, report_quoted_CFG, NULL);
+	columns_as_rows = find_config_tree_bool(cmd, report_colums_as_rows_CFG, NULL);
 
 	args_are_pvs = (report_type == PVS ||
 			report_type == LABEL ||
 			report_type == PVSEGS) ? 1 : 0;
 
+	/*
+	 * FIXME Trigger scans based on unrecognised listed devices instead.
+	 */
+	if (args_are_pvs && argc)
+		cmd->filter->wipe(cmd->filter);
+
 	switch (report_type) {
-	case LVS:
-		keys = find_config_tree_str(cmd, "report/lvs_sort",
-				       DEFAULT_LVS_SORT);
+	case DEVTYPES:
+		keys = find_config_tree_str(cmd, report_devtypes_sort_CFG, NULL);
 		if (!arg_count(cmd, verbose_ARG))
-			options = find_config_tree_str(cmd,
-						  "report/lvs_cols",
-						  DEFAULT_LVS_COLS);
+			options = find_config_tree_str(cmd, report_devtypes_cols_CFG, NULL);
 		else
-			options = find_config_tree_str(cmd,
-						  "report/lvs_cols_verbose",
-						  DEFAULT_LVS_COLS_VERB);
+			options = find_config_tree_str(cmd, report_devtypes_cols_verbose_CFG, NULL);
+		break;
+	case LVS:
+		keys = find_config_tree_str(cmd, report_lvs_sort_CFG, NULL);
+		if (!arg_count(cmd, verbose_ARG))
+			options = find_config_tree_str(cmd, report_lvs_cols_CFG, NULL);
+		else
+			options = find_config_tree_str(cmd, report_lvs_cols_verbose_CFG, NULL);
 		break;
 	case VGS:
-		keys = find_config_tree_str(cmd, "report/vgs_sort",
-				       DEFAULT_VGS_SORT);
+		keys = find_config_tree_str(cmd, report_vgs_sort_CFG, NULL);
 		if (!arg_count(cmd, verbose_ARG))
-			options = find_config_tree_str(cmd,
-						  "report/vgs_cols",
-						  DEFAULT_VGS_COLS);
+			options = find_config_tree_str(cmd, report_vgs_cols_CFG, NULL);
 		else
-			options = find_config_tree_str(cmd,
-						  "report/vgs_cols_verbose",
-						  DEFAULT_VGS_COLS_VERB);
+			options = find_config_tree_str(cmd, report_vgs_cols_verbose_CFG, NULL);
 		break;
 	case LABEL:
 	case PVS:
-		keys = find_config_tree_str(cmd, "report/pvs_sort",
-				       DEFAULT_PVS_SORT);
+		keys = find_config_tree_str(cmd, report_pvs_sort_CFG, NULL);
 		if (!arg_count(cmd, verbose_ARG))
-			options = find_config_tree_str(cmd,
-						  "report/pvs_cols",
-						  DEFAULT_PVS_COLS);
+			options = find_config_tree_str(cmd, report_pvs_cols_CFG, NULL);
 		else
-			options = find_config_tree_str(cmd,
-						  "report/pvs_cols_verbose",
-						  DEFAULT_PVS_COLS_VERB);
+			options = find_config_tree_str(cmd, report_pvs_cols_verbose_CFG, NULL);
 		break;
 	case SEGS:
-		keys = find_config_tree_str(cmd, "report/segs_sort",
-				       DEFAULT_SEGS_SORT);
+		keys = find_config_tree_str(cmd, report_segs_sort_CFG, NULL);
 		if (!arg_count(cmd, verbose_ARG))
-			options = find_config_tree_str(cmd,
-						  "report/segs_cols",
-						  DEFAULT_SEGS_COLS);
+			options = find_config_tree_str(cmd, report_segs_cols_CFG, NULL);
 		else
-			options = find_config_tree_str(cmd,
-						  "report/segs_cols_verbose",
-						  DEFAULT_SEGS_COLS_VERB);
+			options = find_config_tree_str(cmd, report_segs_cols_verbose_CFG, NULL);
 		break;
 	case PVSEGS:
-		keys = find_config_tree_str(cmd, "report/pvsegs_sort",
-				       DEFAULT_PVSEGS_SORT);
+		keys = find_config_tree_str(cmd, report_pvsegs_sort_CFG, NULL);
 		if (!arg_count(cmd, verbose_ARG))
-			options = find_config_tree_str(cmd,
-						  "report/pvsegs_cols",
-						  DEFAULT_PVSEGS_COLS);
+			options = find_config_tree_str(cmd, report_pvsegs_cols_CFG, NULL);
 		else
-			options = find_config_tree_str(cmd,
-						  "report/pvsegs_cols_verbose",
-						  DEFAULT_PVSEGS_COLS_VERB);
+			options = find_config_tree_str(cmd, report_pvsegs_cols_verbose_CFG, NULL);
 		break;
+	default:
+		log_error(INTERNAL_ERROR "Unknown report type.");
+		return ECMD_FAILED;
 	}
 
 	/* If -o supplied use it, else use default for report_type */
@@ -329,9 +395,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 				log_error("options string allocation failed");
 				return ECMD_FAILED;
 			}
-			strcpy(str, options);
-			strcat(str, ",");
-			strcat(str, opts + 1);
+			(void) sprintf(str, "%s,%s", options, opts + 1);
 			options = str;
 		} else
 			options = opts;
@@ -358,20 +422,24 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 	if (arg_count(cmd, rows_ARG))
 		columns_as_rows = 1;
 
+	if (arg_count(cmd, select_ARG))
+		selection = arg_str_value(cmd, select_ARG, NULL);
+
 	if (!(report_handle = report_init(cmd, options, keys, &report_type,
 					  separator, aligned, buffered,
 					  headings, field_prefixes, quoted,
-					  columns_as_rows))) {
-		stack;
-		return ECMD_FAILED;
-	}
+					  columns_as_rows, selection)))
+		return_ECMD_FAILED;
+
+	/* Do we need lv_info to be called for LV device status? */
+	lv_info_needed = (report_type & LVSINFO) ? 1 : 0;
 
 	/* Ensure options selected are compatible */
 	if (report_type & SEGS)
 		report_type |= LVS;
 	if (report_type & PVSEGS)
 		report_type |= PVS;
-	if ((report_type & LVS) && (report_type & (PVS | LABEL)) && !args_are_pvs) {
+	if ((report_type & (LVS | LVSINFO)) && (report_type & (PVS | LABEL)) && !args_are_pvs) {
 		log_error("Can't report LV and PV fields at the same time");
 		dm_report_free(report_handle);
 		return ECMD_FAILED;
@@ -379,7 +447,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 
 	/* Change report type if fields specified makes this necessary */
 	if ((report_type & PVSEGS) ||
-	    ((report_type & (PVS | LABEL)) && (report_type & LVS)))
+	    ((report_type & (PVS | LABEL)) && (report_type & (LVS | LVSINFO))))
 		report_type = PVSEGS;
 	else if ((report_type & LABEL) && (report_type & VGS))
 		report_type = PVS;
@@ -387,21 +455,30 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 		report_type = PVS;
 	else if (report_type & SEGS)
 		report_type = SEGS;
+	else if (report_type & LVSINFO)
+		report_type = LVSINFO;
 	else if (report_type & LVS)
 		report_type = LVS;
 
 	switch (report_type) {
+	case DEVTYPES:
+		r = _process_each_devtype(cmd, argc, report_handle);
+		break;
 	case LVS:
 		r = process_each_lv(cmd, argc, argv, 0, report_handle,
 				    &_lvs_single);
+		break;
+	case LVSINFO:
+		r = process_each_lv(cmd, argc, argv, 0, report_handle,
+				    &_lvs_with_info_single);
 		break;
 	case VGS:
 		r = process_each_vg(cmd, argc, argv, 0,
 				    report_handle, &_vgs_single);
 		break;
 	case LABEL:
-		r = process_each_pv(cmd, argc, argv, NULL, READ_WITHOUT_LOCK,
-				    1, report_handle, &_label_single);
+		r = process_each_label(cmd, argc, argv,
+				       report_handle, &_label_single);
 		break;
 	case PVS:
 		if (args_are_pvs)
@@ -413,12 +490,15 @@ static int _report(struct cmd_context *cmd, int argc, char **argv,
 		break;
 	case SEGS:
 		r = process_each_lv(cmd, argc, argv, 0, report_handle,
-				    &_lvsegs_single);
+				    lv_info_needed ? &_lvsegs_with_lv_info_single
+						   : &_lvsegs_single);
 		break;
 	case PVSEGS:
 		if (args_are_pvs)
 			r = process_each_pv(cmd, argc, argv, NULL, 0,
-					    0, report_handle, &_pvsegs_single);
+					    0, report_handle,
+					    lv_info_needed ? &_pvsegs_with_lv_info_single
+							   : &_pvsegs_single);
 		else
 			r = process_each_vg(cmd, argc, argv, 0,
 					    report_handle, &_pvsegs_in_vg);
@@ -458,4 +538,9 @@ int pvs(struct cmd_context *cmd, int argc, char **argv)
 		type = LABEL;
 
 	return _report(cmd, argc, argv, type);
+}
+
+int devtypes(struct cmd_context *cmd, int argc, char **argv)
+{
+	return _report(cmd, argc, argv, DEVTYPES);
 }

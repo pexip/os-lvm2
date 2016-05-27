@@ -27,6 +27,7 @@ int main(int argc, char **argv)
 #  include <readline/history.h>
 #  ifndef HAVE_RL_COMPLETION_MATCHES
 #    define rl_completion_matches(a, b) completion_matches((char *)a, b)
+#    define rl_completion_func_t CPPFunction
 #  endif
 
 static struct cmdline_context *_cmdline;
@@ -60,7 +61,7 @@ static char *_list_args(const char *text, int state)
 	/* Initialise if this is a new completion attempt */
 	if (!state) {
 		char *s = rl_line_buffer;
-		int j = 0;
+		int j;
 
 		match_no = 0;
 		com = NULL;
@@ -85,17 +86,17 @@ static char *_list_args(const char *text, int state)
 				break;
 			}
 		}
-
-		if (!com)
-			return NULL;
 	}
+
+	if (!com)
+		return NULL;
 
 	/* Short form arguments */
 	if (len < 3) {
 		while (match_no < com->num_args) {
 			char s[3];
 			char c;
-			if (!(c = (_cmdline->the_args +
+			if (!(c = (_cmdline->arg_props +
 				   com->valid_args[match_no++])->short_arg))
 				continue;
 
@@ -111,7 +112,7 @@ static char *_list_args(const char *text, int state)
 
 	while (match_no - com->num_args < com->num_args) {
 		const char *l;
-		l = (_cmdline->the_args +
+		l = (_cmdline->arg_props +
 		     com->valid_args[match_no++ - com->num_args])->long_arg;
 		if (*(l + 2) && !strncmp(text, l, len))
 			return strdup(l);
@@ -122,7 +123,7 @@ static char *_list_args(const char *text, int state)
 
 /* Custom completion function */
 static char **_completion(const char *text, int start_pos,
-			  int end_pos __attribute((unused)))
+			  int end_pos __attribute__((unused)))
 {
 	char **match_list = NULL;
 	int p = 0;
@@ -165,9 +166,7 @@ static void _read_history(struct cmd_context *cmd)
 	if (read_history(hist_file))
 		log_very_verbose("Couldn't read history from %s.", hist_file);
 
-	stifle_history(find_config_tree_int(cmd, "shell/history_size",
-				       DEFAULT_MAX_HISTORY));
-
+	stifle_history(find_config_tree_int(cmd, shell_history_size_CFG, NULL));
 }
 
 static void _write_history(void)
@@ -187,7 +186,7 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 	char *input = NULL, *args[MAX_ARGS], **argv;
 
 	rl_readline_name = "lvm";
-	rl_attempted_completion_function = (CPPFunction *) _completion;
+	rl_attempted_completion_function = (rl_completion_func_t *) _completion;
 
 	_read_history(cmd);
 
@@ -200,6 +199,7 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 
 		/* EOF */
 		if (!input) {
+			/* readline sends prompt to stdout */
 			printf("\n");
 			break;
 		}
@@ -216,6 +216,9 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 			log_error("Too many arguments, sorry.");
 			continue;
 		}
+
+		if (!argc)
+			continue;
 
 		if (!strcmp(argv[0], "lvm")) {
 			argv++;

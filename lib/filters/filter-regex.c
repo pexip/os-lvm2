@@ -14,8 +14,7 @@
  */
 
 #include "lib.h"
-#include "filter-regex.h"
-#include "device.h"
+#include "filter.h"
 
 struct rfilter {
 	struct dm_pool *mem;
@@ -87,10 +86,10 @@ static int _extract_pattern(struct dm_pool *mem, const char *pat,
 	return 1;
 }
 
-static int _build_matcher(struct rfilter *rf, struct config_value *val)
+static int _build_matcher(struct rfilter *rf, const struct dm_config_value *val)
 {
 	struct dm_pool *scratch;
-	struct config_value *v;
+	const struct dm_config_value *v;
 	char **regex;
 	unsigned count = 0;
 	int i, r = 0;
@@ -102,7 +101,7 @@ static int _build_matcher(struct rfilter *rf, struct config_value *val)
 	 * count how many patterns we have.
 	 */
 	for (v = val; v; v = v->next) {
-		if (v->type != CFG_STRING) {
+		if (v->type != DM_CFG_STRING) {
 			log_error("Filter patterns must be enclosed in quotes.");
 			goto out;
 		}
@@ -110,16 +109,17 @@ static int _build_matcher(struct rfilter *rf, struct config_value *val)
 		count++;
 	}
 
-	/*
-	 * allocate space for them
-	 */
-	if (!(regex = dm_pool_alloc(scratch, sizeof(*regex) * count)))
-		goto_out;
+	/* Allocate space for them */
+	if (!(regex = dm_pool_alloc(scratch, sizeof(*regex) * count))) {
+		log_error("Failed to allocate regex.");
+		goto out;
+	}
 
-	/*
-	 * create the accept/reject bitset
-	 */
-	rf->accept = dm_bitset_create(rf->mem, count);
+	/* Create the accept/reject bitset */
+	if (!(rf->accept = dm_bitset_create(rf->mem, count))) {
+		log_error("Failed to create bitset.");
+		goto out;
+	}
 
 	/*
 	 * fill the array back to front because we
@@ -135,9 +135,9 @@ static int _build_matcher(struct rfilter *rf, struct config_value *val)
 	/*
 	 * build the matcher.
 	 */
-	if (!(rf->engine = dm_regex_create(rf->mem, (const char **) regex,
+	if (!(rf->engine = dm_regex_create(rf->mem, (const char * const*) regex,
 					   count)))
-		stack;
+		goto_out;
 	r = 1;
 
       out:
@@ -149,7 +149,7 @@ static int _accept_p(struct dev_filter *f, struct device *dev)
 {
 	int m, first = 1, rejected = 0;
 	struct rfilter *rf = (struct rfilter *) f->private;
-	struct str_list *sl;
+	struct dm_str_list *sl;
 
 	dm_list_iterate_items(sl, &dev->aliases) {
 		m = dm_regex_match(rf->engine, sl->str);
@@ -169,7 +169,7 @@ static int _accept_p(struct dev_filter *f, struct device *dev)
 	}
 
 	if (rejected)
-		log_debug("%s: Skipping (regex)", dev_name(dev));
+		log_debug_devs("%s: Skipping (regex)", dev_name(dev));
 
 	/*
 	 * pass everything that doesn't match
@@ -181,10 +181,14 @@ static int _accept_p(struct dev_filter *f, struct device *dev)
 static void _regex_destroy(struct dev_filter *f)
 {
 	struct rfilter *rf = (struct rfilter *) f->private;
+
+	if (f->use_count)
+		log_error(INTERNAL_ERROR "Destroying regex filter while in use %u times.", f->use_count);
+
 	dm_pool_destroy(rf->mem);
 }
 
-struct dev_filter *regex_filter_create(struct config_value *patterns)
+struct dev_filter *regex_filter_create(const struct dm_config_value *patterns)
 {
 	struct dm_pool *mem = dm_pool_create("filter regex", 10 * 1024);
 	struct rfilter *rf;
@@ -206,7 +210,11 @@ struct dev_filter *regex_filter_create(struct config_value *patterns)
 
 	f->passes_filter = _accept_p;
 	f->destroy = _regex_destroy;
+	f->use_count = 0;
 	f->private = rf;
+
+	log_debug_devs("Regex filter initialised.");
+
 	return f;
 
       bad:

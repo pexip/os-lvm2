@@ -22,10 +22,10 @@
  * liblvm2cmd thread-safe so this can go away.
  */
 
-#include "libdevmapper.h"
-
 #ifndef _DMEVENTD_LVMWRAP_H
 #define _DMEVENTD_LVMWRAP_H
+
+struct dm_pool;
 
 int dmeventd_lvm2_init(void);
 void dmeventd_lvm2_exit(void);
@@ -35,5 +35,8 @@ void dmeventd_lvm2_lock(void);
 void dmeventd_lvm2_unlock(void);
 
 struct dm_pool *dmeventd_lvm2_pool(void);
+
+int dmeventd_lvm2_command(struct dm_pool *mem, char *buffer, size_t size,
+			  const char *cmd, const char *device);
 
 #endif /* _DMEVENTD_LVMWRAP_H */
