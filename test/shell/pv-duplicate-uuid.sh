@@ -7,22 +7,47 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # Test 'Found duplicate' is shown
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
 . lib/inittest
 
 aux prepare_devs 3
 
 pvcreate "$dev1"
 UUID1=$(get pv_field "$dev1" uuid)
-pvcreate --config "devices{filter=[\"a|$dev2|\",\"r|.*|\"]}" -u "$UUID1" --norestorefile "$dev2"
-pvcreate --config "devices{filter=[\"a|$dev3|\",\"r|.*|\"]}" -u "$UUID1" --norestorefile "$dev3"
+pvcreate --config "devices{filter=[\"a|$dev2|\",\"r|.*|\"]} global/use_lvmetad=0" -u "$UUID1" --norestorefile "$dev2"
+pvcreate --config "devices{filter=[\"a|$dev3|\",\"r|.*|\"]} global/use_lvmetad=0" -u "$UUID1" --norestorefile "$dev3"
 
-pvs -o+uuid |& tee out
-COUNT=$(should grep --count "Found duplicate" out)
+pvscan --cache 2>&1 | tee out
 
-# FIXME  lvmetad is not able to serve properly this case
-should [ "$COUNT" -eq 2 ]
+if test -e LOCAL_LVMETAD; then
+	grep "was already found" out
+	grep "WARNING: Disabling lvmetad cache which does not support duplicate PVs." out
+fi
 
-pvs -o+uuid --config "devices{filter=[\"a|$dev2|\",\"r|.*|\"]}"
+pvs -o+uuid 2>&1 | tee out
+
+grep    WARNING out > warn || true
+grep -v WARNING out > main || true
+
+test $(grep $UUID1 main | wc -l) -eq 1
+
+COUNT=$(grep --count "was already found" warn)
+[ "$COUNT" -eq 2 ]
+
+pvs -o+uuid --config "devices{filter=[\"a|$dev2|\",\"r|.*|\"]}" 2>&1 | tee out
+
+rm warn main || true
+grep    WARNING out > warn || true
+grep -v WARNING out > main || true
+
+not grep "$dev1" main
+grep "$dev2" main
+not grep "$dev3" main
+
+not grep "was already found" warn
+

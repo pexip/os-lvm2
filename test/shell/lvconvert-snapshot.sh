@@ -8,9 +8,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # Test various supported conversion of snapshot
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -18,7 +21,7 @@ aux prepare_pvs 1
 
 vgcreate -s 1k $vg $(cat DEVICES)
 
-lvcreate -V50 -L1 -n $lv1 -s $vg
+lvcreate --type snapshot -V50 -L1 -n $lv1 -s $vg
 
 lvcreate -aey -L1 -n $lv2 $vg
 lvcreate -L1 -s -n $lv3 $vg/$lv2

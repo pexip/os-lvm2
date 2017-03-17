@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_LOG_H
@@ -37,21 +37,24 @@
  *
  */
 
-#include <stdio.h>		/* FILE */
-#include <string.h>		/* strerror() */
 #include <errno.h>
 
 #define EUNCLASSIFIED -1	/* Generic error code */
 
-#define _LOG_STDERR 128 /* force things to go to stderr, even if loglevel
-			   would make them go to stdout */
-#define _LOG_ONCE 256 /* downgrade to NOTICE if this has been already logged */
-#define _LOG_DEBUG 7
-#define _LOG_INFO 6
-#define _LOG_NOTICE 5
-#define _LOG_WARN 4
-#define _LOG_ERR 3
-#define _LOG_FATAL 2
+#define _LOG_FATAL         0x0002
+#define _LOG_ERR           0x0003
+#define _LOG_WARN          0x0004
+#define _LOG_NOTICE        0x0005
+#define _LOG_INFO          0x0006
+#define _LOG_DEBUG         0x0007
+#define _LOG_STDERR        0x0080 /* force things to go to stderr, even if loglevel would make them go to stdout */
+#define _LOG_ONCE          0x0100 /* downgrade to NOTICE if this has been already logged */
+#define _LOG_BYPASS_REPORT 0x0200 /* do not log through report even if report available */
+#define log_level(x)  ((x) & 0x0f)			/* obtain message level */
+#define log_stderr(x)  ((x) & _LOG_STDERR)		/* obtain stderr bit */
+#define log_once(x)  ((x) & _LOG_ONCE)			/* obtain once bit */
+#define log_bypass_report(x)  ((x) & _LOG_BYPASS_REPORT)/* obtain bypass bit */
+
 #define INTERNAL_ERROR "Internal error: "
 
 /*
@@ -67,6 +70,8 @@
 #define LOG_CLASS_METADATA	0x0020	/* "metadata" */
 #define LOG_CLASS_CACHE		0x0040	/* "cache" */
 #define LOG_CLASS_LOCKING	0x0080	/* "locking" */
+#define LOG_CLASS_LVMPOLLD	0x0100	/* "lvmpolld" */
+#define LOG_CLASS_DBUS		0x0200	/* "dbus" */
 
 #define log_debug(x...) LOG_LINE(_LOG_DEBUG, x)
 #define log_debug_mem(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_MEM, x)
@@ -77,6 +82,8 @@
 #define log_debug_metadata(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_METADATA, x)
 #define log_debug_cache(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_CACHE, x)
 #define log_debug_locking(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_LOCKING, x)
+#define log_debug_lvmpolld(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_LVMPOLLD, x)
+#define log_debug_dbus(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_DBUS, x)
 
 #define log_info(x...) LOG_LINE(_LOG_INFO, x)
 #define log_notice(x...) LOG_LINE(_LOG_NOTICE, x)
@@ -109,6 +116,8 @@
 
 #define return_0	do { stack; return 0; } while (0)
 #define return_NULL	do { stack; return NULL; } while (0)
+#define return_EINVALID_CMD_LINE \
+			do { stack; return EINVALID_CMD_LINE; } while (0)
 #define return_ECMD_FAILED do { stack; return ECMD_FAILED; } while (0)
 #define goto_out	do { stack; goto out; } while (0)
 #define goto_bad	do { stack; goto bad; } while (0)

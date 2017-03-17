@@ -26,7 +26,7 @@ if [ -e /etc/lvm/lvm.conf ]; then
 fi
 
 mkdir -p $DESTDIR/lib/udev/rules.d/
-for rules in 56-lvm.rules 60-persistent-storage-lvm.rules; do
+for rules in 56-lvm.rules 60-persistent-storage-lvm.rules 69-lvm-metad.rules; do
 	if   [ -e /etc/udev/rules.d/$rules ]; then
 		cp -p /etc/udev/rules.d/$rules $DESTDIR/lib/udev/rules.d/
 	elif [ -e /lib/udev/rules.d/$rules ]; then

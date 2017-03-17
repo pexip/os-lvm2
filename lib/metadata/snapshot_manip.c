@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -34,6 +34,11 @@ int lv_is_cow(const struct logical_volume *lv)
 	return (!lv_is_thin_volume(lv) && !lv_is_origin(lv) && lv->snapshot) ? 1 : 0;
 }
 
+struct logical_volume *find_cow(const struct logical_volume *snap)
+{
+	return first_seg(snap)->cow;
+}
+
 /*
  * Some kernels have a bug that they may leak space in the snapshot on crash.
  * If the kernel is buggy, we add some extra space.
@@ -44,7 +49,7 @@ static uint64_t _cow_extra_chunks(struct cmd_context *cmd, uint64_t n_chunks)
 	unsigned attrs = 0;
 
 	if (activation() &&
-	    (segtype = get_segtype_from_string(cmd, "snapshot")) &&
+	    (segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_SNAPSHOT)) &&
 	    segtype->ops->target_present &&
 	    segtype->ops->target_present(cmd, NULL, &attrs) &&
 	    (attrs & SNAPSHOT_FEATURE_FIXED_LEAK))
@@ -113,6 +118,9 @@ int lv_is_cow_covering_origin(const struct logical_volume *lv)
 
 int lv_is_visible(const struct logical_volume *lv)
 {
+	if (lv_is_historical(lv))
+		return 1;
+
 	if (lv->status & SNAPSHOT)
 		return 0;
 
@@ -129,20 +137,16 @@ int lv_is_visible(const struct logical_volume *lv)
 	return lv->status & VISIBLE_LV ? 1 : 0;
 }
 
-int lv_is_virtual_origin(const struct logical_volume *lv)
+int lv_is_merging_cow(const struct logical_volume *cow)
 {
-	return (lv->status & VIRTUAL_ORIGIN) ? 1 : 0;
-}
+	struct lv_segment *snap_seg;
 
-int lv_is_merging_origin(const struct logical_volume *origin)
-{
-	return (origin->status & MERGING) ? 1 : 0;
-}
+	if (!lv_is_cow(cow))
+		return 0;
 
-int lv_is_merging_cow(const struct logical_volume *snapshot)
-{
-	struct lv_segment *snap_seg = find_snapshot(snapshot);
-	/* checks lv_segment's status to see if cow is merging */
+	snap_seg = find_snapshot(cow);
+
+	/* checks lv_segment's status to see if snapshot is merging */
 	return (snap_seg && (snap_seg->status & MERGING)) ? 1 : 0;
 }
 
@@ -192,7 +196,7 @@ void init_snapshot_merge(struct lv_segment *snap_seg,
 
 	if (seg_is_thin_volume(snap_seg)) {
 		snap_seg->merge_lv = origin;
-		/* Making thin LV inivisible with regular log */
+		/* Making thin LV invisible with regular log */
 		lv_set_hidden(snap_seg->lv);
 		return;
 	}
@@ -223,6 +227,28 @@ void clear_snapshot_merge(struct logical_volume *origin)
 	origin->status &= ~MERGING;
 }
 
+static struct lv_segment *_alloc_snapshot_seg(struct logical_volume *lv)
+{
+	struct lv_segment *seg;
+	const struct segment_type *segtype;
+
+	segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_SNAPSHOT);
+	if (!segtype) {
+		log_error("Failed to find snapshot segtype");
+		return NULL;
+	}
+
+	if (!(seg = alloc_lv_segment(segtype, lv, 0, lv->le_count, 0, 0,
+				     NULL, 0, lv->le_count, 0, 0, 0, NULL))) {
+		log_error("Couldn't allocate new snapshot segment.");
+		return NULL;
+	}
+
+	dm_list_add(&lv->segments, &seg->list);
+
+	return seg;
+}
+
 int vg_add_snapshot(struct logical_volume *origin,
 		    struct logical_volume *cow, union lvid *lvid,
 		    uint32_t extent_count, uint32_t chunk_size)
@@ -250,7 +276,7 @@ int vg_add_snapshot(struct logical_volume *origin,
 
 	snap->le_count = extent_count;
 
-	if (!(seg = alloc_snapshot_seg(snap, 0, 0)))
+	if (!(seg = _alloc_snapshot_seg(snap)))
 		return_0;
 
 	init_snapshot_seg(seg, origin, cow, chunk_size, 0);
@@ -282,10 +308,10 @@ int vg_remove_snapshot(struct logical_volume *cow)
 		clear_snapshot_merge(origin);
 		/*
 		 * preload origin IFF "snapshot-merge" target is active
-		 * - IMPORTANT: avoids preload if onactivate merge is pending
+		 * - IMPORTANT: avoids preload if inactivate merge is pending
 		 */
-		if (lv_has_target_type(origin->vg->cmd->mem, origin, NULL,
-				       "snapshot-merge")) {
+		if (lv_has_target_type(origin->vg->vgmem, origin, NULL,
+				       TARGET_NAME_SNAPSHOT_MERGE)) {
 			/*
 			 * preload origin to:
 			 * - allow proper release of -cow
@@ -324,6 +350,7 @@ int vg_remove_snapshot(struct logical_volume *cow)
 	if (is_origin_active && !suspend_lv(origin->vg->cmd, origin)) {
 		log_error("Failed to refresh %s without snapshot.",
 			  origin->name);
+		vg_revert(origin->vg);
 		return 0;
 	}
 	if (!vg_commit(origin->vg))

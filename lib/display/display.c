@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -23,10 +23,6 @@
 #include "lvm-signal.h"
 
 #include <stdarg.h>
-
-#define SIZE_BUF 128
-
-typedef enum { SIZE_LONG = 0, SIZE_SHORT = 1, SIZE_UNIT = 2 } size_len_t;
 
 static const struct {
 	alloc_policy_t alloc;
@@ -86,6 +82,38 @@ alloc_policy_t get_alloc_from_string(const char *str)
 	return ALLOC_INVALID;
 }
 
+const char *get_lock_type_string(lock_type_t lock_type)
+{
+	switch (lock_type) {
+	case LOCK_TYPE_INVALID:
+		return "invalid";
+	case LOCK_TYPE_NONE:
+		return "none";
+	case LOCK_TYPE_CLVM:
+		return "clvm";
+	case LOCK_TYPE_DLM:
+		return "dlm";
+	case LOCK_TYPE_SANLOCK:
+		return "sanlock";
+	}
+	return "invalid";
+}
+
+lock_type_t get_lock_type_from_string(const char *str)
+{
+	if (!str)
+		return LOCK_TYPE_NONE;
+	if (!strcmp(str, "none"))
+		return LOCK_TYPE_NONE;
+	if (!strcmp(str, "clvm"))
+		return LOCK_TYPE_CLVM;
+	if (!strcmp(str, "dlm"))
+		return LOCK_TYPE_DLM;
+	if (!strcmp(str, "sanlock"))
+		return LOCK_TYPE_SANLOCK;
+	return LOCK_TYPE_INVALID;
+}
+
 static const char *_percent_types[7] = { "NONE", "VG", "FREE", "LV", "PVS", "ORIGIN" };
 
 const char *get_percent_string(percent_type_t def)
@@ -93,170 +121,61 @@ const char *get_percent_string(percent_type_t def)
 	return _percent_types[def];
 }
 
-const char *display_lvname(const struct logical_volume *lv)
+static const char *_lv_name(const struct logical_volume *lv)
 {
-	/* On allocation failure, just return the LV name. */
-	return lv_fullname_dup(lv->vg->cmd->mem, lv) ? : lv->name;
+	/* Never try to display names of the internal snapshot structures. */
+	if (lv_is_snapshot(lv))
+		return find_cow(lv)->name;
+
+	return lv->name;
 }
 
-#define BASE_UNKNOWN 0
-#define BASE_SHARED 1
-#define BASE_1024 8
-#define BASE_1000 15
-#define BASE_SPECIAL 21
-#define NUM_UNIT_PREFIXES 6
-#define NUM_SPECIAL 3
+const char *display_lvname(const struct logical_volume *lv)
+{
+	char *name;
+	const char *lv_name = _lv_name(lv);
+	int r;
+
+	if ((lv->vg->cmd->display_lvname_idx + NAME_LEN) >= sizeof((lv->vg->cmd->display_buffer)))
+		lv->vg->cmd->display_lvname_idx = 0;
+
+	name = lv->vg->cmd->display_buffer + lv->vg->cmd->display_lvname_idx;
+	r = dm_snprintf(name, NAME_LEN, "%s/%s", lv->vg->name, lv_name);
+
+	if (r < 0) {
+		log_error("Full LV name \"%s/%s\" is too long.", lv->vg->name, lv_name);
+		return NULL;
+	}
+
+	lv->vg->cmd->display_lvname_idx += r + 1;
+
+	return name;
+}
 
 /* Size supplied in sectors */
 static const char *_display_size(const struct cmd_context *cmd,
-				 uint64_t size, size_len_t sl)
+				 uint64_t size, dm_size_suffix_t suffix_type)
 {
-	unsigned base = BASE_UNKNOWN;
-	unsigned s;
-	int suffix, precision;
-	uint64_t byte = UINT64_C(0);
-	uint64_t units = UINT64_C(1024);
-	char *size_buf = NULL;
-	const char * const size_str[][3] = {
-		/* BASE_UNKNOWN */
-		{"         ", "   ", " "},	/* [0] */
-
-		/* BASE_SHARED - Used if cmd->si_unit_consistency = 0 */
-		{" Exabyte", " EB", "E"},	/* [1] */
-		{" Petabyte", " PB", "P"},	/* [2] */
-		{" Terabyte", " TB", "T"},	/* [3] */
-		{" Gigabyte", " GB", "G"},	/* [4] */
-		{" Megabyte", " MB", "M"},	/* [5] */
-		{" Kilobyte", " KB", "K"},	/* [6] */
-		{" Byte    ", " B", "B"},	/* [7] */
-
-		/* BASE_1024 - Used if cmd->si_unit_consistency = 1 */
-		{" Exbibyte", " EiB", "e"},	/* [8] */
-		{" Pebibyte", " PiB", "p"},	/* [9] */
-		{" Tebibyte", " TiB", "t"},	/* [10] */
-		{" Gibibyte", " GiB", "g"},	/* [11] */
-		{" Mebibyte", " MiB", "m"},	/* [12] */
-		{" Kibibyte", " KiB", "k"},	/* [13] */
-		{" Byte    ", " B", "b"},	/* [14] */
-
-		/* BASE_1000 - Used if cmd->si_unit_consistency = 1 */
-		{" Exabyte",  " EB", "E"},	/* [15] */
-		{" Petabyte", " PB", "P"},	/* [16] */
-		{" Terabyte", " TB", "T"},	/* [17] */
-		{" Gigabyte", " GB", "G"},	/* [18] */
-		{" Megabyte", " MB", "M"},	/* [19] */
-		{" Kilobyte", " kB", "K"},	/* [20] */
-
-		/* BASE_SPECIAL */
-		{" Byte    ", " B ", "B"},	/* [21] (shared with BASE_1000) */
-		{" Units   ", " Un", "U"},	/* [22] */
-		{" Sectors ", " Se", "S"},	/* [23] */
-	};
-
-	if (!(size_buf = dm_pool_alloc(cmd->mem, SIZE_BUF))) {
-		log_error("no memory for size display buffer");
-		return "";
-	}
-
-	suffix = cmd->current_settings.suffix;
-
-	if (!cmd->si_unit_consistency) {
-		/* Case-independent match */
-		for (s = 0; s < NUM_UNIT_PREFIXES; s++)
-			if (toupper((int) cmd->current_settings.unit_type) ==
-			    *size_str[BASE_SHARED + s][2]) {
-				base = BASE_SHARED;
-				break;
-			}
-	} else {
-		/* Case-dependent match for powers of 1000 */
-		for (s = 0; s < NUM_UNIT_PREFIXES; s++)
-			if (cmd->current_settings.unit_type ==
-			    *size_str[BASE_1000 + s][2]) {
-				base = BASE_1000;
-				break;
-			}
-
-		/* Case-dependent match for powers of 1024 */
-		if (base == BASE_UNKNOWN)
-			for (s = 0; s < NUM_UNIT_PREFIXES; s++)
-			if (cmd->current_settings.unit_type ==
-			    *size_str[BASE_1024 + s][2]) {
-				base = BASE_1024;
-				break;
-			}
-	}
-
-	if (base == BASE_UNKNOWN)
-		/* Check for special units - s, b or u */
-		for (s = 0; s < NUM_SPECIAL; s++)
-			if (toupper((int) cmd->current_settings.unit_type) ==
-			    *size_str[BASE_SPECIAL + s][2]) {
-				base = BASE_SPECIAL;
-				break;
-			}
-
-	if (size == UINT64_C(0)) {
-		if (base == BASE_UNKNOWN)
-			s = 0;
-		sprintf(size_buf, "0%s", suffix ? size_str[base + s][sl] : "");
-		return size_buf;
-	}
-
-	size *= UINT64_C(512);
-
-	if (base != BASE_UNKNOWN)
-		byte = cmd->current_settings.unit_factor;
-	else {
-		/* Human-readable style */
-		if (cmd->current_settings.unit_type == 'H') {
-			units = UINT64_C(1000);
-			base = BASE_1000;
-		} else {
-			units = UINT64_C(1024);
-			base = BASE_1024;
-		}
-
-		if (!cmd->si_unit_consistency)
-			base = BASE_SHARED;
-
-		byte = units * units * units * units * units * units;
-
-		for (s = 0; s < NUM_UNIT_PREFIXES && size < byte; s++)
-			byte /= units;
-
-		suffix = 1;
-	}
-
-	/* FIXME Make precision configurable */
-	switch (toupper(*size_str[base + s][SIZE_UNIT])) {
-	case 'B':
-	case 'S':
-		precision = 0;
-		break;
-	default:
-		precision = 2;
-	}
-
-	snprintf(size_buf, SIZE_BUF - 1, "%.*f%s", precision,
-		 (double) size / byte, suffix ? size_str[base + s][sl] : "");
-
-	return size_buf;
+	return dm_size_to_string(cmd->mem, size, cmd->current_settings.unit_type,
+				 cmd->si_unit_consistency, 
+				 cmd->current_settings.unit_factor,
+				 cmd->current_settings.suffix,
+				 suffix_type);
 }
 
 const char *display_size_long(const struct cmd_context *cmd, uint64_t size)
 {
-	return _display_size(cmd, size, SIZE_LONG);
+	return _display_size(cmd, size, DM_SIZE_LONG);
 }
 
 const char *display_size_units(const struct cmd_context *cmd, uint64_t size)
 {
-	return _display_size(cmd, size, SIZE_UNIT);
+	return _display_size(cmd, size, DM_SIZE_UNIT);
 }
 
 const char *display_size(const struct cmd_context *cmd, uint64_t size)
 {
-	return _display_size(cmd, size, SIZE_SHORT);
+	return _display_size(cmd, size, DM_SIZE_SHORT);
 }
 
 void pvdisplay_colons(const struct physical_volume *pv)
@@ -385,7 +304,7 @@ int pvdisplay_short(const struct cmd_context *cmd __attribute__((unused)),
 	char uuid[64] __attribute__((aligned(8)));
 
 	if (!pv)
-		return 0;
+		return_0;
 
 	if (!id_write_format(&pv->id, uuid, sizeof(uuid)))
 		return_0;
@@ -399,7 +318,8 @@ int pvdisplay_short(const struct cmd_context *cmd __attribute__((unused)),
 		  pv->pe_count, pv->pe_count - pv->pe_alloc_count);
 
 	log_print(" ");
-	return 0;
+
+	return 1; /* ECMD_PROCESSED */
 }
 
 void lvdisplay_colons(const struct logical_volume *lv)
@@ -422,6 +342,34 @@ void lvdisplay_colons(const struct logical_volume *lv)
 		  inkernel ? info.major : -1, inkernel ? info.minor : -1);
 }
 
+static int _lvdisplay_historical_full(struct cmd_context *cmd,
+				      const struct logical_volume *lv)
+{
+	char uuid[64] __attribute__((aligned(8)));
+	int lvm1compat = find_config_tree_bool(cmd, global_lvdisplay_shows_full_device_path_CFG, NULL);
+	struct historical_logical_volume *hlv = lv->this_glv->historical;
+
+	if (!id_write_format(&hlv->lvid.id[1], uuid, sizeof(uuid)))
+		return_0;
+
+	log_print("--- Historical Logical volume ---");
+
+	if (lvm1compat)
+		/* /dev/vgname/lvname doen't actually exist for historical devices */
+		log_print("LV Name                %s%s/%s",
+			  hlv->vg->cmd->dev_dir, hlv->vg->name, hlv->name);
+	else
+		log_print("LV Name                %s%s", HISTORICAL_LV_PREFIX, hlv->name);
+
+	log_print("VG Name                %s", hlv->vg->name);
+	log_print("LV UUID                %s", uuid);
+	log_print("LV Creation time       %s", lv_creation_time_dup(cmd->mem, lv, 1));
+	log_print("LV Removal time        %s", lv_removal_time_dup(cmd->mem, lv, 1));
+
+	log_print(" ");
+	return 1;
+}
+
 int lvdisplay_full(struct cmd_context *cmd,
 		   const struct logical_volume *lv,
 		   void *handle __attribute__((unused)))
@@ -438,6 +386,9 @@ int lvdisplay_full(struct cmd_context *cmd,
 	dm_percent_t thin_data_percent, thin_metadata_percent;
 	int thin_active = 0;
 	dm_percent_t thin_percent;
+
+	if (lv_is_historical(lv))
+		return _lvdisplay_historical_full(cmd, lv);
 
 	if (!id_write_format(&lv->lvid.id[1], uuid, sizeof(uuid)))
 		return_0;
@@ -473,7 +424,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 	log_print("LV UUID                %s", uuid);
 	log_print("LV Write Access        %s", access_str);
 	log_print("LV Creation host, time %s, %s",
-		  lv_host_dup(cmd->mem, lv), lv_time_dup(cmd->mem, lv));
+		  lv_host_dup(cmd->mem, lv), lv_creation_time_dup(cmd->mem, lv, 1));
 
 	if (lv_is_origin(lv)) {
 		log_print("LV snapshot status     source of");
@@ -587,10 +538,10 @@ int lvdisplay_full(struct cmd_context *cmd,
 			  display_size(cmd, (uint64_t) snap_seg->chunk_size));
 	}
 
-	if (lv->status & MIRRORED) {
+	if (lv_is_mirrored(lv)) {
 		mirror_seg = first_seg(lv);
 		log_print("Mirrored volumes       %" PRIu32, mirror_seg->area_count);
-		if (lv->status & CONVERTING)
+		if (lv_is_converting(lv))
 			log_print("LV type        Mirror undergoing conversion");
 	}
 
@@ -623,7 +574,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 
 	log_print(" ");
 
-	return 0;
+	return 1; /* ECMD_PROCESSED */
 }
 
 void display_stripe(const struct lv_segment *seg, uint32_t s, const char *pre)
@@ -667,7 +618,7 @@ int lvdisplay_segments(const struct logical_volume *lv)
 			  lv_is_virtual(lv) ? "Virtual" : "Logical",
 			  seg->le, seg->le + seg->len - 1);
 
-		log_print("  Type\t\t%s", seg->segtype->ops->name(seg));
+		log_print("  Type\t\t%s", lvseg_name(seg));
 
 		if (seg->segtype->ops->target_monitored)
 			log_print("  Monitoring\t\t%s",
@@ -695,7 +646,7 @@ void vgdisplay_full(const struct volume_group *vg)
 
 	log_print("--- Volume group ---");
 	log_print("VG Name               %s", vg->name);
-	log_print("System ID             %s", vg->system_id);
+	log_print("System ID             %s", (vg->system_id && *vg->system_id) ? vg->system_id : vg->lvm1_system_id ? : "");
 	log_print("Format                %s", vg->fid->fmt->name);
 	if (vg->fid->fmt->features & FMT_MDAS) {
 		log_print("Metadata Areas        %d",
@@ -855,7 +806,7 @@ void display_name_error(name_error_t name_error)
 	case NAME_INVALID_EMPTY:
 		log_error("Name is zero length.");
 		break;
-	case NAME_INVALID_HYPEN:
+	case NAME_INVALID_HYPHEN:
 		log_error("Name cannot start with hyphen.");
 		break;
 	case NAME_INVALID_DOTS:
@@ -880,50 +831,102 @@ void display_name_error(name_error_t name_error)
  * Prompt for y or n from stdin.
  * Defaults to 'no' in silent mode.
  * All callers should support --yes and/or --force to override this.
+ *
+ * Accepted are either _yes[] or _no[] strings or just their outset.
+ * When running without 'tty' stdin is printed to stderr.
+ * 'Yes' is accepted ONLY with '\n'.
  */
 char yes_no_prompt(const char *prompt, ...)
 {
-	int c = 0, ret = 0, cb = 0;
+	/* Lowercase Yes/No strings */
+	static const char _yes[] = "yes";
+	static const char _no[] = "no";
+	const char *answer = NULL;
+	int c = silent_mode() ? EOF : 0;
+	int i = 0, ret = 0, sig = 0;
+	char buf[12];
 	va_list ap;
 
 	sigint_allow();
-	do {
-		if (c == '\n' || !c) {
+
+	for (;;) {
+		if (!ret) {
+			/* Show prompt */
 			va_start(ap, prompt);
 			vfprintf(stderr, prompt, ap);
 			va_end(ap);
 			fflush(stderr);
-			if (silent_mode()) {
-				fputc('n', stderr);
-				ret = 'n';
+
+			if (c == EOF)
 				break;
-			}
-			ret = 0;
+
+			i = 0;
+			answer = NULL;
 		}
+
+	nextchar:
+		if ((sig = sigint_caught()))
+			break;	/* Check if already interrupted before getchar() */
 
 		if ((c = getchar()) == EOF) {
-			ret = 'n'; /* SIGINT */
-			cb = 1;
-			break;
+			/* SIGNAL or no chars on stdin (missing '\n') or ^D */
+			if (!i)
+				break; /* Just shown prompt,-> print [n]\n */
+
+			goto invalid; /* Note:  c holds EOF */
 		}
 
+		if ((i < (sizeof(buf) - 4)) && isprint(c))
+			buf[i++] = c;
+
 		c = tolower(c);
-		if ((c == 'y') || (c == 'n')) {
-			/* If both 'y' and 'n' given, begin again. */
-			if (ret && c != ret)
-				ret = -1;
-			else
-				ret = c;
-		}
-	} while (ret < 1 || c != '\n');
+
+		if ((ret > 0) && (c == answer[0]))
+			answer++;	/* Matching, next char */
+		else if (c == '\n') {
+			if (feof(stdin))
+				fputc('\n', stderr);
+			if (ret > 0)
+				break;	/* Answered */
+	invalid:
+			if (i >= (sizeof(buf) - 4)) {
+				/* '...'  for missing input */
+				i = sizeof(buf) - 1;
+				buf[i - 1] = buf[i - 2] = buf[i - 3] = '.';
+			}
+			buf[i] = 0;
+			log_warn("WARNING: Invalid input '%s'.", buf);
+			ret = 0;	/* Otherwise refresh prompt */
+		} else if (!ret && (c == _yes[0])) {
+			ret = 'y';
+			answer = _yes + 1;	/* Expecting 'Yes' */
+		} else if (!ret && (c == _no[0])) {
+			ret = 'n';
+			answer = _no + 1;	/* Expecting 'No' */
+		} else if (!ret && isspace(c)) {
+			/* Ignore any whitespace before */
+			--i;
+			goto nextchar;
+		} else if ((ret > 0) && isspace(c)) {
+			/* Ignore any whitespace after */
+			while (*answer)
+				answer++; /* jump to end-of-word */
+		} else
+			ret = -1;	/* Read till '\n' and refresh */
+	}
 
 	sigint_restore();
 
-	if (cb && !sigint_caught())
-		fputc(ret, stderr);
-
-	if (c != '\n')
-		fputc('\n', stderr);
+	/* For other then Yes answer check there is really no interrupt */
+	if (sig || sigint_caught()) {
+		stack;
+		ret = 'n';
+	} else if (c == EOF) {
+		fputs("[n]\n", stderr);
+		ret = 'n';
+	} else
+		/* Not knowing if it's terminal, makes this hard.... */
+		log_verbose("Accepted input: [%c]", ret);
 
 	return ret;
 }

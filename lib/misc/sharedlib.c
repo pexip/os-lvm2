@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -27,10 +27,13 @@ void get_shared_library_path(struct cmd_context *cmd, const char *libname,
 {
 	struct stat info;
 
+	if (!path_len)
+		return;
+
 	/* If libname doesn't begin with '/' then use lib_dir/libname,
 	 * if present */
 	if (libname[0] == '/' ||
-            (!cmd->lib_dir &&
+	    (!cmd->lib_dir &&
 	     !(cmd->lib_dir = find_config_tree_str(cmd, global_library_dir_CFG, NULL))) ||
 	    (dm_snprintf(path, path_len, "%s/%s", cmd->lib_dir,
 			 libname) == -1) || stat(path, &info) == -1) {

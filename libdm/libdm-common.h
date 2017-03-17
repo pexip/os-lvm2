@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef LIB_DMCOMMON_H
@@ -50,5 +50,7 @@ void selinux_release(void);
 
 void inc_suspended(void);
 void dec_suspended(void);
+
+int parse_thin_pool_status(const char *params, struct dm_status_thin_pool *s);
 
 #endif

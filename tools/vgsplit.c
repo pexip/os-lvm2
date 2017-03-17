@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2009 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2009,2016 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -10,11 +10,10 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
-#include "metadata.h"  /* for 'get_only_segment_using_this_lv' */
 
 static int _lv_is_in_vg(struct volume_group *vg, struct logical_volume *lv)
 {
@@ -24,9 +23,52 @@ static int _lv_is_in_vg(struct volume_group *vg, struct logical_volume *lv)
 	return 1;
 }
 
+static struct dm_list *_lvh_in_vg(struct logical_volume *lv, struct volume_group *vg)
+{
+	struct dm_list *lvh;
+
+	dm_list_iterate(lvh, &vg->lvs)
+		if (lv == dm_list_item(lvh, struct lv_list)->lv)
+			return lvh;
+
+	return NULL;
+}
+
+static int _lv_tree_move(struct dm_list *lvh,
+			 struct dm_list **lvht,
+			 struct volume_group *vg_from,
+			 struct volume_group *vg_to)
+{
+	uint32_t s;
+	struct logical_volume *lv = dm_list_item(lvh, struct lv_list)->lv;
+	struct lv_segment *seg = first_seg(lv);
+	struct dm_list *lvh1;
+
+	/* Update the list pointer refering to the item moving to @vg_to. */
+	if (lvh == *lvht)
+		*lvht = dm_list_next(lvh, lvh);
+
+	dm_list_move(&vg_to->lvs, lvh);
+	lv->vg = vg_to;
+	lv->lvid.id[0] = lv->vg->id;
+
+	if (seg)
+		for (s = 0; s < seg->area_count; s++)
+			if (seg_type(seg, s) == AREA_LV && seg_lv(seg, s)) {
+				if ((lvh1 = _lvh_in_vg(seg_lv(seg, s), vg_from))) {
+					if (!_lv_tree_move(lvh1, lvht, vg_from, vg_to))
+						return 0;
+				} else if (!_lvh_in_vg(seg_lv(seg, s), vg_to))
+					return 0;
+			}
+
+	return 1;
+}
+
 static int _move_one_lv(struct volume_group *vg_from,
-			 struct volume_group *vg_to,
-			 struct dm_list *lvh)
+			struct volume_group *vg_to,
+			struct dm_list *lvh,
+			struct dm_list **lvht)
 {
 	struct logical_volume *lv = dm_list_item(lvh, struct lv_list)->lv;
 	struct logical_volume *parent_lv;
@@ -39,10 +81,15 @@ static int _move_one_lv(struct volume_group *vg_from,
 		return 0;
 	}
 
-	dm_list_move(&vg_to->lvs, lvh);
-	lv->vg = vg_to;
+	/* Bail out, if any allocations of @lv are still on PVs of @vg_from */
+	if (lv_is_on_pvs(lv, &vg_from->pvs)) {
+		log_error("Can't split LV %s between "
+			  "two Volume Groups", lv->name);
+		return 0;
+	}
 
-	lv->lvid.id[0] = lv->vg->id;
+	if (!_lv_tree_move(lvh, lvht, vg_from, vg_to))
+		return 0;
 
 	/* Moved pool metadata spare LV */
 	if (vg_from->pool_metadata_spare_lv == lv) {
@@ -71,7 +118,7 @@ static int _move_lvs(struct volume_group *vg_from, struct volume_group *vg_to)
 		if (lv_is_raid(lv))
 			continue;
 
-		if ((lv->status & MIRRORED))
+		if (lv_is_mirrored(lv))
 			continue;
 
 		if (lv_is_thin_pool(lv) ||
@@ -122,7 +169,7 @@ static int _move_lvs(struct volume_group *vg_from, struct volume_group *vg_to)
 			continue;
 
 		/* Move this LV */
-		if (!_move_one_lv(vg_from, vg_to, lvh))
+		if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 			return_0;
 	}
 
@@ -168,7 +215,7 @@ static int _move_snapshots(struct volume_group *vg_from,
 			 */
 			if (_lv_is_in_vg(vg_to, seg->cow) &&
 			    _lv_is_in_vg(vg_to, seg->origin)) {
-				if (!_move_one_lv(vg_from, vg_to, lvh))
+				if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 					return_0;
 			}
 		}
@@ -192,7 +239,11 @@ static int _move_mirrors(struct volume_group *vg_from,
 		if (lv_is_raid(lv))
 			continue;
 
-		if (!(lv->status & MIRRORED))
+		if (!lv_is_mirrored(lv))
+			continue;
+
+		/* Ignore, if no allocations on PVs of @vg_to */
+		if (!lv_is_on_pvs(lv, &vg_to->pvs))
 			continue;
 
 		seg = first_seg(lv);
@@ -226,7 +277,7 @@ static int _move_mirrors(struct volume_group *vg_from,
 		}
 
 		if (seg_in == seg->area_count && log_in) {
-			if (!_move_one_lv(vg_from, vg_to, lvh))
+			if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 				return_0;
 		}
 	}
@@ -234,13 +285,18 @@ static int _move_mirrors(struct volume_group *vg_from,
 	return 1;
 }
 
-static int _move_raid(struct volume_group *vg_from,
-		      struct volume_group *vg_to)
+/*
+ * Check for any RAID LVs with allocations on PVs of @vg_to.
+ *
+ * If these don't have any allocations on PVs of @vg_from,
+ * move their whole lv stack across to @vg_to including the
+ * top-level RAID LV.
+ */
+static int _move_raids(struct volume_group *vg_from,
+		       struct volume_group *vg_to)
 {
 	struct dm_list *lvh, *lvht;
 	struct logical_volume *lv;
-	struct lv_segment *seg;
-	unsigned s, seg_in;
 
 	dm_list_iterate_safe(lvh, lvht, &vg_from->lvs) {
 		lv = dm_list_item(lvh, struct lv_list)->lv;
@@ -248,23 +304,12 @@ static int _move_raid(struct volume_group *vg_from,
 		if (!lv_is_raid(lv))
 			continue;
 
-		seg = first_seg(lv);
-
-		seg_in = 0;
-		for (s = 0; s < seg->area_count; s++) {
-			if (_lv_is_in_vg(vg_to, seg_lv(seg, s)))
-				seg_in++;
-			if (_lv_is_in_vg(vg_to, seg_metalv(seg, s)))
-				seg_in++;
-		}
-
-		if (seg_in && seg_in != (seg->area_count * 2)) {
-			log_error("Can't split RAID %s between "
-				  "two Volume Groups", lv->name);
-			return 0;
-		}
-
-		if (!_move_one_lv(vg_from, vg_to, lvh))
+		/* Ignore, if no allocations on PVs of @vg_to */
+		if (!lv_is_on_pvs(lv, &vg_to->pvs))
+			continue;
+ 
+		/* If allocations are on PVs of @vg_to -> move RAID LV stack across */
+		if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 			return_0;
 	}
 
@@ -284,6 +329,12 @@ static int _move_thins(struct volume_group *vg_from,
 		if (lv_is_thin_volume(lv)) {
 			seg = first_seg(lv);
 			data_lv = seg_lv(first_seg(seg->pool_lv), 0);
+
+			/* Ignore, if no allocations on PVs of @vg_to */
+			if (!lv_is_on_pvs(data_lv, &vg_to->pvs) &&
+			    (seg->external_lv && !lv_is_on_pvs(seg->external_lv, &vg_to->pvs)))
+				continue;
+
 			if ((_lv_is_in_vg(vg_to, data_lv) ||
 			     _lv_is_in_vg(vg_to, seg->external_lv))) {
 				if (_lv_is_in_vg(vg_from, seg->external_lv) ||
@@ -294,12 +345,17 @@ static int _move_thins(struct volume_group *vg_from,
 						  seg->pool_lv->name);
 					return 0;
 				}
-				if (!_move_one_lv(vg_from, vg_to, lvh))
+				if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 					return_0;
 			}
 		} else if (lv_is_thin_pool(lv)) {
 			seg = first_seg(lv);
 			data_lv = seg_lv(seg, 0);
+
+			/* Ignore, if no allocations on PVs of @vg_to */
+			if (!lv_is_on_pvs(data_lv, &vg_to->pvs))
+				continue;
+
 			if (_lv_is_in_vg(vg_to, data_lv) ||
 			    _lv_is_in_vg(vg_to, seg->metadata_lv)) {
 				if (_lv_is_in_vg(vg_from, seg->metadata_lv) ||
@@ -309,7 +365,7 @@ static int _move_thins(struct volume_group *vg_from,
 						  lv->name);
 					return 0;
 				}
-				if (!_move_one_lv(vg_from, vg_to, lvh))
+				if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 					return_0;
 			}
 		}
@@ -351,7 +407,7 @@ static int _move_cache(struct volume_group *vg_from,
 			data = seg_lv(first_seg(seg->pool_lv), 0);
 			meta = first_seg(seg->pool_lv)->metadata_lv;
 			/* Ensure all components are coming along */
-			is_moving = !!_lv_is_in_vg(vg_to, orig);
+			is_moving = _lv_is_in_vg(vg_to, orig);
 		} else {
 			if (!dm_list_empty(&seg->lv->segs_using_this_lv) &&
 			    !(cache_seg = get_only_segment_using_this_lv(seg->lv)))
@@ -365,26 +421,32 @@ static int _move_cache(struct volume_group *vg_from,
 				is_moving = 1;
 		}
 
-		if (orig && (!!_lv_is_in_vg(vg_to, orig) != is_moving)) {
+		if (!lv_is_on_pvs(data, &vg_to->pvs))
+			continue;
+
+		if (!lv_is_on_pvs(meta, &vg_to->pvs))
+			continue;
+
+		if (orig && (_lv_is_in_vg(vg_to, orig) != is_moving)) {
 			log_error("Can't split %s and its origin (%s)"
 				  " into separate VGs", lv->name, orig->name);
 			return 0;
 		}
 
-		if (data && (!!_lv_is_in_vg(vg_to, data) != is_moving)) {
+		if (data && (_lv_is_in_vg(vg_to, data) != is_moving)) {
 			log_error("Can't split %s and its cache pool"
 				  " data LV (%s) into separate VGs",
 				  lv->name, data->name);
 			return 0;
 		}
 
-		if (meta && (!!_lv_is_in_vg(vg_to, meta) != is_moving)) {
+		if (meta && (_lv_is_in_vg(vg_to, meta) != is_moving)) {
 			log_error("Can't split %s and its cache pool"
 				  " metadata LV (%s) into separate VGs",
 				  lv->name, meta->name);
 			return 0;
 		}
-		if (!_move_one_lv(vg_from, vg_to, lvh))
+		if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 			return_0;
 	}
 
@@ -414,7 +476,7 @@ static struct volume_group *_vgsplit_to(struct cmd_context *cmd,
 	 * we obtained a WRITE lock and could not find the vgname in the
 	 * system.  Thus, the split will be into a new VG.
 	 */
-	vg_to = vg_create(cmd, vg_name_to);
+	vg_to = vg_lock_and_create(cmd, vg_name_to);
 	if (vg_read_error(vg_to) == FAILED_LOCKING) {
 		log_error("Can't get lock for %s", vg_name_to);
 		release_vg(vg_to);
@@ -423,7 +485,7 @@ static struct volume_group *_vgsplit_to(struct cmd_context *cmd,
 	if (vg_read_error(vg_to) == FAILED_EXIST) {
 		*existing_vg = 1;
 		release_vg(vg_to);
-		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0);
+		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0);
 
 		if (vg_read_error(vg_to)) {
 			release_vg(vg_to);
@@ -449,11 +511,18 @@ static struct volume_group *_vgsplit_from(struct cmd_context *cmd,
 
 	log_verbose("Checking for volume group \"%s\"", vg_name_from);
 
-	vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0);
+	vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0, 0);
 	if (vg_read_error(vg_from)) {
 		release_vg(vg_from);
 		return NULL;
 	}
+
+	if (is_lockd_type(vg_from->lock_type)) {
+		log_error("vgsplit not allowed for lock_type %s", vg_from->lock_type);
+		unlock_and_release_vg(cmd, vg_from, vg_name_from);
+		return NULL;
+	}
+
 	return vg_from;
 }
 
@@ -462,11 +531,11 @@ static struct volume_group *_vgsplit_from(struct cmd_context *cmd,
  */
 static int new_vg_option_specified(struct cmd_context *cmd)
 {
-	return(arg_count(cmd, clustered_ARG) ||
-	       arg_count(cmd, alloc_ARG) ||
-	       arg_count(cmd, maxphysicalvolumes_ARG) ||
-	       arg_count(cmd, maxlogicalvolumes_ARG) ||
-	       arg_count(cmd, vgmetadatacopies_ARG));
+	return(arg_is_set(cmd, clustered_ARG) ||
+	       arg_is_set(cmd, alloc_ARG) ||
+	       arg_is_set(cmd, maxphysicalvolumes_ARG) ||
+	       arg_is_set(cmd, maxlogicalvolumes_ARG) ||
+	       arg_is_set(cmd, vgmetadatacopies_ARG));
 }
 
 int vgsplit(struct cmd_context *cmd, int argc, char **argv)
@@ -481,19 +550,23 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	const char *lv_name;
 	int lock_vg_from_first = 1;
 
-	if ((arg_count(cmd, name_ARG) + argc) < 3) {
+	if ((arg_is_set(cmd, name_ARG) + argc) < 3) {
 		log_error("Existing VG, new VG and either physical volumes "
 			  "or logical volume required.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, name_ARG) && (argc > 2)) {
+	if (arg_is_set(cmd, name_ARG) && (argc > 2)) {
 		log_error("A logical volume name cannot be given with "
 			  "physical volumes.");
 		return ECMD_FAILED;
 	}
 
-	if (arg_count(cmd, name_ARG))
+	/* Needed change the global VG namespace. */
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return_ECMD_FAILED;
+
+	if (arg_is_set(cmd, name_ARG))
 		lv_name = arg_value(cmd, name_ARG);
 	else
 		lv_name = NULL;
@@ -516,8 +589,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 			return_ECMD_FAILED;
 		/*
 		 * Set metadata format of original VG.
-		 * NOTE: We must set the format before calling vg_create()
-		 * since vg_create() calls the per-format constructor.
+		 * NOTE: We must set the format before calling vg_lock_and_create()
+		 * since vg_lock_and_create() calls the per-format constructor.
 		 */
 		cmd->fmt = vg_from->fid->fmt;
 
@@ -551,7 +624,10 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		if (!vgs_are_compatible(cmd, vg_from,vg_to))
 			goto_bad;
 	} else {
-		vgcreate_params_set_defaults(&vp_def, vg_from);
+		if (!vgcreate_params_set_defaults(cmd, &vp_def, vg_from)) {
+			r = EINVALID_CMD_LINE;
+			goto_bad;
+		}
 		vp_def.vg_name = vg_name_to;
 		if (!vgcreate_params_set_from_args(cmd, &vp_new, &vp_def)) {
 			r = EINVALID_CMD_LINE;
@@ -568,6 +644,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		    !vg_set_max_pv(vg_to, vp_new.max_pv) ||
 		    !vg_set_alloc_policy(vg_to, vp_new.alloc) ||
 		    !vg_set_clustered(vg_to, vp_new.clustered) ||
+		    !vg_set_system_id(vg_to, vp_new.system_id) ||
 		    !vg_set_mda_copies(vg_to, vp_new.vgmetadatacopies))
 			goto_bad;
 	}
@@ -587,28 +664,35 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (lv_name && !move_pvs_used_by_lv(vg_from, vg_to, lv_name))
 		goto_bad;
 
-	/* Move required LVs across, checking consistency */
-	if (!(_move_lvs(vg_from, vg_to)))
+	/*
+	 * First move any required RAID LVs across recursively.
+	 * Reject if they get split between VGs.
+	 *
+	 * This moves the whole LV stack across, thus _move_lvs() below
+	 * ain't hit any of their MetaLVs/DataLVs any more but'll still
+	 * work for all other type specific moves following it.
+	 */
+	if (!(_move_raids(vg_from, vg_to)))
 		goto_bad;
 
-	/* FIXME Separate the 'move' from the 'validation' to fix dev stacks */
-	/* Move required RAID across */
-	if (!(_move_raid(vg_from, vg_to)))
+	/* Move required sub LVs across, checking consistency */
+	if (!(_move_lvs(vg_from, vg_to)))
 		goto_bad;
 
 	/* Move required mirrors across */
 	if (!(_move_mirrors(vg_from, vg_to)))
 		goto_bad;
 
-	/* Move required snapshots across */
-	if (!(_move_snapshots(vg_from, vg_to)))
-		goto_bad;
-
 	/* Move required pools across */
 	if (!(_move_thins(vg_from, vg_to)))
 		goto_bad;
 
+	/* Move required cache LVs across */
 	if (!(_move_cache(vg_from, vg_to)))
+		goto_bad;
+
+	/* Move required snapshots across */
+	if (!(_move_snapshots(vg_from, vg_to)))
 		goto_bad;
 
 	/* Split metadata areas and check if both vgs have at least one area */
@@ -627,8 +711,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	/*
 	 * First, write out the new VG as EXPORTED.  We do this first in case
 	 * there is a crash - we will still have the new VG information, in an
-	 * exported state.  Recovery after this point would be removal of the
-	 * new VG and redoing the vgsplit.
+	 * exported state.  Recovery after this point would importing and removal
+	 * of the new VG and redoing the vgsplit.
 	 * FIXME: recover automatically or instruct the user?
 	 */
 	vg_to->status |= EXPORTED_VG;
@@ -638,6 +722,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 
 	if (!vg_write(vg_to) || !vg_commit(vg_to))
 		goto_bad;
+
+	lvmetad_vg_update_finish(vg_to);
 
 	backup(vg_to);
 
@@ -650,6 +736,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		if (!vg_write(vg_from) || !vg_commit(vg_from))
 			goto_bad;
 
+		lvmetad_vg_update_finish(vg_from);
+
 		backup(vg_from);
 	}
 
@@ -659,7 +747,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!test_mode()) {
 		release_vg(vg_to);
 		vg_to = vg_read_for_update(cmd, vg_name_to, NULL,
-					   READ_ALLOW_EXPORTED);
+					   READ_ALLOW_EXPORTED, 0);
 		if (vg_read_error(vg_to)) {
 			log_error("Volume group \"%s\" became inconsistent: "
 				  "please fix manually", vg_name_to);
@@ -671,6 +759,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 
 	if (!vg_write(vg_to) || !vg_commit(vg_to))
 		goto_bad;
+
+	lvmetad_vg_update_finish(vg_to);
 
 	backup(vg_to);
 

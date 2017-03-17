@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -17,6 +17,7 @@
 #include "metadata.h"
 #include "segtype.h"
 #include "toolcontext.h"
+#include "lvmetad.h"
 
 /* Add lv as replicator_dev device */
 int replicator_dev_add_rimage(struct replicator_device *rdev,
@@ -298,7 +299,7 @@ int check_replicator_segment(const struct lv_segment *rseg)
 			}
 			if (rsite->fall_behind_data) {
 				log_error("Defined fall_behind_data="
-					  "%" PRIu64 " for sync replicator %s/%s.",
+					  FMTu64 " for sync replicator %s/%s.",
 					  rsite->fall_behind_data, lv->name, rsite->name);
 				r = 0;
 			}
@@ -566,7 +567,7 @@ int cmd_vg_read(struct cmd_context *cmd, struct dm_list *cmd_vgs)
 
 	/* Iterate through alphabeticaly ordered cmd_vg list */
 	dm_list_iterate_items(cvl, cmd_vgs) {
-		cvl->vg = vg_read(cmd, cvl->vg_name, cvl->vgid, cvl->flags);
+		cvl->vg = vg_read(cmd, cvl->vg_name, cvl->vgid, cvl->flags, 0);
 		if (vg_read_error(cvl->vg)) {
 			log_debug_metadata("Failed to vg_read %s", cvl->vg_name);
 			return 0;
@@ -600,7 +601,7 @@ void free_cmd_vgs(struct dm_list *cmd_vgs)
  * Find all needed remote VGs for processing given LV.
  * Missing VGs are added to VG's cmd_vg list and flag cmd_missing_vgs is set.
  */
-int find_replicator_vgs(struct logical_volume *lv)
+int find_replicator_vgs(const struct logical_volume *lv)
 {
 	struct replicator_site *rsite;
 	int ret = 1;
@@ -632,7 +633,7 @@ int find_replicator_vgs(struct logical_volume *lv)
  * Read all remote VGs from lv's replicator sites.
  * Function is used in activation context and needs all VGs already locked.
  */
-int lv_read_replicator_vgs(struct logical_volume *lv)
+int lv_read_replicator_vgs(const struct logical_volume *lv)
 {
 	struct replicator_device *rdev;
 	struct replicator_site *rsite;
@@ -644,7 +645,7 @@ int lv_read_replicator_vgs(struct logical_volume *lv)
 	dm_list_iterate_items(rsite, &first_seg(lv)->replicator->rsites) {
 		if (!rsite->vg_name)
 			continue;
-		vg = vg_read(lv->vg->cmd, rsite->vg_name, 0, 0); // READ_WITHOUT_LOCK
+		vg = vg_read(lv->vg->cmd, rsite->vg_name, 0, 0, 0); // READ_WITHOUT_LOCK
 		if (vg_read_error(vg)) {
 			log_error("Unable to read volume group %s",
 				  rsite->vg_name);
@@ -670,7 +671,7 @@ bad:
  * Release all VG resources taken by lv's replicator sites.
  * Function is used in activation context and needs all VGs already locked.
  */
-void lv_release_replicator_vgs(struct logical_volume *lv)
+void lv_release_replicator_vgs(const struct logical_volume *lv)
 {
 	struct replicator_site *rsite;
 

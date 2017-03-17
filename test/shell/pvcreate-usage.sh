@@ -7,10 +7,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description='Test pvcreate option values'
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 PAGESIZE=$(getconf PAGESIZE)
+# MDA_SIZE_MIN defined in lib/format_text/layout.h
+MDA_SIZE_MIN=$((8*$PAGESIZE))
 
 . lib/inittest
 
@@ -21,6 +25,13 @@ not pvcreate --setphysicalvolumesize -1024 "$dev1"
 
 #COMM 'pvcreate rejects negative metadatasize'
 not pvcreate --metadatasize -1024 "$dev1"
+
+#COMM 'pvcreate rejects metadatasize that is less than minimum size'
+not pvcreate --dataalignment $((${MDA_SIZE_MIN}/2))b --metadatasize $((${MDA_SIZE_MIN}/2))b "$dev1" 2>err
+grep "Metadata area size too small" err
+
+#COMM 'pvcreate accepts metadatasize that is at least the minimum size'
+pvcreate --dataalignment ${MDA_SIZE_MIN}b --metadatasize ${MDA_SIZE_MIN}b "$dev1"
 
 # x. metadatasize 0, defaults to 255
 # FIXME: unable to check default value, not in reporting cmds
@@ -82,8 +93,10 @@ not pvcreate --labelsector 1000000000000 "$dev1"
 
 #COMM 'pvcreate basic dataalignment sanity checks'
 not pvcreate --dataalignment -1 "$dev1"
-not pvcreate -M 1 --dataalignment 1 "$dev1"
 not pvcreate --dataalignment 1e "$dev1"
+if test -n "$LVM_TEST_LVM1" ; then
+not pvcreate -M1 --dataalignment 1 "$dev1"
+fi
 
 #COMM 'pvcreate always rounded up to page size for start of device'
 #pvcreate --metadatacopies 0 --dataalignment 1 "$dev1"
@@ -131,18 +144,22 @@ check pv_field "$dev1" pv_mda_count 2
 
 #COMM 'pv with LVM1 compatible data alignment can be convereted'
 #compatible == LVM1_PE_ALIGN == 64k
+if test -n "$LVM_TEST_LVM1" ; then
 pvcreate --dataalignment 256k "$dev1"
 vgcreate -s 1m $vg "$dev1"
 vgconvert -M1 $vg
 vgconvert -M2 $vg
 check pv_field "$dev1" pe_start 256.00k
 vgremove $vg
+fi
 
 #COMM 'pv with LVM1 incompatible data alignment cannot be convereted'
+if test -n "$LVM_TEST_LVM1" ; then
 pvcreate --dataalignment 10k "$dev1"
 vgcreate -s 1m $vg "$dev1"
 not vgconvert -M1 $vg
 vgremove $vg
+fi
 
 #COMM 'vgcfgrestore allows pe_start=0'
 #basically it produces nonsense, but it tests vgcfgrestore,

@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_LVMETAD_CLIENT_H
@@ -18,6 +18,13 @@
 #include "daemon-client.h"
 
 #define LVMETAD_SOCKET DEFAULT_RUN_DIR "/lvmetad.socket"
+
+#define LVMETAD_TOKEN_UPDATE_IN_PROGRESS "update in progress"
+
+#define LVMETAD_DISABLE_REASON_DIRECT		"DIRECT"
+#define LVMETAD_DISABLE_REASON_LVM1		"LVM1"
+#define LVMETAD_DISABLE_REASON_DUPLICATES	"DUPLICATES"
+#define LVMETAD_DISABLE_REASON_VGRESTORE	"VGRESTORE"
 
 struct volume_group;
 

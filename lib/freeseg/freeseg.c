@@ -9,17 +9,12 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
 #include "toolcontext.h"
 #include "segtype.h"
-
-static const char *_freeseg_name(const struct lv_segment *seg)
-{
-	return seg->segtype->name;
-}
 
 static void _freeseg_destroy(struct segment_type *segtype)
 {
@@ -27,7 +22,6 @@ static void _freeseg_destroy(struct segment_type *segtype)
 }
 
 static struct segtype_handler _freeseg_ops = {
-	.name = _freeseg_name,
 	.destroy = _freeseg_destroy,
 };
 
@@ -38,10 +32,8 @@ struct segment_type *init_free_segtype(struct cmd_context *cmd)
 	if (!segtype)
 		return_NULL;
 
-	segtype->cmd = cmd;
 	segtype->ops = &_freeseg_ops;
-	segtype->name = "free";
-	segtype->private = NULL;
+	segtype->name = SEG_TYPE_NAME_FREE;
 	segtype->flags = SEG_VIRTUAL | SEG_CANNOT_BE_ZEROED;
 
 	log_very_verbose("Initialised segtype: %s", segtype->name);

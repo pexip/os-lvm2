@@ -10,7 +10,7 @@
 #
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 srcdir = @srcdir@
 top_srcdir = @top_srcdir@
@@ -21,11 +21,14 @@ SOURCES =\
 	datastruct/hash.c \
 	datastruct/list.c \
 	libdm-common.c \
-	libdm-file.c \
-	libdm-deptree.c \
-	libdm-string.c \
-	libdm-report.c \
 	libdm-config.c \
+	libdm-deptree.c \
+	libdm-file.c \
+	libdm-report.c \
+	libdm-stats.c \
+	libdm-string.c \
+	libdm-targets.c \
+	libdm-timestamp.c \
 	mm/dbg_malloc.c \
 	mm/pool.c \
 	regex/matcher.c \
@@ -33,11 +36,7 @@ SOURCES =\
 	regex/ttree.c \
 	$(interface)/libdm-iface.c
 
-INCLUDES = -I$(srcdir)/$(interface) -I$(srcdir)
-ifeq ("@VALGRIND_POOL@", "yes")
-INCLUDES += @VALGRIND_CFLAGS@
-endif
-CFLAGS += $(UDEV_CFLAGS)
+INCLUDES = -I$(srcdir)/$(interface)
 
 ifeq ("@STATIC_LINK@", "yes")
 LIB_STATIC = $(interface)/libdevmapper.a
@@ -45,7 +44,7 @@ endif
 
 LIB_SHARED = $(interface)/libdevmapper.$(LIB_SUFFIX)
 LIB_VERSION = $(LIB_VERSION_DM)
-TARGETS += libdevmapper.$(LIB_SUFFIX) libdevmapper.$(LIB_SUFFIX).$(LIB_VERSION)
+TARGETS = libdevmapper.$(LIB_SUFFIX) libdevmapper.$(LIB_SUFFIX).$(LIB_VERSION)
 
 CFLOW_LIST = $(SOURCES)
 CFLOW_LIST_TARGET = libdevmapper.cflow
@@ -55,10 +54,9 @@ EXPORTED_FN_PREFIX = dm
 
 include $(top_builddir)/make.tmpl
 
-DEFS += -DDM_DEVICE_UID=@DM_DEVICE_UID@ -DDM_DEVICE_GID=@DM_DEVICE_GID@ \
-	-DDM_DEVICE_MODE=@DM_DEVICE_MODE@
+CFLAGS += $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
 
-LIBS += $(SELINUX_LIBS) $(UDEV_LIBS) $(PTHREAD_LIBS)
+LIBS += $(SELINUX_LIBS) $(UDEV_LIBS) $(PTHREAD_LIBS) $(M_LIBS)
 
 device-mapper: all
 
@@ -99,4 +97,4 @@ install_ioctl_static: $(LIB_STATIC)
 	$(INSTALL_DATA) -D $< $(usrlibdir)/$(<F)
 
 CLEAN_TARGETS += ioctl/libdevmapper.a
-DISTCLEAN_TARGETS += libdevmapper.pc .exported_symbols_generated
+DISTCLEAN_TARGETS += libdevmapper.pc

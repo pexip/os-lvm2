@@ -10,11 +10,17 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_FILE_H
 #define _LVM_FILE_H
+
+struct custom_fds {
+	int out;
+	int err;
+	int report;
+};
 
 /*
  * Create a temporary filename, and opens a descriptor to the file.
@@ -62,4 +68,15 @@ void fcntl_unlock_file(int lockfd);
  */
 int lvm_fclose(FILE *fp, const char *filename);
 
+/*
+ * Convert stat->st_ctim  status of last change in nanoseconds
+ * uses  st_ctime when not available.
+ */
+void lvm_stat_ctim(struct timespec *ts, const struct stat *buf);
+
+/* Inspired by <sys/time.h>  timercmp() macro for timeval */
+#define timespeccmp(tsp, usp, cmp)\
+	(((tsp)->tv_sec == (usp)->tv_sec) ?\
+		((tsp)->tv_nsec cmp (usp)->tv_nsec) :\
+		((tsp)->tv_sec cmp (usp)->tv_sec))
 #endif

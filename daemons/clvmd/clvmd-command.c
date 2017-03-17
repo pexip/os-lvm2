@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 /*
@@ -323,6 +323,7 @@ void cmd_client_cleanup(struct local_client *client)
 	int lkid;
 	char *lockname;
 
+	DEBUGLOG("Client thread cleanup (%p)\n", client);
 	if (!client->bits.localsock.private)
 		return;
 
@@ -331,14 +332,13 @@ void cmd_client_cleanup(struct local_client *client)
 	dm_hash_iterate(v, lock_hash) {
 		lkid = (int)(long)dm_hash_get_data(lock_hash, v);
 		lockname = dm_hash_get_key(lock_hash, v);
-		DEBUGLOG("cleanup: Unlocking lock %s %x\n", lockname, lkid);
+		DEBUGLOG("Cleanup (%p): Unlocking lock %s %x\n", client, lockname, lkid);
 		(void) sync_unlock(lockname, lkid);
 	}
 
 	dm_hash_destroy(lock_hash);
 	client->bits.localsock.private = NULL;
 }
-
 
 static int restart_clvmd(void)
 {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2010-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 /*
@@ -38,5 +38,37 @@ struct dm_pool *dmeventd_lvm2_pool(void);
 
 int dmeventd_lvm2_command(struct dm_pool *mem, char *buffer, size_t size,
 			  const char *cmd, const char *device);
+
+#define dmeventd_lvm2_run_with_lock(cmdline) \
+	({\
+		int rc;\
+		dmeventd_lvm2_lock();\
+		rc = dmeventd_lvm2_run(cmdline);\
+		dmeventd_lvm2_unlock();\
+		rc;\
+	})
+
+#define dmeventd_lvm2_init_with_pool(name, st) \
+	({\
+		struct dm_pool *mem;\
+		st = NULL;\
+		if (dmeventd_lvm2_init()) {\
+			if ((mem = dm_pool_create(name, 2048)) &&\
+			    (st = dm_pool_zalloc(mem, sizeof(*st))))\
+				st->mem = mem;\
+			else {\
+				if (mem)\
+					dm_pool_destroy(mem);\
+				dmeventd_lvm2_exit();\
+			}\
+		}\
+		st;\
+	})
+
+#define dmeventd_lvm2_exit_with_pool(pool) \
+	do {\
+		dm_pool_destroy(pool->mem);\
+		dmeventd_lvm2_exit();\
+	} while(0)
 
 #endif /* _DMEVENTD_LVMWRAP_H */

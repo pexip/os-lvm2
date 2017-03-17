@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -56,7 +56,7 @@ const char *lvm_lv_get_uuid(const lv_t lv)
 {
 	const char *rc;
 	struct saved_env e = store_user_env(lv->vg->cmd);
-	rc = lv_uuid_dup(lv);
+	rc = lv_uuid_dup(lv->vg->vgmem, lv);
 	restore_user_env(&e);
 	return rc;
 }
@@ -205,7 +205,7 @@ static void _lv_set_default_params(struct lvcreate_params *lp,
 }
 
 static struct segment_type * _get_segtype(struct cmd_context *cmd) {
-	struct segment_type *rc = get_segtype_from_string(cmd, "striped");
+	struct segment_type *rc = get_segtype_from_string(cmd, SEG_TYPE_NAME_STRIPED);
 	if (!rc) {
 		log_error(INTERNAL_ERROR "Segtype striped not found.");
 	}
@@ -221,7 +221,6 @@ static int _lv_set_default_linear_params(struct cmd_context *cmd,
 	}
 
 	lp->stripes = 1;
-	lp->stripe_size = DEFAULT_STRIPESIZE * 2;
 
 	return 1;
 }
@@ -295,13 +294,13 @@ static int _lvm_lv_activate(lv_t lv)
 		return -1;
 
 	/* FIXME: handle pvmove stuff later */
-	if (lv->status & LOCKED) {
+	if (lv_is_locked(lv)) {
 		log_error("Unable to activate locked LV");
 		return -1;
 	}
 
 	/* FIXME: handle lvconvert stuff later */
-	if (lv->status & CONVERTING) {
+	if (lv_is_converting(lv)) {
 		log_error("Unable to activate LV with in-progress lvconvert");
 		return -1;
 	}
@@ -458,18 +457,15 @@ int lvm_lv_resize(const lv_t lv, uint64_t new_size)
 {
 	int rc = 0;
 	struct lvresize_params lp = {
-		.lv_name = lv->name,
 		.sign = SIGN_NONE,
 		.percent = PERCENT_NONE,
 		.resize = LV_ANY,
 		.size = new_size >> SECTOR_SHIFT,
-		.ac_force = 1,	/* Assume the user has a good backup? */
-		.sizeargs = 1,
+		.force = 1,	/* Assume the user has a good backup? */
 	};
 	struct saved_env e = store_user_env(lv->vg->cmd);
 
-	if (!lv_resize_prepare(lv->vg->cmd, lv, &lp, &lv->vg->pvs) ||
-	    !lv_resize(lv->vg->cmd, lv, &lp, &lv->vg->pvs)) {
+	if (!lv_resize(lv, &lp, &lv->vg->pvs)) {
 		/* FIXME Improve msg */
 		log_error("LV resize failed.");
 		/* FIXME Define consistent symbolic return codes */
@@ -496,35 +492,35 @@ lv_t lvm_lv_snapshot(const lv_t lv, const char *snap_name,
 
 /* Set defaults for thin pool specific LV parameters */
 static int _lv_set_pool_params(struct lvcreate_params *lp,
-				vg_t vg, const char *pool,
+				vg_t vg, const char *pool_name,
 				uint64_t extents, uint64_t meta_size)
 {
-	_lv_set_default_params(lp, vg, NULL, extents);
+	uint64_t pool_metadata_size;
 
-	lp->pool = pool;
+	_lv_set_default_params(lp, vg, pool_name, extents);
 
 	lp->create_pool = 1;
-	lp->segtype = get_segtype_from_string(vg->cmd, "thin-pool");
+	lp->segtype = get_segtype_from_string(vg->cmd, SEG_TYPE_NAME_THIN_POOL);
 	lp->stripes = 1;
 
 	if (!meta_size) {
-		lp->poolmetadatasize = extents * vg->extent_size /
+		pool_metadata_size = extents * vg->extent_size /
 			(lp->chunk_size * (SECTOR_SIZE / 64));
-		while ((lp->poolmetadatasize >
+		while ((pool_metadata_size >
 			(2 * DEFAULT_THIN_POOL_OPTIMAL_SIZE / SECTOR_SIZE)) &&
 		       lp->chunk_size < DM_THIN_MAX_DATA_BLOCK_SIZE) {
 			lp->chunk_size <<= 1;
-			lp->poolmetadatasize >>= 1;
+			pool_metadata_size >>= 1;
 	         }
 	} else
-		lp->poolmetadatasize = meta_size;
+		pool_metadata_size = meta_size;
 
-	if (lp->poolmetadatasize % vg->extent_size)
-		lp->poolmetadatasize +=
-			vg->extent_size - lp->poolmetadatasize % vg->extent_size;
+	if (pool_metadata_size % vg->extent_size)
+		pool_metadata_size +=
+			vg->extent_size - pool_metadata_size % vg->extent_size;
 
-	if (!(lp->poolmetadataextents =
-	      extents_from_size(vg->cmd, lp->poolmetadatasize / SECTOR_SIZE,
+	if (!(lp->pool_metadata_extents =
+	      extents_from_size(vg->cmd, pool_metadata_size / SECTOR_SIZE,
 				vg->extent_size)))
 		return_0;
 
@@ -605,29 +601,23 @@ lv_create_params_t lvm_lv_params_create_thin_pool(vg_t vg,
 
 /* Set defaults for thin LV specific parameters */
 static int _lv_set_thin_params(struct lvcreate_params *lp,
-				vg_t vg, const char *pool,
-				const char *lvname,
-				uint64_t extents)
+			       vg_t vg, const char *pool_name,
+			       const char *lvname,
+			       uint32_t extents)
 {
-	_lv_set_default_params(lp, vg, lvname, extents);
+	_lv_set_default_params(lp, vg, lvname, 0);
 
-	lp->thin = 1;
-	lp->pool = pool;
-	lp->segtype = get_segtype_from_string(vg->cmd, "thin");
-
-	lp->voriginsize = extents * vg->extent_size;
-	if (!(lp->voriginextents = extents_from_size(vg->cmd, lp->voriginsize,
-						     vg->extent_size)))
-		return_0;
-
+	lp->pool_name = pool_name;
+	lp->segtype = get_segtype_from_string(vg->cmd, SEG_TYPE_NAME_THIN);
+	lp->virtual_extents = extents;
 	lp->stripes = 1;
 
 	return 1;
 }
 
 static lv_create_params_t _lvm_lv_params_create_snapshot(const lv_t lv,
-						 const char *snap_name,
-						 uint64_t max_snap_size)
+							 const char *snap_name,
+							 uint64_t max_snap_size)
 {
 	uint64_t size = 0;
 	uint64_t extents = 0;
@@ -653,32 +643,32 @@ static lv_create_params_t _lvm_lv_params_create_snapshot(const lv_t lv,
 
 	if (!size && !lv_is_thin_volume(lv) ) {
 		log_error("Origin is not thin, specify size of snapshot");
-					return NULL;
+		return NULL;
 	}
 
 	lvcp = dm_pool_zalloc(lv->vg->vgmem, sizeof (struct lvm_lv_create_params));
 	if (lvcp) {
 		lvcp->vg = lv->vg;
 		_lv_set_default_params(&lvcp->lvp, lv->vg, snap_name, extents);
-		lvcp->lvp.snapshot = 1;
-
 
 		if (size) {
-			lvcp->lvp.segtype = _get_segtype(lvcp->vg->cmd);
+			if (!(lvcp->lvp.segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_SNAPSHOT))) {
+				log_error("Segtype snapshot not found.");
+				return NULL;
+			}
 			lvcp->lvp.chunk_size = 8;
+			lvcp->lvp.snapshot = 1;
 		} else {
-			lvcp->lvp.segtype = get_segtype_from_string(lv->vg->cmd, "thin");
-
-			if (!lvcp->lvp.segtype) {
-				log_error(INTERNAL_ERROR "Segtype thin not found.");
+			if (!(lvcp->lvp.segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_THIN))) {
+				log_error("Segtype thin not found.");
 				return NULL;
 			}
 
-			lvcp->lvp.pool = first_seg(lv)->pool_lv->name;
+			lvcp->lvp.pool_name = first_seg(lv)->pool_lv->name;
 		}
 
 		lvcp->lvp.stripes = 1;
-		lvcp->lvp.origin = lv->name;
+		lvcp->lvp.origin_name = lv->name;
 
 		lvcp->magic = LV_CREATE_PARAMS_MAGIC;
 	}
@@ -702,7 +692,7 @@ static lv_create_params_t _lvm_lv_params_create_thin(const vg_t vg,
 									const char *lvname, uint64_t size)
 {
 	struct lvm_lv_create_params *lvcp = NULL;
-	uint64_t extents = 0;
+	uint32_t extents = 0;
 
 	/* precondition checks */
 	if (vg_read_error(vg))
@@ -797,7 +787,7 @@ static lv_t _lvm_lv_create(lv_create_params_t params)
 		 * pool is.
 		 */
 		if (!(lvl = find_lv_in_vg(params->vg,
-				(params->lvp.lv_name) ? params->lvp.lv_name : params->lvp.pool)))
+				(params->lvp.lv_name) ? params->lvp.lv_name : params->lvp.pool_name)))
 			return_NULL;
 		return (lv_t) lvl->lv;
 	}

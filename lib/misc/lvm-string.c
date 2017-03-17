@@ -10,12 +10,13 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
 #include "lvm-string.h"
 #include "metadata-exported.h"
+#include "display.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -75,7 +76,7 @@ static name_error_t _validate_name(const char *n)
 
 	/* Hyphen used as VG-LV separator - ambiguity if LV starts with it */
 	if (*n == '-')
-		return NAME_INVALID_HYPEN;
+		return NAME_INVALID_HYPHEN;
 
 	if ((*n == '.') && (!n[1] || (n[1] == '.' && !n[2]))) /* ".", ".." */
 		return NAME_INVALID_DOTS;
@@ -101,6 +102,39 @@ int validate_name(const char *n)
 	return (_validate_name(n) == NAME_VALID) ? 1 : 0;
 }
 
+/*
+ * Copy valid systemid characters from source to destination.
+ * Invalid characters are skipped.  Copying is stopped
+ * when NAME_LEN characters have been copied.
+ * A terminating NUL is appended.
+ */
+void copy_systemid_chars(const char *src, char *dst)
+{
+	const char *s = src;
+	char *d = dst;
+	int len = 0;
+	char c;
+
+	if (!s || !*s)
+		return;
+
+	/* Skip non-alphanumeric starting characters */
+	while (*s && !isalnum(*s))
+		s++;
+
+	while ((c = *s++)) {
+		if (!isalnum(c) && c != '.' && c != '_' && c != '-' && c != '+')
+			continue;
+
+		*d++ = c;
+
+		if (++len >= NAME_LEN)
+			break;
+	}
+
+	*d = '\0';
+}
+
 static const char *_lvname_has_reserved_prefix(const char *lvname)
 {
 	static const char _prefixes[][12] = {
@@ -121,6 +155,7 @@ static const char *_lvname_has_reserved_string(const char *lvname)
 	static const char _strings[][12] = {
 		"_cdata",
 		"_cmeta",
+		"_corig",
 		"_mimage",
 		"_mlog",
 		"_pmspare",
@@ -177,6 +212,7 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 		    const char *layer)
 {
 	const char *lvid = lv->lvid.s;
+	char *dlid;
 
 	if (!layer) {
 		/*
@@ -186,7 +222,9 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 		 * Should also make internal detection simpler.
 		 */
 		/* Suffixes used here MUST match lib/activate/dev_manager.c */
-		layer = lv_is_cache_pool_data(lv) ? "cdata" :
+		layer = lv_is_cache_origin(lv) ? "real" :
+			(lv_is_cache(lv) && lv_is_pending_delete(lv)) ? "real" :
+			lv_is_cache_pool_data(lv) ? "cdata" :
 			lv_is_cache_pool_metadata(lv) ? "cmeta" :
 			// FIXME: dm-tree needs fixes for mirrors/raids
 			//lv_is_mirror_image(lv) ? "mimage" :
@@ -199,5 +237,25 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 			NULL;
 	}
 
-	return dm_build_dm_uuid(mem, UUID_PREFIX, lvid, layer);
+	if (!(dlid = dm_build_dm_uuid(mem, UUID_PREFIX, lvid, layer)))
+		log_error("Failed to build LVM dlid for %s.",
+			  display_lvname(lv));
+
+	return dlid;
+}
+
+char *first_substring(const char *str, ...)
+{
+	char *substr, *r = NULL;
+	va_list ap;
+
+	va_start(ap, str);
+
+	while ((substr = va_arg(ap, char *)))
+		if ((r = strstr(str, substr)))
+			break;
+
+	va_end(ap);
+
+	return r;
 }

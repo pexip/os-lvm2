@@ -1,8 +1,173 @@
-lvm2 (2.02.111-2.2+deb8u1) jessie; urgency=medium
+lvm2 (2.02.168-2) unstable; urgency=medium
 
+  * Don't try to disable cluster locking on clvm purge. (closes: #856696)
+  * Drop symlinks for private libs. (closes: #857954)
+  * Deny writemostly/writebehind during raid1 resync. (closes: #855895)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 17 Mar 2017 17:29:47 +0100
+
+lvm2 (2.02.168-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Install but not start cmirrord. (closes: #570232)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 16 Dec 2016 15:29:17 +0100
+
+lvm2 (2.02.167-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 09 Nov 2016 23:34:42 +0100
+
+lvm2 (2.02.164-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 17 Aug 2016 17:03:41 +0200
+
+lvm2 (2.02.160-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 09 Jul 2016 22:11:07 +0200
+
+lvm2 (2.02.156-1) unstable; urgency=medium
+
+  * New upstream version.
+  * Build-depend on systemd for pkg-config info.
+  * Only support systemd in cluster package. (closes: #796625)
+  * Update dependencies and description of cluster package.
+  * Disable cluster while removing cluster package.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 22 Jun 2016 16:18:48 +0200
+
+lvm2 (2.02.153-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 09 May 2016 16:45:31 +0200
+
+lvm2 (2.02.151-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 28 Apr 2016 15:46:51 +0200
+
+lvm2 (2.02.150-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 22 Apr 2016 20:44:07 +0200
+
+lvm2 (2.02.146-1) unstable; urgency=medium
+
+  * New upstream version.
+  * Build-depend on autoconf-archive.
+  * Install blkdeactivate and dmstats.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 16 Mar 2016 13:21:41 +0100
+
+lvm2 (2.02.142-1) unstable; urgency=medium
+
+  * New upstream version.
+    - Fix unalligned memory access. (closes: #809685)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 20 Feb 2016 13:50:19 +0100
+
+lvm2 (2.02.141-2) unstable; urgency=medium
+
+  * Use blkid.
+  * Mark dev and python packages as multi-arch same. (closes: 731294)
+  * Remove old dependency and conflicts. (closes: 804972)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 05 Feb 2016 22:11:45 +0100
+
+lvm2 (2.02.141-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 28 Jan 2016 22:15:49 +0100
+
+lvm2 (2.02.138-1) unstable; urgency=medium
+
+  * New upstream version.
+  * Add watch file. (closes: #742305)
+    - This does not add the signature key.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 22 Dec 2015 19:34:04 +0100
+
+lvm2 (2.02.133-2) unstable; urgency=medium
+
+  * Build-depend on a lot corosync stuff. (closes: #804541)
+  * Drop event plugin directory move.  This moves the plugins back into
+    the main library path. (closes: #807279)
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 13 Dec 2015 18:02:40 +0100
+
+lvm2 (2.02.133-1) unstable; urgency=medium
+
+  * New upstream version.
+  * Remove references to EVMS. (closes: #794405)
+  * Remove support for cman and openais.
+  * Make libdevmapper-dev depend on libudev-dev. (closes: #797800)
+  * Use debhelper compat level 9.
+  * Cleanup old systemd services.
+  * Add python bindings. (closes: #773984)
+  * Update Standards-Version to 3.9.6, no changes.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Nov 2015 10:42:25 +0100
+
+lvm2 (2.02.127-1) unstable; urgency=medium
+
+  * Remove superfluous directory specs. (closes: #794200)
   * Set default pid directory to /run. (closes: #783120)
+  * Force activation of snapshots in initramfs. (closes: #555958)
+  * Cleanup initramfs-tools scripts.
+  * Set architecture to linux-any. (closes: #638255)
 
- -- Bastian Blank <waldi@debian.org>  Fri, 27 May 2016 09:04:17 +0000
+ -- Bastian Blank <waldi@debian.org>  Sat, 15 Aug 2015 11:58:45 +0200
+
+lvm2 (2.02.126-3) unstable; urgency=medium
+
+  * Also remove racy file test from mdadm udev interaction.
+  * Don't run pvscan in background or via systemd.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 12 Aug 2015 00:09:16 +0200
+
+lvm2 (2.02.126-2) unstable; urgency=medium
+
+  * Workaround incorrect blkid call in mdadm udev.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 02 Aug 2015 10:36:59 +0200
+
+lvm2 (2.02.126-1) unstable; urgency=medium
+
+  * New upstream version.
+  * Install new udev rules in initamfs.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 29 Jul 2015 19:29:56 +0200
+
+lvm2 (2.02.122-2) unstable; urgency=medium
+
+  * Workaround broken API/ABI of dm_tree_node_add_cache_target
+    (closes: #791888):
+    - Update symbol version to 2:1.02.99.
+    - Update breaks from libdevmapper to lvm2 and liblvm2app2.2.
+  * Use sysinit mode in initramfs.
+  * Use lvm2 activation generator instead of static services.
+  * Finally remove explicit init script ordering.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 15 Jul 2015 21:58:12 +0200
+
+lvm2 (2.02.122-1) unstable; urgency=medium
+
+  * New upsream version.
+  * Make sure lvmetad is enabled:
+    - Add init-script.
+  * Build and enable lvmpolld:
+    - Add init-script.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 08 Jul 2015 18:38:20 +0200
 
 lvm2 (2.02.111-2.2) unstable; urgency=medium
 

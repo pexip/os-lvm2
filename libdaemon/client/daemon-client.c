@@ -9,8 +9,12 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
+
+#define _REENTRANT
+
+#include "tool.h"
 
 #include "daemon-io.h"
 #include "daemon-client.h"
@@ -18,15 +22,10 @@
 
 #include <sys/un.h>
 #include <sys/socket.h>
-#include <string.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <assert.h>
-#include <errno.h> // ENOMEM
 
 daemon_handle daemon_open(daemon_info i)
 {
-	daemon_handle h = { .protocol_version = 0, .error = 0 };
+	daemon_handle h = { .error = 0 };
 	daemon_reply r = { 0 };
 	struct sockaddr_un sockaddr = { .sun_family = AF_UNIX };
 
@@ -79,12 +78,16 @@ daemon_handle daemon_open(daemon_info i)
 	return h;
 
 error:
-	if (h.socket_fd >= 0)
-		if (close(h.socket_fd))
-			log_sys_error("close", "daemon_open");
+	if (h.socket_fd >= 0 && close(h.socket_fd))
+		log_sys_error("close", "daemon_open");
+	h.socket_fd = -1;
+
 	if (r.cft)
 		daemon_reply_destroy(r);
-	h.socket_fd = -1;
+
+	dm_free((char *)h.protocol);
+	h.protocol = NULL;
+
 	return h;
 }
 
@@ -92,7 +95,13 @@ daemon_reply daemon_send(daemon_handle h, daemon_request rq)
 {
 	struct buffer buffer;
 	daemon_reply reply = { 0 };
-	assert(h.socket_fd >= 0);
+
+	if (h.socket_fd < 0) {
+		log_error(INTERNAL_ERROR "Daemon send: socket fd cannot be negative %d", h.socket_fd);
+		reply.error = EINVAL;
+		return reply;
+	}
+
 	buffer = rq.buffer;
 
 	if (!buffer.mem)
@@ -101,12 +110,17 @@ daemon_reply daemon_send(daemon_handle h, daemon_request rq)
 			return reply;
 		}
 
-	assert(buffer.mem);
+	if (!buffer.mem) {
+		log_error(INTERNAL_ERROR "Daemon send: no memory available");
+		reply.error = ENOMEM;
+		return reply;
+	}
+
 	if (!buffer_write(h.socket_fd, &buffer))
 		reply.error = errno;
 
 	if (buffer_read(h.socket_fd, &reply.buffer)) {
-		reply.cft = dm_config_from_string(reply.buffer.mem);
+		reply.cft = config_tree_from_string_without_dup_node_check(reply.buffer.mem);
 		if (!reply.cft)
 			reply.error = EPROTO;
 	} else
@@ -118,7 +132,8 @@ daemon_reply daemon_send(daemon_handle h, daemon_request rq)
 	return reply;
 }
 
-void daemon_reply_destroy(daemon_reply r) {
+void daemon_reply_destroy(daemon_reply r)
+{
 	if (r.cft)
 		dm_config_destroy(r.cft);
 	buffer_destroy(&r.buffer);
@@ -129,12 +144,16 @@ daemon_reply daemon_send_simple_v(daemon_handle h, const char *id, va_list ap)
 	static const daemon_reply err = { .error = ENOMEM };
 	daemon_request rq = { .cft = NULL };
 	daemon_reply repl;
+	va_list apc;
 
+	va_copy(apc, ap);
 	if (!buffer_append_f(&rq.buffer, "request = %s", id, NULL) ||
-	    !buffer_append_vf(&rq.buffer, ap)) {
+	    !buffer_append_vf(&rq.buffer, apc)) {
+		va_end(apc);
 		buffer_destroy(&rq.buffer);
 		return err;
 	}
+	va_end(apc);
 
 	repl = daemon_send(h, rq);
 	buffer_destroy(&rq.buffer);
@@ -156,38 +175,50 @@ daemon_reply daemon_send_simple(daemon_handle h, const char *id, ...)
 
 void daemon_close(daemon_handle h)
 {
+	if (h.socket_fd >= 0) {
+		log_debug("Closing daemon socket (fd %d).", h.socket_fd);
+ 		if (close(h.socket_fd))
+			log_sys_error("close", "daemon_close");
+	}
+
 	dm_free((char *)h.protocol);
 }
 
 daemon_request daemon_request_make(const char *id)
 {
 	daemon_request r;
-	r.cft = NULL;
+
 	buffer_init(&r.buffer);
 
 	if (!(r.cft = dm_config_create()))
-		goto bad;
+		goto_bad;
 
 	if (!(r.cft->root = make_text_node(r.cft, "request", id, NULL, NULL)))
-		goto bad;
+		goto_bad;
 
 	return r;
 bad:
-	if (r.cft)
+	if (r.cft) {
 		dm_config_destroy(r.cft);
-	r.cft = NULL;
+		r.cft = NULL;
+	}
+
 	return r;
 }
 
 int daemon_request_extend_v(daemon_request r, va_list ap)
 {
+	int res;
+	va_list apc;
+
 	if (!r.cft)
 		return 0;
 
-	if (!config_make_nodes_v(r.cft, NULL, r.cft->root, ap))
-		return 0;
+	va_copy(apc, ap);
+	res = config_make_nodes_v(r.cft, NULL, r.cft->root, apc) ? 1 : 0;
+	va_end(apc);
 
-	return 1;
+	return res;
 }
 
 int daemon_request_extend(daemon_request r, ...)
@@ -202,7 +233,8 @@ int daemon_request_extend(daemon_request r, ...)
 	return res;
 }
 
-void daemon_request_destroy(daemon_request r) {
+void daemon_request_destroy(daemon_request r)
+{
 	if (r.cft)
 		dm_config_destroy(r.cft);
 	buffer_destroy(&r.buffer);

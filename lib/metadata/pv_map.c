@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -133,8 +133,11 @@ static int _create_maps(struct dm_pool *mem, struct dm_list *pvs, struct dm_list
 	struct pv_list *pvl;
 
 	dm_list_iterate_items(pvl, pvs) {
-		if (!(pvl->pv->status & ALLOCATABLE_PV))
+		if (!(pvl->pv->status & ALLOCATABLE_PV) ||
+		    (pvl->pv->status & PV_ALLOCATION_PROHIBITED)) {
+		    	pvl->pv->status &= ~PV_ALLOCATION_PROHIBITED;
 			continue;
+		}
 		if (is_missing_pv(pvl->pv))
 			continue;
 		assert(pvl->pv->dev);

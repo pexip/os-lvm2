@@ -7,13 +7,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux prepare_pvs 3 22
 
-vgcreate -s 32K $vg "$dev1" "$dev2" "$dev3"
+vgcreate -s 32K $vg $(cat DEVICES)
 
 lvcreate -an -Zn -l4 -i3 -I64 $vg
 
@@ -31,7 +34,9 @@ lvresize -l+64 -i3 -I128 $vg/$lv1
 vgremove -f $vg
 
 # 15 extents
+LVM_TEST_AUX_TRACE=yes
 aux prepare_vg 3 22
+unset LVM_TEST_AUX_TRACE
 
 # Block some extents
 lvcreate -an -Zn -l4 -i3 $vg

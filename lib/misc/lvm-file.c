@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -272,4 +272,14 @@ int lvm_fclose(FILE *fp, const char *filename)
 		log_sys_error("write error", filename);
 
 	return EOF;
+}
+
+void lvm_stat_ctim(struct timespec *ctim, const struct stat *buf)
+{
+#ifdef HAVE_STAT_ST_CTIM
+	*ctim = buf->st_ctim;
+#else
+	ctim->tv_sec = buf->st_ctime;
+	ctim->tv_nsec = 0;
+#endif
 }

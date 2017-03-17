@@ -10,26 +10,12 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "libdevmapper.h"
-#include "log.h"
+#include "units.h"
 
-#include <stdio.h>
-#include <ctype.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-
-#include <CUnit/CUnit.h>
 #include "matcher_data.h"
-
-int regex_init(void);
-int regex_fini(void);
 
 static struct dm_pool *mem = NULL;
 
@@ -82,4 +68,3 @@ CU_TestInfo regex_list[] = {
 	{ (char*)"matching", test_matching },
 	CU_TEST_INFO_NULL
 };
-

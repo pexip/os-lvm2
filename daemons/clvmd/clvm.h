@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 /* Definitions for CLVMD server and clients */
@@ -50,7 +50,7 @@ struct clvm_header {
 #define CLVMD_FLAG_REMOTE	8	/* Do this on all nodes except for the local node */
 
 /* Name of the local socket to communicate between lvm and clvmd */
-static const char CLVMD_SOCKNAME[]= DEFAULT_RUN_DIR "/clvmd.sock";
+#define CLVMD_SOCKNAME		DEFAULT_RUN_DIR "/clvmd.sock"
 
 /* Internal commands & replies */
 #define CLVMD_CMD_REPLY    1
@@ -76,8 +76,10 @@ static const char CLVMD_SOCKNAME[]= DEFAULT_RUN_DIR "/clvmd.sock";
 #define CLVMD_CMD_SYNC_NAMES	    45
 
 /* Used internally by some callers, but not part of the protocol.*/
-#define NODE_ALL	"*"
-#define NODE_LOCAL	"."
-#define NODE_REMOTE	"^"
+#ifndef NODE_ALL
+#  define NODE_ALL	"*"
+#  define NODE_LOCAL	"."
+#  define NODE_REMOTE	"^"
+#endif
 
 #endif

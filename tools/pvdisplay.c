@@ -10,45 +10,19 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
 
 static int _pvdisplay_single(struct cmd_context *cmd,
 			     struct volume_group *vg,
-			     struct physical_volume *pv, void *handle)
+			     struct physical_volume *pv,
+			     struct processing_handle *handle __attribute__((unused)))
 {
-	struct pv_list *pvl;
+	const char *pv_name = pv_dev_name(pv);
 	int ret = ECMD_PROCESSED;
 	uint64_t size;
-	struct volume_group *old_vg = vg;
-
-	const char *pv_name = pv_dev_name(pv);
-	const char *vg_name = NULL;
-
-	if (!is_orphan(pv) && !vg) {
-		vg_name = pv_vg_name(pv);
-		vg = vg_read(cmd, vg_name, (char *)&pv->vgid, 0);
-		if (ignore_vg(vg, vg_name, 0, &ret)) {
-			release_vg(vg);
-			stack;
-			return ret;
-		}
-
-		/*
-		 * Replace possibly incomplete PV structure with new one
-		 * allocated in vg_read_internal() path.
-		 */
-		if (!(pvl = find_pv_in_vg(vg, pv_name))) {
-			log_error("Unable to find \"%s\" in volume group \"%s\"",
-				  pv_name, vg->name);
-			ret = ECMD_FAILED;
-			goto out;
-		}
-
-		pv = pvl->pv;
-	}
 
 	if (is_orphan(pv))
 		size = pv_size(pv);
@@ -56,7 +30,7 @@ static int _pvdisplay_single(struct cmd_context *cmd,
 		size = (uint64_t)(pv_pe_count(pv) - pv_pe_alloc_count(pv)) *
 			pv_pe_size(pv);
 
-	if (arg_count(cmd, short_ARG)) {
+	if (arg_is_set(cmd, short_ARG)) {
 		log_print("Device \"%s\" has a capacity of %s", pv_name,
 			  display_size(cmd, size));
 		goto out;
@@ -70,58 +44,75 @@ static int _pvdisplay_single(struct cmd_context *cmd,
 		log_print_unless_silent("\"%s\" is a new physical volume of \"%s\"",
 					pv_name, display_size(cmd, size));
 
-	if (arg_count(cmd, colon_ARG)) {
+	if (arg_is_set(cmd, colon_ARG)) {
 		pvdisplay_colons(pv);
 		goto out;
 	}
 
-	pvdisplay_full(cmd, pv, handle);
+	pvdisplay_full(cmd, pv, NULL);
 
-	if (arg_count(cmd, maps_ARG))
+	if (arg_is_set(cmd, maps_ARG))
 		pvdisplay_segments(pv);
 
 out:
-	if (vg_name)
-		unlock_vg(cmd, vg_name);
-	if (!old_vg)
-		release_vg(vg);
-
 	return ret;
 }
 
 int pvdisplay(struct cmd_context *cmd, int argc, char **argv)
 {
-	if (arg_count(cmd, columns_ARG)) {
-		if (arg_count(cmd, colon_ARG) || arg_count(cmd, maps_ARG) ||
-		    arg_count(cmd, short_ARG)) {
+	int lock_global = 0;
+	int ret;
+
+	if (arg_is_set(cmd, columns_ARG)) {
+		if (arg_is_set(cmd, colon_ARG) || arg_is_set(cmd, maps_ARG) ||
+		    arg_is_set(cmd, short_ARG)) {
 			log_error("Incompatible options selected");
 			return EINVALID_CMD_LINE;
 		}
 		return pvs(cmd, argc, argv);
 	}
 
-	if (arg_count(cmd, aligned_ARG) ||
-	    arg_count(cmd, all_ARG) ||
-	    arg_count(cmd, noheadings_ARG) ||
-	    arg_count(cmd, options_ARG) ||
-	    arg_count(cmd, select_ARG) ||
-	    arg_count(cmd, separator_ARG) ||
-	    arg_count(cmd, sort_ARG) ||
-	    arg_count(cmd, unbuffered_ARG)) {
+	if (arg_is_set(cmd, aligned_ARG) ||
+	    arg_is_set(cmd, all_ARG) ||
+	    arg_is_set(cmd, binary_ARG) ||
+	    arg_is_set(cmd, noheadings_ARG) ||
+	    arg_is_set(cmd, options_ARG) ||
+	    arg_is_set(cmd, separator_ARG) ||
+	    arg_is_set(cmd, sort_ARG) ||
+	    arg_is_set(cmd, unbuffered_ARG)) {
 		log_error("Incompatible options selected");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, colon_ARG) && arg_count(cmd, maps_ARG)) {
+	if (arg_is_set(cmd, colon_ARG) && arg_is_set(cmd, maps_ARG)) {
 		log_error("Option -c not allowed with option -m");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, colon_ARG) && arg_count(cmd, short_ARG)) {
+	if (arg_is_set(cmd, colon_ARG) && arg_is_set(cmd, short_ARG)) {
 		log_error("Option -c is not allowed with option -s");
 		return EINVALID_CMD_LINE;
 	}
 
-	return process_each_pv(cmd, argc, argv, NULL, 0, 0, NULL,
-			       _pvdisplay_single);
+	/*
+	 * If the lock_type is LCK_VG_READ (used only in reporting commands),
+	 * we lock VG_GLOBAL to enable use of metadata cache.
+	 * This can pause alongide pvscan or vgscan process for a while.
+	 */
+	if (!lvmetad_used()) {
+		lock_global = 1;
+		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
+			log_error("Unable to obtain global lock.");
+			return ECMD_FAILED;
+		}
+	}
+
+	ret = process_each_pv(cmd, argc, argv, NULL,
+			      arg_is_set(cmd, all_ARG), 0,
+			      NULL, _pvdisplay_single);
+
+	if (lock_global)
+		unlock_vg(cmd, NULL, VG_GLOBAL);
+
+	return ret;
 }

@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -29,9 +29,9 @@ char *pv_fmt_dup(const struct physical_volume *pv)
 	return dm_pool_strdup(pv->vg->vgmem, pv->fmt->name);
 }
 
-char *pv_name_dup(const struct physical_volume *pv)
+char *pv_name_dup(struct dm_pool *mem, const struct physical_volume *pv)
 {
-	return dm_pool_strdup(pv->vg->vgmem, dev_name(pv->dev));
+	return dm_pool_strdup(mem ? mem : pv->vg->vgmem, dev_name(pv->dev));
 }
 
 /*
@@ -42,9 +42,9 @@ struct id pv_id(const struct physical_volume *pv)
 	return pv_field(pv, id);
 }
 
-char *pv_uuid_dup(const struct physical_volume *pv)
+char *pv_uuid_dup(struct dm_pool *mem, const struct physical_volume *pv)
 {
-	return id_format_and_copy(pv->vg->vgmem, &pv->id);
+	return id_format_and_copy(mem ? mem : pv->vg->vgmem, &pv->id);
 }
 
 char *pv_tags_dup(const struct physical_volume *pv)
@@ -157,7 +157,7 @@ uint32_t pv_mda_count(const struct physical_volume *pv)
 {
 	struct lvmcache_info *info;
 
-	info = lvmcache_info_from_pvid((const char *)&pv->id.uuid, 0);
+	info = lvmcache_info_from_pvid((const char *)&pv->id.uuid, pv->dev, 0);
 
 	return info ? lvmcache_mda_count(info) : UINT64_C(0);
 }
@@ -177,7 +177,7 @@ uint32_t pv_mda_used_count(const struct physical_volume *pv)
 	struct lvmcache_info *info;
 	uint32_t used_count=0;
 
-	info = lvmcache_info_from_pvid((const char *)&pv->id.uuid, 0);
+	info = lvmcache_info_from_pvid((const char *)&pv->id.uuid, pv->dev, 0);
 	if (!info)
 		return 0;
 	lvmcache_foreach_mda(info, _count_unignored, &used_count);
@@ -208,16 +208,53 @@ int is_missing_pv(const struct physical_volume *pv)
 	return pv_field(pv, status) & MISSING_PV ? 1 : 0;
 }
 
+int is_used_pv(const struct physical_volume *pv)
+{
+	struct lvmcache_info *info;
+	uint32_t ext_flags;
+
+	if (!pv->fmt)
+		return 0;
+
+	if (!is_orphan(pv))
+		return 1;
+
+	if (!(pv->fmt->features & FMT_PV_FLAGS))
+		return 0;
+
+	if (!(info = lvmcache_info_from_pvid((const char *)&pv->id, pv->dev, 0))) {
+		log_error("Failed to find cached info for PV %s.", pv_dev_name(pv));
+		return -1;
+	}
+
+	ext_flags = lvmcache_ext_flags(info);
+
+	return ext_flags & PV_EXT_USED ? 1 : 0;
+}
+
 char *pv_attr_dup(struct dm_pool *mem, const struct physical_volume *pv)
 {
 	char *repstr;
+	int used = is_used_pv(pv);
+	int duplicate = lvmcache_dev_is_unchosen_duplicate(pv->dev);
 
 	if (!(repstr = dm_pool_zalloc(mem, 4))) {
 		log_error("dm_pool_alloc failed");
 		return NULL;
 	}
 
-	repstr[0] = (pv->status & ALLOCATABLE_PV) ? 'a' : '-';
+	/*
+	 * An allocatable PV is always used, so we don't need to show 'u'.
+	 */
+	if (duplicate)
+		repstr[0] = 'd';
+	else if (pv->status & ALLOCATABLE_PV)
+		repstr[0] = 'a';
+	else if (used > 0)
+		repstr[0] = 'u';
+	else
+		repstr[0] = '-';
+
 	repstr[1] = (pv->status & EXPORTED_VG) ? 'x' : '-';
 	repstr[2] = (pv->status & MISSING_PV) ? 'm' : '-';
 
@@ -231,7 +268,7 @@ uint64_t pv_mda_size(const struct physical_volume *pv)
 	const char *pvid = (const char *)(&pv->id.uuid);
 
 	/* PVs could have 2 mdas of different sizes (rounding effect) */
-	if ((info = lvmcache_info_from_pvid(pvid, 0)))
+	if ((info = lvmcache_info_from_pvid(pvid, pv->dev, 0)))
 		min_mda_size = lvmcache_smallest_mda_size(info);
 	return min_mda_size;
 }
@@ -269,7 +306,7 @@ uint64_t pv_mda_free(const struct physical_volume *pv)
 	const char *pvid = (const char *)&pv->id.uuid;
 	struct lvmcache_info *info;
 
-	if ((info = lvmcache_info_from_pvid(pvid, 0)))
+	if ((info = lvmcache_info_from_pvid(pvid, pv->dev, 0)))
 		return lvmcache_info_mda_free(info);
 
 	return 0;
@@ -322,7 +359,7 @@ unsigned pv_mda_set_ignored(const struct physical_volume *pv, unsigned mda_ignor
 	struct _pv_mda_set_ignored_baton baton;
 	struct metadata_area *mda;
 
-	if (!(info = lvmcache_info_from_pvid((const char *)&pv->id.uuid, 0)))
+	if (!(info = lvmcache_info_from_pvid((const char *)&pv->id.uuid, pv->dev, 0)))
 		return_0;
 
 	baton.mda_ignored = mda_ignored;
@@ -368,7 +405,7 @@ unsigned pv_mda_set_ignored(const struct physical_volume *pv, unsigned mda_ignor
 struct label *pv_label(const struct physical_volume *pv)
 {
 	struct lvmcache_info *info =
-		lvmcache_info_from_pvid((const char *)&pv->id.uuid, 0);
+		lvmcache_info_from_pvid((const char *)&pv->id.uuid, pv->dev, 0);
 
 	if (info)
 		return lvmcache_get_label(info);

@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "clvmd-common.h"
@@ -136,7 +136,7 @@ static const char *decode_flags(unsigned char flags)
 		flags & LCK_DMEVENTD_MONITOR_MODE ? "DMEVENTD_MONITOR|" : "",
 		flags & LCK_ORIGIN_ONLY_MODE ? "ORIGIN_ONLY|" : "",
 		flags & LCK_TEST_MODE ? "TEST|" : "",
-		flags & LCK_CONVERT ? "CONVERT|" : "",
+		flags & LCK_CONVERT_MODE ? "CONVERT|" : "",
 		flags & LCK_DMEVENTD_MONITOR_IGNORE ? "DMEVENTD_MONITOR_IGNORE|" : "",
 		flags & LCK_REVERT_MODE ? "REVERT|" : "");
 
@@ -291,6 +291,7 @@ static int hold_lock(char *resource, int mode, int flags)
 		}
 
 		lvi->lock_mode = mode;
+		lvi->lock_id = 0;
 		status = sync_lock(resource, mode, flags & ~LCKF_CONVERT, &lvi->lock_id);
 		saved_errno = errno;
 		if (status) {
@@ -375,7 +376,7 @@ static int do_activate_lv(char *resource, unsigned char command, unsigned char l
 	 * of exclusive lock to shared one during activation.
 	 */
 	if (!test_mode() && command & LCK_CLUSTER_VG) {
-		status = hold_lock(resource, mode, LCKF_NOQUEUE | (lock_flags & LCK_CONVERT ? LCKF_CONVERT:0));
+		status = hold_lock(resource, mode, LCKF_NOQUEUE | ((lock_flags & LCK_CONVERT_MODE) ? LCKF_CONVERT:0));
 		if (status) {
 			/* Return an LVM-sensible error for this.
 			 * Forcing EIO makes the upper level return this text
@@ -510,7 +511,7 @@ int do_lock_lv(unsigned char command, unsigned char lock_flags, char *resource)
 	DEBUGLOG("do_lock_lv: resource '%s', cmd = %s, flags = %s, critical_section = %d\n",
 		 resource, decode_locking_cmd(command), decode_flags(lock_flags), critical_section());
 
-	if (!cmd->config_initialized || config_files_changed(cmd)) {
+	if (!cmd->initialized.config || config_files_changed(cmd)) {
 		/* Reinitialise various settings inc. logging, filters */
 		if (do_refresh_cache()) {
 			log_error("Updated config file invalid. Aborting.");
@@ -662,7 +663,8 @@ int do_refresh_cache(void)
 
 	init_full_scan_done(0);
 	init_ignore_suspended_devices(1);
-	lvmcache_label_scan(cmd, 2);
+	lvmcache_force_next_label_scan();
+	lvmcache_label_scan(cmd);
 	dm_pool_empty(cmd->mem);
 
 	pthread_mutex_unlock(&lvm_lock);
@@ -842,7 +844,7 @@ void lvm_do_backup(const char *vgname)
 
 	pthread_mutex_lock(&lvm_lock);
 
-	vg = vg_read_internal(cmd, vgname, NULL /*vgid*/, 1, &consistent);
+	vg = vg_read_internal(cmd, vgname, NULL /*vgid*/, WARN_PV_READ, &consistent);
 
 	if (vg && consistent)
 		check_current_backup(vg);
@@ -899,8 +901,12 @@ int init_clvm(struct dm_hash_table *excl_uuid)
 	if (!get_initial_state(excl_uuid))
 		log_error("Cannot load initial lock states.");
 
-	if (!(cmd = create_toolcontext(1, NULL, 0, 1))) {
+	if (!udev_init_library_context())
+		stack;
+
+	if (!(cmd = create_toolcontext(1, NULL, 0, 1, 1, 1))) {
 		log_error("Failed to allocate command context");
+		udev_fin_library_context();
 		return 0;
 	}
 
@@ -927,6 +933,7 @@ void destroy_lvm(void)
 	if (cmd) {
 		memlock_dec_daemon(cmd);
 		destroy_toolcontext(cmd);
+		udev_fin_library_context();
 		cmd = NULL;
 	}
 }

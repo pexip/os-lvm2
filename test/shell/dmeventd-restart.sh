@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -43,9 +46,12 @@ not pgrep dmeventd
 rm LOCAL_DMEVENTD
 
 # set dmeventd path
-aux lvmconf "dmeventd/executable=\"$abs_top_builddir/test/lib/dmeventd\""
+if test -n "$abs_top_builddir"; then
+    aux lvmconf "dmeventd/executable=\"$abs_top_builddir/test/lib/dmeventd\""
+fi
+
 lvchange --monitor y --verbose $vg/3way 2>&1 | tee lvchange.out
-pgrep dmeventd >LOCAL_DMEVENTD
+pgrep -o dmeventd >LOCAL_DMEVENTD
 not grep 'already monitored' lvchange.out
 
 vgremove -ff $vg

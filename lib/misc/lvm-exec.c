@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -53,17 +53,20 @@ int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 	int status;
 	char buf[PATH_MAX * 2];
 
+	if (rstatus)
+		*rstatus = -1;
+
 	if (!argv[0]) {
 		log_error(INTERNAL_ERROR "Missing command.");
 		return 0;
 	}
 
-	if (rstatus)
-		*rstatus = -1;
-
 	if (sync_needed)
-		if (!sync_local_dev_names(cmd)) /* Flush ops and reset dm cookie */
-			return_0;
+		/* Flush ops and reset dm cookie */
+		if (!sync_local_dev_names(cmd)) {
+			log_error("Failed to sync local device names before forking.");
+			return 0;
+		}
 
 	log_verbose("Executing:%s", _verbose_args(argv, buf, sizeof(buf)));
 
@@ -148,8 +151,11 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 	char buf[PATH_MAX * 2];
 
 	if (sync_needed)
-		if (!sync_local_dev_names(cmd)) /* Flush ops and reset dm cookie */
-			return_0;
+		/* Flush ops and reset dm cookie */
+		if (!sync_local_dev_names(cmd)) {
+			log_error("Failed to sync local device names before forking.");
+			return 0;
+		}
 
 	if (pipe(pipefd)) {
 		log_sys_error("pipe", "");

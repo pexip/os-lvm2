@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -20,11 +20,13 @@
 #include "toolcontext.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lv_alloc.h"
 #include "pv_alloc.h"
 #include "segtype.h"
 #include "text_import.h"
 #include "defaults.h"
+#include "str_list.h"
 
 typedef int (*section_fn) (struct format_instance * fid,
 			   struct volume_group * vg, const struct dm_config_node * pvn,
@@ -61,7 +63,7 @@ static int _vsn1_check_version(const struct dm_config_tree *cft)
 	const struct dm_config_value *cv;
 
 	// TODO if this is pvscan --cache, we want this check back.
-	if (lvmetad_active())
+	if (lvmetad_used())
 		return 1;
 
 	/*
@@ -99,7 +101,7 @@ static int _is_converting(struct logical_volume *lv)
 {
 	struct lv_segment *seg;
 
-	if (lv->status & MIRRORED) {
+	if (lv_is_mirrored(lv)) {
 		seg = first_seg(lv);
 		/* Can't use is_temporary_mirror() because the metadata for
 		 * seg_lv may not be read in and flags may not be set yet. */
@@ -153,6 +155,26 @@ static int _read_flag_config(const struct dm_config_node *n, uint64_t *status, i
 	return 1;
 }
 
+static int _read_str_list(struct dm_pool *mem, struct dm_list *list, const struct dm_config_value *cv)
+{
+	if (cv->type == DM_CFG_EMPTY_ARRAY)
+		return 1;
+
+	while (cv) {
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Found an item that is not a string");
+			return 0;
+		}
+
+		if (!str_list_add(mem, list, dm_pool_strdup(mem, cv->v.str)))
+			return_0;
+
+		cv = cv->next;
+	}
+
+	return 1;
+}
+
 static int _read_pv(struct format_instance *fid,
 		    struct volume_group *vg, const struct dm_config_node *pvn,
 		    const struct dm_config_node *vgn __attribute__((unused)),
@@ -166,6 +188,8 @@ static int _read_pv(struct format_instance *fid,
 	struct pv_list *pvl;
 	const struct dm_config_value *cv;
 	uint64_t size, ba_start;
+
+	int outdated = !strcmp(pvn->parent->key, "outdated_pvs");
 
 	if (!(pvl = dm_pool_zalloc(mem, sizeof(*pvl))) ||
 	    !(pvl->pv = dm_pool_zalloc(mem, sizeof(*pvl->pv))))
@@ -212,13 +236,13 @@ static int _read_pv(struct format_instance *fid,
 
 	memcpy(&pv->vgid, &vg->id, sizeof(vg->id));
 
-	if (!_read_flag_config(pvn, &pv->status, PV_FLAGS)) {
+	if (!outdated && !_read_flag_config(pvn, &pv->status, PV_FLAGS)) {
 		log_error("Couldn't read status flags for physical volume.");
 		return 0;
 	}
 
-	/* TODO is the !lvmetad_active() too coarse here? */
-	if (!pv->dev && !lvmetad_active())
+	/* TODO is the !lvmetad_used() too coarse here? */
+	if (!pv->dev && !lvmetad_used())
 		pv->status |= MISSING_PV;
 
 	if ((pv->status & MISSING_PV) && pv->dev && pv_mda_used_count(pv) == 0) {
@@ -234,13 +258,13 @@ static int _read_pv(struct format_instance *fid,
 		return 0;
 	}
 
-	if (!_read_uint64(pvn, "pe_start", &pv->pe_start)) {
+	if (!outdated && !_read_uint64(pvn, "pe_start", &pv->pe_start)) {
 		log_error("Couldn't read extent start value (pe_start) "
 			  "for physical volume.");
 		return 0;
 	}
 
-	if (!_read_int32(pvn, "pe_count", &pv->pe_count)) {
+	if (!outdated && !_read_int32(pvn, "pe_count", &pv->pe_count)) {
 		log_error("Couldn't find extent count (pe_count) for "
 			  "physical volume.");
 		return 0;
@@ -251,7 +275,7 @@ static int _read_pv(struct format_instance *fid,
 	_read_uint64(pvn, "ba_start", &ba_start);
 	_read_uint64(pvn, "ba_size", &size);
 	if (ba_start && size) {
-		log_debug("Found bootloader area specification for PV %s "
+		log_debug_metadata("Found bootloader area specification for PV %s "
 			  "in metadata: ba_start=%" PRIu64 ", ba_size=%" PRIu64 ".",
 			  pv_dev_name(pv), ba_start, size);
 		pv->ba_start = ba_start;
@@ -267,7 +291,7 @@ static int _read_pv(struct format_instance *fid,
 
 	/* Optional tags */
 	if (dm_config_get_list(pvn, "tags", &cv) &&
-	    !(read_tags(mem, &pv->tags, cv))) {
+	    !(_read_str_list(mem, &pv->tags, cv))) {
 		log_error("Couldn't read tags for physical volume %s in %s.",
 			  pv_dev_name(pv), vg->name);
 		return 0;
@@ -299,7 +323,10 @@ static int _read_pv(struct format_instance *fid,
 
 	vg->extent_count += pv->pe_count;
 	vg->free_count += pv->pe_count;
-	add_pvl_to_vgs(vg, pvl);
+	if (outdated)
+		dm_list_add(&vg->pvs_outdated, &pvl->list);
+	else
+		add_pvl_to_vgs(vg, pvl);
 
 	return 1;
 }
@@ -348,7 +375,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 		return 0;
 	}
 
-	segtype_str = "striped";
+	segtype_str = SEG_TYPE_NAME_STRIPED;
 
 	if (!dm_config_get_str(sn_child, "type", &segtype_str)) {
 		log_error("Segment type must be a string.");
@@ -363,7 +390,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 		return_0;
 
 	if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
-				     extent_count, 0, 0, NULL, NULL, area_count,
+				     extent_count, 0, 0, NULL, area_count,
 				     extent_count, 0, 0, 0, NULL))) {
 		log_error("Segment allocation failed");
 		return 0;
@@ -375,7 +402,7 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 
 	/* Optional tags */
 	if (dm_config_get_list(sn_child, "tags", &cv) &&
-	    !(read_tags(mem, &seg->tags, cv))) {
+	    !(_read_str_list(mem, &seg->tags, cv))) {
 		log_error("Couldn't read tags for a segment of %s/%s.",
 			  lv->vg->name, lv->name);
 		return 0;
@@ -385,6 +412,9 @@ static int _read_segment(struct logical_volume *lv, const struct dm_config_node 
 	 * Insert into correct part of segment list.
 	 */
 	_insert_segment(lv, seg);
+
+	if (seg_is_mirror(seg))
+		lv->status |= MIRROR;
 
 	if (seg_is_mirrored(seg))
 		lv->status |= MIRRORED;
@@ -528,58 +558,94 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 	const char *str;
 	const struct dm_config_value *cv;
 	const char *hostname;
-	uint64_t timestamp = 0;
+	uint64_t timestamp = 0, lvstatus;
 
 	if (!(lv = alloc_lv(mem)))
+		return_0;
+
+	if (!link_lv_to_vg(vg, lv))
 		return_0;
 
 	if (!(lv->name = dm_pool_strdup(mem, lvn->key)))
 		return_0;
 
+	log_debug_metadata("Importing logical volume %s.", display_lvname(lv));
+
 	if (!(lvn = lvn->child)) {
-		log_error("Empty logical volume section.");
+		log_error("Empty logical volume section for %s.",
+			  display_lvname(lv));
 		return 0;
 	}
 
-	if (!_read_flag_config(lvn, &lv->status, LV_FLAGS)) {
+	if (!_read_flag_config(lvn, &lvstatus, LV_FLAGS)) {
 		log_error("Couldn't read status flags for logical volume %s.",
-			  lv->name);
+			  display_lvname(lv));
 		return 0;
 	}
+
+	if (lvstatus & LVM_WRITE_LOCKED) {
+		lvstatus |= LVM_WRITE;
+		lvstatus &= ~LVM_WRITE_LOCKED;
+	}
+	lv->status = lvstatus;
 
 	if (dm_config_has_node(lvn, "creation_time")) {
 		if (!_read_uint64(lvn, "creation_time", &timestamp)) {
 			log_error("Invalid creation_time for logical volume %s.",
-				  lv->name);
+				  display_lvname(lv));
 			return 0;
 		}
 		if (!dm_config_get_str(lvn, "creation_host", &hostname)) {
 			log_error("Couldn't read creation_host for logical volume %s.",
-				  lv->name);
+				  display_lvname(lv));
 			return 0;
 		}
 	} else if (dm_config_has_node(lvn, "creation_host")) {
 		log_error("Missing creation_time for logical volume %s.",
-			  lv->name);
+			  display_lvname(lv));
 		return 0;
 	}
 
-	lv->alloc = ALLOC_INHERIT;
+	/*
+	 * The LV lock_args string is generated in lvmlockd, and the content
+	 * depends on the lock_type.
+	 *
+	 * lock_type dlm does not use LV lock_args, so the LV lock_args field
+	 * is just set to "dlm".
+	 *
+	 * lock_type sanlock uses the LV lock_args field to save the
+	 * location on disk of that LV's sanlock lock.  The disk name is
+	 * specified in the VG lock_args.  The lock_args string begins
+	 * with a version number, e.g. 1.0.0, followed by a colon, followed
+	 * by a number.  The number is the offset on disk where sanlock is
+	 * told to find the LV's lock.
+	 * e.g. lock_args = 1.0.0:70254592
+	 * means that the lock is located at offset 70254592.
+	 *
+	 * The lvmlockd code for each specific lock manager also validates
+	 * the lock_args before using it to access the lock manager.
+	 */
+	if (dm_config_get_str(lvn, "lock_args", &str)) {
+		if (!(lv->lock_args = dm_pool_strdup(mem, str)))
+			return_0;
+	}
+
 	if (dm_config_get_str(lvn, "allocation_policy", &str)) {
 		lv->alloc = get_alloc_from_string(str);
 		if (lv->alloc == ALLOC_INVALID) {
-			log_warn("WARNING: Ignoring unrecognised allocation policy %s for LV %s", str, lv->name);
+			log_warn("WARNING: Ignoring unrecognised allocation policy %s for LV %s.",
+				 str, display_lvname(lv));
 			lv->alloc = ALLOC_INHERIT;
 		}
-	}
+	} else
+		lv->alloc = ALLOC_INHERIT;
 
 	if (dm_config_get_str(lvn, "profile", &str)) {
-		log_debug_metadata("Adding profile configuration %s for LV %s/%s.",
-				   str, vg->name, lv->name);
-		lv->profile = add_profile(vg->cmd, str, CONFIG_PROFILE_METADATA);
-		if (!lv->profile) {
-			log_error("Failed to add configuration profile %s for LV %s/%s",
-				  str, vg->name, lv->name);
+		log_debug_metadata("Adding profile configuration %s for LV %s.",
+				   str, display_lvname(lv));
+		if (!(lv->profile = add_profile(vg->cmd, str, CONFIG_PROFILE_METADATA))) {
+			log_error("Failed to add configuration profile %s for LV %s.",
+				  str, display_lvname(lv));
 			return 0;
 		}
 	}
@@ -592,7 +658,7 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 		case 0:
 			lv->read_ahead = DM_READ_AHEAD_AUTO;
 			break;
-		case (uint32_t) -1:
+		case UINT32_C(-1):
 			lv->read_ahead = DM_READ_AHEAD_NONE;
 			break;
 		default:
@@ -602,16 +668,13 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 
 	/* Optional tags */
 	if (dm_config_get_list(lvn, "tags", &cv) &&
-	    !(read_tags(mem, &lv->tags, cv))) {
-		log_error("Couldn't read tags for logical volume %s/%s.",
-			  vg->name, lv->name);
+	    !(_read_str_list(mem, &lv->tags, cv))) {
+		log_error("Couldn't read tags for logical volume %s.",
+			  display_lvname(lv));
 		return 0;
 	}
 
 	if (!dm_hash_insert(lv_hash, lv->name, lv))
-		return_0;
-
-	if (!link_lv_to_vg(vg, lv))
 		return_0;
 
 	if (timestamp && !lv_set_creation(lv, hostname, timestamp))
@@ -620,19 +683,209 @@ static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
 	if (!lv_is_visible(lv) && strstr(lv->name, "_pmspare")) {
 		if (vg->pool_metadata_spare_lv) {
 			log_error("Couldn't use another pool metadata spare "
-				  "logical volume %s/%s.", vg->name, lv->name);
+				  "logical volume %s.", display_lvname(lv));
 			return 0;
 		}
 		log_debug_metadata("Logical volume %s is pool metadata spare.",
-				   lv->name);
+				   display_lvname(lv));
 		lv->status |= POOL_METADATA_SPARE;
 		vg->pool_metadata_spare_lv = lv;
+	}
+
+	if (!lv_is_visible(lv) && !strcmp(lv->name, LOCKD_SANLOCK_LV_NAME)) {
+		log_debug_metadata("Logical volume %s is sanlock lv.",
+				   display_lvname(lv));
+		lv->status |= LOCKD_SANLOCK_LV;
+		vg->sanlock_lv = lv;
 	}
 
 	return 1;
 }
 
-static int _read_lvsegs(struct format_instance *fid __attribute__((unused)),
+static int _read_historical_lvnames(struct format_instance *fid __attribute__((unused)),
+				     struct volume_group *vg, const struct dm_config_node *hlvn,
+				     const struct dm_config_node *vgn __attribute__((unused)),
+				     struct dm_hash_table *pv_hash __attribute__((unused)),
+				     struct dm_hash_table *lv_hash __attribute__((unused)),
+				     unsigned *scan_done_once __attribute__((unused)),
+				     unsigned report_missing_devices __attribute__((unused)))
+{
+	struct dm_pool *mem = vg->vgmem;
+	struct generic_logical_volume *glv;
+	struct glv_list *glvl;
+	const char *str;
+	uint64_t timestamp;
+
+	if (!(glv = dm_pool_zalloc(mem, sizeof(struct generic_logical_volume))) ||
+	    !(glv->historical = dm_pool_zalloc(mem, sizeof(struct historical_logical_volume))) ||
+	    !(glvl = dm_pool_zalloc(mem, sizeof(struct glv_list)))) {
+		log_error("Removed logical volume structure allocation failed");
+		goto bad;
+	}
+
+	glv->is_historical = 1;
+	glv->historical->vg = vg;
+	dm_list_init(&glv->historical->indirect_glvs);
+
+	if (!(glv->historical->name = dm_pool_strdup(mem, hlvn->key)))
+		goto_bad;
+
+	if (!(hlvn = hlvn->child)) {
+		log_error("Empty removed logical volume section.");
+		goto bad;
+	}
+
+	if (!_read_id(&glv->historical->lvid.id[1], hlvn, "id")) {
+		log_error("Couldn't read uuid for removed logical volume %s in vg %s.",
+			  glv->historical->name, vg->name);
+		return 0;
+	}
+	memcpy(&glv->historical->lvid.id[0], &glv->historical->vg->id, sizeof(glv->historical->lvid.id[0]));
+
+	if (dm_config_get_str(hlvn, "name", &str)) {
+		if (!(glv->historical->name = dm_pool_strdup(mem, str)))
+			goto_bad;
+	}
+
+	if (dm_config_has_node(hlvn, "creation_time")) {
+		if (!_read_uint64(hlvn, "creation_time", &timestamp)) {
+			log_error("Invalid creation_time for removed logical volume %s.", str);
+			goto bad;
+		}
+		glv->historical->timestamp = timestamp;
+	}
+
+	if (dm_config_has_node(hlvn, "removal_time")) {
+		if (!_read_uint64(hlvn, "removal_time", &timestamp)) {
+			log_error("Invalid removal_time for removed logical volume %s.", str);
+			goto bad;
+		}
+		glv->historical->timestamp_removed = timestamp;
+	}
+
+	glvl->glv = glv;
+	dm_list_add(&vg->historical_lvs, &glvl->list);
+
+	return 1;
+bad:
+	if (glv)
+		dm_pool_free(mem, glv);
+	return 0;
+}
+
+static int _read_historical_lvnames_interconnections(struct format_instance *fid __attribute__((unused)),
+						 struct volume_group *vg, const struct dm_config_node *hlvn,
+						 const struct dm_config_node *vgn __attribute__((unused)),
+						 struct dm_hash_table *pv_hash __attribute__((unused)),
+						 struct dm_hash_table *lv_hash __attribute__((unused)),
+						 unsigned *scan_done_once __attribute__((unused)),
+						 unsigned report_missing_devices __attribute__((unused)))
+{
+	struct dm_pool *mem = vg->vgmem;
+	const char *historical_lv_name, *origin_name = NULL;
+	struct generic_logical_volume *glv, *origin_glv, *descendant_glv;
+	struct logical_volume *tmp_lv;
+	struct glv_list *glvl = NULL;
+	const struct dm_config_value *descendants = NULL;
+
+	historical_lv_name = hlvn->key;
+	hlvn = hlvn->child;
+
+	if (!(glv = find_historical_glv(vg, historical_lv_name, 0, NULL))) {
+		log_error("Unknown historical logical volume %s/%s%s",
+			  vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+		goto bad;
+	}
+
+	if (dm_config_has_node(hlvn, "origin")) {
+		if (!dm_config_get_str(hlvn, "origin", &origin_name)) {
+			log_error("Couldn't read origin for historical logical "
+				  "volume %s/%s%s", vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+			goto bad;
+		}
+	}
+
+	if (dm_config_has_node(hlvn, "descendants")) {
+		if (!dm_config_get_list(hlvn, "descendants", &descendants)) {
+			log_error("Couldn't get descendants list for historical logical "
+				  "volume %s/%s%s", vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+			goto bad;
+		}
+		if (descendants->type == DM_CFG_EMPTY_ARRAY) {
+			log_error("Found empty descendants list for historical logical "
+				  "volume %s/%s%s", vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+			goto bad;
+		}
+	}
+
+	if (!origin_name && !descendants)
+		/* no interconnections */
+		return 1;
+
+	if (origin_name) {
+		if (!(glvl = dm_pool_zalloc(mem, sizeof(struct glv_list)))) {
+			log_error("Failed to allocate list item for historical logical "
+				  "volume %s/%s%s", vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+			goto bad;
+		}
+		glvl->glv = glv;
+
+		if (!strncmp(origin_name, HISTORICAL_LV_PREFIX, strlen(HISTORICAL_LV_PREFIX))) {
+			if (!(origin_glv = find_historical_glv(vg, origin_name + strlen(HISTORICAL_LV_PREFIX), 0, NULL))) {
+				log_error("Unknown origin %s for historical logical volume %s/%s%s",
+					  origin_name, vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+				goto bad;
+			}
+		} else {
+			if (!(tmp_lv = find_lv(vg, origin_name))) {
+				log_error("Unknown origin %s for historical logical volume %s/%s%s",
+					  origin_name, vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+				goto bad;
+			}
+
+			if (!(origin_glv = get_or_create_glv(mem, tmp_lv, NULL)))
+				goto bad;
+		}
+
+		glv->historical->indirect_origin = origin_glv;
+		if (origin_glv->is_historical)
+			dm_list_add(&origin_glv->historical->indirect_glvs, &glvl->list);
+		else
+			dm_list_add(&origin_glv->live->indirect_glvs, &glvl->list);
+	}
+
+	if (descendants) {
+		do {
+			if (descendants->type != DM_CFG_STRING) {
+				log_error("Descendant value for historical logical volume %s/%s%s "
+					  "is not a string.", vg->name, HISTORICAL_LV_PREFIX, historical_lv_name);
+				goto bad;
+			}
+
+			if (!(tmp_lv = find_lv(vg, descendants->v.str))) {
+				log_error("Failed to find descendant %s for historical LV %s.",
+					  descendants->v.str, historical_lv_name);
+				goto bad;
+			}
+
+			if (!(descendant_glv = get_or_create_glv(mem, tmp_lv, NULL)))
+				goto bad;
+
+			if (!add_glv_to_indirect_glvs(mem, glv, descendant_glv))
+				goto bad;
+
+			descendants = descendants->next;
+		} while (descendants);
+	}
+
+	return 1;
+bad:
+	if (glvl)
+		dm_pool_free(mem, glvl);
+	return 0;
+}
+
+static int _read_lvsegs(struct format_instance *fid,
 			struct volume_group *vg, const struct dm_config_node *lvn,
 			const struct dm_config_node *vgn __attribute__((unused)),
 			struct dm_hash_table *pv_hash,
@@ -655,7 +908,7 @@ static int _read_lvsegs(struct format_instance *fid __attribute__((unused)),
 	/* FIXME: read full lvid */
 	if (!_read_id(&lv->lvid.id[1], lvn, "id")) {
 		log_error("Couldn't read uuid for logical volume %s.",
-			  lv->name);
+			  display_lvname(lv));
 		return 0;
 	}
 
@@ -665,20 +918,30 @@ static int _read_lvsegs(struct format_instance *fid __attribute__((unused)),
 		return_0;
 
 	lv->size = (uint64_t) lv->le_count * (uint64_t) vg->extent_size;
-
 	lv->minor = -1;
-	if ((lv->status & FIXED_MINOR) &&
-	    !_read_int32(lvn, "minor", &lv->minor)) {
-		log_error("Couldn't read minor number for logical "
-			  "volume %s.", lv->name);
-		return 0;
-	}
-
 	lv->major = -1;
-	if ((lv->status & FIXED_MINOR) &&
-	    !_read_int32(lvn, "major", &lv->major)) {
-		log_error("Couldn't read major number for logical "
-			  "volume %s.", lv->name);
+
+	if (lv->status & FIXED_MINOR) {
+		if (!_read_int32(lvn, "minor", &lv->minor)) {
+			log_error("Couldn't read minor number for logical volume %s.",
+				  display_lvname(lv));
+			return 0;
+		}
+
+		if (!dm_config_has_node(lvn, "major"))
+			/* If major is missing, pick default */
+			lv->major = vg->cmd->dev_types->device_mapper_major;
+		else if (!_read_int32(lvn, "major", &lv->major)) {
+			log_warn("WARNING: Couldn't read major number for logical "
+				 "volume %s.", display_lvname(lv));
+			lv->major = vg->cmd->dev_types->device_mapper_major;
+		}
+
+		if (!validate_major_minor(vg->cmd, fid->fmt, lv->major, lv->minor)) {
+			log_warn("WARNING: Ignoring invalid major, minor number for "
+				 "logical volume %s.", display_lvname(lv));
+			lv->major = lv->minor = -1;
+		}
 	}
 
 	return 1;
@@ -716,14 +979,16 @@ static int _read_sections(struct format_instance *fid,
 
 static struct volume_group *_read_vg(struct format_instance *fid,
 				     const struct dm_config_tree *cft,
-				     unsigned use_cached_pvs)
+				     unsigned use_cached_pvs,
+				     unsigned allow_lvmetad_extensions)
 {
 	const struct dm_config_node *vgn;
 	const struct dm_config_value *cv;
-	const char *str;
+	const char *str, *format_str, *system_id;
 	struct volume_group *vg;
 	struct dm_hash_table *pv_hash = NULL, *lv_hash = NULL;
 	unsigned scan_done_once = use_cached_pvs;
+	uint64_t vgstatus;
 
 	/* skip any top-level values */
 	for (vgn = cft->root; (vgn && vgn->v); vgn = vgn->sib)
@@ -736,9 +1001,6 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 
 	if (!(vg = alloc_vg("read_vg", fid->fmt->cmd, vgn->key)))
 		return_NULL;
-
-	if (!(vg->system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
-		goto_bad;
 
 	/*
 	 * The pv hash memorises the pv section names -> pv
@@ -760,8 +1022,42 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 
 	vgn = vgn->child;
 
-	if (dm_config_get_str(vgn, "system_id", &str)) {
-		strncpy(vg->system_id, str, NAME_LEN);
+	/* A backup file might be a backup of a different format */
+	if (dm_config_get_str(vgn, "format", &format_str) &&
+	    !(vg->original_fmt = get_format_by_name(fid->fmt->cmd, format_str))) {
+		log_error("Unrecognised format %s for volume group %s.", format_str, vg->name);
+		goto bad;
+	}
+
+	if (dm_config_get_str(vgn, "lock_type", &str)) {
+		if (!(vg->lock_type = dm_pool_strdup(vg->vgmem, str)))
+			goto bad;
+	}
+
+	/*
+	 * The VG lock_args string is generated in lvmlockd, and the content
+	 * depends on the lock_type.  lvmlockd begins the lock_args string
+	 * with a version number, e.g. 1.0.0, followed by a colon, followed
+	 * by a string that depends on the lock manager.  The string after
+	 * the colon is information needed to use the lock manager for the VG.
+	 *
+	 * For sanlock, the string is the name of the internal LV used to store
+	 * sanlock locks.  lvmlockd needs to know where the locks are located
+	 * so it can pass that location to sanlock which needs to access the locks.
+	 * e.g. lock_args = 1.0.0:lvmlock
+	 * means that the locks are located on the the LV "lvmlock".
+	 *
+	 * For dlm, the string is the dlm cluster name.  lvmlockd needs to use
+	 * a dlm lockspace in this cluster to use the VG.
+	 * e.g. lock_args = 1.0.0:foo
+	 * means that the host needs to be a member of the cluster "foo".
+	 *
+	 * The lvmlockd code for each specific lock manager also validates
+	 * the lock_args before using it to access the lock manager.
+	 */
+	if (dm_config_get_str(vgn, "lock_args", &str)) {
+		if (!(vg->lock_args = dm_pool_strdup(vg->vgmem, str)))
+			goto bad;
 	}
 
 	if (!_read_id(&vg->id, vgn, "id")) {
@@ -775,11 +1071,31 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		goto bad;
 	}
 
-	if (!_read_flag_config(vgn, &vg->status, VG_FLAGS)) {
+	if (!_read_flag_config(vgn, &vgstatus, VG_FLAGS)) {
 		log_error("Error reading flags of volume group %s.",
 			  vg->name);
 		goto bad;
 	}
+
+	/*
+	 * A system id without WRITE_LOCKED is an old lvm1 system id.
+	 */
+	if (dm_config_get_str(vgn, "system_id", &system_id)) {
+		if (!(vgstatus & LVM_WRITE_LOCKED)) {
+			if (!(vg->lvm1_system_id = dm_pool_zalloc(vg->vgmem, NAME_LEN + 1)))
+				goto_bad;
+			strncpy(vg->lvm1_system_id, system_id, NAME_LEN);
+		} else if (!(vg->system_id = dm_pool_strdup(vg->vgmem, system_id))) {
+			log_error("Failed to allocate memory for system_id in _read_vg.");
+			goto bad;
+		}
+	}
+
+	if (vgstatus & LVM_WRITE_LOCKED) {
+		vgstatus |= LVM_WRITE;
+		vgstatus &= ~LVM_WRITE_LOCKED;
+	}
+	vg->status = vgstatus;
 
 	if (!_read_int32(vgn, "extent_size", &vg->extent_size)) {
 		log_error("Couldn't read extent size for volume group %s.",
@@ -832,9 +1148,15 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		goto bad;
 	}
 
+	if (allow_lvmetad_extensions)
+		_read_sections(fid, "outdated_pvs", _read_pv, vg,
+			       vgn, pv_hash, lv_hash, 1, &scan_done_once);
+	else if (dm_config_has_node(vgn, "outdated_pvs"))
+		log_error(INTERNAL_ERROR "Unexpected outdated_pvs section in metadata of VG %s.", vg->name);
+
 	/* Optional tags */
 	if (dm_config_get_list(vgn, "tags", &cv) &&
-	    !(read_tags(vg->vgmem, &vg->tags, cv))) {
+	    !(_read_str_list(vg->vgmem, &vg->tags, cv))) {
 		log_error("Couldn't read tags for volume group %s.", vg->name);
 		goto bad;
 	}
@@ -846,10 +1168,24 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 		goto bad;
 	}
 
+	if (!_read_sections(fid, "historical_logical_volumes", _read_historical_lvnames, vg,
+			    vgn, pv_hash, lv_hash, 1, NULL)) {
+		log_error("Couldn't read all historical logical volumes for volume "
+			  "group %s.", vg->name);
+		goto bad;
+	}
+
 	if (!_read_sections(fid, "logical_volumes", _read_lvsegs, vg,
 			    vgn, pv_hash, lv_hash, 1, NULL)) {
 		log_error("Couldn't read all logical volumes for "
 			  "volume group %s.", vg->name);
+		goto bad;
+	}
+
+	if (!_read_sections(fid, "historical_logical_volumes", _read_historical_lvnames_interconnections,
+			    vg, vgn, pv_hash, lv_hash, 1, NULL)) {
+		log_error("Couldn't read all removed logical volume interconnections "
+			  "for volume group %s.", vg->name);
 		goto bad;
 	}
 
@@ -862,8 +1198,6 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 	dm_hash_destroy(pv_hash);
 	dm_hash_destroy(lv_hash);
 
-	/* FIXME Determine format type from file contents */
-	/* eg Set to instance of fmt1 here if reading a format1 backup? */
 	vg_set_fid(vg, fid);
 
 	/*
@@ -885,33 +1219,39 @@ static struct volume_group *_read_vg(struct format_instance *fid,
 static void _read_desc(struct dm_pool *mem,
 		       const struct dm_config_tree *cft, time_t *when, char **desc)
 {
-	const char *d;
+	const char *str;
 	unsigned int u = 0u;
-	int old_suppress;
 
-	old_suppress = log_suppress(1);
-	d = dm_config_find_str_allow_empty(cft->root, "description", "");
-	log_suppress(old_suppress);
-	*desc = dm_pool_strdup(mem, d);
+	if (!dm_config_get_str(cft->root, "description", &str))
+		str = "";
+
+	*desc = dm_pool_strdup(mem, str);
 
 	(void) dm_config_get_uint32(cft->root, "creation_time", &u);
 	*when = u;
 }
 
-static const char *_read_vgname(const struct format_type *fmt,
-				const struct dm_config_tree *cft, struct id *vgid,
-				uint64_t *vgstatus, char **creation_host)
+/*
+ * It is used to read vgsummary information about a VG
+ * before locking and reading the VG via vg_read().
+ * read_vgsummary: read VG metadata before VG is locked
+ *                 and save the data in struct vgsummary
+ * read_vg: read VG metadata after VG is locked
+ *          and save the data in struct volume_group
+ * FIXME: why are these separate?
+ */
+static int _read_vgsummary(const struct format_type *fmt, const struct dm_config_tree *cft, 
+			   struct lvmcache_vgsummary *vgsummary)
 {
 	const struct dm_config_node *vgn;
 	struct dm_pool *mem = fmt->cmd->mem;
-	char *vgname;
-	int old_suppress;
+	const char *str;
 
-	old_suppress = log_suppress(2);
-	*creation_host = dm_pool_strdup(mem,
-					dm_config_find_str_allow_empty(cft->root,
-							"creation_host", ""));
-	log_suppress(old_suppress);
+	if (!dm_config_get_str(cft->root, "creation_host", &str))
+		str = "";
+
+	if (!(vgsummary->creation_host = dm_pool_strdup(mem, str)))
+		return_0;
 
 	/* skip any top-level values */
 	for (vgn = cft->root; (vgn && vgn->v); vgn = vgn->sib) ;
@@ -921,30 +1261,38 @@ static const char *_read_vgname(const struct format_type *fmt,
 		return 0;
 	}
 
-	if (!(vgname = dm_pool_strdup(mem, vgn->key)))
+	if (!(vgsummary->vgname = dm_pool_strdup(mem, vgn->key)))
 		return_0;
 
 	vgn = vgn->child;
 
-	if (!_read_id(vgid, vgn, "id")) {
-		log_error("Couldn't read uuid for volume group %s.", vgname);
+	if (!_read_id(&vgsummary->vgid, vgn, "id")) {
+		log_error("Couldn't read uuid for volume group %s.", vgsummary->vgname);
 		return 0;
 	}
 
-	if (!_read_flag_config(vgn, vgstatus, VG_FLAGS)) {
+	if (!_read_flag_config(vgn, &vgsummary->vgstatus, VG_FLAGS)) {
 		log_error("Couldn't find status flags for volume group %s.",
-			  vgname);
+			  vgsummary->vgname);
 		return 0;
 	}
 
-	return vgname;
+	if (dm_config_get_str(vgn, "system_id", &str) &&
+	    (!(vgsummary->system_id = dm_pool_strdup(mem, str))))
+		return_0;
+
+	if (dm_config_get_str(vgn, "lock_type", &str) &&
+	    (!(vgsummary->lock_type = dm_pool_strdup(mem, str))))
+		return_0;
+
+	return 1;
 }
 
 static struct text_vg_version_ops _vsn1_ops = {
 	.check_version = _vsn1_check_version,
 	.read_vg = _read_vg,
 	.read_desc = _read_desc,
-	.read_vgname = _read_vgname,
+	.read_vgsummary = _read_vgsummary
 };
 
 struct text_vg_version_ops *text_vg_vsn1_init(void)

@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -18,8 +18,6 @@
 #include "locking_types.h"
 #include "lvm-string.h"
 #include "activate.h"
-
-#include <signal.h>
 
 /*
  * No locking
@@ -34,7 +32,7 @@ static void _no_reset_locking(void)
 }
 
 static int _no_lock_resource(struct cmd_context *cmd, const char *resource,
-			     uint32_t flags, struct logical_volume *lv)
+			     uint32_t flags, const struct logical_volume *lv)
 {
 	switch (flags & LCK_SCOPE_MASK) {
 	case LCK_ACTIVATION:
@@ -46,17 +44,19 @@ static int _no_lock_resource(struct cmd_context *cmd, const char *resource,
 	case LCK_LV:
 		switch (flags & LCK_TYPE_MASK) {
 		case LCK_NULL:
-			return lv_deactivate(cmd, resource, lv_ondisk(lv));
+			return lv_deactivate(cmd, resource, lv_committed(lv));
 		case LCK_UNLOCK:
-			return lv_resume_if_active(cmd, resource, (flags & LCK_ORIGIN_ONLY) ? 1: 0, 0, (flags & LCK_REVERT) ? 1 : 0, lv_ondisk(lv));
+			return lv_resume_if_active(cmd, resource, (flags & LCK_ORIGIN_ONLY) ? 1: 0, 0,
+						   (flags & LCK_REVERT) ? 1 : 0, lv_committed(lv));
 		case LCK_READ:
-			return lv_activate_with_filter(cmd, resource, 0, lv->status & LV_NOSCAN ? 1 : 0,
-						       lv->status & LV_TEMPORARY ? 1 : 0, lv_ondisk(lv));
+			return lv_activate_with_filter(cmd, resource, 0, (lv->status & LV_NOSCAN) ? 1 : 0,
+						       (lv->status & LV_TEMPORARY) ? 1 : 0, lv_committed(lv));
 		case LCK_WRITE:
-			return lv_suspend_if_active(cmd, resource, (flags & LCK_ORIGIN_ONLY) ? 1 : 0, 0, lv_ondisk(lv), lv);
+			return lv_suspend_if_active(cmd, resource, (flags & LCK_ORIGIN_ONLY) ? 1 : 0, 0,
+						    lv_committed(lv), lv);
 		case LCK_EXCL:
-			return lv_activate_with_filter(cmd, resource, 1, lv->status & LV_NOSCAN ? 1 : 0,
-						       lv->status & LV_TEMPORARY ? 1 : 0, lv_ondisk(lv));
+			return lv_activate_with_filter(cmd, resource, 1, (lv->status & LV_NOSCAN) ? 1 : 0,
+						       (lv->status & LV_TEMPORARY) ? 1 : 0, lv_committed(lv));
 		default:
 			break;
 		}
@@ -70,7 +70,7 @@ static int _no_lock_resource(struct cmd_context *cmd, const char *resource,
 	return 1;
 }
 
-static int _no_query_resource(const char *resource, int *mode)
+static int _no_query_resource(const char *resource, const char *node, int *mode)
 {
 	log_very_verbose("Locking is disabled: Treating lock %s as not held.",
 			 resource);
@@ -79,7 +79,7 @@ static int _no_query_resource(const char *resource, int *mode)
 
 static int _readonly_lock_resource(struct cmd_context *cmd,
 				   const char *resource,
-				   uint32_t flags, struct logical_volume *lv)
+				   uint32_t flags, const struct logical_volume *lv)
 {
 	if ((flags & LCK_TYPE_MASK) == LCK_WRITE &&
 	    (flags & LCK_SCOPE_MASK) == LCK_VG &&

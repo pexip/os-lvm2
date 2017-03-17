@@ -10,15 +10,15 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
 
 static int _vgmknodes_single(struct cmd_context *cmd, struct logical_volume *lv,
-			     void *handle __attribute__((unused)))
+			     struct processing_handle *handle __attribute__((unused)))
 {
-	if (arg_count(cmd, refresh_ARG) && lv_is_visible(lv))
+	if (arg_is_set(cmd, refresh_ARG) && lv_is_visible(lv))
 		if (!lv_refresh(cmd, lv))
 			return_ECMD_FAILED;
 
@@ -33,6 +33,5 @@ int vgmknodes(struct cmd_context *cmd, int argc, char **argv)
 	if (!lv_mknodes(cmd, NULL))
 		return_ECMD_FAILED;
 
-	return process_each_lv(cmd, argc, argv, LCK_VG_READ, NULL,
-			    &_vgmknodes_single);
+	return process_each_lv(cmd, argc, argv, NULL, NULL, LCK_VG_READ, NULL, &_vgmknodes_single);
 }

@@ -7,7 +7,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+
+# disable lvmetad logging as it bogs down test systems
+export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
@@ -92,7 +97,15 @@ test_lvconvert() {
 		alloc="--alloc anywhere"
 	fi
 
-	lvconvert --type mirror -m $finish_count --mirrorlog $finish_log_type \
+	# --mirrorlog is invalid with -m0
+	if [ "$finish_count" -eq 0 ]; then
+		mirrorlog=""
+		finish_log_type=""
+	else
+		mirrorlog="--mirrorlog"
+	fi
+
+	lvconvert --type mirror -m $finish_count $mirrorlog $finish_log_type \
 		$vg/$lv1 $alloc
 
 	test $active || lvchange -aey $vg/$lv1
@@ -109,7 +122,6 @@ test_lvconvert() {
 		check mirror_legs $vg $lv1 $finish_count_p1
 	fi
 }
-
 
 aux prepare_pvs 5 5
 vgcreate -s 32k $vg $(cat DEVICES)

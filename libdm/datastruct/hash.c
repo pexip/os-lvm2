@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "dmlib.h"
@@ -18,6 +18,7 @@
 struct dm_hash_node {
 	struct dm_hash_node *next;
 	void *data;
+	unsigned data_len;
 	unsigned keylen;
 	char key[0];
 };
@@ -206,6 +207,131 @@ int dm_hash_insert(struct dm_hash_table *t, const char *key, void *data)
 void dm_hash_remove(struct dm_hash_table *t, const char *key)
 {
 	dm_hash_remove_binary(t, key, strlen(key) + 1);
+}
+
+static struct dm_hash_node **_find_str_with_val(struct dm_hash_table *t,
+					        const void *key, const void *val,
+					        uint32_t len, uint32_t val_len)
+{
+	struct dm_hash_node **c;
+	unsigned h;
+       
+	h = _hash(key, len) & (t->num_slots - 1);
+
+	for (c = &t->slots[h]; *c; c = &((*c)->next)) {
+		if ((*c)->keylen != len)
+			continue;
+
+		if (!memcmp(key, (*c)->key, len) && (*c)->data) {
+			if (((*c)->data_len == val_len) &&
+			    !memcmp(val, (*c)->data, val_len))
+				return c;
+		}
+	}
+
+	return NULL;
+}
+
+int dm_hash_insert_allow_multiple(struct dm_hash_table *t, const char *key,
+				  const void *val, uint32_t val_len)
+{
+	struct dm_hash_node *n;
+	struct dm_hash_node *first;
+	int len = strlen(key) + 1;
+	unsigned h;
+
+	n = _create_node(key, len);
+	if (!n)
+		return 0;
+
+	n->data = (void *)val;
+	n->data_len = val_len;
+
+	h = _hash(key, len) & (t->num_slots - 1);
+
+	first = t->slots[h];
+
+	if (first)
+		n->next = first;
+	else
+		n->next = 0;
+	t->slots[h] = n;
+
+	t->num_nodes++;
+	return 1;
+}
+
+/*
+ * Look through multiple entries with the same key for one that has a
+ * matching val and return that.  If none have maching val, return NULL.
+ */
+void *dm_hash_lookup_with_val(struct dm_hash_table *t, const char *key,
+			      const void *val, uint32_t val_len)
+{
+	struct dm_hash_node **c;
+
+	c = _find_str_with_val(t, key, val, strlen(key) + 1, val_len);
+
+	return (c && *c) ? (*c)->data : 0;
+}
+
+/*
+ * Look through multiple entries with the same key for one that has a
+ * matching val and remove that.
+ */
+void dm_hash_remove_with_val(struct dm_hash_table *t, const char *key,
+			     const void *val, uint32_t val_len)
+{
+	struct dm_hash_node **c;
+
+	c = _find_str_with_val(t, key, val, strlen(key) + 1, val_len);
+
+	if (c && *c) {
+		struct dm_hash_node *old = *c;
+		*c = (*c)->next;
+		dm_free(old);
+		t->num_nodes--;
+	}
+}
+
+/*
+ * Look up the value for a key and count how many
+ * entries have the same key.
+ *
+ * If no entries have key, return NULL and set count to 0.
+ *
+ * If one entry has the key, the function returns the val,
+ * and sets count to 1.
+ *
+ * If N entries have the key, the function returns the val
+ * from the first entry, and sets count to N.
+ */
+void *dm_hash_lookup_with_count(struct dm_hash_table *t, const char *key, int *count)
+{
+	struct dm_hash_node **c;
+	struct dm_hash_node **c1 = NULL;
+	uint32_t len = strlen(key) + 1;
+	unsigned h;
+
+	*count = 0;
+
+	h = _hash(key, len) & (t->num_slots - 1);
+
+	for (c = &t->slots[h]; *c; c = &((*c)->next)) {
+		if ((*c)->keylen != len)
+			continue;
+
+		if (!memcmp(key, (*c)->key, len)) {
+			(*count)++;
+			if (!c1)
+				c1 = c;
+		}
+	}
+
+	if (!c1)
+		return NULL;
+	else
+		return *c1 ? (*c1)->data : 0;
 }
 
 unsigned dm_hash_get_num_entries(struct dm_hash_table *t)

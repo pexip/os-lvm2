@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_UUID_H
@@ -18,7 +18,6 @@
 
 #define ID_LEN 32
 
-#include <inttypes.h>
 #include <sys/types.h>
 
 struct dm_pool;
@@ -57,6 +56,10 @@ int id_write_format(const struct id *id, char *buffer, size_t size);
  * Reads a formatted uuid.
  */
 int id_read_format(struct id *id, const char *buffer);
+/*
+ * Tries to read a formatted uuid without logging error for invalid ID
+ */
+int id_read_format_try(struct id *id, const char *buffer);
 
 char *id_format_and_copy(struct dm_pool *mem, const struct id *id);
 

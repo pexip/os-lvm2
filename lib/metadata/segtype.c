@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -21,6 +21,10 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 					     const char *str)
 {
 	struct segment_type *segtype;
+
+	/* FIXME Register this properly within striped.c */
+	if (!strcmp(str, SEG_TYPE_NAME_LINEAR))
+		str = SEG_TYPE_NAME_STRIPED;
 
 	dm_list_iterate_items(segtype, &cmd->segtypes)
 		if (!strcmp(segtype->name, str))
@@ -33,4 +37,17 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 	log_warn("WARNING: Unrecognised segment type %s", str);
 
 	return segtype;
+}
+
+struct segment_type *get_segtype_from_flag(struct cmd_context *cmd, uint64_t flag)
+{
+	struct segment_type *segtype;
+
+	dm_list_iterate_items(segtype, &cmd->segtypes)
+		if (flag & segtype->flags)
+			return segtype;
+
+	log_error(INTERNAL_ERROR "Unrecognised segment type flag 0x%016" PRIx64, flag);
+
+	return NULL;
 }

@@ -7,20 +7,47 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITHOUT_LVMETAD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-test -e LOCAL_LVMETAD || skip
 aux prepare_pvs 2
 
-vgcreate $vg1 $dev1 $dev2
-lvchange -ay $vg1 2>&1 | not grep "Failed to connect"
+vgcreate $vg1 "$dev1" "$dev2"
+lvcreate -an -l1 --zero n -n $lv1 $vg1
+
+lvchange -ay $vg1 2>&1 | tee out
+not grep "WARNING: Failed to connect" out
+check active $vg1 $lv1
+lvchange -an $vg1
+check inactive $vg1 $lv1
+
 kill $(< LOCAL_LVMETAD)
-lvchange -ay $vg1 2>&1 | grep "Failed to connect"
-lvchange -aay $vg1 --sysinit 2>&1 | not grep "Failed to connect"
-lvchange -ay $vg1 --config 'global { use_lvmetad = 0 }' 2>&1 | not grep "Failed to connect"
+
+lvchange -ay $vg1 2>&1 | tee out
+grep "WARNING: Failed to connect" out
+check active $vg1 $lv1
+lvchange -an $vg1
+check inactive $vg1 $lv1
+
+lvchange -ay --config global/use_lvmetad=0 $vg1 2>&1 | tee out
+# FIXME: this warning appears when the command tries to connect to
+# lvmetad during refresh at the end after the --config is cleared.
+should not grep "WARNING: Failed to connect" out
+check active $vg1 $lv1
+lvchange -an $vg1
+check inactive $vg1 $lv1
+
 aux lvmconf "global/use_lvmetad = 0"
-lvchange -ay $vg1 --config 'global { use_lvmetad = 1 }' 2>&1 | grep "Failed to connect"
+
+lvchange -ay --config global/use_lvmetad=1 $vg1 2>&1 | tee out
+grep "WARNING: Failed to connect" out
+check active $vg1 $lv1
+lvchange -an $vg1
+check inactive $vg1 $lv1
 
 vgremove -ff $vg1

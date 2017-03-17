@@ -19,30 +19,30 @@ if [ ! -e /sbin/lvm ]; then
 	exit 0
 fi
 
-dev="$1"
+lvchange_activate() {
+	lvm lvchange -aay -y --sysinit --ignoreskippedcluster "$@"
+}
 
-case "$dev" in
-/dev/mapper/*)
-	dev="${dev#/dev/mapper/}"
+activate() {
+	local dev="$1"
 
-	eval $(dmsetup splitname --nameprefixes --noheadings --rows "$dev")
-
-	if [ "$DM_VG_NAME" ] && [ "$DM_LV_NAME" ]; then
-		lvm lvchange -aly --ignorelockingfailure "$DM_VG_NAME/$DM_LV_NAME"
-		rc=$?
-		if [ $rc = 5 ]; then
-			echo "Unable to find LVM volume $DM_VG_NAME/$DM_LV_NAME"
+	case "$dev" in
+	/dev/mapper/*)
+		eval $(dmsetup splitname --nameprefixes --noheadings --rows "${dev#/dev/mapper/}")
+		if [ "$DM_VG_NAME" ] && [ "$DM_LV_NAME" ]; then
+			lvchange_activate "$DM_VG_NAME/$DM_LV_NAME"
 		fi
-	fi
-	;;
+		;;
 
-/dev/*/*)
-	# Could be /dev/VG/LV; use lvs to check
-	dev="${dev#/dev/}"
-	if lvm lvs -- "$dev" >/dev/null 2>/dev/null; then
-		lvm lvchange -aly --ignorelockingfailure "$dev"
-	fi
-	;;
-esac
+	/dev/*/*)
+		# Could be /dev/VG/LV; use lvs to check
+		if lvm lvs -- "$dev" >/dev/null 2>&1; then
+			lvchange_activate "$dev"
+		fi
+		;;
+	esac
+}
+
+activate "$1"
 
 exit 0

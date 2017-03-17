@@ -7,8 +7,12 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
+
+#define _REENTRANT
+
+#include "tool.h"
 
 #include "daemon-io.h"
 #include "daemon-server.h"
@@ -78,7 +82,28 @@ static void _exit_handler(int sig __attribute__((unused)))
 #  define SD_LISTEN_FDS_START 3
 #  define SD_FD_SOCKET_SERVER SD_LISTEN_FDS_START
 
-#  include <stdio.h>
+static int _is_idle(daemon_state s)
+{
+	return s.idle && s.idle->is_idle && !s.threads->next;
+}
+
+static struct timeval *_get_timeout(daemon_state s)
+{
+	return s.idle ? s.idle->ptimeout : NULL;
+}
+
+static void _reset_timeout(daemon_state s)
+{
+	if (s.idle) {
+		s.idle->ptimeout->tv_sec = 1;
+		s.idle->ptimeout->tv_usec = 0;
+	}
+}
+
+static unsigned _get_max_timeouts(daemon_state s)
+{
+	return s.idle ? s.idle->max_timeouts : 0;
+}
 
 static int _set_oom_adj(const char *oom_adj_path, int val)
 {
@@ -221,9 +246,7 @@ static int _open_socket(daemon_state s)
 		goto error;
 	}
 
-	/* Set Close-on-exec & non-blocking */
-	if (fcntl(fd, F_SETFD, 1))
-		fprintf(stderr, "setting CLOEXEC on socket fd %d failed: %s\n", fd, strerror(errno));
+	/* Set non-blocking */
 	if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK))
 		fprintf(stderr, "setting O_NONBLOCK on socket fd %d failed: %s\n", fd, strerror(errno));
 
@@ -240,12 +263,12 @@ static int _open_socket(daemon_state s)
 		}
 
 		/* Socket already exists. If it's stale, remove it. */
-		if (stat(sockaddr.sun_path, &buf)) {
+		if (lstat(sockaddr.sun_path, &buf)) {
 			perror("stat failed");
 			goto error;
 		}
 
-		if (S_ISSOCK(buf.st_mode)) {
+		if (!S_ISSOCK(buf.st_mode)) {
 			fprintf(stderr, "%s: not a socket\n", sockaddr.sun_path);
 			goto error;
 		}
@@ -296,7 +319,7 @@ error:
 	goto out;
 }
 
-static void remove_lockfile(const char *file)
+static void _remove_lockfile(const char *file)
 {
 	if (unlink(file))
 		perror("unlink failed");
@@ -395,7 +418,7 @@ end:
 	return res;
 }
 
-static response builtin_handler(daemon_state s, client_handle h, request r)
+static response _builtin_handler(daemon_state s, client_handle h, request r)
 {
 	const char *rq = daemon_request_str(r, "request", "NONE");
 	response res = { .error = EPROTO };
@@ -409,7 +432,7 @@ static response builtin_handler(daemon_state s, client_handle h, request r)
 	return res;
 }
 
-static void *client_thread(void *state)
+static void *_client_thread(void *state)
 {
 	thread_state *ts = state;
 	request req;
@@ -421,14 +444,14 @@ static void *client_thread(void *state)
 		if (!buffer_read(ts->client.socket_fd, &req.buffer))
 			goto fail;
 
-		req.cft = dm_config_from_string(req.buffer.mem);
+		req.cft = config_tree_from_string_without_dup_node_check(req.buffer.mem);
 
 		if (!req.cft)
 			fprintf(stderr, "error parsing request:\n %s\n", req.buffer.mem);
 		else
 			daemon_log_cft(ts->s.log, DAEMON_LOG_WIRE, "<- ", req.cft->root);
 
-		res = builtin_handler(ts->s, ts->client, req);
+		res = _builtin_handler(ts->s, ts->client, req);
 
 		if (res.error == EPROTO) /* Not a builtin, delegate to the custom handler. */
 			res = ts->s.handler(ts->s, ts->client, req);
@@ -467,8 +490,13 @@ static int handle_connect(daemon_state s)
 	socklen_t sl = sizeof(sockaddr);
 
 	client.socket_fd = accept(s.socket_fd, (struct sockaddr *) &sockaddr, &sl);
-	if (client.socket_fd < 0)
+	if (client.socket_fd < 0) {
+		ERROR(&s, "Failed to accept connection errno %d.", errno);
 		return 0;
+	}
+
+	 if (fcntl(client.socket_fd, F_SETFD, FD_CLOEXEC))
+		WARN(&s, "setting CLOEXEC on client socket fd %d failed", client.socket_fd);
 
 	if (!(ts = dm_malloc(sizeof(thread_state)))) {
 		if (close(client.socket_fd))
@@ -484,13 +512,15 @@ static int handle_connect(daemon_state s)
 	ts->s = s;
 	ts->client = client;
 
-	if (pthread_create(&ts->client.thread_id, NULL, client_thread, ts))
+	if (pthread_create(&ts->client.thread_id, NULL, _client_thread, ts)) {
+		ERROR(&s, "Failed to create client thread errno %d.", errno);
 		return 0;
+	}
 
 	return 1;
 }
 
-static void reap(daemon_state s, int waiting)
+static void _reap(daemon_state s, int waiting)
 {
 	thread_state *last = s.threads, *ts = last->next;
 	void *rv;
@@ -512,6 +542,8 @@ void daemon_start(daemon_state s)
 	int failed = 0;
 	log_state _log = { { 0 } };
 	thread_state _threads = { .next = NULL };
+	unsigned timeout_count = 0;
+	fd_set in;
 
 	/*
 	 * Switch to C locale to avoid reading large locale-archive file used by
@@ -543,8 +575,10 @@ void daemon_start(daemon_state s)
 		 * NB. Take care to not keep stale locks around. Best not exit(...)
 		 * after this point.
 		 */
-		if (dm_create_lockfile(s.pidfile) == 0)
+		if (dm_create_lockfile(s.pidfile) == 0) {
+			ERROR(&s, "Failed to acquire lock on %s. Already running?\n", s.pidfile);
 			exit(EXIT_ALREADYRUNNING);
+		}
 
 		(void) dm_prepare_selinux_context(NULL, 0);
 	}
@@ -569,33 +603,66 @@ void daemon_start(daemon_state s)
 			failed = 1;
 	}
 
+	/* Set Close-on-exec */
+	if (!failed && fcntl(s.socket_fd, F_SETFD, 1))
+		ERROR(&s, "setting CLOEXEC on socket fd %d failed: %s\n", s.socket_fd, strerror(errno));
+
 	/* Signal parent, letting them know we are ready to go. */
 	if (!s.foreground)
 		kill(getppid(), SIGTERM);
+
+	/*
+	 * Use daemon_main for daemon-specific init and polling, or
+	 * use daemon_init for daemon-specific init and generic lib polling.
+	 */
+
+	if (s.daemon_main) {
+		if (!s.daemon_main(&s))
+			failed = 1;
+		goto out;
+	}
 
 	if (s.daemon_init)
 		if (!s.daemon_init(&s))
 			failed = 1;
 
-	while (!_shutdown_requested && !failed) {
-		fd_set in;
+	while (!failed) {
+		_reset_timeout(s);
 		FD_ZERO(&in);
 		FD_SET(s.socket_fd, &in);
-		if (select(FD_SETSIZE, &in, NULL, NULL, NULL) < 0 && errno != EINTR)
+		if (select(FD_SETSIZE, &in, NULL, NULL, _get_timeout(s)) < 0 && errno != EINTR)
 			perror("select error");
-		if (FD_ISSET(s.socket_fd, &in))
-			if (!_shutdown_requested && !handle_connect(s))
-				ERROR(&s, "Failed to handle a client connection.");
-		reap(s, 0);
+		if (FD_ISSET(s.socket_fd, &in)) {
+			timeout_count = 0;
+			handle_connect(s);
+		}
+
+		_reap(s, 0);
+
+		if (_shutdown_requested && !s.threads->next)
+			break;
+
+		/* s.idle == NULL equals no shutdown on timeout */
+		if (_is_idle(s)) {
+			DEBUGLOG(&s, "timeout occured");
+			if (++timeout_count >= _get_max_timeouts(s)) {
+				INFO(&s, "Inactive for %d seconds. Exiting.", timeout_count);
+				break;
+			}
+		}
 	}
 
 	INFO(&s, "%s waiting for client threads to finish", s.name);
-	reap(s, 1);
-
+	_reap(s, 1);
+out:
 	/* If activated by systemd, do not unlink the socket - systemd takes care of that! */
 	if (!_systemd_activation && s.socket_fd >= 0)
 		if (unlink(s.socket_path))
 			perror("unlink error");
+
+	if (s.socket_fd >= 0)
+		if (close(s.socket_fd))
+			perror("socket close");
 
 	if (s.daemon_fini)
 		if (!s.daemon_fini(&s))
@@ -605,7 +672,7 @@ void daemon_start(daemon_state s)
 
 	closelog(); /* FIXME */
 	if (s.pidfile)
-		remove_lockfile(s.pidfile);
+		_remove_lockfile(s.pidfile);
 	if (failed)
 		exit(1);
 }

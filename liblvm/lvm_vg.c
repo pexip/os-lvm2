@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -22,6 +22,7 @@
 #include "lvm_misc.h"
 #include "lvm2app.h"
 #include "display.h"
+#include "lvmetad.h"
 
 int lvm_vg_add_tag(vg_t vg, const char *tag)
 {
@@ -54,7 +55,7 @@ vg_t lvm_vg_create(lvm_t libh, const char *vg_name)
 	struct volume_group *vg = NULL;
 	struct saved_env e = store_user_env((struct cmd_context *)libh);
 
-	vg = vg_create((struct cmd_context *)libh, vg_name);
+	vg = vg_lock_and_create((struct cmd_context *)libh, vg_name);
 	/* FIXME: error handling is still TBD */
 	if (vg_read_error(vg)) {
 		release_vg(vg);
@@ -84,14 +85,14 @@ static int _lvm_vg_extend(vg_t vg, const char *device)
 
 	pvcreate_params_set_defaults(&pp);
 	if (!vg_extend(vg, 1, &device, &pp)) {
-		unlock_vg(vg->cmd, VG_ORPHANS);
+		unlock_vg(vg->cmd, NULL, VG_ORPHANS);
 		return -1;
 	}
 	/*
 	 * FIXME: Either commit to disk, or keep holding VG_ORPHANS and
 	 * release in lvm_vg_close().
 	 */
-	unlock_vg(vg->cmd, VG_ORPHANS);
+	unlock_vg(vg->cmd, NULL, VG_ORPHANS);
 	return 0;
 }
 
@@ -165,7 +166,7 @@ static int _lvm_vg_write(vg_t vg)
 			/* FIXME: do pvremove / label_remove()? */
 		}
 		dm_list_init(&vg->removed_pvs);
-		unlock_vg(vg->cmd, VG_ORPHANS);
+		unlock_vg(vg->cmd, NULL, VG_ORPHANS);
 	}
 
 	return 0;
@@ -218,7 +219,7 @@ static vg_t _lvm_vg_open(lvm_t libh, const char *vgname, const char *mode,
 		return NULL;
 	}
 
-	vg = vg_read((struct cmd_context *)libh, vgname, NULL, internal_flags);
+	vg = vg_read((struct cmd_context *)libh, vgname, NULL, internal_flags, 0);
 	if (vg_read_error(vg)) {
 		/* FIXME: use log_errno either here in inside vg_read */
 		release_vg(vg);
@@ -511,7 +512,8 @@ int lvm_scan(lvm_t libh)
 	int rc = 0;
 	struct saved_env e = store_user_env((struct cmd_context *)libh);
 
-	if (!lvmcache_label_scan((struct cmd_context *)libh, 2))
+	lvmcache_force_next_label_scan();
+	if (!lvmcache_label_scan((struct cmd_context *)libh))
 		rc = -1;
 
 	restore_user_env(&e);
@@ -522,6 +524,7 @@ int lvm_lv_name_validate(const vg_t vg, const char *name)
 {
 	int rc = -1;
 	name_error_t name_error;
+	int historical;
 
 	struct saved_env e = store_user_env(vg->cmd);
 
@@ -529,10 +532,11 @@ int lvm_lv_name_validate(const vg_t vg, const char *name)
 
 	if (NAME_VALID == name_error) {
 		if (apply_lvname_restrictions(name)) {
-			if (!find_lv_in_vg(vg, name)) {
+			if (!lv_name_is_used_in_vg(vg, name, &historical)) {
 				rc = 0;
 			} else {
-				log_errno(EINVAL, "LV name exists in VG");
+				log_errno(EINVAL, "%sLV name exists in VG",
+					  historical ? "historical " : "");
 			}
 		}
 	} else {

@@ -7,15 +7,19 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux prepare_vg 2
-init_udev_transaction
-dmsetup remove -f "$dev1" || true
-finish_udev_transaction
+
+aux disable_dev "$dev1"
 
 not lvcreate -n "foo" $vg -l 1
+
+aux enable_dev "$dev1"
 
 vgremove -ff $vg

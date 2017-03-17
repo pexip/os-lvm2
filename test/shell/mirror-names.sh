@@ -8,9 +8,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description="check namings of mirrored LV"
+
+SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
@@ -27,19 +29,35 @@ lv_devices_() {
 	devs=$(get lv_devices "$lv")
 
 	for d in $devs; do
-		(echo "$devices" | grep $d) || return 1
-		devices=$(echo $devices | sed "s/$d//")
+		(echo "$devices" | grep "$d") || return 1
+		devices=$(echo "$devices" | sed "s/$d//")
 	done
 
 	test -z "$(echo $devices | sed 's/ //g')"
 }
 
 lv_mirror_log_() {
-	test $(get lv_field $1 mirror_log) = $2
+	get lv_field $1 mirror_log | tr -d []
 }
 
 lv_convert_lv_() {
-	get lv_field $1 convert_lv
+	get lv_field $1 convert_lv | tr -d []
+}
+
+enable_devs() {
+	aux enable_dev "$dev1"
+	aux enable_dev "$dev2"
+	aux enable_dev "$dev3"
+	aux enable_dev "$dev4"
+	aux enable_dev "$dev5"
+}
+
+delay_devs() {
+	aux delay_dev "$dev1" 0 1000 $(get first_extent_sector "$dev1"):
+	aux delay_dev "$dev2" 0 1000 $(get first_extent_sector "$dev2"):
+	aux delay_dev "$dev3" 0 1000 $(get first_extent_sector "$dev3"):
+	aux delay_dev "$dev4" 0 1000 $(get first_extent_sector "$dev4"):
+	aux delay_dev "$dev5" 0 1000 $(get first_extent_sector "$dev5"):
 }
 
 # ---------------------------------------------------------------------
@@ -69,7 +87,7 @@ lvcreate -an -Zn -l2 --type mirror -m1 -n $lv1 $vg
 lv_devices_ $vg/$lv1 ${lv1}_mimage_0 ${lv1}_mimage_1
 
 #COMM "mirror log is ${lv1}_mlog"
-lv_mirror_log_ $vg/$lv1 ${lv1}_mlog
+test $(lv_mirror_log_ $vg/$lv1) = ${lv1}_mlog
 
 # "cleanup"
 check_and_cleanup_lvs_
@@ -101,12 +119,14 @@ check_and_cleanup_lvs_
 
 #COMM "converting mirror names is ${lv1}_mimagetmp_2"
 lvcreate -aey -l2 --type mirror -m1 -n $lv1 $vg
-lvconvert -m+1 -i+40 -b $vg/$lv1
+delay_devs
+LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -i+40 -b $vg/$lv1
 convlv=$(lv_convert_lv_ $vg/$lv1)
 test $convlv = ${lv1}_mimagetmp_2
 lv_devices_ $vg/$lv1 $convlv ${lv1}_mimage_2
 lv_devices_ $vg/$convlv ${lv1}_mimage_0 ${lv1}_mimage_1
 lv_mirror_log_ $vg/$convlv ${lv1}_mlog
+enable_devs
 
 #COMM "mirror log name after re-adding is ${lv1}_mlog" \
 lvconvert -f --mirrorlog core $vg/$lv1

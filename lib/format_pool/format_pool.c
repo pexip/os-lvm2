@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -101,6 +101,8 @@ static int _check_usp(const char *vgname, struct user_subpool *usp, int sp_count
 static struct volume_group *_pool_vg_read(struct format_instance *fid,
 					  const char *vg_name,
 					  struct metadata_area *mda __attribute__((unused)),
+					  struct cached_vg_fmtdata **vg_fmtdata __attribute__((unused)),
+					  unsigned *use_previous_vg __attribute__((unused)),
 					  int single_device __attribute__((unused)))
 {
 	struct volume_group *vg;
@@ -164,10 +166,7 @@ bad:
 }
 
 static int _pool_pv_initialise(const struct format_type *fmt __attribute__((unused)),
-			       int64_t label_sector __attribute__((unused)),
-			       unsigned long data_alignment __attribute__((unused)),
-			       unsigned long data_alignment_offset __attribute__((unused)),
-			       struct pvcreate_restorable_params *rp __attribute__((unused)),
+			       struct pv_create_args *pva __attribute__((unused)),
 			       struct physical_volume *pv __attribute__((unused)))
 {
 	return 1;

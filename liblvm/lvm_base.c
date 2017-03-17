@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -38,19 +38,16 @@ static lvm_t _lvm_init(const char *system_dir)
 	/*
 	 * It's not necessary to use name mangling for LVM:
 	 *   - the character set used for VG-LV names is subset of udev character set
-	 *   - when we check other devices (e.g. _device_is_usable fn), we use major:minor, not dm names
+	 *   - when we check other devices (e.g. device_is_usable fn), we use major:minor, not dm names
 	 */
 	dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
 
 	/* create context */
 	/* FIXME: split create_toolcontext */
 	/* FIXME: make all globals configurable */
-	cmd = create_toolcontext(0, system_dir, 0, 0);
+	cmd = create_toolcontext(0, system_dir, 0, 0, 1, 1);
 	if (!cmd)
 		return NULL;
-
-	if (stored_errno())
-		return (lvm_t) cmd;
 
 	/*
 	 * FIXME: if an non memory error occured, return the cmd (maybe some
@@ -96,6 +93,7 @@ lvm_t lvm_init(const char *system_dir)
 void lvm_quit(lvm_t libh)
 {
 	struct saved_env e = store_user_env((struct cmd_context *)libh);
+	fin_locking();
 	destroy_toolcontext((struct cmd_context *)libh);
 	udev_fin_library_context();
 	restore_user_env(&e);
@@ -128,14 +126,31 @@ int lvm_config_override(lvm_t libh, const char *config_settings)
 	return rc;
 }
 
+/*
+ * When full lvm connection is not being used, libh can be NULL
+ * and this command will internally create a single-use, light-weight
+ * cmd struct that only has cmd->cft populated from lvm.conf.
+ */
 int lvm_config_find_bool(lvm_t libh, const char *config_path, int fail)
 {
 	int rc = 0;
-	struct cmd_context *cmd = (struct cmd_context *)libh;
-	struct saved_env e = store_user_env((struct cmd_context *)libh);
+	struct cmd_context *cmd;
+	struct saved_env e;
+
+	if (libh) {
+		cmd = (struct cmd_context *)libh;
+		e = store_user_env((struct cmd_context *)libh);
+	} else {
+		if (!(cmd = create_config_context()))
+			return 0;
+	}
 
 	rc = dm_config_tree_find_bool(cmd->cft, config_path, fail);
-	restore_user_env(&e);
+
+	if (libh)
+		restore_user_env(&e);
+	else
+		destroy_config_context(cmd);
 	return rc;
 }
 

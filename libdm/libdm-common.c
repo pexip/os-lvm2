@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "dmlib.h"
@@ -110,13 +110,13 @@ void dm_lib_init(void)
 __attribute__((format(printf, 5, 0)))
 static void _default_log_line(int level,
 	    const char *file __attribute__((unused)),
-	    int line __attribute__((unused)), int dm_errno_or_class, 
+	    int line __attribute__((unused)), int dm_errno_or_class,
 	    const char *f, va_list ap)
 {
 	static int _abort_on_internal_errors = -1;
-	FILE *out = (level & _LOG_STDERR) ? stderr : stdout;
+	FILE *out = log_stderr(level) ? stderr : stdout;
 
-	level &= ~_LOG_STDERR;
+	level = log_level(level);
 
 	if (level <= _LOG_WARN || _verbose) {
 		if (level < _LOG_WARN)
@@ -137,8 +137,7 @@ static void _default_log_line(int level,
 
 __attribute__((format(printf, 5, 6)))
 static void _default_log_with_errno(int level,
-	    const char *file __attribute__((unused)),
-	    int line __attribute__((unused)), int dm_errno_or_class, 
+	    const char *file, int line, int dm_errno_or_class,
 	    const char *f, ...)
 {
 	va_list ap;
@@ -162,29 +161,75 @@ static void _default_log(int level, const char *file,
 dm_log_fn dm_log = _default_log;
 dm_log_with_errno_fn dm_log_with_errno = _default_log_with_errno;
 
+/*
+ * Wrapper function to reformat new messages to and
+ * old style logging which had not used errno parameter
+ *
+ * As we cannot simply pass '...' to old function we
+ * need to process arg list locally and just pass '%s' + buffer
+ */
+__attribute__((format(printf, 5, 6)))
+static void _log_to_default_log(int level,
+	    const char *file, int line, int dm_errno_or_class,
+	    const char *f, ...)
+{
+	va_list ap;
+	char buf[2 * PATH_MAX + 256]; /* big enough for most messages */
+
+	va_start(ap, f);
+	vsnprintf(buf, sizeof(buf), f, ap);
+	va_end(ap);
+
+	dm_log(level, file, line, "%s", buf);
+}
+
+/*
+ * Wrapper function take 'old' style message without errno
+ * and log it via new logging function with errno arg
+ *
+ * This minor case may happen if new libdm is used with old
+ * recompiled tool that would decided to use new logging,
+ * but still would like to use old binary plugins.
+ */
+__attribute__((format(printf, 4, 5)))
+static void _log_to_default_log_with_errno(int level,
+	    const char *file, int line, const char *f, ...)
+{
+	va_list ap;
+	char buf[2 * PATH_MAX + 256]; /* big enough for most messages */
+
+	va_start(ap, f);
+	vsnprintf(buf, sizeof(buf), f, ap);
+	va_end(ap);
+
+	dm_log_with_errno(level, file, line, 0, "%s", buf);
+}
+
 void dm_log_init(dm_log_fn fn)
 {
-	if (fn)
+	if (fn)  {
 		dm_log = fn;
-	else
+		dm_log_with_errno = _log_to_default_log;
+	} else {
 		dm_log = _default_log;
-
-	dm_log_with_errno = _default_log_with_errno;
+		dm_log_with_errno = _default_log_with_errno;
+	}
 }
 
 int dm_log_is_non_default(void)
 {
-	return (dm_log == _default_log) ? 0 : 1;
+	return (dm_log == _default_log && dm_log_with_errno == _default_log_with_errno) ? 0 : 1;
 }
 
 void dm_log_with_errno_init(dm_log_with_errno_fn fn)
 {
-	if (fn)
+	if (fn) {
+		dm_log = _log_to_default_log_with_errno;
 		dm_log_with_errno = fn;
-	else
+	} else {
+		dm_log = _default_log;
 		dm_log_with_errno = _default_log_with_errno;
-
-	dm_log = _default_log;
+	}
 }
 
 void dm_log_init_verbose(int level)
@@ -277,6 +322,7 @@ struct dm_task *dm_task_create(int type)
 	dmt->query_inactive_table = 0;
 	dmt->new_uuid = 0;
 	dmt->secure_data = 0;
+	dmt->record_timestamp = 0;
 
 	return dmt;
 }
@@ -546,35 +592,57 @@ static int _dm_task_set_name_from_path(struct dm_task *dmt, const char *path,
 {
 	char buf[PATH_MAX];
 	struct stat st1, st2;
-	const char *final_name;
+	const char *final_name = NULL;
+	size_t len;
 
 	if (dmt->type == DM_DEVICE_CREATE) {
 		log_error("Name \"%s\" invalid. It contains \"/\".", path);
 		return 0;
 	}
 
-	if (stat(path, &st1)) {
-		log_error("Device %s not found", path);
-		return 0;
+	if (!stat(path, &st1)) {
+		/*
+		 * Found directly.
+		 * If supplied path points to same device as last component
+		 * under /dev/mapper, use that name directly.  
+		 */
+		if (dm_snprintf(buf, sizeof(buf), "%s/%s", _dm_dir, name) == -1) {
+			log_error("Couldn't create path for %s", name);
+			return 0;
+		}
+
+		if (!stat(buf, &st2) && (st1.st_rdev == st2.st_rdev))
+			final_name = name;
+	} else {
+		/* Not found. */
+		/* If there is exactly one '/' try a prefix of /dev */
+		if ((len = strlen(path)) < 3 || path[0] == '/' ||
+		    dm_count_chars(path, len, '/') != 1) {
+			log_error("Device %s not found", path);
+			return 0;
+		}
+		if (dm_snprintf(buf, sizeof(buf), "%s/../%s", _dm_dir, path) == -1) {
+			log_error("Couldn't create /dev path for %s", path);
+			return 0;
+		}
+		if (stat(buf, &st1)) {
+			log_error("Device %s not found", path);
+			return 0;
+		}
+		/* Found */
 	}
 
 	/*
-	 * If supplied path points to same device as last component
-	 * under /dev/mapper, use that name directly.  Otherwise call
-	 * _find_dm_name_of_device() to scan _dm_dir for a match.
+	 * If we don't have the dm name yet, Call _find_dm_name_of_device() to
+	 * scan _dm_dir for a match.
 	 */
-	if (dm_snprintf(buf, sizeof(buf), "%s/%s", _dm_dir, name) == -1) {
-		log_error("Couldn't create path for %s", name);
-		return 0;
-	}
-
-	if (!stat(buf, &st2) && (st1.st_rdev == st2.st_rdev))
-		final_name = name;
-	else if (_find_dm_name_of_device(st1.st_rdev, buf, sizeof(buf)))
-		final_name = buf;
-	else {
-		log_error("Device %s not found", name);
-		return 0;
+	if (!final_name) {
+		if (_find_dm_name_of_device(st1.st_rdev, buf, sizeof(buf)))
+			final_name = buf;
+		else {
+			log_error("Device %s not found", name);
+			return 0;
+		}
 	}
 
 	/* This is an already existing path - do not mangle! */
@@ -959,7 +1027,7 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 {
 	char path[PATH_MAX];
 	struct stat info;
-	dev_t dev = MKDEV((dev_t)major, minor);
+	dev_t dev = MKDEV((dev_t)major, (dev_t)minor);
 	mode_t old_mask;
 
 	if (!_build_dev_path(path, sizeof(path), dev_name))
@@ -1015,7 +1083,7 @@ static int _rm_dev_node(const char *dev_name, int warn_if_udev_failed)
 
 	if (!_build_dev_path(path, sizeof(path), dev_name))
 		return_0;
-	if (stat(path, &info) < 0)
+	if (lstat(path, &info) < 0)
 		return 1;
 	else if (_warn_if_op_needed(warn_if_udev_failed))
 		log_warn("Node %s was not removed by udev. "
@@ -1037,20 +1105,31 @@ static int _rename_dev_node(const char *old_name, const char *new_name,
 {
 	char oldpath[PATH_MAX];
 	char newpath[PATH_MAX];
-	struct stat info;
+	struct stat info, info2;
+	struct stat *info_block_dev;
 
 	if (!_build_dev_path(oldpath, sizeof(oldpath), old_name) ||
 	    !_build_dev_path(newpath, sizeof(newpath), new_name))
 		return_0;
 
-	if (stat(newpath, &info) == 0) {
-		if (!S_ISBLK(info.st_mode)) {
+	if (lstat(newpath, &info) == 0) {
+		if (S_ISLNK(info.st_mode)) {
+			if (stat(newpath, &info2) == 0)
+				info_block_dev = &info2;
+			else {
+				log_sys_error("stat", newpath);
+				return 0;
+			}
+		} else
+			info_block_dev = &info;
+
+		if (!S_ISBLK(info_block_dev->st_mode)) {
 			log_error("A non-block device file at '%s' "
 				  "is already present", newpath);
 			return 0;
 		}
 		else if (_warn_if_op_needed(warn_if_udev_failed)) {
-			if (stat(oldpath, &info) < 0 &&
+			if (lstat(oldpath, &info) < 0 &&
 				 errno == ENOENT)
 				/* assume udev already deleted this */
 				return 1;
@@ -1219,7 +1298,7 @@ static int _set_read_ahead(const char *dev_name, uint32_t major, uint32_t minor,
 		}
 
 		/* Sysfs is kB based, round up to kB */
-		if ((len = dm_snprintf(buf, sizeof(buf), "%" PRIu32,
+		if ((len = dm_snprintf(buf, sizeof(buf), FMTu32,
 				       (read_ahead + 1) / 2)) < 0) {
 			log_error("Failed to build size in kB.");
 			return 0;
@@ -2048,6 +2127,14 @@ int dm_udev_wait(uint32_t cookie)
 	return 1;
 }
 
+int dm_udev_wait_immediate(uint32_t cookie, int *ready)
+{
+	update_devs();
+	*ready = 1;
+
+	return 1;
+}
+
 #else		/* UDEV_SYNC_SUPPORT */
 
 static int _check_semaphore_is_supported(void)
@@ -2472,16 +2559,37 @@ int dm_udev_complete(uint32_t cookie)
 	return 1;
 }
 
-static int _udev_wait(uint32_t cookie)
+/*
+ * If *nowait is set, return immediately leaving it set if the semaphore
+ * is not ready to be decremented to 0.  *nowait is cleared if the wait
+ * succeeds.
+ */
+static int _udev_wait(uint32_t cookie, int *nowait)
 {
 	int semid;
 	struct sembuf sb = {0, 0, 0};
+	int val;
 
 	if (!cookie || !dm_udev_get_sync_support())
 		return 1;
 
 	if (!_get_cookie_sem(cookie, &semid))
 		return_0;
+
+	/* Return immediately if the semaphore value exceeds 1? */
+	if (*nowait) {
+		if ((val = semctl(semid, 0, GETVAL)) < 0) {
+			log_error("semid %d: sem_ctl GETVAL failed for "
+				  "cookie 0x%" PRIx32 ": %s",
+				  semid, cookie, strerror(errno));
+			return 0;		
+		}
+
+		if (val > 1)
+			return 1;
+
+		*nowait = 0;
+	}
 
 	if (!_udev_notify_sem_dec(cookie, semid)) {
 		log_error("Failed to set a proper state for notification "
@@ -2514,11 +2622,27 @@ repeat_wait:
 
 int dm_udev_wait(uint32_t cookie)
 {
-	int r = _udev_wait(cookie);
+	int nowait = 0;
+	int r = _udev_wait(cookie, &nowait);
 
 	update_devs();
 
 	return r;
 }
 
+int dm_udev_wait_immediate(uint32_t cookie, int *ready)
+{
+	int nowait = 1;
+	int r = _udev_wait(cookie, &nowait);
+
+	if (r && nowait) {
+		*ready = 0;
+		return 1;
+	}
+
+	update_devs();
+	*ready = 1;
+
+	return r;
+}
 #endif		/* UDEV_SYNC_SUPPORT */

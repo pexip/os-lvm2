@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -20,6 +20,7 @@
 #include "toolcontext.h"
 #include "lvmcache.h"
 #include "archiver.h"
+#include "lvmetad.h"
 
 struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 			      const char *vg_name)
@@ -41,6 +42,14 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 		return NULL;
 	}
 
+	if (!(vg->lvm1_system_id = dm_pool_zalloc(vgmem, NAME_LEN + 1))) {
+		log_error("Failed to allocate VG systemd id.");
+		dm_pool_destroy(vgmem);
+		return NULL;
+	}
+
+	vg->system_id = "";
+
 	vg->cmd = cmd;
 	vg->vgmem = vgmem;
 	vg->alloc = ALLOC_NORMAL;
@@ -52,9 +61,14 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 	}
 
 	dm_list_init(&vg->pvs);
-	dm_list_init(&vg->pvs_to_create);
+	dm_list_init(&vg->pvs_to_write);
+	dm_list_init(&vg->pv_write_list);
+	dm_list_init(&vg->pvs_outdated);
 	dm_list_init(&vg->lvs);
+	dm_list_init(&vg->historical_lvs);
 	dm_list_init(&vg->tags);
+	dm_list_init(&vg->removed_lvs);
+	dm_list_init(&vg->removed_historical_lvs);
 	dm_list_init(&vg->removed_pvs);
 
 	log_debug_mem("Allocated VG %s at %p.", vg->name, vg);
@@ -88,7 +102,7 @@ void release_vg(struct volume_group *vg)
 	    !lvmcache_vginfo_holders_dec_and_test_for_zero(vg->vginfo))
 		return;
 
-	release_vg(vg->vg_ondisk);
+	release_vg(vg->vg_committed);
 	release_vg(vg->vg_precommitted);
 	if (vg->cft_precommitted)
 		dm_config_destroy(vg->cft_precommitted);
@@ -107,6 +121,51 @@ void free_orphan_vg(struct volume_group *vg)
 	_free_vg(vg);
 }
 
+int link_lv_to_vg(struct volume_group *vg, struct logical_volume *lv)
+{
+	struct lv_list *lvl;
+
+	if (vg_max_lv_reached(vg))
+		stack;
+
+	if (!(lvl = dm_pool_zalloc(vg->vgmem, sizeof(*lvl))))
+		return_0;
+
+	lvl->lv = lv;
+	lv->vg = vg;
+	dm_list_add(&vg->lvs, &lvl->list);
+	lv->status &= ~LV_REMOVED;
+
+	return 1;
+}
+
+int unlink_lv_from_vg(struct logical_volume *lv)
+{
+	struct lv_list *lvl;
+
+	if (!(lvl = find_lv_in_vg(lv->vg, lv->name)))
+		return_0;
+
+	dm_list_move(&lv->vg->removed_lvs, &lvl->list);
+	lv->status |= LV_REMOVED;
+
+	return 1;
+}
+
+int vg_max_lv_reached(struct volume_group *vg)
+{
+	if (!vg->max_lv)
+		return 0;
+
+	if (vg->max_lv > vg_visible_lvs(vg))
+		return 0;
+
+	log_verbose("Maximum number of logical volumes (%u) reached "
+		    "in volume group %s", vg->max_lv, vg->name);
+
+	return 1;
+}
+
 char *vg_fmt_dup(const struct volume_group *vg)
 {
 	if (!vg->fid || !vg->fid->fmt)
@@ -121,7 +180,17 @@ char *vg_name_dup(const struct volume_group *vg)
 
 char *vg_system_id_dup(const struct volume_group *vg)
 {
-	return dm_pool_strdup(vg->vgmem, vg->system_id);
+	return dm_pool_strdup(vg->vgmem, vg->system_id ? : vg->lvm1_system_id ? : "");
+}
+
+char *vg_lock_type_dup(const struct volume_group *vg)
+{
+	return dm_pool_strdup(vg->vgmem, vg->lock_type ? : vg->lock_type ? : "");
+}
+
+char *vg_lock_args_dup(const struct volume_group *vg)
+{
+	return dm_pool_strdup(vg->vgmem, vg->lock_args ? : vg->lock_args ? : "");
 }
 
 char *vg_uuid_dup(const struct volume_group *vg)
@@ -278,18 +347,18 @@ char *vg_profile_dup(const struct volume_group *vg)
 }
 
 static int _recalc_extents(uint32_t *extents, const char *desc1,
-			   const char *desc2, uint32_t old_size,
-			   uint32_t new_size)
+			   const char *desc2, uint32_t old_extent_size,
+			   uint32_t new_extent_size)
 {
-	uint64_t size = (uint64_t) old_size * (*extents);
+	uint64_t size = (uint64_t) old_extent_size * (*extents);
 
-	if (size % new_size) {
+	if (size % new_extent_size) {
 		log_error("New size %" PRIu64 " for %s%s not an exact number "
 			  "of new extents.", size, desc1, desc2);
 		return 0;
 	}
 
-	size /= new_size;
+	size /= new_extent_size;
 
 	if (size > MAX_EXTENT_COUNT) {
 		log_error("New extent count %" PRIu64 " for %s%s exceeds "
@@ -302,9 +371,48 @@ static int _recalc_extents(uint32_t *extents, const char *desc1,
 	return 1;
 }
 
-int vg_set_extent_size(struct volume_group *vg, uint32_t new_size)
+int vg_check_new_extent_size(const struct format_type *fmt, uint32_t new_extent_size)
 {
-	uint32_t old_size = vg->extent_size;
+	if (!new_extent_size) {
+		log_error("Physical extent size may not be zero");
+		return 0;
+	}
+
+	if ((fmt->features & FMT_NON_POWER2_EXTENTS)) {
+		if (!is_power_of_2(new_extent_size) &&
+		    (new_extent_size % MIN_NON_POWER2_EXTENT_SIZE)) {
+			log_error("Physical Extent size must be a multiple of %s when not a power of 2.",
+				  display_size(fmt->cmd, (uint64_t) MIN_NON_POWER2_EXTENT_SIZE));
+			return 0;
+		}
+		return 1;
+	}
+
+	/* Apply original format1 restrictions */
+	if (!is_power_of_2(new_extent_size)) {
+		log_error("Metadata format only supports Physical Extent sizes that are powers of 2.");
+		return 0;
+	}
+
+	if (new_extent_size > MAX_PE_SIZE || new_extent_size < MIN_PE_SIZE) {
+		log_error("Extent size must be between %s and %s",
+			  display_size(fmt->cmd, (uint64_t) MIN_PE_SIZE),
+			  display_size(fmt->cmd, (uint64_t) MAX_PE_SIZE));
+		return 0;
+	}
+
+	if (new_extent_size % MIN_PE_SIZE) {
+		log_error("Extent size must be multiple of %s",
+			  display_size(fmt->cmd, (uint64_t) MIN_PE_SIZE));
+		return 0;
+	}
+
+ 	return 1;
+}
+
+int vg_set_extent_size(struct volume_group *vg, uint32_t new_extent_size)
+{
+	uint32_t old_extent_size = vg->extent_size;
 	struct pv_list *pvl;
 	struct lv_list *lvl;
 	struct physical_volume *pv;
@@ -319,52 +427,45 @@ int vg_set_extent_size(struct volume_group *vg, uint32_t new_size)
 		return 0;
 	}
 
-	if (!new_size) {
-		log_error("Physical extent size may not be zero");
-		return 0;
-	}
-
-	if (new_size == vg->extent_size)
+	if (new_extent_size == vg->extent_size)
 		return 1;
 
-	if (new_size & (new_size - 1)) {
-		log_error("Physical extent size must be a power of 2.");
-		return 0;
-	}
+	if (!vg_check_new_extent_size(vg->fid->fmt, new_extent_size))
+		return_0;
 
-	if (new_size > vg->extent_size) {
-		if ((uint64_t) vg_size(vg) % new_size) {
+	if (new_extent_size > vg->extent_size) {
+		if ((uint64_t) vg_size(vg) % new_extent_size) {
 			/* FIXME Adjust used PV sizes instead */
 			log_error("New extent size is not a perfect fit");
 			return 0;
 		}
 	}
 
-	vg->extent_size = new_size;
+	vg->extent_size = new_extent_size;
 
 	if (vg->fid->fmt->ops->vg_setup &&
 	    !vg->fid->fmt->ops->vg_setup(vg->fid, vg))
 		return_0;
 
-	if (!_recalc_extents(&vg->extent_count, vg->name, "", old_size,
-			     new_size))
+	if (!_recalc_extents(&vg->extent_count, vg->name, "", old_extent_size,
+			     new_extent_size))
 		return_0;
 
 	if (!_recalc_extents(&vg->free_count, vg->name, " free space",
-			     old_size, new_size))
+			     old_extent_size, new_extent_size))
 		return_0;
 
 	/* foreach PV */
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		pv = pvl->pv;
 
-		pv->pe_size = new_size;
+		pv->pe_size = new_extent_size;
 		if (!_recalc_extents(&pv->pe_count, pv_dev_name(pv), "",
-				     old_size, new_size))
+				     old_extent_size, new_extent_size))
 			return_0;
 
 		if (!_recalc_extents(&pv->pe_alloc_count, pv_dev_name(pv),
-				     " allocated space", old_size, new_size))
+				     " allocated space", old_extent_size, new_extent_size))
 			return_0;
 
 		/* foreach free PV Segment */
@@ -373,12 +474,12 @@ int vg_set_extent_size(struct volume_group *vg, uint32_t new_size)
 				continue;
 
 			if (!_recalc_extents(&pvseg->pe, pv_dev_name(pv),
-					     " PV segment start", old_size,
-					     new_size))
+					     " PV segment start", old_extent_size,
+					     new_extent_size))
 				return_0;
 			if (!_recalc_extents(&pvseg->len, pv_dev_name(pv),
-					     " PV segment length", old_size,
-					     new_size))
+					     " PV segment length", old_extent_size,
+					     new_extent_size))
 				return_0;
 		}
 	}
@@ -387,29 +488,29 @@ int vg_set_extent_size(struct volume_group *vg, uint32_t new_size)
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
 
-		if (!_recalc_extents(&lv->le_count, lv->name, "", old_size,
-				     new_size))
+		if (!_recalc_extents(&lv->le_count, lv->name, "", old_extent_size,
+				     new_extent_size))
 			return_0;
 
 		dm_list_iterate_items(seg, &lv->segments) {
 			if (!_recalc_extents(&seg->le, lv->name,
-					     " segment start", old_size,
-					     new_size))
+					     " segment start", old_extent_size,
+					     new_extent_size))
 				return_0;
 
 			if (!_recalc_extents(&seg->len, lv->name,
-					     " segment length", old_size,
-					     new_size))
+					     " segment length", old_extent_size,
+					     new_extent_size))
 				return_0;
 
 			if (!_recalc_extents(&seg->area_len, lv->name,
-					     " area length", old_size,
-					     new_size))
+					     " area length", old_extent_size,
+					     new_extent_size))
 				return_0;
 
 			if (!_recalc_extents(&seg->extents_copied, lv->name,
-					     " extents moved", old_size,
-					     new_size))
+					     " extents moved", old_extent_size,
+					     new_extent_size))
 				return_0;
 
 			/* foreach area */
@@ -419,21 +520,21 @@ int vg_set_extent_size(struct volume_group *vg, uint32_t new_size)
 					if (!_recalc_extents
 					    (&seg_pe(seg, s),
 					     lv->name,
-					     " pvseg start", old_size,
-					     new_size))
+					     " pvseg start", old_extent_size,
+					     new_extent_size))
 						return_0;
 					if (!_recalc_extents
 					    (&seg_pvseg(seg, s)->len,
 					     lv->name,
-					     " pvseg length", old_size,
-					     new_size))
+					     " pvseg length", old_extent_size,
+					     new_extent_size))
 						return_0;
 					break;
 				case AREA_LV:
 					if (!_recalc_extents
 					    (&seg_le(seg, s), lv->name,
-					     " area start", old_size,
-					     new_size))
+					     " area start", old_extent_size,
+					     new_extent_size))
 						return_0;
 					break;
 				case AREA_UNASSIGNED:
@@ -519,36 +620,41 @@ int vg_set_alloc_policy(struct volume_group *vg, alloc_policy_t alloc)
 	return 1;
 }
 
+/*
+ * Setting the cluster attribute marks active volumes exclusive.
+ *
+ * FIXME: resolve logic with reacquiring proper top-level LV locks
+ *        and we likely can't giveup DLM locks for active LVs...
+ */
 int vg_set_clustered(struct volume_group *vg, int clustered)
 {
 	struct lv_list *lvl;
+	int fail = 0;
 
-	/*
-	 * We do not currently support switching the cluster attribute
-	 * on active mirrors, snapshots or RAID logical volumes.
-	 */
-	dm_list_iterate_items(lvl, &vg->lvs) {
-		if (lv_is_active(lvl->lv) &&
-		    (lv_is_mirrored(lvl->lv) || lv_is_raid_type(lvl->lv))) {
-			log_error("%s logical volumes must be inactive "
-				  "when changing the cluster attribute.",
-				  lv_is_raid_type(lvl->lv) ? "RAID" : "Mirror");
-			return 0;
-		}
-
-		if (clustered) {
-			if (lv_is_origin(lvl->lv) || lv_is_cow(lvl->lv)) {
-				log_error("Volume group %s contains snapshots "
-					  "that are not yet supported.",
-					  vg->name);
-				return 0;
+	if (vg_is_clustered(vg) &&
+	    locking_is_clustered() &&
+	    locking_supports_remote_queries() &&
+	    !clustered) {
+		/*
+		 * If the volume is locally active but not exclusively
+		 * we cannot determine when other nodes also use
+		 * locally active (CR lock), so refuse conversion.
+		 */
+		dm_list_iterate_items(lvl, &vg->lvs)
+			if ((lv_lock_holder(lvl->lv) == lvl->lv) &&
+			    lv_is_active(lvl->lv) &&
+			    !lv_is_active_exclusive_locally(lvl->lv)) {
+				/* Show all non-local-exclusively active LVs
+				 * this includes i.e. clustered mirrors */
+				log_error("Can't change cluster attribute with "
+					  "active logical volume %s.",
+					  display_lvname(lvl->lv));
+				fail = 1;
 			}
-		}
 
-		if ((lv_is_origin(lvl->lv) || lv_is_cow(lvl->lv)) &&
-		    lv_is_active(lvl->lv)) {
-			log_error("Snapshot logical volumes must be inactive "
-				  "when changing the cluster attribute.");
+		if (fail) {
+			log_print_unless_silent("Conversion is supported only for "
+						"locally exclusive volumes.");
 			return 0;
 		}
 	}
@@ -557,6 +663,49 @@ int vg_set_clustered(struct volume_group *vg, int clustered)
 		vg->status |= CLUSTERED;
 	else
 		vg->status &= ~CLUSTERED;
+
+	log_debug_metadata("Setting volume group %s as %sclustered.",
+			   vg->name, clustered ? "" : "not " );
+
+	return 1;
+}
+
+/* The input string has already been validated. */
+
+int vg_set_system_id(struct volume_group *vg, const char *system_id)
+{
+	if (!system_id || !*system_id) {
+		vg->system_id = NULL;
+		return 1;
+	}
+
+	if (systemid_on_pvs(vg)) {
+		log_error("Metadata format %s does not support this type of system ID.",
+			  vg->fid->fmt->name);
+		return 0;
+	}
+
+	if (!(vg->system_id = dm_pool_strdup(vg->vgmem, system_id))) {
+		log_error("Failed to allocate memory for system_id in vg_set_system_id.");
+		return 0;
+	}
+
+	if (vg->lvm1_system_id)
+		*vg->lvm1_system_id = '\0';
+
+	return 1;
+}
+
+int vg_set_lock_type(struct volume_group *vg, const char *lock_type)
+{
+	if (!lock_type)
+		lock_type = "none";
+
+	if (!(vg->lock_type = dm_pool_strdup(vg->vgmem, lock_type))) {
+		log_error("vg_set_lock_type %s no mem", lock_type);
+		return 0;
+	}
+
 	return 1;
 }
 
@@ -574,7 +723,14 @@ char *vg_attr_dup(struct dm_pool *mem, const struct volume_group *vg)
 	repstr[2] = (vg_is_exported(vg)) ? 'x' : '-';
 	repstr[3] = (vg_missing_pv_count(vg)) ? 'p' : '-';
 	repstr[4] = alloc_policy_char(vg->alloc);
-	repstr[5] = (vg_is_clustered(vg)) ? 'c' : '-';
+
+	if (vg_is_clustered(vg))
+		repstr[5] = 'c';
+	else if (is_lockd_type(vg->lock_type))
+		repstr[5] = 's';
+	else
+		repstr[5] = '-';
+
 	return repstr;
 }
 
@@ -629,7 +785,7 @@ int vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 	vg->extent_count -= pv_pe_count(pv);
 
 	orphan_vg = vg_read_for_update(cmd, vg->fid->fmt->orphan_vg_name,
-				       NULL, 0);
+				       NULL, 0, 0);
 
 	if (vg_read_error(orphan_vg))
 		goto bad;

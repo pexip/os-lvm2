@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (C) 2011-2013 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2011-2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -8,10 +8,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # test currently needs to drop
 # 'return NULL' in _lv_create_an_lv after log_error("Can't create %s without using "
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
+export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
 
@@ -39,20 +44,48 @@ vgcreate $vg -s 64K $(cat DEVICES)
 lvcreate -l1 -T $vg/pool1
 lvcreate -l1 -T --thinpool $vg/pool2
 lvcreate -l1 -T --thinpool pool3 $vg
-lvcreate -l1 --type thin $vg/pool4
-lvcreate -l1 --type thin --thinpool $vg/pool5
-lvcreate -l1 --type thin --thinpool pool6 $vg
+invalid lvcreate -l1 --type thin $vg/pool4
+invalid lvcreate -l1 --type thin --thinpool $vg/pool5
+invalid lvcreate -l1 --type thin --thinpool pool6 $vg
 lvcreate -l1 --type thin-pool $vg/pool7
 lvcreate -l1 --type thin-pool --thinpool $vg/pool8
 lvcreate -l1 --type thin-pool --thinpool pool9 $vg
 
-lvremove -ff $vg/pool1 $vg/pool2 $vg/pool3 $vg/pool4 $vg/pool5 $vg/pool6 $vg/pool7 $vg/pool8 $vg/pool9
+lvremove -ff $vg/pool1 $vg/pool2 $vg/pool3 $vg/pool7 $vg/pool8 $vg/pool9
 check vg_field $vg lv_count 0
+
+
+# Let's pretend pool is like normal LV when using --type thin-pool support --name
+# Reject ambiguous thin pool names
+invalid lvcreate --type thin-pool -l1 --name pool1 $vg/pool2
+invalid lvcreate --type thin-pool -l1 --name pool3 --thinpool pool4 $vg
+invalid lvcreate --type thin-pool -l1 --name pool5 --thinpool pool6 $vg/pool7
+invalid lvcreate --type thin-pool -l1 --name pool8 --thinpool pool8 $vg/pool9
+
+# no size specified and no origin name give for snapshot
+invalid lvcreate --thinpool pool $vg
+
+check vg_field $vg lv_count 0
+
+lvcreate --type thin-pool -l1 --name pool1 $vg
+lvcreate --type thin-pool -l1 --name $vg/pool2
+# If the thin pool name is unambiguous let it proceed
+lvcreate --type thin-pool -l1 --name pool3 $vg/pool3
+lvcreate --type thin-pool -l1 --name pool4 --thinpool $vg/pool4
+lvcreate --type thin-pool -l1 --name pool5 --thinpool $vg/pool5 $vg/pool5
+
+check lv_field $vg/pool1 segtype "thin-pool"
+check lv_field $vg/pool2 segtype "thin-pool"
+check lv_field $vg/pool3 segtype "thin-pool"
+check lv_field $vg/pool4 segtype "thin-pool"
+check lv_field $vg/pool5 segtype "thin-pool"
+
+lvremove -ff $vg
 
 
 # Create default pool name
 lvcreate -l1 -T $vg
-lvcreate -l1 --type thin $vg
+invalid lvcreate -l1 --type thin $vg
 lvcreate -l1 --type thin-pool $vg
 
 lvremove -ff $vg
@@ -74,7 +107,7 @@ lvcreate -L4M -V2G --name lvo4 --type thin $vg/pool4
 lvcreate -L4M -V2G --name lvo5 --type thin --thinpool $vg/pool5
 lvcreate -L4M -V2G --name lvo6 --type thin --thinpool pool6 $vg
 
-check lv_exists $vg lvo1 lvo2 lvo3 lvo4 lvo5 lvo6
+check lv_exists $vg lvo1 lvo2 lvo3
 lvremove -ff $vg
 
 
@@ -141,13 +174,13 @@ lvcreate -K -s $vg/lv1 --name snap_lv1
 fsck -n "$DM_DEV_DIR/$vg/snap_lv1"
 lvcreate -s $vg/lv1 --name lv2
 lvcreate -s $vg/lv1 --name $vg/lv3
-lvcreate --type snapshot $vg/lv1 --name lv6
-lvcreate --type snapshot $vg/lv1 --name lv4
-lvcreate --type snapshot $vg/lv1 --name $vg/lv5
+invalid lvcreate --type snapshot $vg/lv1 --name lv6
+invalid lvcreate --type snapshot $vg/lv1 --name lv4
+invalid lvcreate --type snapshot $vg/lv1 --name $vg/lv5
 
 lvdisplay --maps $vg
-check_lv_field_modules_ thin,thin-pool lv1 snap_lv1 lv2 lv3 lv4 lv5 lv6
-check vg_field $vg lv_count 8
+check_lv_field_modules_ thin,thin-pool lv1 snap_lv1 lv2 lv3
+check vg_field $vg lv_count 5
 
 lvremove -ff $vg
 
@@ -172,6 +205,23 @@ not lvcreate --chunksize 256 -l1 -T $vg/pool1
 not lvcreate --chunksize 32 -l1 -T $vg/pool1
 # Too large chunk size (max is 1GB)
 not lvcreate -L4M --chunksize 2G -T $vg/pool1
+# Cannot specify --minor with pool
+fail lvcreate -L10M --minor 100 -T $vg/pool_minor
+
+# FIXME: Currently ambigous - is it for thin, thin-pool, both ?
+fail lvcreate -L4M -Mn -m0 -T --readahead 32 -V20 -n $lv $vg/pool_normal
+
+# Check read-ahead setting will also pass with -Mn -m0
+lvcreate -L4M -Mn -m0 -T --readahead 64k $vg/pool_readahead
+lvcreate -V20M -Mn -m0 -T --readahead 128k -n thin_readahead $vg/pool_readahead
+check lv_field $vg/pool_readahead lv_read_ahead "64.00k"
+check lv_field $vg/thin_readahead lv_read_ahead "128.00k"
+
+if test ! -d /sys/block/dm-2345; then
+# Check some unused minor and support for --minor with thins
+	lvcreate --minor 2345 -T -V20M -n thin_minor $vg/pool_readahead
+	check lv_field $vg/thin_minor lv_minor "2345"
+fi
 
 # Test creation of inactive pool
 lvcreate -an -L4M -T $vg/pool1
@@ -186,32 +236,4 @@ not lvcreate -s $vg/lv1 -L4M -V2G --name $vg/lv4
 not lvcreate -T mirpool -L4M --alloc anywhere -m1 $vg
 not lvcreate --thinpool mirpool -L4M --alloc anywhere -m1 $vg
 
-vgremove -ff $vg
-
-# Test --poolmetadatasize range
-# allocating large devices for testing
-aux teardown_devs
-aux prepare_pvs 10 16500
-vgcreate $vg -s 64K $(cat DEVICES)
-
-lvcreate -L4M --chunksize 128 --poolmetadatasize 0 -T $vg/pool1 2>out
-grep "WARNING: Minimum" out
-# FIXME: metadata allocation fails, if PV doesn't have at least 16GB
-# i.e. pool metadata device cannot be multisegment
-lvcreate -L4M --chunksize 64k --poolmetadatasize 17G -T $vg/pool2 2>out
-grep "WARNING: Maximum" out
-check lv_field $vg/pool1_tmeta size "2.00m"
-check lv_field $vg/pool2_tmeta size "16.00g"
-lvremove -ff $vg
-
-# Test automatic calculation of pool metadata size
-lvcreate -L160G -T $vg/pool
-check lv_field $vg/pool lv_metadata_size "80.00m"
-check lv_field $vg/pool chunksize        "128.00k"
-lvremove -ff $vg/pool
-
-lvcreate -L10G --chunksize 256 -T $vg/pool1
-lvcreate -L60G --chunksize 1024 -T $vg/pool2
-check lv_field $vg/pool1_tmeta size "2.50m"
-check lv_field $vg/pool2_tmeta size "3.75m"
 vgremove -ff $vg

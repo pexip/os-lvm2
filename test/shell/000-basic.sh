@@ -7,19 +7,24 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 lvm version
 
-v=$abs_top_builddir/lib/misc/lvm-version.h
-sed -n "/#define LVM_VERSION ./s///p" "$v" | sed "s/ .*//" > expected
-
-lvm pvmove --version|sed -n "1s/.*: *\([0-9][^ ]*\) .*/\1/p" > actual
+lvm pvmove --version|sed -n "1s/.*: *\([0-9][^ ]*\) .*/\1/p" | tee version
 
 # ensure they are the same
-diff -u actual expected
+diff -u version lib/version-expected
+
+dmstats version |sed -n "1s/.*: *\([0-9][^ ]*\) .*/\1/p" | tee dmstats-version
+
+# ensure dmstats version matches build
+diff -u dmstats-version lib/dm-version-expected
 
 # ensure we can create devices (uses dmsetup, etc)
 aux prepare_devs 5

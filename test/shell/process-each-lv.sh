@@ -7,9 +7,13 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description='Exercise toollib process_each_lv'
+SKIP_WITH_LVMPOLLD=1
+
+# disable lvmetad logging as it bogs down test systems
+export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
@@ -38,11 +42,11 @@ aux prepare_devs 10
 
 prepare_vgs_() {
 	# set up vgs/lvs that we will remove
-	vgcreate $vg1 "$dev1" "$dev2"
-	vgcreate $vg2 "$dev3" "$dev4"
-	vgcreate $vg3 "$dev5" "$dev6"
-	vgcreate $vg4 "$dev7" "$dev8"
-	vgcreate $vg5 "$dev9" "$dev10"
+	vgcreate $SHARED $vg1 "$dev1" "$dev2"
+	vgcreate $SHARED $vg2 "$dev3" "$dev4"
+	vgcreate $SHARED $vg3 "$dev5" "$dev6"
+	vgcreate $SHARED $vg4 "$dev7" "$dev8"
+	vgcreate $SHARED $vg5 "$dev9" "$dev10"
 	lvcreate -Zn -an -l 2 -n $lv1 $vg1
 	lvcreate -Zn -an -l 2 -n $lv1 $vg2
 	lvcreate -Zn -an -l 2 -n $lv2 $vg2
@@ -651,3 +655,5 @@ not grep $vg5-$lv2 err
 not grep $vg5-$lv3 err
 not grep $vg5-$lv4 err
 not grep $vg5-$lv5 err
+
+vgremove -f $vg1 $vg2 $vg3 $vg4 $vg5

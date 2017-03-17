@@ -1,3 +1,360 @@
+Version 1.02.137 - 30th November 2016
+=====================================
+  Document raid status values.
+  Always exit dmsetup with success when asked to display help/version.
+
+Version 1.02.136 - 5th November 2016
+====================================
+  Log failure of raid device with log_error level.
+  Use dm_log_with_errno and translate runtime to dm_log only when needed.
+  Make log messages from dm and lvm library different from dmeventd.
+  Notice and Info messages are again logged from dmeventd and its plugins.
+  Dmeventd now also respects DM_ABORT_ON_INTERNAL_ERRORS as libdm based tool.
+  Report as non default dm logging also when logging with errno was changed.
+  Use log_level() macro to consistently decode message log level in dmeventd.
+  Still produce output when dmsetup dependency tree building finds dev missing.
+  Check and report pthread_sigmask() failure in dmeventd.
+  Check mem alloc fail in _canonicalize_field_ids().
+  Use unsigned math when checking more then 31 legs of raid.
+  Fix 'dmstats delete' with dmsetup older than v1.02.129
+  Fix stats walk segfault with dmsetup older than v1.02.129
+
+Version 1.02.135 - 26th September 2016
+======================================
+  Fix man entry for dmsetup status.
+  Introduce new dm_config_parse_without_dup_node_check().
+  Don't omit last entry in dmstats list --group.
+
+Version 1.02.134 - 7th September 2016
+=====================================
+  Improve explanation of udev fallback in libdevmapper.h.
+
+Version 1.02.133 - 10th August 2016
+===================================
+  Add dm_report_destroy_rows/dm_report_group_output_and_pop_all for lvm shell.
+  Adjust group handling and json production for lvm shell.
+
+Version 1.02.132 - 28th July 2016
+=================================
+  Fix json reporting to escape '"' character that may appear in reported string.
+
+Version 1.02.131 - 15th July 2016
+=================================
+  Disable queueing on mpath devs in blk-availability systemd service/initscript.
+  Add new -m|--mpathoption disablequeueing to blkdeactivate.
+  Automatically group regions with 'create --segments' unless --nogroup.
+  Fix resource leak when deleting the first member of a group.
+  Allow --bounds with 'create --filemap' for dmstats.
+  Enable creation of filemap regions with histograms.
+  Enable histogram aggregation for regions with more than one area.
+  Enable histogram aggregation for groups of regions.
+  Add a --filemap option to 'dmstats create' to allow mapping of files.
+  Add dm_stats_create_regions_from_fd() to map file extents to regions.
+
+Version 1.02.130 - 6th July 2016
+================================
+  Minor fixes from coverity.
+
+Version 1.02.129 - 6th July 2016
+================================
+  Update default dmstats field selections for groups.
+  Add 'obj_type', 'group_id', and 'statsname' fields to dmstats reports.
+  Add --area, --region, and --group to dmstats to control object selection.
+  Add --alias, --groupid, --regions to dmstats for group creation and deletion.
+  Add 'group' and 'ungroup' commands to dmstats.
+  Allow dm_stats_delete_group() to optionally delete all group members.
+  Add dm_stats_get_object_type() to return the type of object present.
+  Add dm_stats_walk_init() allowing control of objects visited by walks.
+  Add dm_stats_get_group_descriptor() to return the member list as a string.
+  Introduce dm_stats_get_nr_groups() and dm_stats_group_present().
+  Add dm_stats_{get,set}_alias() to set and retrieve alias names for groups.
+  Add dm_stats_get_group_id() to return the group ID for a given region.
+  Add dm_stats_{create,delete}_group() to allow grouping of stats regions.
+  Add enum-driven dm_stats_get_{metric,counter}() interfaces.
+  Add dm_bitset_parse_list() to parse a string representation of a bitset.
+  Thin dmeventd plugin umounts lvm2 volume only when pool is 95% or more.
+
+Version 1.02.128 - 25th June 2016
+=================================
+  Recognize 'all' keyword used in selection as synonym for "" (no selection).
+  Add dm_report_set_selection to set selection for multiple output of report.
+  Add DM_REPORT_OUTPUT_MULTIPLE_TIMES flag for multiple output of same report.
+  Move field width handling/sort init from dm_report_object to dm_report_output.
+  Add _LOG_BYPASS_REPORT flag for bypassing any log report currently set.
+  Introduce DM_REPORT_GROUP_JSON for report group with JSON output format.
+  Introduce DM_REPORT_GROUP_BASIC for report group with basic report output.
+  Introduce DM_REPORT_GROUP_SINGLE for report group having single report only.
+  Add dm_report_group_{create,push,pop,destroy} to support report grouping.
+
+Version 1.02.127 - 11th June 2016
+=================================
+ Fix blkdeactivate regression causing skipping of dm + md devices. (1.02.126)
+
+Version 1.02.126 - 3rd June 2016
+================================
+  Report passthrough caching mode when parsing cache mode.
+
+Version 1.02.125 - 14th May 2016
+================================
+  Show library version in message even if dm driver version is unavailable.
+
+Version 1.02.124 - 30th April 2016
+==================================
+  Add dm_udev_wait_immediate to libdevmapper for waiting outside the library.
+
+Version 1.02.123 - 23rd April 2016
+==================================
+  Do not strip LVM- when debug reporting not found uuid.
+
+Version 1.02.122 - 9th April 2016
+=================================
+  Change log_debug ioctl flags from single characters into words.
+
+Version 1.02.121 - 26th March 2016
+==================================
+  Adjust raid status function.
+
+Version 1.02.120 - 11th March 2016
+==================================
+  Improve parsing of cache status and report Fail, Error, needs_check, ro.
+
+Version 1.02.119 - 4th March 2016
+=================================
+  Fix dm_config_write_node and variants to return error on subsection failures.
+  Remove 4096 char limit due to buffer size if writing dm_config_node.
+
+Version 1.02.118 - 26th February 2016
+=====================================
+  Fix string boundary check in _get_canonical_field_name().
+  Always initialized hist struct in _stats_parse_histogram().
+
+Version 1.02.117 - 21st February 2016
+=====================================
+  Improve status parsing for thin-pool and thin devices.
+
+Version 1.02.116 - 15th February 2016
+=====================================
+  Use fully aligned allocations for dm_pool_strdup/strndup() (1.02.64).
+  Fix thin-pool table parameter feature order to match kernel output.
+
+Version 1.02.115 - 25th January 2016
+====================================
+  Fix man page for dmsetup udevcreatecookie.
+
+Version 1.02.114 - 14th December 2015
+=====================================
+  Better support for dmsetup static linkage.
+  Extend validity checks on dmeventd client socket.
+
+Version 1.02.113 - 5th December 2015
+====================================
+  Mirror plugin in dmeventd uses dm_get_status_mirror().
+  Add dm_get_status_mirror() for parsing mirror status line.
+
+Version 1.02.112 - 28th November 2015
+=====================================
+  Show error message when trying to create unsupported raid type.
+  Improve preloading sequence of an active thin-pool target.
+  Drop extra space from cache target line to fix unneded table reloads.
+
+Version 1.02.111 - 23rd November 2015
+=====================================
+  Extend dm_hash to support multiple values with the same key.
+  Add missing check for allocation inside dm_split_lvm_name().
+  Test dm_task_get_message_response for !NULL in dm_stats_print_region().
+  Add checks for failing dm_stats_create() in dmsetup.
+  Add missing fifo close when failed to initialize client connection.
+
+Version 1.02.110 - 30th October 2015
+====================================
+  Disable thin monitoring plugin when it fails too often (>10 times).
+  Fix/restore parsing of empty field '-' when processing dmeventd event.
+  Enhance dm_tree_node_size_changed() to recognize size reduction.
+  Support exit on idle for dmenventd (1 hour).
+  Add support to allow unmonitor device from plugin itself.
+  New design for thread co-operation in dmeventd.
+  Dmeventd read device status with 'noflush'.
+  Dmeventd closes control device when no device is monitored.
+  Thin plugin for dmeventd improved percentage usage.
+  Snapshot plugin for dmeventd improved percentage usage.
+  Add dm_hold_control_dev to allow holding of control device open.
+  Add dm_report_compact_given_fields to remove given empty fields from report.
+  Use libdm status parsing and local mem raid dmeventd plugin.
+  Use local mem pool and lock only lvm2 execution for mirror dmeventd plugin.
+  Lock protect only lvm2 execution for snapshot and thin dmeventd plugin.
+  Use local mempool for raid and mirror plugins.
+  Reworked thread initialization for dmeventd plugins.
+  Dmeventd handles snapshot overflow for now equally as invalid.
+  Convert dmeventd to use common logging macro system from libdm.
+  Return -ENOMEM when device registration fails instead of 0 (=success).
+  Enforce writethrough mode for cleaner policy.
+  Add support for recognition and deactivation of MD devices to blkdeactivate.
+  Move target status functions out of libdm-deptree.
+  Correct use of max_write_behind parameter when generating raid target line.
+  Fix dm-event systemd service to make sure it is executed before mounting.
+
+Version 1.02.109 - 22nd September 2015
+======================================
+  Update man pages for dmsetup and dmstats.
+  Improve help text for dmsetup.
+  Use --noflush and --nolockfs when removing device with --force.
+  Parse new Overflow status string for snapshot target.
+  Check dir path components are valid if using dm_create_dir, error out if not.
+  Fix /dev/mapper handling to remove dangling entries if symlinks are found.
+  Make it possible to use blank value as selection for string list report field.
+
+Version 1.02.108 - 15th September 2015
+======================================
+  Do not check for full thin pool when activating without messages (1.02.107).
+
+Version 1.02.107 - 5th September 2015
+=====================================
+  Parse thin-pool status with one single routine internally.
+  Add --histogram to select default histogram fields for list and report.
+  Add report fields for displaying latency histogram configuration and data.
+  Add dmstats --bounds to specify histogram boundaries for a new region.
+  Add dm_histogram_to_string() to format histogram data in string form.
+  Add public methods to libdm to access numerical histogram config and data.
+  Parse and store histogram data in dm_stats_list() and dm_stats_populate().
+  Add an argument to specify histogram bounds to dm_stats_create_region().
+  Add dm_histogram_bounds_from_{string,uint64_t}() to parse histogram bounds.
+  Add dm_histogram handle type to represent a latency histogram and its bounds.
+  Fix devmapper.pc pkgconfig file to not reference non-existent rt.pc file.
+  Reinstate dm_task_get_info@Base to libdevmapper exports. (1.02.106)
+
+Version 1.02.106 - 26th August 2015
+===================================
+  Add 'precise' column to statistics reports.
+  Add --precise switch to 'dmstats create' to request nanosecond counters.
+  Add precise argument to dm_stats_create_region().
+  Add support to libdm-stats for precise_timestamps
+
+Version 1.02.105 - 17th August 2015
+===================================
+  Fix 'dmstats list -o all' segfault.
+  Separate dmstats statistics fields from region information fields.
+  Add interval and interval_ns fields to dmstats reports.
+  Do not include internal glibc headers in libdm-timestamp.c (1.02.104)
+  Exit immediately if no device is supplied to dmsetup wipe_table.
+  Suppress dmsetup report headings when no data is output. (1.02.104)
+  Adjust dmsetup usage/help output selection to match command invoked.
+  Fix dmsetup -o all to select correct fields in splitname report.
+  Restructure internal dmsetup argument handling across all commands.
+  Add dm_report_is_empty() to indicate there is no data awaiting output.
+  Add more arg validation for dm_tree_node_add_cache_target().
+  Add --alldevices switch to replace use of --force for stats create / delete.
+
+Version 1.02.104 - 10th August 2015
+===================================
+  Add dmstats.8 man page
+  Add dmstats --segments switch to create one region per device segment.
+  Add dmstats --regionid, --allregions to specify a single / all stats regions.
+  Add dmstats --allprograms for stats commands that filter by program ID.
+  Add dmstats --auxdata and --programid args to specify aux data and program ID.
+  Add report stats sub-command to provide repeating stats reports.
+  Add clear, delete, list, and print stats sub-commands.
+  Add create stats sub-command and --start, --length, --areas and --areasize.
+  Recognize 'dmstats' as an alias for 'dmsetup stats' when run with this name.
+  Add a 'stats' command to dmsetup to configure, manage and report stats data.
+  Add statistics fields to dmsetup -o.
+  Add libdm-stats library to allow management of device-mapper statistics.
+  Add --nosuffix to suppress dmsetup unit suffixes in report output.
+  Add --units to control dmsetup report field output units.
+  Add support to redisplay column headings for repeating column reports.
+  Fix report header and row resource leaks.
+  Report timestamps of ioctls with dmsetup -vvv.
+  Recognize report field name variants without any underscores too.
+  Add dmsetup --interval and --count to repeat reports at specified intervals.
+  Add dm_timestamp functions to libdevmapper.
+  Recognise vg/lv name format in dmsetup.
+  Move size display code to libdevmapper as dm_size_to_string.
+
+Version 1.02.103 - 24th July 2015
+=================================
+  Introduce libdevmapper wrappers for all malloc-related functions.
+
+Version 1.02.102 - 7th July 2015
+================================
+  Include tool.h for default non-library use.
+  Introduce format macros with embedded % such as FMTu64.
+
+Version 1.02.101 - 3rd July 2015
+================================
+  Add experimental support to passing messages in suspend tree.
+  Add dm_report_value_cache_{set,get} to support caching during report/select.
+  Add dm_report_reserved_handler to handle report reserved value actions.
+  Support dynamic value in select: DM_REPORT_FIELD_RESERVED_VALUE_DYNAMIC_VALUE.
+  Support fuzzy names in select: DM_REPORT_FIELD_RESERVED_VALUE_FUZZY_NAMES.
+  Thin pool trace messages show a device name and major:minor.
+
+Version 1.02.100 - 30th June 2015
+=================================
+  Add since, after, until and before time operators to be used in selection.
+  Add support for time in reports and selection: DM_REPORT_FIELD_TYPE_TIME.
+  Support report reserved value ranges: DM_REPORT_FIELD_RESERVED_VALUE_RANGE.
+  Support report reserved value names: DM_REPORT_FIELD_RESERVED_VALUE_NAMED.
+  Add DM_CONFIG_VALUE_FMT_{INT_OCTAL,STRING_NO_QUOTES} config value format flag.
+  Add DM_CONFIG_VALUE_FMT_COMMON_{ARRAY,EXTRA_SPACE} config value format flag.
+  Add dm_config_value_{get,set}_format_flags to get and set config value format.
+
+Version 1.02.99 - 20th June 2015
+================================
+  New dm_tree_node_set_thin_pool_read_only(DM_1_02_99) for read-only thin pool.
+  Enhance error message when thin-pool message fails.
+  Fix dmeventd logging to avoid threaded use of static variable.
+  Remove redundant dmeventd SIGALRM coded.
+
+Version 1.02.98 - 12th June 2015
+================================
+  Add dm_task_get_errno() to return any unexpected errno from a dm ioctl call.
+  Use copy of errno made after each dm ioctl call in case errno changes later.
+
+Version 1.02.97 - 15th May 2015
+===============================
+  New dm_task_get_info(DM_1_02_97) supports internal_suspend state.
+  New symbols are versioned and comes with versioned symbol name (DM_1_02_97).
+
+Version 1.02.96 - 2nd May 2015
+==============================
+  Fix selection to not match if using reserved value in criteria with >,<,>=,<.
+  Fix selection to not match reserved values for size fields if using >,<,>=,<.
+  Include uuid or device number in log message after ioctl failure.
+  Add DM_INTERNAL_SUSPEND_FLAG to dm-ioctl.h.
+  Install blkdeactivate script and its man page with make install_device-mapper.
+
+Version 1.02.95 - 15th March 2015
+=================================
+  Makefile regenerated.
+
+Version 1.02.94 - 4th March 2015
+================================
+  Add dm_report_object_is_selected for generalized interface for report/select.
+
+Version 1.02.93 - 21st January 2015
+===================================
+  Reduce severity of ioctl error message when dmeventd waitevent is interrupted.
+  Report 'unknown version' when incompatible version numbers were not obtained.
+  Report more info from thin pool status (out of data, metadata-ro, fail).
+  Support error_if_no_space for thin pool target.
+  Fix segfault while using selection with regex and unbuffered reporting.
+  Add dm_report_compact_fields to remove empty fields from report output.
+  Remove unimplemented dm_report_set_output_selection from libdevmapper.h.
+
+Version 1.02.92 - 24th November 2014
+====================================
+  Fix memory corruption with sorting empty string lists (1.02.86).
+  Fix man dmsetup.8 syntax warning of Groff
+  Accept unquoted strings and / in place of {} when parsing configs.
+
+Version 1.02.91 - 11th November 2014
+====================================
+  Update cache creation and dm_config_node to pass policy.
+  Allow activation of any thin-pool if transaction_id supplied is 0.
+  Don't print uninitialized stack bytes when non-root uses dm_check_version().
+  Fix selection criteria to not match reserved values when using >, <, >=, <.
+  Add DM_LIST_HEAD_INIT macro to libdevmapper.h.
+  Fix dm_is_dm_major to not issue error about missing /proc lines for dm module.
+
 Version 1.02.90 - 1st September 2014
 ====================================
   Restore proper buffer size for parsing mountinfo line (1.02.89)

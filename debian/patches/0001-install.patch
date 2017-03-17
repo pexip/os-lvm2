@@ -1,0 +1,73 @@
+From c039196cf14088a3d34a87c79ac9068728086c2d Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Tue, 30 Jun 2015 11:46:04 +0200
+Subject: install
+
+---
+ make.tmpl.in | 33 +++++++--------------------------
+ 1 file changed, 7 insertions(+), 26 deletions(-)
+
+diff --git a/make.tmpl.in b/make.tmpl.in
+index d418cfba2..a78ef0857 100644
+--- a/make.tmpl.in
++++ b/make.tmpl.in
+@@ -17,20 +17,10 @@ SHELL = /bin/sh
+ 
+ @SET_MAKE@
+ 
+-# Allow environment to override any built-in default value for CC.
+-# If there is a built-in default, CC is NOT set to @CC@ here.
+-CC ?= @CC@
+-
+-# If $(CC) holds the usual built-in default value of 'cc' then replace it with
+-# the configured value.
+-# (To avoid this and force the use of 'cc' from the environment, supply its
+-# full path.)
+-ifeq ($(CC), cc)
+-  CC = @CC@
+-endif
+-
++CC = @CC@
+ RANLIB = @RANLIB@
+ INSTALL = @INSTALL@
++INSTALL_DATA = @INSTALL@ -m 644
+ MKDIR_P = @MKDIR_P@
+ MSGFMT = @MSGFMT@
+ LCOV = @LCOV@
+@@ -104,8 +94,7 @@ pythonprefix = $(DESTDIR)$(prefix)
+ python2dir = @PYTHON2DIR@
+ python3dir = @PYTHON3DIR@
+ 
+-USRLIB_RELPATH = $(shell echo $(abspath $(usrlibdir) $(libdir)) | \
+-  $(AWK) -f $(top_srcdir)/scripts/relpath.awk)
++USRLIB_RELPATH = @libdir@/
+ 
+ SYSTEMD_GENERATOR_DIR = @systemdutildir@/system-generators
+ DEFAULT_SYS_DIR = @DEFAULT_SYS_DIR@
+@@ -134,22 +123,14 @@ MAKEFLAGS = @JOBS@
+ endif
+ 
+ # Handle installation of files
+-ifeq ("@WRITE_INSTALL@", "yes")
+-# leaving defaults
+-M_INSTALL_SCRIPT =
+-M_INSTALL_DATA = -m 644
+-else
+-M_INSTALL_PROGRAM = -m 555
+-M_INSTALL_DATA = -m 444
+-endif
+-INSTALL_PROGRAM = $(INSTALL) $(M_INSTALL_PROGRAM) $(STRIP)
+-INSTALL_DATA = $(INSTALL) -p $(M_INSTALL_DATA)
+-INSTALL_WDATA = $(INSTALL) -p -m 644
++INSTALL_PROGRAM = $(INSTALL)
++INSTALL_DATA = $(INSTALL) -m 644
++INSTALL_WDATA = $(INSTALL_DATA)
+ 
+ INSTALL_DIR = $(INSTALL) -m 755 -d
+ INSTALL_ROOT_DIR = $(INSTALL) -m 700 -d
+ INSTALL_ROOT_DATA = $(INSTALL) -m 600
+-INSTALL_SCRIPT = $(INSTALL) -p $(M_INSTALL_PROGRAM)
++INSTALL_SCRIPT = $(INSTALL_PROGRAM)
+ 
+ .SUFFIXES: .c .cpp .d .o .so .a .po .pot .mo .dylib
+ 

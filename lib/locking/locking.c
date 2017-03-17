@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -119,8 +119,9 @@ int init_locking(int type, struct cmd_context *cmd, int suppress_messages)
 	switch (type) {
 	case 0:
 		init_no_locking(&_locking, cmd, suppress_messages);
-		log_warn("WARNING: Locking disabled. Be careful! "
-			  "This could corrupt your metadata.");
+		log_warn_suppress(suppress_messages,
+			"WARNING: Locking disabled. Be careful! "
+			"This could corrupt your metadata.");
 		return 1;
 
 	case 1:
@@ -244,7 +245,7 @@ int check_lvm1_vg_inactive(struct cmd_context *cmd, const char *vgname)
  * FIXME This should become VG uuid.
  */
 static int _lock_vol(struct cmd_context *cmd, const char *resource,
-		     uint32_t flags, lv_operation_t lv_op, struct logical_volume *lv)
+		     uint32_t flags, lv_operation_t lv_op, const struct logical_volume *lv)
 {
 	uint32_t lck_type = flags & LCK_TYPE_MASK;
 	uint32_t lck_scope = flags & LCK_SCOPE_MASK;
@@ -295,7 +296,7 @@ out:
 	return ret;
 }
 
-int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, struct logical_volume *lv)
+int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, const struct logical_volume *lv)
 {
 	char resource[258] __attribute__((aligned(8)));
 	lv_operation_t lv_op;
@@ -492,7 +493,12 @@ int locking_is_clustered(void)
 	return (_locking.flags & LCK_CLUSTERED) ? 1 : 0;
 }
 
-int remote_lock_held(const char *vol, int *exclusive)
+int locking_supports_remote_queries(void)
+{
+	return (_locking.flags & LCK_SUPPORTS_REMOTE_QUERIES) ? 1 : 0;
+}
+
+int cluster_lock_held(const char *vol, const char *node, int *exclusive)
 {
 	int mode = LCK_NULL;
 
@@ -505,7 +511,7 @@ int remote_lock_held(const char *vol, int *exclusive)
 	/*
 	 * If an error occured, expect that volume is active
 	 */
-	if (!_locking.query_resource(vol, &mode)) {
+	if (!_locking.query_resource(vol, node, &mode)) {
 		stack;
 		return 1;
 	}

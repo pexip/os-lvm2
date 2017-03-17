@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_DISPLAY_H
@@ -63,6 +63,9 @@ void display_name_error(name_error_t name_error);
 const char *get_alloc_string(alloc_policy_t alloc);
 char alloc_policy_char(alloc_policy_t alloc);
 alloc_policy_t get_alloc_from_string(const char *str);
+
+const char *get_lock_type_string(lock_type_t lock_type);
+lock_type_t get_lock_type_from_string(const char *str);
 
 const char *get_percent_string(percent_type_t def);
 

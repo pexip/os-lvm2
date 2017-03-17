@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -97,6 +97,18 @@ struct labeller *label_get_handler(const char *name)
 	return NULL;
 }
 
+static void _update_lvmcache_orphan(struct lvmcache_info *info)
+{
+	struct lvmcache_vgsummary vgsummary_orphan = {
+		.vgname = lvmcache_fmt(info)->orphan_vg_name,
+	};
+
+        memcpy(&vgsummary_orphan.vgid, lvmcache_fmt(info)->orphan_vg_name, strlen(lvmcache_fmt(info)->orphan_vg_name));
+
+	if (!lvmcache_update_vgname_and_id(info, &vgsummary_orphan))
+		stack;
+}
+
 static struct labeller *_find_labeller(struct device *dev, char *buf,
 				       uint64_t *label_sector,
 				       uint64_t scan_sector)
@@ -128,18 +140,18 @@ static struct labeller *_find_labeller(struct device *dev, char *buf,
 					  sector + scan_sector);
 			}
 			if (xlate64(lh->sector_xl) != sector + scan_sector) {
-				log_info("%s: Label for sector %" PRIu64
-					 " found at sector %" PRIu64
-					 " - ignoring", dev_name(dev),
-					 (uint64_t)xlate64(lh->sector_xl),
-					 sector + scan_sector);
+				log_very_verbose("%s: Label for sector %" PRIu64
+						 " found at sector %" PRIu64
+						 " - ignoring", dev_name(dev),
+						 (uint64_t)xlate64(lh->sector_xl),
+						 sector + scan_sector);
 				continue;
 			}
 			if (calc_crc(INITIAL_CRC, (uint8_t *)&lh->offset_xl, LABEL_SIZE -
 				     ((uint8_t *) &lh->offset_xl - (uint8_t *) lh)) !=
 			    xlate32(lh->crc_xl)) {
-				log_info("Label checksum incorrect on %s - "
-					 "ignoring", dev_name(dev));
+				log_very_verbose("Label checksum incorrect on %s - "
+						 "ignoring", dev_name(dev));
 				continue;
 			}
 			if (found)
@@ -172,10 +184,8 @@ static struct labeller *_find_labeller(struct device *dev, char *buf,
 
       out:
 	if (!found) {
-		if ((info = lvmcache_info_from_pvid(dev->pvid, 0)))
-			lvmcache_update_vgname_and_id(info, lvmcache_fmt(info)->orphan_vg_name,
-						      lvmcache_fmt(info)->orphan_vg_name,
-						      0, NULL);
+		if ((info = lvmcache_info_from_pvid(dev->pvid, dev, 0)))
+			_update_lvmcache_orphan(info);
 		log_very_verbose("%s: No label detected", dev_name(dev));
 	}
 
@@ -233,8 +243,8 @@ int label_remove(struct device *dev)
 		}
 
 		if (wipe) {
-			log_info("%s: Wiping label at sector %" PRIu64,
-				 dev_name(dev), sector);
+			log_very_verbose("%s: Wiping label at sector %" PRIu64,
+					 dev_name(dev), sector);
 			if (!dev_write(dev, sector << SECTOR_SHIFT, LABEL_SIZE,
 				       buf)) {
 				log_error("Failed to remove label from %s at "
@@ -261,32 +271,29 @@ int label_read(struct device *dev, struct label **result,
 	struct lvmcache_info *info;
 	int r = 0;
 
-	if ((info = lvmcache_info_from_pvid(dev->pvid, 1))) {
-		log_debug_devs("Using cached label for %s", dev_name(dev));
+	if ((info = lvmcache_info_from_pvid(dev->pvid, dev, 1))) {
+		log_debug_devs("Reading label from lvmcache for %s", dev_name(dev));
 		*result = lvmcache_get_label(info);
 		return 1;
 	}
 
+	log_debug_devs("Reading label from device %s", dev_name(dev));
+
 	if (!dev_open_readonly(dev)) {
 		stack;
 
-		if ((info = lvmcache_info_from_pvid(dev->pvid, 0)))
-			lvmcache_update_vgname_and_id(info, lvmcache_fmt(info)->orphan_vg_name,
-						      lvmcache_fmt(info)->orphan_vg_name,
-						      0, NULL);
+		if ((info = lvmcache_info_from_pvid(dev->pvid, dev, 0)))
+			_update_lvmcache_orphan(info);
 
 		return r;
 	}
 
-	if (!(l = _find_labeller(dev, buf, &sector, scan_sector)))
-		goto_out;
+	if ((l = _find_labeller(dev, buf, &sector, scan_sector)))
+		if ((r = (l->ops->read)(l, dev, buf, result)) && result && *result) {
+			(*result)->dev = dev;
+			(*result)->sector = sector;
+		}
 
-	if ((r = (l->ops->read)(l, dev, buf, result)) && result && *result) {
-		(*result)->dev = dev;
-		(*result)->sector = sector;
-	}
-
-      out:
 	if (!dev_close(dev))
 		stack;
 
@@ -326,9 +333,9 @@ int label_write(struct device *dev, struct label *label)
 	if (!dev_open(dev))
 		return_0;
 
-	log_info("%s: Writing label to sector %" PRIu64 " with stored offset %"
-		 PRIu32 ".", dev_name(dev), label->sector,
-		 xlate32(lh->offset_xl));
+	log_very_verbose("%s: Writing label to sector %" PRIu64 " with stored offset %"
+			 PRIu32 ".", dev_name(dev), label->sector,
+			 xlate32(lh->offset_xl));
 	if (!dev_write(dev, label->sector << SECTOR_SHIFT, LABEL_SIZE, buf)) {
 		log_debug_devs("Failed to write label to %s", dev_name(dev));
 		r = 0;
@@ -350,11 +357,8 @@ int label_verify(struct device *dev)
 	int r = 0;
 
 	if (!dev_open_readonly(dev)) {
-		if ((info = lvmcache_info_from_pvid(dev->pvid, 0)))
-			lvmcache_update_vgname_and_id(info, lvmcache_fmt(info)->orphan_vg_name,
-						      lvmcache_fmt(info)->orphan_vg_name,
-						      0, NULL);
-
+		if ((info = lvmcache_info_from_pvid(dev->pvid, dev, 0)))
+			_update_lvmcache_orphan(info);
 		return_0;
 	}
 

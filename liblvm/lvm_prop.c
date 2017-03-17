@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lvm_prop.h"
@@ -21,27 +21,27 @@ GET_LVCREATEPARAMS_NUM_PROPERTY_FN(skip_zero, lvcp->zero)
 SET_LVCREATEPARAMS_NUM_PROPERTY_FN(skip_zero, lvcp->zero)
 
 /* PV create parameters */
-GET_PVCREATEPARAMS_NUM_PROPERTY_FN(size, pvcp->size)
-SET_PVCREATEPARAMS_NUM_PROPERTY_FN(size, pvcp->size)
+GET_PVCREATEPARAMS_NUM_PROPERTY_FN(size, pvcp->pva.size)
+SET_PVCREATEPARAMS_NUM_PROPERTY_FN(size, pvcp->pva.size)
 
-GET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatacopies, pvcp->pvmetadatacopies)
-SET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatacopies, pvcp->pvmetadatacopies)
+GET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatacopies, pvcp->pva.pvmetadatacopies)
+SET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatacopies, pvcp->pva.pvmetadatacopies)
 
-GET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatasize, pvcp->pvmetadatasize)
-SET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatasize, pvcp->pvmetadatasize)
+GET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatasize, pvcp->pva.pvmetadatasize)
+SET_PVCREATEPARAMS_NUM_PROPERTY_FN(pvmetadatasize, pvcp->pva.pvmetadatasize)
 
-GET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment, pvcp->data_alignment)
-SET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment, pvcp->data_alignment)
+GET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment, pvcp->pva.data_alignment)
+SET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment, pvcp->pva.data_alignment)
 
-GET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment_offset, pvcp->data_alignment_offset)
-SET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment_offset, pvcp->data_alignment_offset)
+GET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment_offset, pvcp->pva.data_alignment_offset)
+SET_PVCREATEPARAMS_NUM_PROPERTY_FN(data_alignment_offset, pvcp->pva.data_alignment_offset)
 
 GET_PVCREATEPARAMS_NUM_PROPERTY_FN(zero, pvcp->zero)
 SET_PVCREATEPARAMS_NUM_PROPERTY_FN(zero, pvcp->zero)
 
 struct lvm_property_type _lib_properties[] = {
 #include "lvm_prop_fields.h"
-	{ 0, "", 0, 0, 0, { .integer = 0 }, prop_not_implemented_get,
+	{ 0, "", 0, 0, 0, 0, { .integer = 0 }, prop_not_implemented_get,
 			prop_not_implemented_set },
 };
 

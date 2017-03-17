@@ -10,15 +10,15 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
 
-static int vgimport_single(struct cmd_context *cmd __attribute__((unused)),
+static int vgimport_single(struct cmd_context *cmd,
 			   const char *vg_name,
 			   struct volume_group *vg,
-			   void *handle __attribute__((unused)))
+			   struct processing_handle *handle __attribute__((unused)))
 {
 	struct pv_list *pvl;
 	struct physical_volume *pv;
@@ -37,6 +37,9 @@ static int vgimport_single(struct cmd_context *cmd __attribute__((unused)),
 		goto_bad;
 
 	vg->status &= ~EXPORTED_VG;
+
+	if (!is_lockd_type(vg->lock_type))
+		vg->system_id = cmd->system_id ? dm_pool_strdup(vg->vgmem, cmd->system_id) : NULL;
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		pv = pvl->pv;
@@ -58,17 +61,19 @@ bad:
 
 int vgimport(struct cmd_context *cmd, int argc, char **argv)
 {
-	if (!argc && !arg_count(cmd, all_ARG)) {
-		log_error("Please supply volume groups or use -a for all.");
+	const char *reason = NULL;
+
+	if (!argc && !arg_is_set(cmd, all_ARG) && !arg_is_set(cmd, select_ARG)) {
+		log_error("Please supply volume groups or -S for selection or use -a for all.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (argc && arg_count(cmd, all_ARG)) {
+	if (arg_is_set(cmd, all_ARG) && (argc || arg_is_set(cmd, select_ARG))) {
 		log_error("No arguments permitted when using -a for all.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, force_ARG)) {
+	if (arg_is_set(cmd, force_ARG)) {
 		/*
 		 * The volume group cannot be repaired unless it is first
 		 * imported.  If we don't allow the user a way to import the
@@ -84,8 +89,26 @@ int vgimport(struct cmd_context *cmd, int argc, char **argv)
 		cmd->handles_missing_pvs = 1;
 	}
 
-	return process_each_vg(cmd, argc, argv,
+	/*
+	 * Rescan devices and update lvmetad.  lvmetad may hold a copy of the
+	 * VG from before it was exported, if it was exported by another host.
+	 * We need to reread it to see that it's been exported before we can
+	 * import it.
+	 */
+	if (lvmetad_used()) {
+		if (!lvmetad_pvscan_all_devs(cmd, 1)) {
+			log_warn("WARNING: Not using lvmetad because cache update failed.");
+			lvmetad_make_unused(cmd);
+		}
+
+		if (lvmetad_used() && lvmetad_is_disabled(cmd, &reason)) {
+			log_warn("WARNING: Not using lvmetad because %s.", reason);
+			lvmetad_make_unused(cmd);
+		}
+	}
+
+	return process_each_vg(cmd, argc, argv, NULL, NULL,
 			       READ_FOR_UPDATE | READ_ALLOW_EXPORTED,
-			       NULL,
+			       0, NULL,
 			       &vgimport_single);
 }

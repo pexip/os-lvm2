@@ -7,11 +7,13 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_CLVMD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
-
-exit 0
 
 #
 # Snapshots of 'mirrors' are not supported.  They can no longer be created.
@@ -21,7 +23,7 @@ exit 0
 
 aux prepare_vg 5
 
-lvcreate --type mirror -m 3 --ig -L 2M -n 4way $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5":0
+lvcreate --type mirror -m 3 -L 2M -n 4way $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5":0
 lvcreate -s $vg/4way -L 2M -n snap
 lvcreate -i 2 -L 2M $vg "$dev1" "$dev2" -n stripe
 

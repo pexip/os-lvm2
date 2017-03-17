@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef LVM_MEMLOCK_H
@@ -36,6 +36,7 @@ void critical_section_dec(struct cmd_context *cmd, const char *reason);
 int critical_section(void);
 void memlock_inc_daemon(struct cmd_context *cmd);
 void memlock_dec_daemon(struct cmd_context *cmd);
+int memlock_count_daemon(void);
 void memlock_init(struct cmd_context *cmd);
 void memlock_reset(void);
 void memlock_unlock(struct cmd_context *cmd);

@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -66,7 +66,7 @@ bad:
 	return 0;
 }
 
-struct udev* udev_get_library_context(void)
+void *udev_get_library_context(void)
 {
 	return _udev;
 }
@@ -76,6 +76,11 @@ struct udev* udev_get_library_context(void)
 int udev_init_library_context(void)
 {
 	return 1;
+}
+
+void *udev_get_library_context(void)
+{
+	return NULL;
 }
 
 void udev_fin_library_context(void)

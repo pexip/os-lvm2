@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -34,6 +34,7 @@ static const struct flag _vg_flags[] = {
 	{PVMOVE, "PVMOVE", STATUS_FLAG},
 	{LVM_READ, "READ", STATUS_FLAG},
 	{LVM_WRITE, "WRITE", STATUS_FLAG},
+	{LVM_WRITE_LOCKED, "WRITE_LOCKED", COMPATIBLE_FLAG},
 	{CLUSTERED, "CLUSTERED", STATUS_FLAG},
 	{SHARED, "SHARED", STATUS_FLAG},
 	{PARTIAL_VG, NULL, 0},
@@ -53,6 +54,7 @@ static const struct flag _pv_flags[] = {
 static const struct flag _lv_flags[] = {
 	{LVM_READ, "READ", STATUS_FLAG},
 	{LVM_WRITE, "WRITE", STATUS_FLAG},
+	{LVM_WRITE_LOCKED, "WRITE_LOCKED", COMPATIBLE_FLAG},
 	{FIXED_MINOR, "FIXED_MINOR", STATUS_FLAG},
 	{VISIBLE_LV, "VISIBLE", STATUS_FLAG},
 	{PVMOVE, "PVMOVE", STATUS_FLAG},
@@ -61,12 +63,15 @@ static const struct flag _lv_flags[] = {
 	{LV_REBUILD, "REBUILD", STATUS_FLAG},
 	{LV_WRITEMOSTLY, "WRITEMOSTLY", STATUS_FLAG},
 	{LV_ACTIVATION_SKIP, "ACTIVATION_SKIP", COMPATIBLE_FLAG},
+	{LV_ERROR_WHEN_FULL, "ERROR_WHEN_FULL", COMPATIBLE_FLAG},
 	{LV_NOSCAN, NULL, 0},
 	{LV_TEMPORARY, NULL, 0},
 	{POOL_METADATA_SPARE, NULL, 0},
+	{LOCKD_SANLOCK_LV, NULL, 0},
 	{RAID, NULL, 0},
 	{RAID_META, NULL, 0},
 	{RAID_IMAGE, NULL, 0},
+	{MIRROR, NULL, 0},
 	{MIRROR_IMAGE, NULL, 0},
 	{MIRROR_LOG, NULL, 0},
 	{MIRRORED, NULL, 0},
@@ -87,6 +92,8 @@ static const struct flag _lv_flags[] = {
 	{CACHE_POOL, NULL, 0},
 	{CACHE_POOL_DATA, NULL, 0},
 	{CACHE_POOL_METADATA, NULL, 0},
+	{LV_PENDING_DELETE, NULL, 0}, /* FIXME Display like COMPATIBLE_FLAG */
+	{LV_REMOVED, NULL, 0},
 	{0, NULL, 0}
 };
 

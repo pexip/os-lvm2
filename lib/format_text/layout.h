@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_TEXT_LAYOUT_H
@@ -18,11 +18,17 @@
 
 #include "config.h"
 #include "metadata.h"
+#include "lvmcache.h"
 #include "uuid.h"
 
 /* disk_locn and data_area_list are defined in format-text.h */
 
-#define PV_HEADER_EXTENSION_VSN 1
+/*
+ * PV header extension versions:
+ *   - version 1: bootloader area support
+ *   - version 2: PV_EXT_USED flag support
+ */
+#define PV_HEADER_EXTENSION_VSN 2
 
 struct pv_header_extension {
 	uint32_t version;
@@ -97,11 +103,8 @@ struct mda_context {
 #define LVM2_LABEL "LVM2 001"
 #define MDA_SIZE_MIN (8 * (unsigned) lvm_getpagesize())
 
-
-const char *vgname_from_mda(const struct format_type *fmt,
-			    struct mda_header *mdah,
-			    struct device_area *dev_area, struct id *vgid,
-			    uint64_t *vgstatus, char **creation_host,
-			    uint64_t *mda_free_sectors);
+int vgname_from_mda(const struct format_type *fmt, struct mda_header *mdah,
+		    struct device_area *dev_area, struct lvmcache_vgsummary *vgsummary,
+		    uint64_t *mda_free_sectors);
 
 #endif

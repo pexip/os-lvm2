@@ -7,14 +7,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-. lib/inittest
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # This test is not using any lvm command
 # so skip duplicate CLMVD and lvmetad test
-test -e LOCAL_CLVMD && skip
-test -e LOCAL_LVMETAD && skip
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_CLVMD=1
+SKIP_WITH_LVMETAD=1
+SKIP_WITH_LVMPOLLD=1
+
+. lib/inittest
 
 CHARACTER_WHITELIST="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#+-.:=@_"
 FAIL_MIXED_STR="contains mixed mangled and unmangled characters"

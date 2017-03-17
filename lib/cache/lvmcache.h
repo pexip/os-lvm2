@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_CACHE_H
@@ -39,14 +39,41 @@ struct disk_locn;
 
 struct lvmcache_vginfo;
 
+/*
+ * vgsummary represents a summary of the VG that is read
+ * without a lock.  The info does not come through vg_read(),
+ * but through reading mdas.  It provides information about
+ * the VG that is needed to lock the VG and then read it fully
+ * with vg_read(), after which the VG summary should be checked
+ * against the full VG metadata to verify it was correct (since
+ * it was read without a lock.)
+ *
+ * Once read, vgsummary information is saved in lvmcache_vginfo.
+ */
+struct lvmcache_vgsummary {
+	const char *vgname;
+	struct id vgid;
+	uint64_t vgstatus;
+	char *creation_host;
+	const char *system_id;
+	const char *lock_type;
+	uint32_t mda_checksum;
+	size_t mda_size;
+};
+
 int lvmcache_init(void);
 void lvmcache_allow_reads_with_lvmetad(void);
 
 void lvmcache_destroy(struct cmd_context *cmd, int retain_orphans, int reset);
 
-/* Set full_scan to 1 to reread every filtered device label or
- * 2 to rescan /dev for new devices */
-int lvmcache_label_scan(struct cmd_context *cmd, int full_scan);
+/*
+ * lvmcache_label_scan() will scan labels the first time it's
+ * called, but not on subsequent calls, unless
+ * lvmcache_force_next_label_scan() is called first
+ * to force the next lvmcache_label_scan() to scan again.
+ */
+void lvmcache_force_next_label_scan(void);
+int lvmcache_label_scan(struct cmd_context *cmd);
 
 /* Add/delete a device */
 struct lvmcache_info *lvmcache_add(struct labeller *labeller, const char *pvid,
@@ -58,8 +85,7 @@ void lvmcache_del(struct lvmcache_info *info);
 
 /* Update things */
 int lvmcache_update_vgname_and_id(struct lvmcache_info *info,
-				  const char *vgname, const char *vgid,
-				  uint32_t vgstatus, const char *hostname);
+				  struct lvmcache_vgsummary *vgsummary);
 int lvmcache_update_vg(struct volume_group *vg, unsigned precommitted);
 
 void lvmcache_lock_vgname(const char *vgname, int read_only);
@@ -68,6 +94,7 @@ int lvmcache_verify_lock_order(const char *vgname);
 
 /* Queries */
 const struct format_type *lvmcache_fmt_from_vgname(struct cmd_context *cmd, const char *vgname, const char *vgid, unsigned revalidate_labels);
+int lvmcache_lookup_mda(struct lvmcache_vgsummary *vgsummary);
 
 /* Decrement and test if there are still vg holders in vginfo. */
 int lvmcache_vginfo_holders_dec_and_test_for_zero(struct lvmcache_vginfo *vginfo);
@@ -75,14 +102,16 @@ int lvmcache_vginfo_holders_dec_and_test_for_zero(struct lvmcache_vginfo *vginfo
 struct lvmcache_vginfo *lvmcache_vginfo_from_vgname(const char *vgname,
 					   const char *vgid);
 struct lvmcache_vginfo *lvmcache_vginfo_from_vgid(const char *vgid);
-struct lvmcache_info *lvmcache_info_from_pvid(const char *pvid, int valid_only);
+struct lvmcache_info *lvmcache_info_from_pvid(const char *pvid, struct device *dev, int valid_only);
 const char *lvmcache_vgname_from_vgid(struct dm_pool *mem, const char *vgid);
+const char *lvmcache_vgid_from_vgname(struct cmd_context *cmd, const char *vgname);
 struct device *lvmcache_device_from_pvid(struct cmd_context *cmd, const struct id *pvid,
 				unsigned *scan_done_once, uint64_t *label_sector);
 const char *lvmcache_pvid_from_devname(struct cmd_context *cmd,
-			      const char *dev_name);
+				       const char *devname);
 char *lvmcache_vgname_from_pvid(struct cmd_context *cmd, const char *pvid);
 const char *lvmcache_vgname_from_info(struct lvmcache_info *info);
+const struct format_type *lvmcache_fmt_from_info(struct lvmcache_info *info);
 int lvmcache_vgs_locked(void);
 int lvmcache_vgname_is_locked(const char *vgname);
 
@@ -97,6 +126,9 @@ struct dm_list *lvmcache_get_vgnames(struct cmd_context *cmd,
 /* If include_internal is not set, return only proper vg ids. */
 struct dm_list *lvmcache_get_vgids(struct cmd_context *cmd,
 				   int include_internal);
+
+int lvmcache_get_vgnameids(struct cmd_context *cmd, int include_internal,
+                          struct dm_list *vgnameids);
 
 /* Returns list of struct dm_str_list containing pool-allocated copy of pvids */
 struct dm_list *lvmcache_get_pvids(struct cmd_context *cmd, const char *vgname,
@@ -124,6 +156,11 @@ int lvmcache_add_mda(struct lvmcache_info *info, struct device *dev,
 		     uint64_t start, uint64_t size, unsigned ignored);
 int lvmcache_add_da(struct lvmcache_info *info, uint64_t start, uint64_t size);
 int lvmcache_add_ba(struct lvmcache_info *info, uint64_t start, uint64_t size);
+
+void lvmcache_set_ext_version(struct lvmcache_info *info, uint32_t version);
+uint32_t lvmcache_ext_version(struct lvmcache_info *info);
+void lvmcache_set_ext_flags(struct lvmcache_info *info, uint32_t flags);
+uint32_t lvmcache_ext_flags(struct lvmcache_info *info);
 
 const struct format_type *lvmcache_fmt(struct lvmcache_info *info);
 struct label *lvmcache_get_label(struct lvmcache_info *info);
@@ -156,5 +193,26 @@ int lvmcache_uncertain_ownership(struct lvmcache_info *info);
 unsigned lvmcache_mda_count(struct lvmcache_info *info);
 int lvmcache_vgid_is_cached(const char *vgid);
 uint64_t lvmcache_smallest_mda_size(struct lvmcache_info *info);
+
+int lvmcache_found_duplicate_pvs(void);
+
+int lvmcache_get_unused_duplicate_devs(struct cmd_context *cmd, struct dm_list *head);
+
+int vg_has_duplicate_pvs(struct volume_group *vg);
+
+int lvmcache_contains_lock_type_sanlock(struct cmd_context *cmd);
+
+void lvmcache_get_max_name_lengths(struct cmd_context *cmd,
+			unsigned *pv_max_name_len, unsigned *vg_max_name_len);
+
+int lvmcache_vg_is_foreign(struct cmd_context *cmd, const char *vgname, const char *vgid);
+
+void lvmcache_lock_ordering(int enable);
+
+int lvmcache_dev_is_unchosen_duplicate(struct device *dev);
+
+void lvmcache_remove_unchosen_duplicate(struct device *dev);
+
+int lvmcache_pvid_in_unchosen_duplicates(const char *pvid);
 
 #endif

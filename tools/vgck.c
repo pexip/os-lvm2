@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
@@ -18,7 +18,7 @@
 static int vgck_single(struct cmd_context *cmd __attribute__((unused)),
 		       const char *vg_name,
 		       struct volume_group *vg,
-		       void *handle __attribute__((unused)))
+		       struct processing_handle *handle __attribute__((unused)))
 {
 	if (!vg_check_status(vg, EXPORTED_VG))
 		return_ECMD_FAILED;
@@ -37,7 +37,7 @@ static int vgck_single(struct cmd_context *cmd __attribute__((unused)),
 
 int vgck(struct cmd_context *cmd, int argc, char **argv)
 {
-	lvmetad_set_active(0);
-	return process_each_vg(cmd, argc, argv, 0, NULL,
+	lvmetad_make_unused(cmd);
+	return process_each_vg(cmd, argc, argv, NULL, NULL, 0, 0, NULL,
 			       &vgck_single);
 }

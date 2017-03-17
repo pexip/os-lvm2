@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_DEV_TYPE_H
@@ -21,9 +21,7 @@
 #define NUMBER_OF_MAJORS 4096
 
 #ifdef __linux__
-#  define MAJOR(dev)	((dev & 0xfff00) >> 8)
-#  define MINOR(dev)	((dev & 0xff) | ((dev >> 12) & 0xfff00))
-#  define MKDEV(ma,mi)	((mi & 0xff) | (ma << 8) | ((mi & ~0xff) << 12))
+#  include "kdev_t.h"
 #else
 #  define MAJOR(x) major((x))
 #  define MINOR(x) minor((x))
@@ -44,6 +42,8 @@ struct dev_types {
 	int device_mapper_major;
 	int emcpower_major;
 	int power2_major;
+	int dasd_major;
+	int loop_major;
 	struct dev_type_def dev_type_array[NUMBER_OF_MAJORS];
 };
 
@@ -58,6 +58,8 @@ int major_is_scsi_device(struct dev_types *dt, int major);
 int dev_is_md(struct device *dev, uint64_t *sb);
 int dev_is_swap(struct device *dev, uint64_t *signature);
 int dev_is_luks(struct device *dev, uint64_t *signature);
+int dasd_is_cdl_formatted(struct device *dev);
+int udev_dev_is_mpath_component(struct device *dev);
 
 /* Signature wiping. */
 #define TYPE_LVM1_MEMBER	0x001
@@ -65,7 +67,7 @@ int dev_is_luks(struct device *dev, uint64_t *signature);
 #define TYPE_DM_SNAPSHOT_COW	0x004
 int wipe_known_signatures(struct cmd_context *cmd, struct device *dev, const char *name,
 			  uint32_t types_to_exclude, uint32_t types_no_prompt,
-			  int yes, force_t force);
+			  int yes, force_t force, int *wiped);
 
 /* Type-specific device properties */
 unsigned long dev_md_stripe_width(struct dev_types *dt, struct device *dev);
@@ -81,5 +83,7 @@ unsigned long dev_minimum_io_size(struct dev_types *dt, struct device *dev);
 unsigned long dev_optimal_io_size(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_max_bytes(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_granularity(struct dev_types *dt, struct device *dev);
+
+int dev_is_rotational(struct dev_types *dt, struct device *dev);
 
 #endif

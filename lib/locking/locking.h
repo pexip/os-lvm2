@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_LOCKING_H
@@ -26,8 +26,14 @@ void fin_locking(void);
 void reset_locking(void);
 int vg_write_lock_held(void);
 int locking_is_clustered(void);
+int locking_supports_remote_queries(void);
 
-int remote_lock_held(const char *vol, int *exclusive);
+#ifndef NODE_ALL
+#  define NODE_ALL     "*"
+#  define NODE_LOCAL   "."
+#  define NODE_REMOTE  "^"
+#endif
+int cluster_lock_held(const char *vol, const char *node, int *exclusive);
 
 /*
  * LCK_VG:
@@ -48,7 +54,7 @@ int remote_lock_held(const char *vol, int *exclusive);
  *   Lock/unlock an individual logical volume
  *   char *vol holds lvid
  */
-int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, struct logical_volume *lv);
+int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, const struct logical_volume *lv);
 
 /*
  * Internal locking representation.
@@ -113,7 +119,7 @@ int check_lvm1_vg_inactive(struct cmd_context *cmd, const char *vgname);
 #define LCK_DMEVENTD_MONITOR_MODE	0x04	/* Register with dmeventd */
 
 /* Not yet used. */
-#define LCK_CONVERT			0x08	/* Convert existing lock */
+#define LCK_CONVERT_MODE		0x08	/* Convert existing lock */
 
 #define LCK_TEST_MODE			0x10    /* Test mode: No activation */
 #define LCK_ORIGIN_ONLY_MODE		0x20	/* Same as above */
@@ -192,15 +198,18 @@ int check_lvm1_vg_inactive(struct cmd_context *cmd, const char *vgname);
 	rr; \
 })
 
-#define unlock_vg(cmd, vol)	\
+#define unlock_vg(cmd, vg, vol)	\
 	do { \
-		if (is_real_vg(vol)) \
-			sync_dev_names(cmd); \
-		(void) lock_vol(cmd, vol, LCK_VG_UNLOCK, NULL);	\
+		if (vg && !lvmetad_vg_update_finish(vg)) \
+			stack; \
+		if (is_real_vg(vol) && !sync_dev_names(cmd)) \
+			stack; \
+		if (!lock_vol(cmd, vol, LCK_VG_UNLOCK, NULL)) \
+			stack;	\
 	} while (0)
 #define unlock_and_release_vg(cmd, vg, vol) \
 	do { \
-		unlock_vg(cmd, vol); \
+		unlock_vg(cmd, vg, vol); \
 		release_vg(vg); \
 	} while (0)
 

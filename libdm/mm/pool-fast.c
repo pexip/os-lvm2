@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifdef VALGRIND_POOL
@@ -100,14 +100,14 @@ void *dm_pool_alloc_aligned(struct dm_pool *p, size_t s, unsigned alignment)
 		_align_chunk(c, alignment);
 
 	/* have we got room ? */
-	if (!c || (c->begin > c->end) || (c->end - c->begin < s)) {
+	if (!c || (c->begin > c->end) || ((c->end - c->begin) < (int) s)) {
 		/* allocate new chunk */
 		size_t needed = s + alignment + sizeof(struct chunk);
 		c = _new_chunk(p, (needed > p->chunk_size) ?
 			       needed : p->chunk_size);
 
 		if (!c)
-			return NULL;
+			return_NULL;
 
 		_align_chunk(c, alignment);
 	}
@@ -177,7 +177,7 @@ int dm_pool_begin_object(struct dm_pool *p, size_t hint)
 	if (c)
 		_align_chunk(c, align);
 
-	if (!c || (c->begin > c->end) || (c->end - c->begin < hint)) {
+	if (!c || (c->begin > c->end) || ((c->end - c->begin) < (int) hint)) {
 		/* allocate a new chunk */
 		c = _new_chunk(p,
 			       hint > (p->chunk_size - sizeof(struct chunk)) ?
@@ -200,7 +200,7 @@ int dm_pool_grow_object(struct dm_pool *p, const void *extra, size_t delta)
 	if (!delta)
 		delta = strlen(extra);
 
-	if (c->end - (c->begin + p->object_len) < delta) {
+	if ((c->end - (c->begin + p->object_len)) < (int) delta) {
 		/* move into a new chunk */
 		if (p->object_len + delta > (p->chunk_size / 2))
 			nc = _new_chunk(p, (p->object_len + delta) * 2);
