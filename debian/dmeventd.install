@@ -1,4 +1,3 @@
 lib/*/device-mapper
-lib/systemd/system/dm-event*
 sbin/dmeventd
 usr/share/man/man8/dmeventd.8
