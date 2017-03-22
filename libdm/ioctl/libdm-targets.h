@@ -20,7 +20,6 @@
 #include <sys/types.h>
 
 struct dm_ioctl;
-struct dm_ioctl_v1;
 
 struct target {
 	uint64_t start;
@@ -34,6 +33,7 @@ struct target {
 struct dm_task {
 	int type;
 	char *dev_name;
+	char *mangled_dev_name;
 
 	struct target *head, *tail;
 
@@ -49,7 +49,6 @@ struct dm_task {
 	uint32_t read_ahead_flags;
 	union {
 		struct dm_ioctl *v4;
-		struct dm_ioctl_v1 *v1;
 	} dmi;
 	char *newname;
 	char *message;
@@ -60,15 +59,23 @@ struct dm_task {
 	int skip_lockfs;
 	int query_inactive_table;
 	int suppress_identical_reload;
+	dm_add_node_t add_node;
 	uint64_t existing_table_size;
 	int cookie_set;
+	int new_uuid;
+	int secure_data;
+	int retry_remove;
+	int deferred_remove;
+	int enable_checks;
+	int expected_errno;
 
 	char *uuid;
+	char *mangled_uuid;
 };
 
 struct cmd_data {
 	const char *name;
-	const int cmd;
+	const unsigned cmd;
 	const int version[3];
 };
 

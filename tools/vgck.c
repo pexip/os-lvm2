@@ -14,20 +14,21 @@
  */
 
 #include "tools.h"
-#include "metadata.h"
 
-static int vgck_single(struct cmd_context *cmd __attribute((unused)),
+static int vgck_single(struct cmd_context *cmd __attribute__((unused)),
 		       const char *vg_name,
 		       struct volume_group *vg,
-		       void *handle __attribute((unused)))
+		       void *handle __attribute__((unused)))
 {
-	if (!vg_check_status(vg, EXPORTED_VG)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!vg_check_status(vg, EXPORTED_VG))
+		return_ECMD_FAILED;
 
-	if (!vg_validate(vg)) {
-		stack;
+	if (!vg_validate(vg))
+		return_ECMD_FAILED;
+
+	if (vg_missing_pv_count(vg)) {
+		log_error("The volume group is missing %d physical volumes.",
+			  vg_missing_pv_count(vg));
 		return ECMD_FAILED;
 	}
 
@@ -36,6 +37,7 @@ static int vgck_single(struct cmd_context *cmd __attribute((unused)),
 
 int vgck(struct cmd_context *cmd, int argc, char **argv)
 {
+	lvmetad_set_active(0);
 	return process_each_vg(cmd, argc, argv, 0, NULL,
 			       &vgck_single);
 }

@@ -16,8 +16,10 @@
 #ifndef _LVM_CRC_H
 #define _LVM_CRC_H
 
+#include <inttypes.h>
+
 #define INITIAL_CRC 0xf597a6cf
 
-uint32_t calc_crc(uint32_t initial, const void *buf, uint32_t size);
+uint32_t calc_crc(uint32_t initial, const uint8_t *buf, uint32_t size);
 
 #endif

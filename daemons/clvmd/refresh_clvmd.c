@@ -13,26 +13,20 @@
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+/* FIXME Remove duplicated functions from this file. */
+
 /*
  * Send a command to a running clvmd from the command-line
  */
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
-#include <configure.h>
-#include <stddef.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <errno.h>
-#include <unistd.h>
-#include <libdevmapper.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <limits.h>
+#include "clvmd-common.h"
 
 #include "clvm.h"
 #include "refresh_clvmd.h"
+
+#include <stddef.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 typedef struct lvm_response {
 	char node[255];
@@ -53,18 +47,18 @@ static int _clvmd_sock = -1;
 static int _open_local_sock(void)
 {
 	int local_socket;
-	struct sockaddr_un sockaddr;
+	struct sockaddr_un sockaddr = { .sun_family = AF_UNIX };
+
+	if (!dm_strncpy(sockaddr.sun_path, CLVMD_SOCKNAME, sizeof(sockaddr.sun_path))) {
+		fprintf(stderr, "%s: clvmd socket name too long.", CLVMD_SOCKNAME);
+		return -1;
+	}
 
 	/* Open local socket */
 	if ((local_socket = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
 		fprintf(stderr, "Local socket creation failed: %s", strerror(errno));
 		return -1;
 	}
-
-	memset(&sockaddr, 0, sizeof(sockaddr));
-	memcpy(sockaddr.sun_path, CLVMD_SOCKNAME, sizeof(CLVMD_SOCKNAME));
-
-	sockaddr.sun_family = AF_UNIX;
 
 	if (connect(local_socket,(struct sockaddr *) &sockaddr,
 		    sizeof(sockaddr))) {
@@ -88,7 +82,7 @@ static int _send_request(const char *inbuf, int inlen, char **retbuf, int no_res
 	char outbuf[PIPE_BUF];
 	struct clvm_header *outheader = (struct clvm_header *) outbuf;
 	int len;
-	int off;
+	unsigned off;
 	int buflen;
 	int err;
 
@@ -157,29 +151,31 @@ static int _send_request(const char *inbuf, int inlen, char **retbuf, int no_res
 
 /* Build the structure header and parse-out wildcard node names */
 static void _build_header(struct clvm_header *head, int cmd, const char *node,
-			  int len)
+			  unsigned int len)
 {
 	head->cmd = cmd;
 	head->status = 0;
 	head->flags = 0;
+	head->xid = 0;
 	head->clientid = 0;
-	head->arglen = len;
+	if (len)
+		/* 1 byte is used from struct clvm_header.args[1], so -> len - 1 */
+		head->arglen = len - 1;
+	else {
+		head->arglen = 0;
+		*head->args = '\0';
+	}
 
-	if (node) {
-		/*
-		 * Allow a couple of special node names:
-		 * "*" for all nodes,
-		 * "." for the local node only
-		 */
-		if (strcmp(node, "*") == 0) {
-			head->node[0] = '\0';
-		} else if (strcmp(node, ".") == 0) {
-			head->node[0] = '\0';
-			head->flags = CLVMD_FLAG_LOCAL;
-		} else
-			strcpy(head->node, node);
-	} else
+	/*
+	 * Translate special node names.
+	 */
+	if (!node || !strcmp(node, NODE_ALL))
 		head->node[0] = '\0';
+	else if (!strcmp(node, NODE_LOCAL)) {
+		head->node[0] = '\0';
+		head->flags = CLVMD_FLAG_LOCAL;
+	} else
+		strcpy(head->node, node);
 }
 
 /*
@@ -206,7 +202,8 @@ static int _cluster_request(char cmd, const char *node, void *data, int len,
 		return 0;
 
 	_build_header(head, cmd, node, len);
-	memcpy(head->node + strlen(head->node) + 1, data, len);
+	if (len)
+		memcpy(head->node + strlen(head->node) + 1, data, len);
 
 	status = _send_request(outbuf, sizeof(struct clvm_header) +
 			       strlen(head->node) + len, &retbuf, no_response);
@@ -228,15 +225,13 @@ static int _cluster_request(char cmd, const char *node, void *data, int len,
 	 * With an extra pair of INTs on the front to sanity
 	 * check the pointer when we are given it back to free
 	 */
-	*response = dm_malloc(sizeof(lvm_response_t) * num_responses +
-			    sizeof(int) * 2);
-	if (!*response) {
+	*response = NULL;
+	if (!(rarray = dm_malloc(sizeof(lvm_response_t) * num_responses +
+				 sizeof(int) * 2))) {
 		errno = ENOMEM;
 		status = 0;
 		goto out;
 	}
-
-	rarray = *response;
 
 	/* Unpack the response into an lvm_response_t array */
 	inptr = head->args;
@@ -254,9 +249,9 @@ static int _cluster_request(char cmd, const char *node, void *data, int len,
 			int j;
 			for (j = 0; j < i; j++)
 				dm_free(rarray[i].response);
-			free(*response);
+			dm_free(rarray);
 			errno = ENOMEM;
-			status = -1;
+			status = 0;
 			goto out;
 		}
 
@@ -269,8 +264,7 @@ static int _cluster_request(char cmd, const char *node, void *data, int len,
 	*response = rarray;
 
       out:
-	if (retbuf)
-		dm_free(retbuf);
+	dm_free(retbuf);
 
 	return status;
 }
@@ -293,12 +287,12 @@ int refresh_clvmd(int all_nodes)
 {
 	int num_responses;
 	char args[1]; // No args really.
-	lvm_response_t *response;
+	lvm_response_t *response = NULL;
 	int saved_errno;
 	int status;
 	int i;
 
-	status = _cluster_request(CLVMD_CMD_REFRESH, all_nodes?"*":".", args, 0, &response, &num_responses, 0);
+	status = _cluster_request(CLVMD_CMD_REFRESH, all_nodes ? NODE_ALL : NODE_LOCAL, args, 0, &response, &num_responses, 0);
 
 	/* If any nodes were down then display them and return an error */
 	for (i = 0; i < num_responses; i++) {
@@ -327,8 +321,21 @@ int refresh_clvmd(int all_nodes)
 
 int restart_clvmd(int all_nodes)
 {
-	int dummy;
-	return _cluster_request(CLVMD_CMD_RESTART, all_nodes?"*":".", NULL, 0, NULL, &dummy, 1);
+	int dummy, status;
+
+	status = _cluster_request(CLVMD_CMD_RESTART, all_nodes ? NODE_ALL : NODE_LOCAL, NULL, 0, NULL, &dummy, 1);
+
+	/*
+	 * FIXME: we cannot receive response, clvmd re-exec before it.
+	 *        but also should not close socket too early (the whole rq is dropped then).
+	 * FIXME: This should be handled this way:
+	 *  - client waits for RESTART ack (and socket close)
+	 *  - server restarts
+	 *  - client checks that server is ready again (VERSION command?)
+	 */
+	usleep(500000);
+
+	return status;
 }
 
 int debug_clvmd(int level, int clusterwide)
@@ -336,16 +343,16 @@ int debug_clvmd(int level, int clusterwide)
 	int num_responses;
 	char args[1];
 	const char *nodes;
-	lvm_response_t *response;
+	lvm_response_t *response = NULL;
 	int saved_errno;
 	int status;
 	int i;
 
 	args[0] = level;
 	if (clusterwide)
-		nodes = "*";
+		nodes = NODE_ALL;
 	else
-		nodes = ".";
+		nodes = NODE_LOCAL;
 
 	status = _cluster_request(CLVMD_CMD_SET_DEBUG, nodes, args, 1, &response, &num_responses, 0);
 

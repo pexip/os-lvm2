@@ -33,6 +33,8 @@ struct dm_pool {
 	struct dm_list list;
 	const char *name;
 	void *orig_pool;	/* to pair it with first allocation call */
+	unsigned locked;
+	long crc;
 
 	int begun;
 	struct block *object;
@@ -48,7 +50,7 @@ struct dm_pool {
 
 struct dm_pool *dm_pool_create(const char *name, size_t chunk_hint)
 {
-	struct dm_pool *mem = dm_malloc(sizeof(*mem));
+	struct dm_pool *mem = dm_zalloc(sizeof(*mem));
 
 	if (!mem) {
 		log_error("Couldn't create memory pool %s (size %"
@@ -57,20 +59,10 @@ struct dm_pool *dm_pool_create(const char *name, size_t chunk_hint)
 	}
 
 	mem->name = name;
-	mem->begun = 0;
-	mem->object = 0;
-	mem->blocks = mem->tail = NULL;
-
-	mem->stats.block_serialno = 0;
-	mem->stats.blocks_allocated = 0;
-	mem->stats.blocks_max = 0;
-	mem->stats.bytes = 0;
-	mem->stats.maxbytes = 0;
-
 	mem->orig_pool = mem;
 
 #ifdef DEBUG_POOL
-	log_debug("Created mempool %s", name);
+	log_debug_mem("Created mempool %s at %p", name, mem);
 #endif
 
 	dm_list_add(&_dm_pools, &mem->list);
@@ -80,6 +72,10 @@ struct dm_pool *dm_pool_create(const char *name, size_t chunk_hint)
 static void _free_blocks(struct dm_pool *p, struct block *b)
 {
 	struct block *n;
+
+	if (p->locked)
+		log_error(INTERNAL_ERROR "_free_blocks from locked pool %s",
+			  p->name);
 
 	while (b) {
 		p->stats.bytes -= b->size;
@@ -95,10 +91,10 @@ static void _free_blocks(struct dm_pool *p, struct block *b)
 static void _pool_stats(struct dm_pool *p, const char *action)
 {
 #ifdef DEBUG_POOL
-	log_debug("%s mempool %s: %u/%u bytes, %u/%u blocks, "
-		  "%u allocations)", action, p->name, p->stats.bytes,
-		  p->stats.maxbytes, p->stats.blocks_allocated,
-		  p->stats.blocks_max, p->stats.block_serialno);
+	log_debug_mem("%s mempool %s at %p: %u/%u bytes, %u/%u blocks, "
+		      "%u allocations)", action, p->name, p, p->stats.bytes,
+		      p->stats.maxbytes, p->stats.blocks_allocated,
+		      p->stats.blocks_max, p->stats.block_serialno);
 #else
 	;
 #endif
@@ -119,6 +115,10 @@ void *dm_pool_alloc(struct dm_pool *p, size_t s)
 
 static void _append_block(struct dm_pool *p, struct block *b)
 {
+	if (p->locked)
+		log_error(INTERNAL_ERROR "_append_blocks to locked pool %s",
+			  p->name);
+
 	if (p->tail) {
 		p->tail->next = b;
 		p->tail = b;
@@ -146,7 +146,7 @@ static struct block *_new_block(size_t s, unsigned alignment)
 	 * I don't think LVM will use anything but default
 	 * align.
 	 */
-	assert(alignment == DEFAULT_ALIGNMENT);
+	assert(alignment <= DEFAULT_ALIGNMENT);
 
 	if (!b) {
 		log_error("Out of memory");
@@ -226,6 +226,10 @@ int dm_pool_grow_object(struct dm_pool *p, const void *extra, size_t delta)
 	struct block *new;
 	size_t new_size;
 
+	if (p->locked)
+		log_error(INTERNAL_ERROR "Grow objects in locked pool %s",
+			  p->name);
+
 	if (!delta)
 		delta = strlen(extra);
 
@@ -248,7 +252,7 @@ int dm_pool_grow_object(struct dm_pool *p, const void *extra, size_t delta)
 	}
 	p->object = new;
 
-	memcpy(new->data + new_size - delta, extra, delta);
+	memcpy((char*)new->data + new_size - delta, extra, delta);
 
 	return 1;
 }
@@ -269,4 +273,20 @@ void dm_pool_abandon_object(struct dm_pool *p)
 	dm_free(p->object);
 	p->begun = 0;
 	p->object = NULL;
+}
+
+static long _pool_crc(const struct dm_pool *p)
+{
+#ifndef DEBUG_ENFORCE_POOL_LOCKING
+#warning pool crc not implemented with pool debug
+#endif
+	return 0;
+}
+
+static int _pool_protect(struct dm_pool *p, int prot)
+{
+#ifdef DEBUG_ENFORCE_POOL_LOCKING
+#warning pool mprotect not implemented with pool debug
+#endif
+	return 1;
 }

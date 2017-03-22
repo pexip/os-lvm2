@@ -63,8 +63,12 @@ static struct dm_hash_table *_create_lv_maps(struct dm_pool *mem,
 			goto_bad;
 
 		lvm->lv = ll->lv;
+		/*
+		 * Alloc 1 extra element, so the loop in _area_length() and
+		 * _check_stripe() finds the last map member as noncontinuous.
+		 */
 		if (!(lvm->map = dm_pool_zalloc(mem, sizeof(*lvm->map)
-					     * ll->lv->le_count)))
+					     * (ll->lv->le_count + 1))))
 			goto_bad;
 
 		if (!dm_hash_insert(maps, ll->lv->name, lvm))
@@ -114,7 +118,10 @@ static int _fill_maps(struct dm_hash_table *maps, struct volume_group *vg,
 	uint32_t i, lv_num, le;
 
 	dm_list_iterate_items(dl, pvds) {
-		pv = find_pv(vg, dl->dev);
+		if (!(pv = find_pv(vg, dl->dev))) {
+			log_error("PV %s not found.", dl->dev->pvid);
+			return 0;
+		}
 		e = dl->extents;
 
 		/* build an array of lv's for this pv */
@@ -218,8 +225,8 @@ static int _read_linear(struct cmd_context *cmd, struct lv_map *lvm)
 	while (le < lvm->lv->le_count) {
 		len = _area_length(lvm, le);
 
-		if (!(seg = alloc_lv_segment(cmd->mem, segtype, lvm->lv, le,
-					     len, 0, 0, NULL, 1, len, 0, 0, 0, NULL))) {
+		if (!(seg = alloc_lv_segment(segtype, lvm->lv, le, len, 0, 0,
+					     NULL, NULL, 1, len, 0, 0, 0, NULL))) {
 			log_error("Failed to allocate linear segment.");
 			return 0;
 		}
@@ -288,10 +295,10 @@ static int _read_stripes(struct cmd_context *cmd, struct lv_map *lvm)
 				     area_len, first_area_le, total_area_len))
 			area_len++;
 
-		if (!(seg = alloc_lv_segment(cmd->mem, segtype, lvm->lv,
+		if (!(seg = alloc_lv_segment(segtype, lvm->lv,
 					     lvm->stripes * first_area_le,
 					     lvm->stripes * area_len,
-					     0, lvm->stripe_size, NULL,
+					     0, lvm->stripe_size, NULL, NULL,
 					     lvm->stripes,
 					     area_len, 0, 0, 0, NULL))) {
 			log_error("Failed to allocate striped segment.");

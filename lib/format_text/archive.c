@@ -25,7 +25,6 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/file.h>
 #include <fcntl.h>
 #include <time.h>
 
@@ -50,7 +49,7 @@
 struct archive_file {
 	struct dm_list list;
 
-	char *path;
+	const char *path;
 	uint32_t index;
 };
 
@@ -226,7 +225,7 @@ int archive_vg(struct volume_group *vg,
 	       const char *dir, const char *desc,
 	       uint32_t retain_days, uint32_t min_archive)
 {
-	int i, fd, renamed = 0;
+	int i, fd, rnum, renamed = 0;
 	uint32_t ix = 0;
 	struct archive_file *last;
 	FILE *fp = NULL;
@@ -271,9 +270,12 @@ int archive_vg(struct volume_group *vg,
 		ix = last->index + 1;
 	}
 
+	rnum = rand_r(&vg->cmd->rand_seed);
+
 	for (i = 0; i < 10; i++) {
 		if (dm_snprintf(archive_name, sizeof(archive_name),
-				 "%s/%s_%05u.vg", dir, vg->name, ix) < 0) {
+				 "%s/%s_%05u-%d.vg",
+				 dir, vg->name, ix, rnum) < 0) {
 			log_error("Archive file name too long.");
 			return 0;
 		}
@@ -297,16 +299,19 @@ static void _display_archive(struct cmd_context *cmd, struct archive_file *af)
 {
 	struct volume_group *vg = NULL;
 	struct format_instance *tf;
+	struct format_instance_ctx fic;
+	struct text_context tc = {.path_live = af->path,
+				  .path_edit = NULL,
+				  .desc = NULL};
 	time_t when;
 	char *desc;
-	void *context;
 
 	log_print(" ");
 	log_print("File:\t\t%s", af->path);
 
-	if (!(context = create_text_context(cmd, af->path, NULL)) ||
-	    !(tf = cmd->fmt_backup->ops->create_instance(cmd->fmt_backup, NULL,
-							 NULL, context))) {
+	fic.type = FMT_INSTANCE_PRIVATE_MDAS;
+	fic.context.private = &tc;
+	if (!(tf = cmd->fmt_backup->ops->create_instance(cmd->fmt_backup, &fic))) {
 		log_error("Couldn't create text instance object.");
 		return;
 	}
@@ -326,8 +331,7 @@ static void _display_archive(struct cmd_context *cmd, struct archive_file *af)
 	log_print("Description:\t%s", desc ? : "<No description>");
 	log_print("Backup Time:\t%s", ctime(&when));
 
-	vg_release(vg);
-	tf->fmt->ops->destroy_instance(tf);
+	release_vg(vg);
 }
 
 int archive_list(struct cmd_context *cmd, const char *dir, const char *vgname)
@@ -353,7 +357,7 @@ int archive_list_file(struct cmd_context *cmd, const char *file)
 {
 	struct archive_file af;
 
-	af.path = (char *)file;
+	af.path = file;
 
 	if (!path_exists(af.path)) {
 		log_error("Archive file %s not found.", af.path);

@@ -17,9 +17,11 @@
 
 static int vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg,
-			    void *handle __attribute((unused)))
+			    void *handle __attribute__((unused)))
 {
-	/* FIXME Do the active check here if activevolumegroups_ARG ? */
+	if (arg_count(cmd, activevolumegroups_ARG) && !lvs_in_vg_activated(vg))
+		return ECMD_PROCESSED;
+
 	vg_check_status(vg, EXPORTED_VG);
 
 	if (arg_count(cmd, colon_ARG)) {
@@ -37,7 +39,7 @@ static int vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
 	if (arg_count(cmd, verbose_ARG)) {
 		vgdisplay_extents(vg);
 
-		process_each_lv_in_vg(cmd, vg, NULL, NULL, NULL,
+		process_each_lv_in_vg(cmd, vg, NULL, NULL, NULL, NULL,
 				      (process_single_lv_fn_t)lvdisplay_full);
 
 		log_print("--- Physical volumes ---");
@@ -63,6 +65,7 @@ int vgdisplay(struct cmd_context *cmd, int argc, char **argv)
 	} else if (arg_count(cmd, aligned_ARG) ||
 		   arg_count(cmd, noheadings_ARG) ||
 		   arg_count(cmd, options_ARG) ||
+		   arg_count(cmd, select_ARG) ||
 		   arg_count(cmd, separator_ARG) ||
 		   arg_count(cmd, sort_ARG) || arg_count(cmd, unbuffered_ARG)) {
 		log_error("Incompatible options selected");

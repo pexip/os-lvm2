@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2012 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -14,7 +14,6 @@
  */
 
 #include "lib.h"
-#include "lvm-types.h"
 #include "device.h"
 #include "metadata.h"
 #include "lvmcache.h"
@@ -27,7 +26,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-#ifdef linux
+#ifdef __linux__
 #  define u64 uint64_t		/* Missing without __KERNEL__ */
 #  undef WNOHANG		/* Avoid redefinition */
 #  undef WUNTRACED		/* Avoid redefinition */
@@ -36,6 +35,9 @@
 #  ifndef BLKGETSIZE64		/* fs.h out-of-date */
 #    define BLKGETSIZE64 _IOR(0x12, 114, size_t)
 #  endif /* BLKGETSIZE64 */
+#  ifndef BLKDISCARD
+#    define BLKDISCARD	_IO(0x12,119)
+#  endif
 #else
 #  include <sys/disk.h>
 #  define BLKBSZGET DKIOCGETBLOCKSIZE
@@ -57,7 +59,7 @@ static DM_LIST_INIT(_open_devices);
  * The standard io loop that keeps submitting an io until it's
  * all gone.
  *---------------------------------------------------------------*/
-static int _io(struct device_area *where, void *buffer, int should_write)
+static int _io(struct device_area *where, char *buffer, int should_write)
 {
 	int fd = dev_fd(where->dev);
 	ssize_t n = 0;
@@ -80,7 +82,7 @@ static int _io(struct device_area *where, void *buffer, int should_write)
 		return 0;
 	}
 
-	if (lseek(fd, (off_t) where->start, SEEK_SET) < 0) {
+	if (lseek(fd, (off_t) where->start, SEEK_SET) == (off_t) -1) {
 		log_error("%s: lseek %" PRIu64 " failed: %s",
 			  dev_name(where->dev), (uint64_t) where->start,
 			  strerror(errno));
@@ -120,23 +122,65 @@ static int _io(struct device_area *where, void *buffer, int should_write)
  *---------------------------------------------------------------*/
 
 /*
- * Get the sector size from an _open_ device.
+ * Get the physical and logical block size for a device.
  */
-static int _get_block_size(struct device *dev, unsigned int *size)
+int dev_get_block_size(struct device *dev, unsigned int *physical_block_size, unsigned int *block_size)
 {
 	const char *name = dev_name(dev);
+	int needs_open;
+	int r = 1;
 
-	if ((dev->block_size == -1)) {
+	needs_open = (!dev->open_count && (dev->phys_block_size == -1 || dev->block_size == -1));
+
+	if (needs_open && !dev_open_readonly(dev))
+		return_0;
+
+	if (dev->block_size == -1) {
 		if (ioctl(dev_fd(dev), BLKBSZGET, &dev->block_size) < 0) {
 			log_sys_error("ioctl BLKBSZGET", name);
-			return 0;
+			r = 0;
+			goto out;
 		}
-		log_debug("%s: block size is %u bytes", name, dev->block_size);
+		log_debug_devs("%s: block size is %u bytes", name, dev->block_size);
 	}
 
-	*size = (unsigned int) dev->block_size;
+#ifdef BLKPBSZGET
+	/* BLKPBSZGET is available in kernel >= 2.6.32 only */
+	if (dev->phys_block_size == -1) {
+		if (ioctl(dev_fd(dev), BLKPBSZGET, &dev->phys_block_size) < 0) {
+			log_sys_error("ioctl BLKPBSZGET", name);
+			r = 0;
+			goto out;
+		}
+		log_debug_devs("%s: physical block size is %u bytes", name, dev->phys_block_size);
+	}
+#elif BLKSSZGET
+	/* if we can't get physical block size, just use logical block size instead */
+	if (dev->phys_block_size == -1) {
+		if (ioctl(dev_fd(dev), BLKSSZGET, &dev->phys_block_size) < 0) {
+			log_sys_error("ioctl BLKSSZGET", name);
+			r = 0;
+			goto out;
+		}
+		log_debug_devs("%s: physical block size can't be determined, using logical "
+			       "block size of %u bytes", name, dev->phys_block_size);
+	}
+#else
+	/* if even BLKSSZGET is not available, use default 512b */
+	if (dev->phys_block_size == -1) {
+		dev->phys_block_size = 512;
+		log_debug_devs("%s: physical block size can't be determined, using block "
+			       "size of %u bytes instead", name, dev->phys_block_size);
+	}
+#endif
 
-	return 1;
+	*physical_block_size = (unsigned int) dev->phys_block_size;
+	*block_size = (unsigned int) dev->block_size;
+out:
+	if (needs_open && !dev_close(dev))
+		stack;
+
+	return r;
 }
 
 /*
@@ -161,16 +205,18 @@ static void _widen_region(unsigned int block_size, struct device_area *region,
 		result->size += block_size - delta;
 }
 
-static int _aligned_io(struct device_area *where, void *buffer,
+static int _aligned_io(struct device_area *where, char *buffer,
 		       int should_write)
 {
-	void *bounce;
+	char *bounce, *bounce_buf;
+	unsigned int physical_block_size = 0;
 	unsigned int block_size = 0;
 	uintptr_t mask;
 	struct device_area widened;
+	int r = 0;
 
 	if (!(where->dev->flags & DEV_REGULAR) &&
-	    !_get_block_size(where->dev, &block_size))
+	    !dev_get_block_size(where->dev, &physical_block_size, &block_size))
 		return_0;
 
 	if (!block_size)
@@ -185,8 +231,8 @@ static int _aligned_io(struct device_area *where, void *buffer,
 		return _io(where, buffer, should_write);
 
 	/* Allocate a bounce buffer with an extra block */
-	if (!(bounce = alloca((size_t) widened.size + block_size))) {
-		log_error("Bounce buffer alloca failed");
+	if (!(bounce_buf = bounce = dm_malloc((size_t) widened.size + block_size))) {
+		log_error("Bounce buffer malloc failed");
 		return 0;
 	}
 
@@ -194,12 +240,12 @@ static int _aligned_io(struct device_area *where, void *buffer,
 	 * Realign start of bounce buffer (using the extra sector)
 	 */
 	if (((uintptr_t) bounce) & mask)
-		bounce = (void *) ((((uintptr_t) bounce) + mask) & ~mask);
+		bounce = (char *) ((((uintptr_t) bounce) + mask) & ~mask);
 
 	/* channel the io through the bounce buffer */
 	if (!_io(&widened, bounce, 0)) {
 		if (!should_write)
-			return_0;
+			goto_out;
 		/* FIXME pre-extend the file */
 		memset(bounce, '\n', widened.size);
 	}
@@ -209,13 +255,20 @@ static int _aligned_io(struct device_area *where, void *buffer,
 		       (size_t) where->size);
 
 		/* ... then we write */
-		return _io(&widened, bounce, 1);
+		if (!(r = _io(&widened, bounce, 1)))
+			stack;
+			
+		goto out;
 	}
 
 	memcpy(buffer, bounce + (where->start - widened.start),
 	       (size_t) where->size);
 
-	return 1;
+	r = 1;
+
+out:
+	dm_free(bounce_buf);
+	return r;
 }
 
 static int _dev_get_size_file(const struct device *dev, uint64_t *size)
@@ -271,7 +324,7 @@ static int _dev_read_ahead_dev(struct device *dev, uint32_t *read_ahead)
 		return 1;
 	}
 
-	if (!dev_open(dev))
+	if (!dev_open_readonly(dev))
 		return_0;
 
 	if (ioctl(dev->fd, BLKRAGET, &read_ahead_long) < 0) {
@@ -281,14 +334,41 @@ static int _dev_read_ahead_dev(struct device *dev, uint32_t *read_ahead)
 		return 0;
 	}
 
-	if (!dev_close(dev))
-		stack;
-
 	*read_ahead = (uint32_t) read_ahead_long;
 	dev->read_ahead = read_ahead_long;
 
 	log_very_verbose("%s: read_ahead is %u sectors",
 			 dev_name(dev), *read_ahead);
+
+	if (!dev_close(dev))
+		stack;
+
+	return 1;
+}
+
+static int _dev_discard_blocks(struct device *dev, uint64_t offset_bytes, uint64_t size_bytes)
+{
+	uint64_t discard_range[2];
+
+	if (!dev_open(dev))
+		return_0;
+
+	discard_range[0] = offset_bytes;
+	discard_range[1] = size_bytes;
+
+	log_debug_devs("Discarding %" PRIu64 " bytes offset %" PRIu64 " bytes on %s.",
+		       size_bytes, offset_bytes, dev_name(dev));
+	if (ioctl(dev->fd, BLKDISCARD, &discard_range) < 0) {
+		log_error("%s: BLKDISCARD ioctl at offset %" PRIu64 " size %" PRIu64 " failed: %s.",
+			  dev_name(dev), offset_bytes, size_bytes, strerror(errno));
+		if (!dev_close(dev))
+			stack;
+		/* It doesn't matter if discard failed, so return success. */
+		return 1;
+	}
+
+	if (!dev_close(dev))
+		stack;
 
 	return 1;
 }
@@ -321,35 +401,16 @@ int dev_get_read_ahead(struct device *dev, uint32_t *read_ahead)
 	return _dev_read_ahead_dev(dev, read_ahead);
 }
 
-/* FIXME Unused
-int dev_get_sectsize(struct device *dev, uint32_t *size)
+int dev_discard_blocks(struct device *dev, uint64_t offset_bytes, uint64_t size_bytes)
 {
-	int fd;
-	int s;
-	const char *name = dev_name(dev);
-
-	if ((fd = open(name, O_RDONLY)) < 0) {
-		log_sys_error("open", name);
+	if (!dev)
 		return 0;
-	}
 
-	if (ioctl(fd, BLKSSZGET, &s) < 0) {
-		log_sys_error("ioctl BLKSSZGET", name);
-		if (close(fd))
-			log_sys_error("close", name);
-		return 0;
-	}
+	if (dev->flags & DEV_REGULAR)
+		return 1;
 
-	if (close(fd))
-		log_sys_error("close", name);
-
-	*size = (uint32_t) s;
-
-	log_very_verbose("%s: sector size is %" PRIu32 " bytes", name, *size);
-
-	return 1;
+	return _dev_discard_blocks(dev, offset_bytes, size_bytes);
 }
-*/
 
 void dev_flush(struct device *dev)
 {
@@ -382,35 +443,23 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 		}
 
 		if (dev->open_count && !need_excl) {
-			/* FIXME Ensure we never get here */
-			log_error(INTERNAL_ERROR "%s already opened read-only",
-				 dev_name(dev));
+			log_debug_devs("%s already opened read-only. Upgrading "
+				       "to read-write.", dev_name(dev));
 			dev->open_count++;
 		}
 
 		dev_close_immediate(dev);
+		// FIXME: dev with DEV_ALLOCED is released
+		// but code is referencing it
 	}
 
-	if (memlock())
+	if (critical_section())
 		/* FIXME Make this log_error */
 		log_verbose("dev_open(%s) called while suspended",
-			 dev_name(dev));
+			    dev_name(dev));
 
-	if (dev->flags & DEV_REGULAR)
-		name = dev_name(dev);
-	else if (!(name = dev_name_confirmed(dev, quiet)))
+	if (!(name = dev_name_confirmed(dev, quiet)))
 		return_0;
-
-	if (!(dev->flags & DEV_REGULAR)) {
-		if (stat(name, &buf) < 0) {
-			log_sys_error("%s: stat failed", name);
-			return 0;
-		}
-		if (buf.st_rdev != dev->dev) {
-			log_error("%s: device changed", name);
-			return 0;
-		}
-	}
 
 #ifdef O_DIRECT_SUPPORT
 	if (direct) {
@@ -434,7 +483,7 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 			flags &= ~O_DIRECT;
 			if ((dev->fd = open(name, flags, 0777)) >= 0) {
 				dev->flags &= ~DEV_O_DIRECT;
-				log_debug("%s: Not using O_DIRECT", name);
+				log_debug_devs("%s: Not using O_DIRECT", name);
 				goto opened;
 			}
 		}
@@ -481,30 +530,37 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 
 	dm_list_add(&_open_devices, &dev->open_list);
 
-	log_debug("Opened %s %s%s%s", dev_name(dev),
-		  dev->flags & DEV_OPENED_RW ? "RW" : "RO",
-		  dev->flags & DEV_OPENED_EXCL ? " O_EXCL" : "",
-		  dev->flags & DEV_O_DIRECT ? " O_DIRECT" : "");
+	log_debug_devs("Opened %s %s%s%s", dev_name(dev),
+		       dev->flags & DEV_OPENED_RW ? "RW" : "RO",
+		       dev->flags & DEV_OPENED_EXCL ? " O_EXCL" : "",
+		       dev->flags & DEV_O_DIRECT ? " O_DIRECT" : "");
 
 	return 1;
 }
 
 int dev_open_quiet(struct device *dev)
 {
-	int flags;
-
-	flags = vg_write_lock_held() ? O_RDWR : O_RDONLY;
-
-	return dev_open_flags(dev, flags, 1, 1);
+	return dev_open_flags(dev, O_RDWR, 1, 1);
 }
 
 int dev_open(struct device *dev)
 {
-	int flags;
+	return dev_open_flags(dev, O_RDWR, 1, 0);
+}
 
-	flags = vg_write_lock_held() ? O_RDWR : O_RDONLY;
+int dev_open_readonly(struct device *dev)
+{
+	return dev_open_flags(dev, O_RDONLY, 1, 0);
+}
 
-	return dev_open_flags(dev, flags, 1, 0);
+int dev_open_readonly_buffered(struct device *dev)
+{
+	return dev_open_flags(dev, O_RDONLY, 0, 0);
+}
+
+int dev_open_readonly_quiet(struct device *dev)
+{
+	return dev_open_flags(dev, O_RDONLY, 1, 1);
 }
 
 int dev_test_excl(struct device *dev)
@@ -527,13 +583,14 @@ static void _close(struct device *dev)
 	if (close(dev->fd))
 		log_sys_error("close", dev_name(dev));
 	dev->fd = -1;
+	dev->phys_block_size = -1;
 	dev->block_size = -1;
 	dm_list_del(&dev->open_list);
 
-	log_debug("Closed %s", dev_name(dev));
+	log_debug_devs("Closed %s", dev_name(dev));
 
 	if (dev->flags & DEV_ALLOCED) {
-		dm_free((void *) dm_list_item(dev->aliases.n, struct str_list)->
+		dm_free((void *) dm_list_item(dev->aliases.n, struct dm_str_list)->
 			 str);
 		dm_free(dev->aliases.n);
 		dm_free(dev);
@@ -542,7 +599,6 @@ static void _close(struct device *dev)
 
 static int _dev_close(struct device *dev, int immediate)
 {
-	struct lvmcache_info *info;
 
 	if (dev->fd < 0) {
 		log_error("Attempt to close device '%s' "
@@ -559,15 +615,12 @@ static int _dev_close(struct device *dev, int immediate)
 		dev->open_count--;
 
 	if (immediate && dev->open_count)
-		log_debug("%s: Immediate close attempt while still referenced",
-			  dev_name(dev));
+		log_debug_devs("%s: Immediate close attempt while still referenced",
+			       dev_name(dev));
 
 	/* Close unless device is known to belong to a locked VG */
 	if (immediate ||
-	    (dev->open_count < 1 &&
-	     (!(info = info_from_pvid(dev->pvid, 0)) ||
-	      !info->vginfo ||
-	      !vgname_is_locked(info->vginfo->vgname))))
+	    (dev->open_count < 1 && !lvmcache_pvid_is_locked(dev->pvid)))
 		_close(dev);
 
 	return 1;
@@ -595,18 +648,42 @@ void dev_close_all(void)
 	}
 }
 
+static inline int _dev_is_valid(struct device *dev)
+{
+	return (dev->max_error_count == NO_DEV_ERROR_COUNT_LIMIT ||
+		dev->error_count < dev->max_error_count);
+}
+
+static void _dev_inc_error_count(struct device *dev)
+{
+	if (++dev->error_count == dev->max_error_count)
+		log_warn("WARNING: Error counts reached a limit of %d. "
+			 "Device %s was disabled",
+			 dev->max_error_count, dev_name(dev));
+}
+
 int dev_read(struct device *dev, uint64_t offset, size_t len, void *buffer)
 {
 	struct device_area where;
+	int ret;
 
 	if (!dev->open_count)
 		return_0;
+
+	if (!_dev_is_valid(dev))
+		return 0;
 
 	where.dev = dev;
 	where.start = offset;
 	where.size = len;
 
-	return _aligned_io(&where, buffer, 0);
+	// fprintf(stderr, "READ: %s, %lld, %d\n", dev_name(dev), offset, len);
+
+	ret = _aligned_io(&where, buffer, 0);
+	if (!ret)
+		_dev_inc_error_count(dev);
+
+	return ret;
 }
 
 /*
@@ -615,7 +692,7 @@ int dev_read(struct device *dev, uint64_t offset, size_t len, void *buffer)
  * 'buf' should be len+len2.
  */
 int dev_read_circular(struct device *dev, uint64_t offset, size_t len,
-		      uint64_t offset2, size_t len2, void *buf)
+		      uint64_t offset2, size_t len2, char *buf)
 {
 	if (!dev_read(dev, offset, len, buf)) {
 		log_error("Read from %s failed", dev_name(dev));
@@ -643,7 +720,7 @@ int dev_read_circular(struct device *dev, uint64_t offset, size_t len,
  */
 
 /* FIXME pre-extend the file */
-int dev_append(struct device *dev, size_t len, void *buffer)
+int dev_append(struct device *dev, size_t len, char *buffer)
 {
 	int r;
 
@@ -662,9 +739,13 @@ int dev_append(struct device *dev, size_t len, void *buffer)
 int dev_write(struct device *dev, uint64_t offset, size_t len, void *buffer)
 {
 	struct device_area where;
+	int ret;
 
 	if (!dev->open_count)
 		return_0;
+
+	if (!_dev_is_valid(dev))
+		return 0;
 
 	where.dev = dev;
 	where.start = offset;
@@ -672,24 +753,28 @@ int dev_write(struct device *dev, uint64_t offset, size_t len, void *buffer)
 
 	dev->flags |= DEV_ACCESSED_W;
 
-	return _aligned_io(&where, buffer, 1);
+	ret = _aligned_io(&where, buffer, 1);
+	if (!ret)
+		_dev_inc_error_count(dev);
+
+	return ret;
 }
 
 int dev_set(struct device *dev, uint64_t offset, size_t len, int value)
 {
 	size_t s;
-	char buffer[4096] __attribute((aligned(8)));
+	char buffer[4096] __attribute__((aligned(8)));
 
 	if (!dev_open(dev))
 		return_0;
 
 	if ((offset % SECTOR_SIZE) || (len % SECTOR_SIZE))
-		log_debug("Wiping %s at %" PRIu64 " length %" PRIsize_t,
-			  dev_name(dev), offset, len);
+		log_debug_devs("Wiping %s at %" PRIu64 " length %" PRIsize_t,
+			       dev_name(dev), offset, len);
 	else
-		log_debug("Wiping %s at sector %" PRIu64 " length %" PRIsize_t
-			  " sectors", dev_name(dev), offset >> SECTOR_SHIFT,
-			  len >> SECTOR_SHIFT);
+		log_debug_devs("Wiping %s at sector %" PRIu64 " length %" PRIsize_t
+			       " sectors", dev_name(dev), offset >> SECTOR_SHIFT,
+			       len >> SECTOR_SHIFT);
 
 	memset(buffer, value, sizeof(buffer));
 	while (1) {

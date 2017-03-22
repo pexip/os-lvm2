@@ -15,10 +15,13 @@
 
 #include "lib.h"
 #include "metadata.h"
+#include "segtype.h"
 #include "locking.h"
 #include "toolcontext.h"
 #include "lv_alloc.h"
 #include "activate.h"
+
+#define SNAPSHOT_MIN_CHUNKS	3       /* Minimum number of chunks in snapshot */
 
 int lv_is_origin(const struct logical_volume *lv)
 {
@@ -27,7 +30,85 @@ int lv_is_origin(const struct logical_volume *lv)
 
 int lv_is_cow(const struct logical_volume *lv)
 {
-	return (!lv_is_origin(lv) && lv->snapshot) ? 1 : 0;
+	/* Make sure a merging thin origin isn't confused as a cow LV */
+	return (!lv_is_thin_volume(lv) && !lv_is_origin(lv) && lv->snapshot) ? 1 : 0;
+}
+
+/*
+ * Some kernels have a bug that they may leak space in the snapshot on crash.
+ * If the kernel is buggy, we add some extra space.
+ */
+static uint64_t _cow_extra_chunks(struct cmd_context *cmd, uint64_t n_chunks)
+{
+	const struct segment_type *segtype;
+	unsigned attrs = 0;
+
+	if (activation() &&
+	    (segtype = get_segtype_from_string(cmd, "snapshot")) &&
+	    segtype->ops->target_present &&
+	    segtype->ops->target_present(cmd, NULL, &attrs) &&
+	    (attrs & SNAPSHOT_FEATURE_FIXED_LEAK))
+		return 0;
+
+	return (n_chunks + 63) / 64;
+}
+
+static uint64_t _cow_max_size(struct cmd_context *cmd, uint64_t origin_size, uint32_t chunk_size)
+{
+	/* Snapshot disk layout:
+	 *    COW is divided into chunks
+	 *        1st. chunk is reserved for header
+	 *        2nd. chunk is the 1st. metadata chunk
+	 *        3rd. chunk is the 1st. data chunk
+	 */
+
+	uint64_t origin_chunks = (origin_size + chunk_size - 1) / chunk_size;
+	uint64_t chunks_per_metadata_area = (uint64_t)chunk_size << (SECTOR_SHIFT - 4);
+
+	/*
+	 * Note: if origin_chunks is divisible by chunks_per_metadata_area, we
+	 * need one extra metadata chunk as a terminator.
+	 */
+	uint64_t metadata_chunks = (origin_chunks + chunks_per_metadata_area) / chunks_per_metadata_area;
+	uint64_t n_chunks = 1 + origin_chunks + metadata_chunks;
+
+	return (n_chunks + _cow_extra_chunks(cmd, n_chunks)) * chunk_size;
+}
+
+uint32_t cow_max_extents(const struct logical_volume *origin, uint32_t chunk_size)
+{
+	uint64_t size = _cow_max_size(origin->vg->cmd, origin->size, chunk_size);
+	uint32_t extent_size = origin->vg->extent_size;
+	uint64_t max_size = (uint64_t) MAX_EXTENT_COUNT * extent_size;
+
+	if (size % extent_size)
+		size += extent_size - size % extent_size;
+
+	if (size > max_size)
+		size = max_size; /* Origin is too big for 100% snapshot anyway */
+
+	return (uint32_t) (size / extent_size);
+}
+
+int cow_has_min_chunks(const struct volume_group *vg, uint32_t cow_extents, uint32_t chunk_size)
+{
+	if (((uint64_t)vg->extent_size * cow_extents) >= (SNAPSHOT_MIN_CHUNKS * chunk_size))
+		return 1;
+
+	log_error("Snapshot volume cannot be smaller than " DM_TO_STRING(SNAPSHOT_MIN_CHUNKS)
+		  " chunks (%u extents, %s).", (unsigned)
+		  (((uint64_t) SNAPSHOT_MIN_CHUNKS * chunk_size +
+		    vg->extent_size - 1) / vg->extent_size),
+		  display_size(vg->cmd, (uint64_t) SNAPSHOT_MIN_CHUNKS * chunk_size));
+
+	return 0;
+}
+
+int lv_is_cow_covering_origin(const struct logical_volume *lv)
+{
+	return lv_is_cow(lv) &&
+		(lv->size >= _cow_max_size(lv->vg->cmd, origin_from_cow(lv)->size,
+					   find_snapshot(lv)->chunk_size));
 }
 
 int lv_is_visible(const struct logical_volume *lv)
@@ -58,22 +139,14 @@ int lv_is_merging_origin(const struct logical_volume *origin)
 	return (origin->status & MERGING) ? 1 : 0;
 }
 
-struct lv_segment *find_merging_cow(const struct logical_volume *origin)
-{
-	if (!lv_is_merging_origin(origin))
-		return NULL;
-
-	return find_cow(origin);
-}
-
 int lv_is_merging_cow(const struct logical_volume *snapshot)
 {
+	struct lv_segment *snap_seg = find_snapshot(snapshot);
 	/* checks lv_segment's status to see if cow is merging */
-	return (find_cow(snapshot)->status & MERGING) ? 1 : 0;
+	return (snap_seg && (snap_seg->status & MERGING)) ? 1 : 0;
 }
 
-/* Given a cow LV, return the snapshot lv_segment that uses it */
-struct lv_segment *find_cow(const struct logical_volume *lv)
+struct lv_segment *find_snapshot(const struct logical_volume *lv)
 {
 	return lv->snapshot;
 }
@@ -81,7 +154,9 @@ struct lv_segment *find_cow(const struct logical_volume *lv)
 /* Given a cow LV, return its origin */
 struct logical_volume *origin_from_cow(const struct logical_volume *lv)
 {
-	return lv->snapshot->origin;
+	if (lv->snapshot)
+		return lv->snapshot->origin;
+	return NULL;
 }
 
 void init_snapshot_seg(struct lv_segment *seg, struct logical_volume *origin,
@@ -108,28 +183,41 @@ void init_snapshot_seg(struct lv_segment *seg, struct logical_volume *origin,
 	dm_list_add(&origin->snapshot_segs, &seg->origin_list);
 }
 
-void init_snapshot_merge(struct lv_segment *cow_seg,
+void init_snapshot_merge(struct lv_segment *snap_seg,
 			 struct logical_volume *origin)
 {
+	snap_seg->status |= MERGING;
+	origin->snapshot = snap_seg;
+	origin->status |= MERGING;
+
+	if (seg_is_thin_volume(snap_seg)) {
+		snap_seg->merge_lv = origin;
+		/* Making thin LV inivisible with regular log */
+		lv_set_hidden(snap_seg->lv);
+		return;
+	}
+
 	/*
-	 * Even though lv_is_visible(cow_seg->lv) returns 0,
-	 * the cow_seg->lv (name: snapshotX) is _not_ hidden;
+	 * Even though lv_is_visible(snap_seg->lv) returns 0,
+	 * the snap_seg->lv (name: snapshotX) is _not_ hidden;
 	 * this is part of the lvm2 snapshot fiction.  Must
 	 * clear VISIBLE_LV directly (lv_set_visible can't)
-	 * - cow_seg->lv->status is used to control whether 'lv'
+	 * - snap_seg->lv->status is used to control whether 'lv'
 	 *   (with user provided snapshot LV name) is visible
 	 * - this also enables vg_validate() to succeed with
-	 *   merge metadata (cow_seg->lv is now "internal")
+	 *   merge metadata (snap_seg->lv is now "internal")
 	 */
-	cow_seg->lv->status &= ~VISIBLE_LV;
-	cow_seg->status |= MERGING;
-	origin->snapshot = cow_seg;
-	origin->status |= MERGING;
+	snap_seg->lv->status &= ~VISIBLE_LV;
 }
 
 void clear_snapshot_merge(struct logical_volume *origin)
 {
 	/* clear merge attributes */
+	if (origin->snapshot->merge_lv)
+		/* Removed thin volume has to be visible */
+		lv_set_visible(origin->snapshot->lv);
+
+	origin->snapshot->merge_lv = NULL;
 	origin->snapshot->status &= ~MERGING;
 	origin->snapshot = NULL;
 	origin->status &= ~MERGING;
@@ -172,13 +260,25 @@ int vg_add_snapshot(struct logical_volume *origin,
 
 int vg_remove_snapshot(struct logical_volume *cow)
 {
-	int preload_origin = 0;
+	int merging_snapshot = 0;
 	struct logical_volume *origin = origin_from_cow(cow);
+	int is_origin_active = lv_is_active(origin);
+
+	if (is_origin_active &&
+	    lv_is_virtual_origin(origin)) {
+		if (!deactivate_lv(origin->vg->cmd, origin)) {
+			log_error("Failed to deactivate logical volume \"%s\"",
+				  origin->name);
+			return 0;
+		}
+		is_origin_active = 0;
+	}
 
 	dm_list_del(&cow->snapshot->origin_list);
 	origin->origin_count--;
 
-	if (find_merging_cow(origin) == find_cow(cow)) {
+	if (lv_is_merging_origin(origin) &&
+	    (find_snapshot(origin) == find_snapshot(cow))) {
 		clear_snapshot_merge(origin);
 		/*
 		 * preload origin IFF "snapshot-merge" target is active
@@ -193,7 +293,7 @@ int vg_remove_snapshot(struct logical_volume *cow)
 			 *   when transitioning from "snapshot-merge" to
 			 *   "snapshot-origin after a merge completes.
 			 */
-			preload_origin = 1;
+			merging_snapshot = 1;
 		}
 	}
 
@@ -206,18 +306,53 @@ int vg_remove_snapshot(struct logical_volume *cow)
 	cow->snapshot = NULL;
 	lv_set_visible(cow);
 
-	if (preload_origin) {
-		if (!vg_write(origin->vg))
-			return_0;
-		if (!suspend_lv(origin->vg->cmd, origin)) {
-			log_error("Failed to refresh %s without snapshot.",
-				  origin->name);
+	/* format1 must do the change in one step, with the commit last. */
+	if (!(origin->vg->fid->fmt->features & FMT_MDAS)) {
+		/* Get the lock for COW volume */
+		if (is_origin_active && !activate_lv(cow->vg->cmd, cow)) {
+			log_error("Unable to activate logical volume \"%s\"",
+				  cow->name);
 			return 0;
 		}
-		if (!vg_commit(origin->vg))
-			return_0;
+		return 1;
+	}
+
+	if (!vg_write(origin->vg))
+		return_0;
+
+	/* Skip call suspend, if device is not active */
+	if (is_origin_active && !suspend_lv(origin->vg->cmd, origin)) {
+		log_error("Failed to refresh %s without snapshot.",
+			  origin->name);
+		return 0;
+	}
+	if (!vg_commit(origin->vg))
+		return_0;
+
+	if (is_origin_active) {
+		/*
+		 * If the snapshot was active and the COW LV is taken away
+		 * the LV lock on cluster has to be grabbed, so use
+		 * activate_lv() which resumes suspend cow device.
+		 */
+		if (!merging_snapshot && !activate_lv(cow->vg->cmd, cow)) {
+			log_error("Failed to activate %s.", cow->name);
+			return 0;
+		}
+
 		if (!resume_lv(origin->vg->cmd, origin)) {
 			log_error("Failed to resume %s.", origin->name);
+			return 0;
+		}
+
+		/*
+		 * For merged snapshot and clustered VG activate cow LV so
+		 * the following call to deactivate_lv() can clean-up table
+		 * entries. For this clustered lock need to be held.
+		 */
+		if (vg_is_clustered(cow->vg) &&
+		    merging_snapshot && !activate_lv(cow->vg->cmd, cow)) {
+			log_error("Failed to activate %s.", cow->name);
 			return 0;
 		}
 	}

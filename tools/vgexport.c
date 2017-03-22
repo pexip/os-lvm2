@@ -15,13 +15,12 @@
 
 #include "tools.h"
 
-static int vgexport_single(struct cmd_context *cmd __attribute((unused)),
+static int vgexport_single(struct cmd_context *cmd __attribute__((unused)),
 			   const char *vg_name,
 			   struct volume_group *vg,
-			   void *handle __attribute((unused)))
+			   void *handle __attribute__((unused)))
 {
 	struct pv_list *pvl;
-	struct physical_volume *pv;
 
 	if (lvs_in_vg_activated(vg)) {
 		log_error("Volume group \"%s\" has active logical volumes",
@@ -34,17 +33,15 @@ static int vgexport_single(struct cmd_context *cmd __attribute((unused)),
 
 	vg->status |= EXPORTED_VG;
 
-	dm_list_iterate_items(pvl, &vg->pvs) {
-		pv = pvl->pv;
-		pv->status |= EXPORTED_VG;
-	}
+	dm_list_iterate_items(pvl, &vg->pvs)
+		pvl->pv->status |= EXPORTED_VG;
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
 
 	backup(vg);
 
-	log_print("Volume group \"%s\" successfully exported", vg->name);
+	log_print_unless_silent("Volume group \"%s\" successfully exported", vg->name);
 
 	return ECMD_PROCESSED;
 
@@ -56,12 +53,12 @@ int vgexport(struct cmd_context *cmd, int argc, char **argv)
 {
 	if (!argc && !arg_count(cmd, all_ARG)) {
 		log_error("Please supply volume groups or use -a for all.");
-		return ECMD_FAILED;
+		return EINVALID_CMD_LINE;
 	}
 
 	if (argc && arg_count(cmd, all_ARG)) {
 		log_error("No arguments permitted when using -a for all.");
-		return ECMD_FAILED;
+		return EINVALID_CMD_LINE;
 	}
 
 	return process_each_vg(cmd, argc, argv, READ_FOR_UPDATE, NULL,

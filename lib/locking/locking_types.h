@@ -17,7 +17,7 @@
 #include "config.h"
 
 typedef int (*lock_resource_fn) (struct cmd_context * cmd, const char *resource,
-				 uint32_t flags);
+				 uint32_t flags, struct logical_volume *lv);
 typedef int (*query_resource_fn) (const char *resource, int *mode);
 
 typedef void (*fin_lock_fn) (void);
@@ -38,12 +38,20 @@ struct locking_type {
 /*
  * Locking types
  */
-int init_no_locking(struct locking_type *locking, struct cmd_context *cmd);
+void init_no_locking(struct locking_type *locking, struct cmd_context *cmd,
+		     int suppress_messages);
 
-int init_readonly_locking(struct locking_type *locking, struct cmd_context *cmd);
+void init_dummy_locking(struct locking_type *locking, struct cmd_context *cmd,
+			int suppress_messages);
 
-int init_file_locking(struct locking_type *locking, struct cmd_context *cmd);
+int init_readonly_locking(struct locking_type *locking, struct cmd_context *cmd,
+			  int suppress_messages);
 
-int init_external_locking(struct locking_type *locking, struct cmd_context *cmd);
+int init_file_locking(struct locking_type *locking, struct cmd_context *cmd,
+		      int suppress_messages);
 
-int init_cluster_locking(struct locking_type *locking, struct cmd_context *cmd);
+int init_external_locking(struct locking_type *locking, struct cmd_context *cmd,
+			  int suppress_messages);
+
+int init_cluster_locking(struct locking_type *locking, struct cmd_context *cmd,
+			 int suppress_messages);

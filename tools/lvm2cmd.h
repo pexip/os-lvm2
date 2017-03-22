@@ -16,6 +16,10 @@
 #ifndef _LVM_CMDLIB_H
 #define _LVM_CMDLIB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef _LVM_LOG_H
 typedef void (*lvm2_log_fn_t) (int level, const char *file, int line,
                                int dm_errno, const char *message);
@@ -31,6 +35,12 @@ typedef void (*lvm2_log_fn_t) (int level, const char *file, int line,
 #define LVM2_LOG_VERBOSE 	5
 #define LVM2_LOG_VERY_VERBOSE	6
 #define LVM2_LOG_DEBUG		7
+
+/* Return values */
+#define LVM2_COMMAND_SUCCEEDED	1	/* ECMD_PROCESSED */
+#define LVM2_NO_SUCH_COMMAND	2	/* ENO_SUCH_CMD */
+#define LVM2_INVALID_PARAMETERS	3	/* EINVALID_CMD_LINE */
+#define LVM2_PROCESSING_FAILED	5	/* ECMD_FAILED */
 
 /*
  * Define external function to replace the built-in logging function.
@@ -48,6 +58,12 @@ void lvm2_log_fn(lvm2_log_fn_t log_fn);
 void *lvm2_init(void);
 
 /*
+ * Disable any dmeventd calls that the library may otherwise do. Useful to avoid
+ * recursive calls from dmeventd to itself.
+ */
+void lvm2_disable_dmeventd_monitoring(void *handle);
+
+/*
  * Set log level (as above) if using built-in logging function. 
  * Default is LVM2_LOG_PRINT.  Use LVM2_LOG_SUPPRESS to suppress output.
  */
@@ -63,4 +79,7 @@ int lvm2_run(void *handle, const char *cmdline);
 /* Release handle */
 void lvm2_exit(void *handle);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

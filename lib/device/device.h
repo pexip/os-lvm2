@@ -33,12 +33,15 @@
  * pointer comparisons are valid.
  */
 struct device {
-	struct dm_list aliases;	/* struct str_list from lvm-types.h */
+	struct dm_list aliases;	/* struct dm_str_list */
 	dev_t dev;
 
 	/* private */
 	int fd;
 	int open_count;
+	int error_count;
+	int max_error_count;
+	int phys_block_size;
 	int block_size;
 	int read_ahead;
 	uint32_t flags;
@@ -63,14 +66,18 @@ struct device_area {
 /*
  * All io should use these routines.
  */
+int dev_get_block_size(struct device *dev, unsigned int *phys_block_size, unsigned int *block_size);
 int dev_get_size(const struct device *dev, uint64_t *size);
-int dev_get_sectsize(struct device *dev, uint32_t *size);
 int dev_get_read_ahead(struct device *dev, uint32_t *read_ahead);
+int dev_discard_blocks(struct device *dev, uint64_t offset_bytes, uint64_t size_bytes);
 
 /* Use quiet version if device number could change e.g. when opening LV */
 int dev_open(struct device *dev);
 int dev_open_quiet(struct device *dev);
 int dev_open_flags(struct device *dev, int flags, int direct, int quiet);
+int dev_open_readonly(struct device *dev);
+int dev_open_readonly_buffered(struct device *dev);
+int dev_open_readonly_quiet(struct device *dev);
 int dev_close(struct device *dev);
 int dev_close_immediate(struct device *dev);
 void dev_close_all(void);
@@ -81,35 +88,16 @@ const char *dev_name(const struct device *dev);
 
 int dev_read(struct device *dev, uint64_t offset, size_t len, void *buffer);
 int dev_read_circular(struct device *dev, uint64_t offset, size_t len,
-		      uint64_t offset2, size_t len2, void *buf);
+		      uint64_t offset2, size_t len2, char *buf);
 int dev_write(struct device *dev, uint64_t offset, size_t len, void *buffer);
-int dev_append(struct device *dev, size_t len, void *buffer);
+int dev_append(struct device *dev, size_t len, char *buffer);
 int dev_set(struct device *dev, uint64_t offset, size_t len, int value);
 void dev_flush(struct device *dev);
 
 struct device *dev_create_file(const char *filename, struct device *dev,
-			       struct str_list *alias, int use_malloc);
+			       struct dm_str_list *alias, int use_malloc);
 
 /* Return a valid device name from the alias list; NULL otherwise */
 const char *dev_name_confirmed(struct device *dev, int quiet);
-
-/* Does device contain md superblock?  If so, where? */
-int dev_is_md(struct device *dev, uint64_t *sb);
-int dev_is_swap(struct device *dev, uint64_t *signature);
-unsigned long dev_md_stripe_width(const char *sysfs_dir, struct device *dev);
-
-int is_partitioned_dev(struct device *dev);
-
-int get_primary_dev(const char *sysfs_dir,
-		    struct device *dev, dev_t *result);
-
-unsigned long dev_alignment_offset(const char *sysfs_dir,
-				   struct device *dev);
-
-unsigned long dev_minimum_io_size(const char *sysfs_dir,
-				  struct device *dev);
-
-unsigned long dev_optimal_io_size(const char *sysfs_dir,
-				  struct device *dev);
 
 #endif

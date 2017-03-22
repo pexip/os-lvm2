@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
  *
@@ -14,6 +14,10 @@
  */
 
 #include "dmlib.h"
+
+#ifdef VALGRIND_POOL
+#include "memcheck.h"
+#endif
 
 #include <assert.h>
 #include <stdarg.h>
@@ -113,10 +117,22 @@ void *dm_malloc_aux_debug(size_t s, const char *file, int line)
 	if (_mem_stats.bytes > _mem_stats.mbytes)
 		_mem_stats.mbytes = _mem_stats.bytes;
 
-	/* log_debug("Allocated: %u %u %u", nb->id, _mem_stats.blocks_allocated,
+	/* log_debug_mem("Allocated: %u %u %u", nb->id, _mem_stats.blocks_allocated,
 		  _mem_stats.bytes); */
-
+#ifdef VALGRIND_POOL
+	VALGRIND_MAKE_MEM_UNDEFINED(nb + 1, s);
+#endif
 	return nb + 1;
+}
+
+void *dm_zalloc_aux_debug(size_t s, const char *file, int line)
+{
+	void *ptr = dm_malloc_aux_debug(s, file, line);
+
+	if (ptr)
+		memset(ptr, 0, s);
+
+	return ptr;
 }
 
 void dm_free_aux(void *p)
@@ -131,11 +147,13 @@ void dm_free_aux(void *p)
 
 	/* sanity check */
 	assert(mb->magic == p);
-
+#ifdef VALGRIND_POOL
+	VALGRIND_MAKE_MEM_DEFINED(p, mb->length);
+#endif
 	/* check data at the far boundary */
-	ptr = ((char *) mb) + sizeof(struct memblock) + mb->length;
+	ptr = (char *) p + mb->length;
 	for (i = 0; i < sizeof(unsigned long); i++)
-		if (*ptr++ != (char) mb->id)
+		if (ptr[i] != (char) mb->id)
 			assert(!"Damage at far end of block");
 
 	/* have we freed this before ? */
@@ -155,9 +173,9 @@ void dm_free_aux(void *p)
 	mb->id = 0;
 
 	/* stomp a different pattern across the memory */
-	ptr = ((char *) mb) + sizeof(struct memblock);
+	ptr = p;
 	for (i = 0; i < mb->length; i++)
-		*ptr++ = i & 1 ? (char) 0xde : (char) 0xad;
+		ptr[i] = i & 1 ? (char) 0xde : (char) 0xad;
 
 	assert(_mem_stats.blocks_allocated);
 	_mem_stats.blocks_allocated--;
@@ -174,7 +192,7 @@ void *dm_realloc_aux(void *p, unsigned int s, const char *file, int line)
 
 	r = dm_malloc_aux_debug(s, file, line);
 
-	if (p) {
+	if (r && p) {
 		memcpy(r, p, mb->length);
 		dm_free_aux(p);
 	}
@@ -187,23 +205,32 @@ int dm_dump_memory_debug(void)
 	unsigned long tot = 0;
 	struct memblock *mb;
 	char str[32];
-	size_t c;
 
 	if (_head)
 		log_very_verbose("You have a memory leak:");
 
 	for (mb = _head; mb; mb = mb->next) {
+#ifdef VALGRIND_POOL
+		/*
+		 * We can't look at the memory in case it has had
+		 * VALGRIND_MAKE_MEM_NOACCESS called on it.
+		 */
+		str[0] = '\0';
+#else
+		size_t c;
+
 		for (c = 0; c < sizeof(str) - 1; c++) {
 			if (c >= mb->length)
 				str[c] = ' ';
-			else if (*(char *)(mb->magic + c) == '\0')
+			else if (((char *)mb->magic)[c] == '\0')
 				str[c] = '\0';
-			else if (*(char *)(mb->magic + c) < ' ')
+			else if (((char *)mb->magic)[c] < ' ')
 				str[c] = '?';
 			else
-				str[c] = *(char *)(mb->magic + c);
+				str[c] = ((char *)mb->magic)[c];
 		}
 		str[sizeof(str) - 1] = '\0';
+#endif
 
 		LOG_MESG(_LOG_INFO, mb->file, mb->line, 0,
 			 "block %d at %p, size %" PRIsize_t "\t [%s]",
@@ -231,8 +258,8 @@ void dm_bounds_check_debug(void)
 	}
 }
 
-void *dm_malloc_aux(size_t s, const char *file __attribute((unused)),
-		    int line __attribute((unused)))
+void *dm_malloc_aux(size_t s, const char *file __attribute__((unused)),
+		    int line __attribute__((unused)))
 {
 	if (s > 50000000) {
 		log_error("Huge memory allocation (size %" PRIsize_t
@@ -241,4 +268,14 @@ void *dm_malloc_aux(size_t s, const char *file __attribute((unused)),
 	}
 
 	return malloc(s);
+}
+
+void *dm_zalloc_aux(size_t s, const char *file, int line)
+{
+	void *ptr = dm_malloc_aux(s, file, line);
+
+	if (ptr)
+		memset(ptr, 0, s);
+
+	return ptr;
 }

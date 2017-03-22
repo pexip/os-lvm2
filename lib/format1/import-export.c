@@ -20,12 +20,10 @@
 #include "lib.h"
 #include "disk-rep.h"
 #include "lvm-string.h"
-#include "filter.h"
 #include "toolcontext.h"
 #include "segtype.h"
 #include "pv_alloc.h"
 #include "display.h"
-#include "lvmcache.h"
 #include "metadata.h"
 
 #include <time.h>
@@ -96,6 +94,8 @@ int import_pv(const struct format_type *fmt, struct dm_pool *mem,
 	pv->pe_count = pvd->pe_total;
 	pv->pe_alloc_count = 0;
 	pv->pe_align = 0;
+        pv->is_labelled = 0; /* format1 PVs have no label */
+        pv->label_sector = 0;
 
 	/* Fix up pv size if missing or impossibly large */
 	if (!pv->size || pv->size > (1ULL << 62)) {
@@ -137,7 +137,7 @@ static int _system_id(struct cmd_context *cmd, char *s, const char *prefix)
 	return 1;
 }
 
-int export_pv(struct cmd_context *cmd, struct dm_pool *mem __attribute((unused)),
+int export_pv(struct cmd_context *cmd, struct dm_pool *mem __attribute__((unused)),
 	      struct volume_group *vg,
 	      struct pv_disk *pvd, struct physical_volume *pv)
 {
@@ -149,7 +149,7 @@ int export_pv(struct cmd_context *cmd, struct dm_pool *mem __attribute((unused))
 
 	memcpy(pvd->pv_uuid, pv->id.uuid, ID_LEN);
 
-	if (pv->vg_name && !is_orphan(pv)) {
+	if (pv->vg_name && !is_orphan(pv) && !(pv->status & UNLABELLED_PV)) {
 		if (!_check_vg_name(pv->vg_name))
 			return_0;
 		strncpy((char *)pvd->vg_name, pv->vg_name, sizeof(pvd->vg_name));
@@ -185,7 +185,7 @@ int export_pv(struct cmd_context *cmd, struct dm_pool *mem __attribute((unused))
 	}
 
 	/* Generate system_id if PV is in VG */
-	if (!pvd->system_id || !*pvd->system_id)
+	if (!pvd->system_id[0])
 		if (!_system_id(cmd, (char *)pvd->system_id, ""))
 			return_0;
 
@@ -225,7 +225,7 @@ int import_vg(struct dm_pool *mem,
 	if (!(vg->name = dm_pool_strdup(mem, (char *)dl->pvd.vg_name)))
 		return_0;
 
-	if (!(vg->system_id = dm_pool_alloc(mem, NAME_LEN)))
+	if (!(vg->system_id = dm_pool_zalloc(mem, NAME_LEN + 1)))
 		return_0;
 
 	*vg->system_id = '\0';
@@ -347,7 +347,7 @@ static void _export_lv(struct lv_disk *lvd, struct volume_group *vg,
 	snprintf((char *)lvd->lv_name, sizeof(lvd->lv_name), "%s%s/%s",
 		 dev_dir, vg->name, lv->name);
 
-	strcpy((char *)lvd->vg_name, vg->name);
+	(void) dm_strncpy((char *)lvd->vg_name, vg->name, sizeof(lvd->vg_name));
 
 	if (lv->status & LVM_READ)
 		lvd->lv_access |= LV_READ;
@@ -506,9 +506,8 @@ int export_lvs(struct disk_list *dl, struct volume_group *vg,
 	 * setup the pv's extents array
 	 */
 	len = sizeof(struct pe_disk) * dl->pvd.pe_total;
-	if (!(dl->extents = dm_pool_alloc(dl->mem, len)))
+	if (!(dl->extents = dm_pool_zalloc(dl->mem, len)))
 		goto_out;
-	memset(dl->extents, 0, len);
 
 	dm_list_iterate_items(ll, &vg->lvs) {
 		if (ll->lv->status & SNAPSHOT)
@@ -552,10 +551,10 @@ int export_lvs(struct disk_list *dl, struct volume_group *vg,
 /*
  * FIXME: More inefficient code.
  */
-int import_snapshots(struct dm_pool *mem __attribute((unused)), struct volume_group *vg,
+int import_snapshots(struct dm_pool *mem __attribute__((unused)), struct volume_group *vg,
 		     struct dm_list *pvds)
 {
-	struct logical_volume *lvs[MAX_LV];
+	struct logical_volume *lvs[MAX_LV] = { 0 };
 	struct disk_list *dl;
 	struct lvd_list *ll;
 	struct lv_disk *lvd;
@@ -563,7 +562,6 @@ int import_snapshots(struct dm_pool *mem __attribute((unused)), struct volume_gr
 	struct logical_volume *org, *cow;
 
 	/* build an index of lv numbers */
-	memset(lvs, 0, sizeof(lvs));
 	dm_list_iterate_items(dl, pvds) {
 		dm_list_iterate_items(ll, &dl->lvds) {
 			lvd = &ll->lvd;
@@ -641,7 +639,7 @@ int export_uuids(struct disk_list *dl, struct volume_group *vg)
  * This calculates the nasty pv_number field
  * used by LVM1.
  */
-void export_numbers(struct dm_list *pvds, struct volume_group *vg __attribute((unused)))
+void export_numbers(struct dm_list *pvds, struct volume_group *vg __attribute__((unused)))
 {
 	struct disk_list *dl;
 	int pv_num = 1;

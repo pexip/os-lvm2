@@ -13,17 +13,11 @@
  */
 
 #include "lib.h"
-#include "toolcontext.h"
 #include "segtype.h"
 #include "display.h"
-#include "text_export.h"
-#include "text_import.h"
 #include "config.h"
 #include "str_list.h"
-#include "targets.h"
-#include "lvm-string.h"
 #include "activate.h"
-#include "metadata.h"
 
 static const char *_zero_name(const struct lv_segment *seg)
 {
@@ -39,20 +33,21 @@ static int _zero_merge_segments(struct lv_segment *seg1, struct lv_segment *seg2
 }
 
 #ifdef DEVMAPPER_SUPPORT
-static int _zero_add_target_line(struct dev_manager *dm __attribute((unused)),
-				 struct dm_pool *mem __attribute((unused)),
-				 struct cmd_context *cmd __attribute((unused)),
-				 void **target_state __attribute((unused)),
-				 struct lv_segment *seg __attribute((unused)),
+static int _zero_add_target_line(struct dev_manager *dm __attribute__((unused)),
+				 struct dm_pool *mem __attribute__((unused)),
+				 struct cmd_context *cmd __attribute__((unused)),
+				 void **target_state __attribute__((unused)),
+				 struct lv_segment *seg __attribute__((unused)),
+				 const struct lv_activate_opts *laopts __attribute__((unused)),
 				 struct dm_tree_node *node,uint64_t len,
-				 uint32_t *pvmove_mirror_count __attribute((unused)))
+				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
 	return dm_tree_node_add_zero_target(node, len);
 }
 
 static int _zero_target_present(struct cmd_context *cmd,
-				const struct lv_segment *seg __attribute((unused)),
-				unsigned *attributes __attribute((unused)))
+				const struct lv_segment *seg __attribute__((unused)),
+				unsigned *attributes __attribute__((unused)))
 {
 	static int _zero_checked = 0;
 	static int _zero_present = 0;
@@ -64,10 +59,9 @@ static int _zero_target_present(struct cmd_context *cmd,
 
 	return _zero_present;
 }
-#endif
 
 static int _zero_modules_needed(struct dm_pool *mem,
-				const struct lv_segment *seg __attribute((unused)),
+				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
 	if (!str_list_add(mem, modules, "zero")) {
@@ -77,10 +71,11 @@ static int _zero_modules_needed(struct dm_pool *mem,
 
 	return 1;
 }
+#endif
 
-static void _zero_destroy(const struct segment_type *segtype)
+static void _zero_destroy(struct segment_type *segtype)
 {
-	dm_free((void *) segtype);
+	dm_free(segtype);
 }
 
 static struct segtype_handler _zero_ops = {
@@ -89,14 +84,14 @@ static struct segtype_handler _zero_ops = {
 #ifdef DEVMAPPER_SUPPORT
 	.add_target_line = _zero_add_target_line,
 	.target_present = _zero_target_present,
-#endif
 	.modules_needed = _zero_modules_needed,
+#endif
 	.destroy = _zero_destroy,
 };
 
 struct segment_type *init_zero_segtype(struct cmd_context *cmd)
 {
-	struct segment_type *segtype = dm_malloc(sizeof(*segtype));
+	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
 
 	if (!segtype)
 		return_NULL;

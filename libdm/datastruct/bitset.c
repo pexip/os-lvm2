@@ -26,8 +26,8 @@ dm_bitset_t dm_bitset_create(struct dm_pool *mem, unsigned num_bits)
 	
 	if (mem)
 		bs = dm_pool_zalloc(mem, size);
-	else if ((bs = dm_malloc(size)))
-		memset(bs, 0, size);
+	else
+		bs = dm_zalloc(size);
 
 	if (!bs)
 		return NULL;
@@ -69,9 +69,9 @@ void dm_bit_union(dm_bitset_t out, dm_bitset_t in1, dm_bitset_t in2)
 
 static int _test_word(uint32_t test, int bit)
 {
-	int next_set_bit;
+	uint32_t tb = test >> bit;
 
-	return ((next_set_bit = ffs(test >> bit)) ? next_set_bit + bit - 1 : -1);
+	return (tb ? ffs(tb) + bit - 1 : -1);
 }
 
 int dm_bit_get_next(dm_bitset_t bs, int last_bit)

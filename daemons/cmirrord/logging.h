@@ -16,7 +16,7 @@
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 
-#include <configure.h>
+#include "configure.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <syslog.h>
@@ -63,7 +63,7 @@ extern int log_resend_requests;
 #ifdef DEBUG
 #define LOG_DBG(f, arg...) LOG_OUTPUT(LOG_DEBUG, f, ## arg)
 #else /* DEBUG */
-#define LOG_DBG(f, arg...)
+#define LOG_DBG(f, arg...) do {} while (0)
 #endif /* DEBUG */
 
 #define LOG_COND(__X, f, arg...) do {\

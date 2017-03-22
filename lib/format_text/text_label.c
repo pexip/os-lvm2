@@ -23,9 +23,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-static int _text_can_handle(struct labeller *l __attribute((unused)),
+static int _text_can_handle(struct labeller *l __attribute__((unused)),
 			    void *buf,
-			    uint64_t sector __attribute((unused)))
+			    uint64_t sector __attribute__((unused)))
 {
 	struct label_header *lh = (struct label_header *) buf;
 
@@ -35,69 +35,108 @@ static int _text_can_handle(struct labeller *l __attribute((unused)),
 	return 0;
 }
 
+struct _dl_setup_baton {
+	struct disk_locn *pvh_dlocn_xl;
+	struct device *dev;
+};
+
+static int _da_setup(struct disk_locn *da, void *baton)
+{
+	struct _dl_setup_baton *p = baton;
+	p->pvh_dlocn_xl->offset = xlate64(da->offset);
+	p->pvh_dlocn_xl->size = xlate64(da->size);
+	p->pvh_dlocn_xl++;
+	return 1;
+}
+
+static int _ba_setup(struct disk_locn *ba, void *baton)
+{
+	return _da_setup(ba, baton);
+}
+
+static int _mda_setup(struct metadata_area *mda, void *baton)
+{
+	struct _dl_setup_baton *p = baton;
+	struct mda_context *mdac = (struct mda_context *) mda->metadata_locn;
+
+	if (mdac->area.dev != p->dev)
+		return 1;
+
+	p->pvh_dlocn_xl->offset = xlate64(mdac->area.start);
+	p->pvh_dlocn_xl->size = xlate64(mdac->area.size);
+	p->pvh_dlocn_xl++;
+
+	return 1;
+}
+
+static int _dl_null_termination(void *baton)
+{
+	struct _dl_setup_baton *p = baton;
+
+	p->pvh_dlocn_xl->offset = xlate64(UINT64_C(0));
+	p->pvh_dlocn_xl->size = xlate64(UINT64_C(0));
+	p->pvh_dlocn_xl++;
+
+	return 1;
+}
+
 static int _text_write(struct label *label, void *buf)
 {
 	struct label_header *lh = (struct label_header *) buf;
 	struct pv_header *pvhdr;
+	struct pv_header_extension *pvhdr_ext;
 	struct lvmcache_info *info;
-	struct disk_locn *pvh_dlocn_xl;
-	struct metadata_area *mda;
-	struct mda_context *mdac;
-	struct data_area_list *da;
-	char buffer[64] __attribute((aligned(8)));
-	int da1, mda1, mda2;
+	struct _dl_setup_baton baton;
+	char buffer[64] __attribute__((aligned(8)));
+	int ba1, da1, mda1, mda2;
 
+	/*
+	 * PV header base
+	 */
 	/* FIXME Move to where label is created */
 	strncpy(label->type, LVM2_LABEL, sizeof(label->type));
 
 	strncpy((char *)lh->type, label->type, sizeof(label->type));
 
-	pvhdr = (struct pv_header *) ((void *) buf + xlate32(lh->offset_xl));
+	pvhdr = (struct pv_header *) ((char *) buf + xlate32(lh->offset_xl));
 	info = (struct lvmcache_info *) label->info;
-	pvhdr->device_size_xl = xlate64(info->device_size);
-	memcpy(pvhdr->pv_uuid, &info->dev->pvid, sizeof(struct id));
+	pvhdr->device_size_xl = xlate64(lvmcache_device_size(info));
+	memcpy(pvhdr->pv_uuid, &lvmcache_device(info)->pvid, sizeof(struct id));
 	if (!id_write_format((const struct id *)pvhdr->pv_uuid, buffer,
 			     sizeof(buffer))) {
 		stack;
 		buffer[0] = '\0';
 	}
 
-	pvh_dlocn_xl = &pvhdr->disk_areas_xl[0];
+	baton.dev = lvmcache_device(info);
+	baton.pvh_dlocn_xl = &pvhdr->disk_areas_xl[0];
 
 	/* List of data areas (holding PEs) */
-	dm_list_iterate_items(da, &info->das) {
-		pvh_dlocn_xl->offset = xlate64(da->disk_locn.offset);
-		pvh_dlocn_xl->size = xlate64(da->disk_locn.size);
-		pvh_dlocn_xl++;
-	}
-
-	/* NULL-termination */
-	pvh_dlocn_xl->offset = xlate64(UINT64_C(0));
-	pvh_dlocn_xl->size = xlate64(UINT64_C(0));
-	pvh_dlocn_xl++;
+	lvmcache_foreach_da(info, _da_setup, &baton);
+	_dl_null_termination(&baton);
 
 	/* List of metadata area header locations */
-	dm_list_iterate_items(mda, &info->mdas) {
-		mdac = (struct mda_context *) mda->metadata_locn;
+	lvmcache_foreach_mda(info, _mda_setup, &baton);
+	_dl_null_termination(&baton);
 
-		if (mdac->area.dev != info->dev)
-			continue;
+	/*
+	 * PV header extension
+	 */
+	pvhdr_ext = (struct pv_header_extension *) ((char *) baton.pvh_dlocn_xl);
+	pvhdr_ext->version = xlate32(PV_HEADER_EXTENSION_VSN);
+	pvhdr_ext->flags = 0; /* no flags yet */
 
-		pvh_dlocn_xl->offset = xlate64(mdac->area.start);
-		pvh_dlocn_xl->size = xlate64(mdac->area.size);
-		pvh_dlocn_xl++;
-	}
+	/* List of bootloader area locations */
+	baton.pvh_dlocn_xl = &pvhdr_ext->bootloader_areas_xl[0];
+	lvmcache_foreach_ba(info, _ba_setup, &baton);
+	_dl_null_termination(&baton);
 
-	/* NULL-termination */
-	pvh_dlocn_xl->offset = xlate64(UINT64_C(0));
-	pvh_dlocn_xl->size = xlate64(UINT64_C(0));
+	/* Create debug message with ba, da and mda locations */
+	ba1 = (xlate64(pvhdr_ext->bootloader_areas_xl[0].offset) ||
+	       xlate64(pvhdr_ext->bootloader_areas_xl[0].size)) ? 0 : -1;
 
-	/* Create debug message with da and mda locations */
-	if (xlate64(pvhdr->disk_areas_xl[0].offset) ||
-	    xlate64(pvhdr->disk_areas_xl[0].size))
-		da1 = 0;
-	else
-		da1 = -1;
+	da1 = (xlate64(pvhdr->disk_areas_xl[0].offset) ||
+	       xlate64(pvhdr->disk_areas_xl[0].size)) ? 0 : -1;
 
 	mda1 = da1 + 2;
 	mda2 = mda1 + 1;
@@ -109,36 +148,44 @@ static int _text_write(struct label *label, void *buf)
 		 !xlate64(pvhdr->disk_areas_xl[mda2].size))
 		mda2 = 0;
 
-	log_debug("%s: Preparing PV label header %s size %" PRIu64 " with"
-		  "%s%.*" PRIu64 "%s%.*" PRIu64 "%s"
-		  "%s%.*" PRIu64 "%s%.*" PRIu64 "%s"
-		  "%s%.*" PRIu64 "%s%.*" PRIu64 "%s",
-		  dev_name(info->dev), buffer, info->device_size, 
-		  (da1 > -1) ? " da1 (" : "",
-		  (da1 > -1) ? 1 : 0,
-		  (da1 > -1) ? xlate64(pvhdr->disk_areas_xl[da1].offset) >> SECTOR_SHIFT : 0,
-		  (da1 > -1) ? "s, " : "",
-		  (da1 > -1) ? 1 : 0,
-		  (da1 > -1) ? xlate64(pvhdr->disk_areas_xl[da1].size) >> SECTOR_SHIFT : 0,
-		  (da1 > -1) ? "s)" : "",
-		  mda1 ? " mda1 (" : "",
-		  mda1 ? 1 : 0,
-		  mda1 ? xlate64(pvhdr->disk_areas_xl[mda1].offset) >> SECTOR_SHIFT : 0,
-		  mda1 ? "s, " : "",
-		  mda1 ? 1 : 0,
-		  mda1 ? xlate64(pvhdr->disk_areas_xl[mda1].size) >> SECTOR_SHIFT : 0,
-		  mda1 ? "s)" : "",
-		  mda2 ? " mda2 (" : "",
-		  mda2 ? 1 : 0,
-		  mda2 ? xlate64(pvhdr->disk_areas_xl[mda2].offset) >> SECTOR_SHIFT : 0,
-		  mda2 ? "s, " : "",
-		  mda2 ? 1 : 0,
-		  mda2 ? xlate64(pvhdr->disk_areas_xl[mda2].size) >> SECTOR_SHIFT : 0,
-		  mda2 ? "s)" : "");
+	log_debug_metadata("%s: Preparing PV label header %s size %" PRIu64 " with"
+			   "%s%.*" PRIu64 "%s%.*" PRIu64 "%s"
+			   "%s%.*" PRIu64 "%s%.*" PRIu64 "%s"
+			   "%s%.*" PRIu64 "%s%.*" PRIu64 "%s"
+			   "%s%.*" PRIu64 "%s%.*" PRIu64 "%s",
+			   dev_name(lvmcache_device(info)), buffer, lvmcache_device_size(info),
+			   (ba1 > -1) ? " ba1 (" : "",
+			   (ba1 > -1) ? 1 : 0,
+			   (ba1 > -1) ? xlate64(pvhdr_ext->bootloader_areas_xl[ba1].offset) >> SECTOR_SHIFT : 0,
+			   (ba1 > -1) ? "s, " : "",
+			   (ba1 > -1) ? 1 : 0,
+			   (ba1 > -1) ? xlate64(pvhdr_ext->bootloader_areas_xl[ba1].size) >> SECTOR_SHIFT : 0,
+			   (ba1 > -1) ? "s)" : "",
+			   (da1 > -1) ? " da1 (" : "",
+			   (da1 > -1) ? 1 : 0,
+			   (da1 > -1) ? xlate64(pvhdr->disk_areas_xl[da1].offset) >> SECTOR_SHIFT : 0,
+			   (da1 > -1) ? "s, " : "",
+			   (da1 > -1) ? 1 : 0,
+			   (da1 > -1) ? xlate64(pvhdr->disk_areas_xl[da1].size) >> SECTOR_SHIFT : 0,
+			   (da1 > -1) ? "s)" : "",
+			   mda1 ? " mda1 (" : "",
+			   mda1 ? 1 : 0,
+			   mda1 ? xlate64(pvhdr->disk_areas_xl[mda1].offset) >> SECTOR_SHIFT : 0,
+			   mda1 ? "s, " : "",
+			   mda1 ? 1 : 0,
+			   mda1 ? xlate64(pvhdr->disk_areas_xl[mda1].size) >> SECTOR_SHIFT : 0,
+			   mda1 ? "s)" : "",
+			   mda2 ? " mda2 (" : "",
+			   mda2 ? 1 : 0,
+			   mda2 ? xlate64(pvhdr->disk_areas_xl[mda2].offset) >> SECTOR_SHIFT : 0,
+			   mda2 ? "s, " : "",
+			   mda2 ? 1 : 0,
+			   mda2 ? xlate64(pvhdr->disk_areas_xl[mda2].size) >> SECTOR_SHIFT : 0,
+			   mda2 ? "s)" : "");
 
 	if (da1 < 0) {
 		log_error(INTERNAL_ERROR "%s label header currently requires "
-			  "a data area.", dev_name(info->dev));
+			  "a data area.", dev_name(lvmcache_device(info)));
 		return 0;
 	}
 
@@ -182,8 +229,20 @@ void del_das(struct dm_list *das)
 	}
 }
 
+int add_ba(struct dm_pool *mem, struct dm_list *eas,
+	   uint64_t start, uint64_t size)
+{
+	return add_da(mem, eas, start, size);
+}
+
+void del_bas(struct dm_list *bas)
+{
+	del_das(bas);
+}
+
+/* FIXME: refactor this function with other mda constructor code */
 int add_mda(const struct format_type *fmt, struct dm_pool *mem, struct dm_list *mdas,
-	    struct device *dev, uint64_t start, uint64_t size)
+	    struct device *dev, uint64_t start, uint64_t size, unsigned ignored)
 {
 /* FIXME List size restricted by pv_header SECTOR_SIZE */
 	struct metadata_area *mdal;
@@ -215,12 +274,14 @@ int add_mda(const struct format_type *fmt, struct dm_pool *mem, struct dm_list *
 
 	mdal->ops = mda_lists->raw_ops;
 	mdal->metadata_locn = mdac;
+	mdal->status = 0;
 
 	mdac->area.dev = dev;
 	mdac->area.start = start;
 	mdac->area.size = size;
 	mdac->free_sectors = UINT64_C(0);
 	memset(&mdac->rlocn, 0, sizeof(mdac->rlocn));
+	mda_set_ignored(mdal, ignored);
 
 	dm_list_add(mdas, &mdal->list);
 	return 1;
@@ -239,10 +300,66 @@ void del_mdas(struct dm_list *mdas)
 	}
 }
 
-static int _text_initialise_label(struct labeller *l __attribute((unused)),
+static int _text_initialise_label(struct labeller *l __attribute__((unused)),
 				  struct label *label)
 {
 	strncpy(label->type, LVM2_LABEL, sizeof(label->type));
+
+	return 1;
+}
+
+struct _update_mda_baton {
+	struct lvmcache_info *info;
+	struct label *label;
+};
+
+static int _update_mda(struct metadata_area *mda, void *baton)
+{
+	struct _update_mda_baton *p = baton;
+	const struct format_type *fmt = p->label->labeller->fmt;
+	struct mda_context *mdac = (struct mda_context *) mda->metadata_locn;
+	struct mda_header *mdah;
+	const char *vgname = NULL;
+	struct id vgid;
+	uint64_t vgstatus;
+	char *creation_host;
+
+	if (!dev_open_readonly(mdac->area.dev)) {
+		mda_set_ignored(mda, 1);
+		stack;
+		return 1;
+	}
+
+	if (!(mdah = raw_read_mda_header(fmt, &mdac->area))) {
+		stack;
+		goto close_dev;
+	}
+
+	mda_set_ignored(mda, rlocn_is_ignored(mdah->raw_locns));
+
+	if (mda_is_ignored(mda)) {
+		log_debug_metadata("Ignoring mda on device %s at offset %"PRIu64,
+				   dev_name(mdac->area.dev),
+				   mdac->area.start);
+		if (!dev_close(mdac->area.dev))
+			stack;
+		return 1;
+	}
+
+	if ((vgname = vgname_from_mda(fmt, mdah,
+				      &mdac->area,
+				      &vgid, &vgstatus, &creation_host,
+				      &mdac->free_sectors)) &&
+	    !lvmcache_update_vgname_and_id(p->info, vgname,
+					   (char *) &vgid, vgstatus,
+					   creation_host)) {
+		if (!dev_close(mdac->area.dev))
+			stack;
+		return_0;
+	}
+close_dev:
+	if (!dev_close(mdac->area.dev))
+		stack;
 
 	return 1;
 }
@@ -252,75 +369,81 @@ static int _text_read(struct labeller *l, struct device *dev, void *buf,
 {
 	struct label_header *lh = (struct label_header *) buf;
 	struct pv_header *pvhdr;
+	struct pv_header_extension *pvhdr_ext;
 	struct lvmcache_info *info;
 	struct disk_locn *dlocn_xl;
 	uint64_t offset;
-	struct metadata_area *mda;
-	struct id vgid;
-	struct mda_context *mdac;
-	const char *vgname;
-	uint64_t vgstatus;
-	char *creation_host;
+	uint32_t ext_version;
+	struct _update_mda_baton baton;
 
-	pvhdr = (struct pv_header *) ((void *) buf + xlate32(lh->offset_xl));
+	/*
+	 * PV header base
+	 */
+	pvhdr = (struct pv_header *) ((char *) buf + xlate32(lh->offset_xl));
 
 	if (!(info = lvmcache_add(l, (char *)pvhdr->pv_uuid, dev,
 				  FMT_TEXT_ORPHAN_VG_NAME,
 				  FMT_TEXT_ORPHAN_VG_NAME, 0)))
 		return_0;
-	*label = info->label;
 
-	info->device_size = xlate64(pvhdr->device_size_xl);
+	*label = lvmcache_get_label(info);
 
-	if (info->das.n)
-		del_das(&info->das);
-	dm_list_init(&info->das);
+	lvmcache_set_device_size(info, xlate64(pvhdr->device_size_xl));
 
-	if (info->mdas.n)
-		del_mdas(&info->mdas);
-	dm_list_init(&info->mdas);
+	lvmcache_del_das(info);
+	lvmcache_del_mdas(info);
+	lvmcache_del_bas(info);
 
 	/* Data areas holding the PEs */
 	dlocn_xl = pvhdr->disk_areas_xl;
 	while ((offset = xlate64(dlocn_xl->offset))) {
-		add_da(NULL, &info->das, offset,
-		       xlate64(dlocn_xl->size));
+		lvmcache_add_da(info, offset, xlate64(dlocn_xl->size));
 		dlocn_xl++;
 	}
 
 	/* Metadata area headers */
 	dlocn_xl++;
 	while ((offset = xlate64(dlocn_xl->offset))) {
-		add_mda(info->fmt, NULL, &info->mdas, dev, offset,
-			xlate64(dlocn_xl->size));
+		lvmcache_add_mda(info, dev, offset, xlate64(dlocn_xl->size), 0);
 		dlocn_xl++;
 	}
 
-	dm_list_iterate_items(mda, &info->mdas) {
-		mdac = (struct mda_context *) mda->metadata_locn;
-		if ((vgname = vgname_from_mda(info->fmt, &mdac->area,
-					      &vgid, &vgstatus, &creation_host,
-					      &mdac->free_sectors)) &&
-		    !lvmcache_update_vgname_and_id(info, vgname,
-						   (char *) &vgid, vgstatus,
-						   creation_host))
-			return_0;
-	}
+	dlocn_xl++;
 
-	info->status &= ~CACHE_INVALID;
+	/*
+	 * PV header extension
+	 */
+	pvhdr_ext = (struct pv_header_extension *) ((char *) dlocn_xl);
+	if (!(ext_version = xlate32(pvhdr_ext->version)))
+		goto out;
+
+	log_debug("%s: PV header extension version %" PRIu32 " found",
+		  dev_name(dev), ext_version);
+
+	/* Bootloader areas */
+	dlocn_xl = pvhdr_ext->bootloader_areas_xl;
+	while ((offset = xlate64(dlocn_xl->offset))) {
+		lvmcache_add_ba(info, offset, xlate64(dlocn_xl->size));
+		dlocn_xl++;
+	}
+out:
+	baton.info = info;
+	baton.label = *label;
+
+	lvmcache_foreach_mda(info, _update_mda, &baton);
+	lvmcache_make_valid(info);
 
 	return 1;
 }
 
-static void _text_destroy_label(struct labeller *l __attribute((unused)),
+static void _text_destroy_label(struct labeller *l __attribute__((unused)),
 				struct label *label)
 {
 	struct lvmcache_info *info = (struct lvmcache_info *) label->info;
 
-	if (info->mdas.n)
-		del_mdas(&info->mdas);
-	if (info->das.n)
-		del_das(&info->das);
+	lvmcache_del_mdas(info);
+	lvmcache_del_das(info);
+	lvmcache_del_bas(info);
 }
 
 static void _fmt_text_destroy(struct labeller *l)
@@ -348,7 +471,7 @@ struct labeller *text_labeller_create(const struct format_type *fmt)
 	}
 
 	l->ops = &_text_ops;
-	l->private = (const void *) fmt;
+	l->fmt = fmt;
 
 	return l;
 }

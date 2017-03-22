@@ -31,10 +31,10 @@ start()
 {
 	ret=0
 	# TODO do we want to separate out already active groups only?
-	VGS=`vgs --noheadings -o name 2> /dev/null`
+	VGS=`vgs --noheadings -o name --config 'log{command_names=0 prefix="  "}' 2> /dev/null`
 	for vg in $VGS
 	do
-	    action "Starting monitoring for VG $vg:" $VGCHANGE --monitor y $vg || ret=$?
+	    action "Starting monitoring for VG $vg:" $VGCHANGE --monitor y --config 'log{command_names=0 prefix="  "}' $vg || ret=$?
 	done
 
 	return $ret
@@ -49,10 +49,10 @@ stop()
 	   echo "Not stopping monitoring, this is a dangerous operation. Please use force-stop to override."
 	   return 1
 	fi
-	VGS=`vgs --noheadings -o name 2> /dev/null`
+	VGS=`vgs --noheadings -o name --config 'log{command_names=0 prefix="  "}' 2> /dev/null`
 	for vg in $VGS
 	do
-	    action "Stopping monitoring for VG $vg:" $VGCHANGE --monitor n $vg || ret=$?
+	    action "Stopping monitoring for VG $vg:" $VGCHANGE --monitor n --config 'log{command_names=0 prefix="  "}' $vg || ret=$?
 	done
 	return $ret
 }

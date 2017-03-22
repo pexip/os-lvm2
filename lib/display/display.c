@@ -19,6 +19,10 @@
 #include "activate.h"
 #include "toolcontext.h"
 #include "segtype.h"
+#include "defaults.h"
+#include "lvm-signal.h"
+
+#include <stdarg.h>
 
 #define SIZE_BUF 128
 
@@ -26,98 +30,29 @@ typedef enum { SIZE_LONG = 0, SIZE_SHORT = 1, SIZE_UNIT = 2 } size_len_t;
 
 static const struct {
 	alloc_policy_t alloc;
-	const char str[12]; /* must be changed when size extends 11 chars */
+	const char str[14]; /* must be changed when size extends 13 chars */
+	const char repchar;
 } _policies[] = {
 	{
-	ALLOC_CONTIGUOUS, "contiguous"}, {
-	ALLOC_CLING, "cling"}, {
-	ALLOC_NORMAL, "normal"}, {
-	ALLOC_ANYWHERE, "anywhere"}, {
-	ALLOC_INHERIT, "inherit"}
+	ALLOC_CONTIGUOUS, "contiguous", 'c'}, {
+	ALLOC_CLING, "cling", 'l'}, {
+	ALLOC_CLING_BY_TAGS, "cling_by_tags", 't'}, {	/* Only used in log mesgs */
+	ALLOC_NORMAL, "normal", 'n'}, {
+	ALLOC_ANYWHERE, "anywhere", 'a'}, {
+	ALLOC_INHERIT, "inherit", 'i'}
 };
 
-static const int _num_policies = sizeof(_policies) / sizeof(*_policies);
+static const int _num_policies = DM_ARRAY_SIZE(_policies);
 
-uint64_t units_to_bytes(const char *units, char *unit_type)
+char alloc_policy_char(alloc_policy_t alloc)
 {
-	char *ptr = NULL;
-	uint64_t v;
+	int i;
 
-	if (isdigit(*units)) {
-		v = (uint64_t) strtod(units, &ptr);
-		if (ptr == units)
-			return 0;
-		units = ptr;
-	} else
-		v = 1;
+	for (i = 0; i < _num_policies; i++)
+		if (_policies[i].alloc == alloc)
+			return _policies[i].repchar;
 
-	if (v == 1)
-		*unit_type = *units;
-	else
-		*unit_type = 'U';
-
-	switch (*units) {
-	case 'h':
-	case 'H':
-		v = UINT64_C(1);
-		*unit_type = *units;
-		break;
-	case 'b':
-	case 'B':
-		v *= UINT64_C(1);
-		break;
-#define KILO UINT64_C(1024)
-	case 's':
-	case 'S':
-		v *= (KILO/2);
-		break;
-	case 'k':
-		v *= KILO;
-		break;
-	case 'm':
-		v *= KILO * KILO;
-		break;
-	case 'g':
-		v *= KILO * KILO * KILO;
-		break;
-	case 't':
-		v *= KILO * KILO * KILO * KILO;
-		break;
-	case 'p':
-		v *= KILO * KILO * KILO * KILO * KILO;
-		break;
-	case 'e':
-		v *= KILO * KILO * KILO * KILO * KILO * KILO;
-		break;
-#undef KILO
-#define KILO UINT64_C(1000)
-	case 'K':
-		v *= KILO;
-		break;
-	case 'M':
-		v *= KILO * KILO;
-		break;
-	case 'G':
-		v *= KILO * KILO * KILO;
-		break;
-	case 'T':
-		v *= KILO * KILO * KILO * KILO;
-		break;
-	case 'P':
-		v *= KILO * KILO * KILO * KILO * KILO;
-		break;
-	case 'E':
-		v *= KILO * KILO * KILO * KILO * KILO * KILO;
-		break;
-#undef KILO
-	default:
-		return 0;
-	}
-
-	if (*(units + 1))
-		return 0;
-
-	return v;
+	return '-';
 }
 
 const char *get_alloc_string(alloc_policy_t alloc)
@@ -135,23 +70,40 @@ alloc_policy_t get_alloc_from_string(const char *str)
 {
 	int i;
 
+	/* cling_by_tags is part of cling */
+	if (!strcmp("cling_by_tags", str))
+		return ALLOC_CLING;
+
 	for (i = 0; i < _num_policies; i++)
 		if (!strcmp(_policies[i].str, str))
 			return _policies[i].alloc;
 
 	/* Special case for old metadata */
-	if(!strcmp("next free", str))
+	if (!strcmp("next free", str))
 		return ALLOC_NORMAL;
 
 	log_error("Unrecognised allocation policy %s", str);
 	return ALLOC_INVALID;
 }
 
+static const char *_percent_types[7] = { "NONE", "VG", "FREE", "LV", "PVS", "ORIGIN" };
+
+const char *get_percent_string(percent_type_t def)
+{
+	return _percent_types[def];
+}
+
+const char *display_lvname(const struct logical_volume *lv)
+{
+	/* On allocation failure, just return the LV name. */
+	return lv_fullname_dup(lv->vg->cmd->mem, lv) ? : lv->name;
+}
+
 #define BASE_UNKNOWN 0
 #define BASE_SHARED 1
-#define BASE_1024 7
-#define BASE_1000 13
-#define BASE_SPECIAL 19
+#define BASE_1024 8
+#define BASE_1000 15
+#define BASE_SPECIAL 21
 #define NUM_UNIT_PREFIXES 6
 #define NUM_SPECIAL 3
 
@@ -161,7 +113,7 @@ static const char *_display_size(const struct cmd_context *cmd,
 {
 	unsigned base = BASE_UNKNOWN;
 	unsigned s;
-	int suffix = 1, precision;
+	int suffix, precision;
 	uint64_t byte = UINT64_C(0);
 	uint64_t units = UINT64_C(1024);
 	char *size_buf = NULL;
@@ -176,27 +128,29 @@ static const char *_display_size(const struct cmd_context *cmd,
 		{" Gigabyte", " GB", "G"},	/* [4] */
 		{" Megabyte", " MB", "M"},	/* [5] */
 		{" Kilobyte", " KB", "K"},	/* [6] */
+		{" Byte    ", " B", "B"},	/* [7] */
 
 		/* BASE_1024 - Used if cmd->si_unit_consistency = 1 */
-		{" Exbibyte", " EiB", "e"},	/* [7] */
-		{" Pebibyte", " PiB", "p"},	/* [8] */
-		{" Tebibyte", " TiB", "t"},	/* [9] */
-		{" Gibibyte", " GiB", "g"},	/* [10] */
-		{" Mebibyte", " MiB", "m"},	/* [11] */
-		{" Kibibyte", " KiB", "k"},	/* [12] */
+		{" Exbibyte", " EiB", "e"},	/* [8] */
+		{" Pebibyte", " PiB", "p"},	/* [9] */
+		{" Tebibyte", " TiB", "t"},	/* [10] */
+		{" Gibibyte", " GiB", "g"},	/* [11] */
+		{" Mebibyte", " MiB", "m"},	/* [12] */
+		{" Kibibyte", " KiB", "k"},	/* [13] */
+		{" Byte    ", " B", "b"},	/* [14] */
 
 		/* BASE_1000 - Used if cmd->si_unit_consistency = 1 */
-		{" Exabyte",  " EB", "E"},	/* [13] */
-		{" Petabyte", " PB", "P"},	/* [14] */
-		{" Terabyte", " TB", "T"},	/* [15] */
-		{" Gigabyte", " GB", "G"},	/* [16] */
-		{" Megabyte", " MB", "M"},	/* [17] */
-		{" Kilobyte", " kB", "K"},	/* [18] */
+		{" Exabyte",  " EB", "E"},	/* [15] */
+		{" Petabyte", " PB", "P"},	/* [16] */
+		{" Terabyte", " TB", "T"},	/* [17] */
+		{" Gigabyte", " GB", "G"},	/* [18] */
+		{" Megabyte", " MB", "M"},	/* [19] */
+		{" Kilobyte", " kB", "K"},	/* [20] */
 
 		/* BASE_SPECIAL */
-		{" Byte    ", " B ", "B"},	/* [19] */
-		{" Units   ", " Un", "U"},	/* [20] */
-		{" Sectors ", " Se", "S"},	/* [21] */
+		{" Byte    ", " B ", "B"},	/* [21] (shared with BASE_1000) */
+		{" Units   ", " Un", "U"},	/* [22] */
+		{" Sectors ", " Se", "S"},	/* [23] */
 	};
 
 	if (!(size_buf = dm_pool_alloc(cmd->mem, SIZE_BUF))) {
@@ -275,7 +229,7 @@ static const char *_display_size(const struct cmd_context *cmd,
 	}
 
 	/* FIXME Make precision configurable */
-	switch(toupper((int) cmd->current_settings.unit_type)) {
+	switch (toupper(*size_str[base + s][SIZE_UNIT])) {
 	case 'B':
 	case 'S':
 		precision = 0;
@@ -307,7 +261,7 @@ const char *display_size(const struct cmd_context *cmd, uint64_t size)
 
 void pvdisplay_colons(const struct physical_volume *pv)
 {
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
 
 	if (!pv)
 		return;
@@ -318,7 +272,7 @@ void pvdisplay_colons(const struct physical_volume *pv)
 	}
 
 	log_print("%s:%s:%" PRIu64 ":-1:%" PRIu64 ":%" PRIu64 ":-1:%" PRIu32 ":%u:%u:%u:%s",
-		  pv_dev_name(pv), pv->vg_name, pv->size,
+		  pv_dev_name(pv), pv_vg_name(pv), pv->size,
 		  /* FIXME pv->pv_number, Derive or remove? */
 		  pv->status,	/* FIXME Support old or new format here? */
 		  pv->status & ALLOCATABLE_PV,	/* FIXME remove? */
@@ -358,9 +312,9 @@ void pvdisplay_segments(const struct physical_volume *pv)
 /* FIXME Include label fields */
 void pvdisplay_full(const struct cmd_context *cmd,
 		    const struct physical_volume *pv,
-		    void *handle __attribute((unused)))
+		    void *handle __attribute__((unused)))
 {
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
 	const char *size;
 
 	uint32_t pe_free;
@@ -423,12 +377,12 @@ void pvdisplay_full(const struct cmd_context *cmd,
 	log_print(" ");
 }
 
-int pvdisplay_short(const struct cmd_context *cmd __attribute((unused)),
-		    const struct volume_group *vg __attribute((unused)),
+int pvdisplay_short(const struct cmd_context *cmd __attribute__((unused)),
+		    const struct volume_group *vg __attribute__((unused)),
 		    const struct physical_volume *pv,
-		    void *handle __attribute((unused)))
+		    void *handle __attribute__((unused)))
 {
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
 
 	if (!pv)
 		return 0;
@@ -452,14 +406,15 @@ void lvdisplay_colons(const struct logical_volume *lv)
 {
 	int inkernel;
 	struct lvinfo info;
-	inkernel = lv_info(lv->vg->cmd, lv, &info, 1, 0) && info.exists;
+	inkernel = lv_info(lv->vg->cmd, lv, 0, &info, 1, 0) && info.exists;
 
 	log_print("%s%s/%s:%s:%" PRIu64 ":%d:-1:%d:%" PRIu64 ":%d:-1:%d:%d:%d:%d",
 		  lv->vg->cmd->dev_dir,
 		  lv->vg->name,
 		  lv->name,
 		  lv->vg->name,
-		  (lv->status & (LVM_READ | LVM_WRITE)) >> 8, inkernel ? 1 : 0,
+		  ((lv->status & (LVM_READ | LVM_WRITE)) >> 8) |
+		  ((inkernel && info.read_only) ? 4 : 0), inkernel ? 1 : 0,
 		  /* FIXME lv->lv_number,  */
 		  inkernel ? info.open_count : 0, lv->size, lv->le_count,
 		  /* FIXME Add num allocated to struct! lv->lv_allocated_le, */
@@ -469,30 +424,56 @@ void lvdisplay_colons(const struct logical_volume *lv)
 
 int lvdisplay_full(struct cmd_context *cmd,
 		   const struct logical_volume *lv,
-		   void *handle __attribute((unused)))
+		   void *handle __attribute__((unused)))
 {
 	struct lvinfo info;
 	int inkernel, snap_active = 0;
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
+	const char *access_str;
 	struct lv_segment *snap_seg = NULL, *mirror_seg = NULL;
-	float snap_percent;	/* fused, fsize; */
-	percent_range_t percent_range;
+	struct lv_segment *seg = NULL;
+	int lvm1compat;
+	dm_percent_t snap_percent;
+	int thin_data_active = 0, thin_metadata_active = 0;
+	dm_percent_t thin_data_percent, thin_metadata_percent;
+	int thin_active = 0;
+	dm_percent_t thin_percent;
 
 	if (!id_write_format(&lv->lvid.id[1], uuid, sizeof(uuid)))
 		return_0;
 
-	inkernel = lv_info(cmd, lv, &info, 1, 1) && info.exists;
+	inkernel = lv_info(cmd, lv, 0, &info, 1, 1) && info.exists;
+
+	if ((lv->status & LVM_WRITE) && inkernel && info.read_only)
+		access_str = "read/write (activated read only)";
+	else if (lv->status & LVM_WRITE)
+		access_str = "read/write";
+	else
+		access_str = "read only";
 
 	log_print("--- Logical volume ---");
 
-	log_print("LV Name                %s%s/%s", lv->vg->cmd->dev_dir,
-		  lv->vg->name, lv->name);
+	lvm1compat = find_config_tree_bool(cmd, global_lvdisplay_shows_full_device_path_CFG, NULL);
+
+	if (lvm1compat)
+		/* /dev/vgname/lvname doen't actually exist for internal devices */
+		log_print("LV Name                %s%s/%s",
+			  lv->vg->cmd->dev_dir, lv->vg->name, lv->name);
+	else if (lv_is_visible(lv)) {
+		/* Thin pool does not have /dev/vg/name link */
+		if (!lv_is_thin_pool(lv))
+			log_print("LV Path                %s%s/%s",
+				  lv->vg->cmd->dev_dir,
+				  lv->vg->name, lv->name);
+		log_print("LV Name                %s", lv->name);
+	} else
+		log_print("Internal LV Name       %s", lv->name);
+
 	log_print("VG Name                %s", lv->vg->name);
-
 	log_print("LV UUID                %s", uuid);
-
-	log_print("LV Write Access        %s",
-		  (lv->status & LVM_WRITE) ? "read/write" : "read only");
+	log_print("LV Write Access        %s", access_str);
+	log_print("LV Creation host, time %s, %s",
+		  lv_host_dup(cmd->mem, lv), lv_time_dup(cmd->mem, lv));
 
 	if (lv_is_origin(lv)) {
 		log_print("LV snapshot status     source of");
@@ -501,33 +482,69 @@ int lvdisplay_full(struct cmd_context *cmd,
 				       origin_list) {
 			if (inkernel &&
 			    (snap_active = lv_snapshot_percent(snap_seg->cow,
-							       &snap_percent,
-							       &percent_range)))
-				if (percent_range == PERCENT_INVALID)
+							       &snap_percent)))
+				if (snap_percent == DM_PERCENT_INVALID)
 					snap_active = 0;
-			log_print("                       %s%s/%s [%s]",
-				  lv->vg->cmd->dev_dir, lv->vg->name,
-				  snap_seg->cow->name,
-				  snap_active ? "active" : "INACTIVE");
+			if (lvm1compat)
+				log_print("                       %s%s/%s [%s]",
+					  lv->vg->cmd->dev_dir, lv->vg->name,
+					  snap_seg->cow->name,
+					  snap_active ? "active" : "INACTIVE");
+			else
+				log_print("                       %s [%s]",
+					  snap_seg->cow->name,
+					  snap_active ? "active" : "INACTIVE");
 		}
 		snap_seg = NULL;
-	} else if ((snap_seg = find_cow(lv))) {
+	} else if ((snap_seg = find_snapshot(lv))) {
 		if (inkernel &&
 		    (snap_active = lv_snapshot_percent(snap_seg->cow,
-						       &snap_percent,
-						       &percent_range)))
-			if (percent_range == PERCENT_INVALID)
+						       &snap_percent)))
+			if (snap_percent == DM_PERCENT_INVALID)
 				snap_active = 0;
 
-		log_print("LV snapshot status     %s destination for %s%s/%s",
-			  snap_active ? "active" : "INACTIVE",
-			  lv->vg->cmd->dev_dir, lv->vg->name,
-			  snap_seg->origin->name);
+		if (lvm1compat)
+			log_print("LV snapshot status     %s destination for %s%s/%s",
+				  snap_active ? "active" : "INACTIVE",
+				  lv->vg->cmd->dev_dir, lv->vg->name,
+				  snap_seg->origin->name);
+		else
+			log_print("LV snapshot status     %s destination for %s",
+				  snap_active ? "active" : "INACTIVE",
+				  snap_seg->origin->name);
+	}
+
+	if (lv_is_thin_volume(lv)) {
+		seg = first_seg(lv);
+		log_print("LV Pool name           %s", seg->pool_lv->name);
+		if (seg->origin)
+			log_print("LV Thin origin name    %s",
+				  seg->origin->name);
+		if (seg->external_lv)
+			log_print("LV External origin name %s",
+				  seg->external_lv->name);
+		if (seg->merge_lv)
+			log_print("LV merging to          %s",
+				  seg->merge_lv->name);
+		if (inkernel)
+			thin_active = lv_thin_percent(lv, 0, &thin_percent);
+		if (lv_is_merging_origin(lv))
+			log_print("LV merged with         %s",
+				  find_snapshot(lv)->lv->name);
+	} else if (lv_is_thin_pool(lv)) {
+		if (lv_info(cmd, lv, 1, &info, 1, 1) && info.exists) {
+			thin_data_active = lv_thin_pool_percent(lv, 0, &thin_data_percent);
+			thin_metadata_active = lv_thin_pool_percent(lv, 1, &thin_metadata_percent);
+		}
+		/* FIXME: display thin_pool targets transid for activated LV as well */
+		seg = first_seg(lv);
+		log_print("LV Pool metadata       %s", seg->metadata_lv->name);
+		log_print("LV Pool data           %s", seg_lv(seg, 0)->name);
 	}
 
 	if (inkernel && info.suspended)
 		log_print("LV Status              suspended");
-	else
+	else if (activation())
 		log_print("LV Status              %savailable",
 			  inkernel ? "" : "NOT ");
 
@@ -542,6 +559,18 @@ int lvdisplay_full(struct cmd_context *cmd,
 		  display_size(cmd,
 			       snap_seg ? snap_seg->origin->size : lv->size));
 
+	if (thin_data_active)
+		log_print("Allocated pool data    %.2f%%",
+			  dm_percent_to_float(thin_data_percent));
+
+	if (thin_metadata_active)
+		log_print("Allocated metadata     %.2f%%",
+			  dm_percent_to_float(thin_metadata_percent));
+
+	if (thin_active)
+		log_print("Mapped size            %.2f%%",
+			  dm_percent_to_float(thin_percent));
+
 	log_print("Current LE             %u",
 		  snap_seg ? snap_seg->origin->le_count : lv->le_count);
 
@@ -551,14 +580,15 @@ int lvdisplay_full(struct cmd_context *cmd,
 		log_print("COW-table LE           %u", lv->le_count);
 
 		if (snap_active)
-			log_print("Allocated to snapshot  %.2f%% ", snap_percent);	
+			log_print("Allocated to snapshot  %.2f%%",
+				  dm_percent_to_float(snap_percent));
 
 		log_print("Snapshot chunk size    %s",
 			  display_size(cmd, (uint64_t) snap_seg->chunk_size));
 	}
 
 	if (lv->status & MIRRORED) {
- 		mirror_seg = first_seg(lv);
+		mirror_seg = first_seg(lv);
 		log_print("Mirrored volumes       %" PRIu32, mirror_seg->area_count);
 		if (lv->status & CONVERTING)
 			log_print("LV type        Mirror undergoing conversion");
@@ -633,10 +663,15 @@ int lvdisplay_segments(const struct logical_volume *lv)
 	log_print("--- Segments ---");
 
 	dm_list_iterate_items(seg, &lv->segments) {
-		log_print("Logical extent %u to %u:",
+		log_print("%s extents %u to %u:",
+			  lv_is_virtual(lv) ? "Virtual" : "Logical",
 			  seg->le, seg->le + seg->len - 1);
 
 		log_print("  Type\t\t%s", seg->segtype->ops->name(seg));
+
+		if (seg->segtype->ops->target_monitored)
+			log_print("  Monitoring\t\t%s",
+				  lvseg_monitor_dup(lv->vg->cmd->mem, seg));
 
 		if (seg->segtype->ops->display)
 			seg->segtype->ops->display(seg);
@@ -646,7 +681,7 @@ int lvdisplay_segments(const struct logical_volume *lv)
 	return 1;
 }
 
-void vgdisplay_extents(const struct volume_group *vg __attribute((unused)))
+void vgdisplay_extents(const struct volume_group *vg __attribute__((unused)))
 {
 }
 
@@ -654,7 +689,7 @@ void vgdisplay_full(const struct volume_group *vg)
 {
 	uint32_t access_str;
 	uint32_t active_pvs;
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
 
 	active_pvs = vg->pv_count - vg_missing_pv_count(vg);
 
@@ -664,7 +699,7 @@ void vgdisplay_full(const struct volume_group *vg)
 	log_print("Format                %s", vg->fid->fmt->name);
 	if (vg->fid->fmt->features & FMT_MDAS) {
 		log_print("Metadata Areas        %d",
-			  dm_list_size(&vg->fid->metadata_areas));
+			  vg_mda_count(vg));
 		log_print("Metadata Sequence No  %d", vg->seqno);
 	}
 	access_str = vg->status & (LVM_READ | LVM_WRITE);
@@ -702,14 +737,14 @@ void vgdisplay_full(const struct volume_group *vg)
 			       (uint64_t) vg->extent_count * vg->extent_size));
 
 	log_print("PE Size               %s",
-		  display_size(vg->cmd, (uint64_t) vg->extent_size));
+		  display_size(vg->cmd, vg->extent_size));
 
 	log_print("Total PE              %u", vg->extent_count);
 
 	log_print("Alloc PE / Size       %u / %s",
 		  vg->extent_count - vg->free_count,
 		  display_size(vg->cmd,
-			       ((uint64_t) vg->extent_count - vg->free_count) *
+			       (uint64_t) (vg->extent_count - vg->free_count) *
 			       vg->extent_size));
 
 	log_print("Free  PE / Size       %u / %s", vg->free_count,
@@ -728,7 +763,7 @@ void vgdisplay_colons(const struct volume_group *vg)
 {
 	uint32_t active_pvs;
 	const char *access_str;
-	char uuid[64] __attribute((aligned(8)));
+	char uuid[64] __attribute__((aligned(8)));
 
 	active_pvs = vg->pv_count - vg_missing_pv_count(vg);
 
@@ -802,35 +837,93 @@ void display_segtypes(const struct cmd_context *cmd)
 	}
 }
 
+void display_tags(const struct cmd_context *cmd)
+{
+	const struct dm_str_list *sl;
+
+	dm_list_iterate_items(sl, &cmd->tags) {
+		log_print("%s", sl->str);
+	}
+}
+
+void display_name_error(name_error_t name_error)
+{
+	switch(name_error) {
+	case NAME_VALID:
+		/* Valid name */
+		break;
+	case NAME_INVALID_EMPTY:
+		log_error("Name is zero length.");
+		break;
+	case NAME_INVALID_HYPEN:
+		log_error("Name cannot start with hyphen.");
+		break;
+	case NAME_INVALID_DOTS:
+		log_error("Name starts with . or .. and has no "
+			  "following character(s).");
+		break;
+	case NAME_INVALID_CHARSET:
+		log_error("Name contains invalid character, valid set includes: "
+			  "[a-zA-Z0-9.-_+].");
+		break;
+	case NAME_INVALID_LENGTH:
+		/* Report that name length - 1 to accommodate nul*/
+		log_error("Name length exceeds maximum limit of %d.", (NAME_LEN - 1));
+		break;
+	default:
+		log_error(INTERNAL_ERROR "Unknown error %d on name validation.", name_error);
+		break;
+	}
+}
+
+/*
+ * Prompt for y or n from stdin.
+ * Defaults to 'no' in silent mode.
+ * All callers should support --yes and/or --force to override this.
+ */
 char yes_no_prompt(const char *prompt, ...)
 {
-	int c = 0, ret = 0;
+	int c = 0, ret = 0, cb = 0;
 	va_list ap;
 
 	sigint_allow();
 	do {
 		if (c == '\n' || !c) {
 			va_start(ap, prompt);
-			vprintf(prompt, ap);
+			vfprintf(stderr, prompt, ap);
 			va_end(ap);
-			fflush(stdout);
+			fflush(stderr);
+			if (silent_mode()) {
+				fputc('n', stderr);
+				ret = 'n';
+				break;
+			}
+			ret = 0;
 		}
 
 		if ((c = getchar()) == EOF) {
-			ret = 'n';
+			ret = 'n'; /* SIGINT */
+			cb = 1;
 			break;
 		}
 
 		c = tolower(c);
-		if ((c == 'y') || (c == 'n'))
-			ret = c;
-	} while (!ret || c != '\n');
+		if ((c == 'y') || (c == 'n')) {
+			/* If both 'y' and 'n' given, begin again. */
+			if (ret && c != ret)
+				ret = -1;
+			else
+				ret = c;
+		}
+	} while (ret < 1 || c != '\n');
 
 	sigint_restore();
 
+	if (cb && !sigint_caught())
+		fputc(ret, stderr);
+
 	if (c != '\n')
-		printf("\n");
+		fputc('\n', stderr);
 
 	return ret;
 }
-

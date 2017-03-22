@@ -17,7 +17,11 @@
 #define _LVM_UUID_H
 
 #define ID_LEN 32
-#define ID_LEN_S "32"
+
+#include <inttypes.h>
+#include <sys/types.h>
+
+struct dm_pool;
 
 struct id {
 	int8_t uuid[ID_LEN];
@@ -53,5 +57,7 @@ int id_write_format(const struct id *id, char *buffer, size_t size);
  * Reads a formatted uuid.
  */
 int id_read_format(struct id *id, const char *buffer);
+
+char *id_format_and_copy(struct dm_pool *mem, const struct id *id);
 
 #endif

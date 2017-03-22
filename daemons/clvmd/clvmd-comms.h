@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2009 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -23,6 +23,7 @@
 struct local_client;
 
 struct cluster_ops {
+	const char *name;
 	void (*cluster_init_completed) (void);
 
 	int (*cluster_send_message) (const void *buf, int msglen,
@@ -53,13 +54,6 @@ struct cluster_ops {
 	int (*sync_unlock) (const char *resource, int lockid);
 
 };
-
-#ifdef USE_GULM
-#  include "tcp-comms.h"
-struct cluster_ops *init_gulm_cluster(void);
-#define MAX_CSID_LEN 			GULM_MAX_CSID_LEN
-#define MAX_CLUSTER_MEMBER_NAME_LEN	GULM_MAX_CLUSTER_MEMBER_NAME_LEN
-#endif
 
 #ifdef USE_CMAN
 #  include <netinet/in.h>

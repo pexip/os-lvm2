@@ -16,12 +16,12 @@
 #ifndef _LVM_FORMAT_TEXT_H
 #define _LVM_FORMAT_TEXT_H
 
-#include "lvm-types.h"
 #include "metadata.h"
 
 #define FMT_TEXT_NAME "lvm2"
 #define FMT_TEXT_ALIAS "text"
 #define FMT_TEXT_ORPHAN_VG_NAME ORPHAN_VG_NAME(FMT_TEXT_NAME)
+#define FMT_TEXT_MAX_MDAS_PER_PV 2
 
 /*
  * Archives a vg config.  'retain_days' is the minimum number of
@@ -43,9 +43,12 @@ int backup_list(struct cmd_context *cmd, const char *dir, const char *vgname);
 /*
  * The text format can read and write a volume_group to a file.
  */
+struct text_context {
+	const char *path_live;	/* Path to file holding live metadata */
+	const char *path_edit;	/* Path to file holding edited metadata */
+	const char *desc;	/* Description placed inside file */
+};
 struct format_type *create_text_format(struct cmd_context *cmd);
-void *create_text_context(struct cmd_context *cmd, const char *path,
-			  const char *desc);
 
 struct labeller *text_labeller_create(const struct format_type *fmt);
 
@@ -54,14 +57,23 @@ int pvhdr_read(struct device *dev, char *buf);
 int add_da(struct dm_pool *mem, struct dm_list *das,
 	   uint64_t start, uint64_t size);
 void del_das(struct dm_list *das);
-
+int add_ba(struct dm_pool *mem, struct dm_list *eas,
+	   uint64_t start, uint64_t size);
+void del_bas(struct dm_list *eas);
 int add_mda(const struct format_type *fmt, struct dm_pool *mem, struct dm_list *mdas,
-	    struct device *dev, uint64_t start, uint64_t size);
+	    struct device *dev, uint64_t start, uint64_t size, unsigned ignored);
 void del_mdas(struct dm_list *mdas);
 
-const char *vgname_from_mda(const struct format_type *fmt,
-			    struct device_area *dev_area, struct id *vgid,
-			    uint64_t *vgstatus, char **creation_host,
-			    uint64_t *mda_free_sectors);
+/* On disk */
+struct disk_locn {
+	uint64_t offset;	/* Offset in bytes to start sector */
+	uint64_t size;		/* Bytes */
+} __attribute__ ((packed));
+
+/* Data areas (holding PEs) */
+struct data_area_list {
+	struct dm_list list;
+	struct disk_locn disk_locn;
+};
 
 #endif

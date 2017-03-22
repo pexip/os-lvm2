@@ -17,19 +17,17 @@
 
 static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 			   struct volume_group *vg,
-			   void *handle __attribute((unused)))
+			   void *handle __attribute__((unused)))
 {
 	unsigned lv_count, missing;
 	force_t force;
 
-	if (!vg_check_status(vg, EXPORTED_VG)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!vg_check_status(vg, EXPORTED_VG))
+		return_ECMD_FAILED;
 
 	lv_count = vg_visible_lvs(vg);
 
-	force = arg_count(cmd, force_ARG);
+	force = (force_t) arg_count(cmd, force_ARG);
 	if (lv_count) {
 		if (force == PROMPT) {
 			if ((missing = vg_missing_pv_count(vg)))
@@ -43,21 +41,17 @@ static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 				return ECMD_FAILED;
 			}
 		}
-		if (!remove_lvs_in_vg(cmd, vg, force)) {
-			stack;
-			return ECMD_FAILED;
-		}
+		if (!remove_lvs_in_vg(cmd, vg, force))
+			return_ECMD_FAILED;
 	}
 
-	if (!vg_remove_check(vg)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	if (!force && !vg_remove_check(vg))
+		return_ECMD_FAILED;
 
-	if (!vg_remove(vg)) {
-		stack;
-		return ECMD_FAILED;
-	}
+	vg_remove_pvs(vg);
+
+	if (!vg_remove(vg))
+		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;
 }
