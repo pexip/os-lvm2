@@ -2,6 +2,7 @@
 #
 # chkconfig: - 22 78
 # description: Starts and stops cmirrord
+# pidfile: @CMIRRORD_PIDFILE@
 #
 # For Red-Hat-based distributions such as Fedora, RHEL, CentOS.
 #
@@ -21,6 +22,7 @@ LOCK_FILE="/var/lock/subsys/$DAEMON"
 
 start()
 {
+	rtrn=0
 	if ! pidof $DAEMON > /dev/null 
 	then 
 		echo -n "Starting $DAEMON: "

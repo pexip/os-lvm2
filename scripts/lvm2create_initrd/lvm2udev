@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# $Id: lvm2udev,v 1.1 2004/06/07 16:20:05 agk Exp $
+# $Id$
 
 # simple startup script to create lvm2 devices if /dev is a mountpoint, there
 # are active dm- devices, and an executable /sbin/vgscan.

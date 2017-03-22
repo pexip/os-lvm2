@@ -16,9 +16,9 @@
 #include "lib.h"
 #include "archiver.h"
 #include "format-text.h"
-#include "lvm-file.h"
 #include "lvm-string.h"
 #include "lvmcache.h"
+#include "lvmetad.h"
 #include "toolcontext.h"
 #include "locking.h"
 
@@ -40,6 +40,8 @@ int archive_init(struct cmd_context *cmd, const char *dir,
 		 unsigned int keep_days, unsigned int keep_min,
 		 int enabled)
 {
+	archive_exit(cmd);
+
 	if (!(cmd->archive_params = dm_pool_zalloc(cmd->libmem,
 						sizeof(*cmd->archive_params)))) {
 		log_error("archive_params alloc failed");
@@ -67,8 +69,7 @@ void archive_exit(struct cmd_context *cmd)
 {
 	if (!cmd->archive_params)
 		return;
-	if (cmd->archive_params->dir)
-		dm_free(cmd->archive_params->dir);
+	dm_free(cmd->archive_params->dir);
 	memset(cmd->archive_params, 0, sizeof(*cmd->archive_params));
 }
 
@@ -82,13 +83,16 @@ static char *_build_desc(struct dm_pool *mem, const char *line, int before)
 	size_t len = strlen(line) + 32;
 	char *buffer;
 
-	if (!(buffer = dm_pool_zalloc(mem, strlen(line) + 32)))
-		return_NULL;
+	if (!(buffer = dm_pool_alloc(mem, len))) {
+		log_error("Failed to allocate desc.");
+		return NULL;
+	}
 
-	if (snprintf(buffer, len,
-		     "Created %s executing '%s'",
-		     before ? "*before*" : "*after*", line) < 0)
-		return_NULL;
+	if (dm_snprintf(buffer, len, "Created %s executing '%s'",
+			before ? "*before*" : "*after*", line) < 0) {
+		log_error("Failed to build desc.");
+		return NULL;
+	}
 
 	return buffer;
 }
@@ -107,10 +111,20 @@ static int __archive(struct volume_group *vg)
 
 int archive(struct volume_group *vg)
 {
-	if (!vg->cmd->archive_params->enabled || !vg->cmd->archive_params->dir)
+	/* Don't archive orphan VGs. */
+	if (is_orphan_vg(vg->name))
 		return 1;
 
+	if (vg_is_archived(vg))
+		return 1; /* VG has been already archived */
+
+	if (!vg->cmd->archive_params->enabled || !vg->cmd->archive_params->dir) {
+		vg->status |= ARCHIVED_VG;
+		return 1;
+	}
+
 	if (test_mode()) {
+		vg->status |= ARCHIVED_VG;
 		log_verbose("Test mode: Skipping archiving of volume group.");
 		return 1;
 	}
@@ -130,6 +144,8 @@ int archive(struct volume_group *vg)
 			  vg->name);
 		return 0;
 	}
+
+	vg->status |= ARCHIVED_VG;
 
 	return 1;
 }
@@ -156,6 +172,8 @@ int archive_display_file(struct cmd_context *cmd, const char *file)
 int backup_init(struct cmd_context *cmd, const char *dir,
 		int enabled)
 {
+	backup_exit(cmd);
+
 	if (!(cmd->backup_params = dm_pool_zalloc(cmd->libmem,
 					       sizeof(*cmd->backup_params)))) {
 		log_error("backup_params alloc failed");
@@ -179,8 +197,7 @@ void backup_exit(struct cmd_context *cmd)
 {
 	if (!cmd->backup_params)
 		return;
-	if (cmd->backup_params->dir)
-		dm_free(cmd->backup_params->dir);
+	dm_free(cmd->backup_params->dir);
 	memset(cmd->backup_params, 0, sizeof(*cmd->backup_params));
 }
 
@@ -215,7 +232,7 @@ int backup_locally(struct volume_group *vg)
 	}
 
 	if (test_mode()) {
-		log_verbose("Test mode: Skipping volume group backup.");
+		log_verbose("Test mode: Skipping backup of volume group.");
 		return 1;
 	}
 
@@ -238,8 +255,13 @@ int backup_locally(struct volume_group *vg)
 
 int backup(struct volume_group *vg)
 {
+	/* Don't back up orphan VGs. */
+	if (is_orphan_vg(vg->name))
+		return 1;
+
 	if (vg_is_clustered(vg))
-		remote_backup_metadata(vg);
+		if (!remote_backup_metadata(vg))
+			stack;
 
 	return backup_locally(vg);
 }
@@ -257,7 +279,9 @@ int backup_remove(struct cmd_context *cmd, const char *vg_name)
 	/*
 	 * Let this fail silently.
 	 */
-	unlink(path);
+	if (unlink(path))
+		log_sys_debug("unlink", path);
+
 	return 1;
 }
 
@@ -266,33 +290,38 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 {
 	struct volume_group *vg = NULL;
 	struct format_instance *tf;
+	struct format_instance_ctx fic;
+	struct text_context tc = {.path_live = file,
+				  .path_edit = NULL,
+				  .desc = cmd->cmd_line};
 	struct metadata_area *mda;
-	void *context;
 
-	if (!(context = create_text_context(cmd, file,
-					    cmd->cmd_line)) ||
-	    !(tf = cmd->fmt_backup->ops->create_instance(cmd->fmt_backup, NULL,
-							 NULL, context))) {
+	fic.type = FMT_INSTANCE_PRIVATE_MDAS;
+	fic.context.private = &tc;
+	if (!(tf = cmd->fmt_backup->ops->create_instance(cmd->fmt_backup, &fic))) {
 		log_error("Couldn't create text format object.");
 		return NULL;
 	}
 
-	dm_list_iterate_items(mda, &tf->metadata_areas) {
-		if (!(vg = mda->ops->vg_read(tf, vg_name, mda)))
+	dm_list_iterate_items(mda, &tf->metadata_areas_in_use) {
+		if (!(vg = mda->ops->vg_read(tf, vg_name, mda, 0)))
 			stack;
 		break;
 	}
 
-	tf->fmt->ops->destroy_instance(tf);
+	if (!vg)
+		tf->fmt->ops->destroy_instance(tf);
+
 	return vg;
 }
 
 /* ORPHAN and VG locks held before calling this */
-int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg)
+int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg, int drop_lvmetad)
 {
 	struct pv_list *pvl;
-	struct physical_volume *pv;
-	struct lvmcache_info *info;
+	struct format_instance *fid;
+	struct format_instance_ctx fic;
+	uint32_t tmp;
 
 	/*
 	 * FIXME: Check that the PVs referenced in the backup are
@@ -300,41 +329,51 @@ int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg)
 	 */
 
 	/* Attempt to write out using currently active format */
-	if (!(vg->fid = cmd->fmt->ops->create_instance(cmd->fmt, vg->name,
-						       NULL, NULL))) {
+	fic.type = FMT_INSTANCE_AUX_MDAS;
+	fic.context.vg_ref.vg_name = vg->name;
+	fic.context.vg_ref.vg_id = NULL;
+	if (!(fid = cmd->fmt->ops->create_instance(cmd->fmt, &fic))) {
 		log_error("Failed to allocate format instance");
 		return 0;
 	}
+	vg_set_fid(vg, fid);
 
 	/*
 	 * Setting vg->old_name to a blank value will explicitly
 	 * disable any attempt to check VG name in existing metadata.
 	*/
-	vg->old_name = dm_pool_strdup(vg->vgmem, "");
+	if (!(vg->old_name = dm_pool_strdup(vg->vgmem, ""))) {
+		log_error("Failed to duplicate empty name.");
+		return 0;
+	}
 
 	/* Add any metadata areas on the PVs */
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		pv = pvl->pv;
-		if (!(info = info_from_pvid(pv->dev->pvid, 0))) {
-			log_error("PV %s missing from cache",
-				  pv_dev_name(pv));
-			return 0;
-		}
-		if (cmd->fmt != info->fmt) {
-			log_error("PV %s is a different format (seqno %s)",
-				  pv_dev_name(pv), info->fmt->name);
-			return 0;
-		}
-		if (!vg->fid->fmt->ops->
-		    pv_setup(vg->fid->fmt, UINT64_C(0), 0, 0, 0, 0, 0UL,
-			     UINT64_C(0), &vg->fid->metadata_areas, pv, vg)) {
+		tmp = vg->extent_size;
+		vg->extent_size = 0;
+		if (!vg->fid->fmt->ops->pv_setup(vg->fid->fmt, pvl->pv, vg)) {
+			vg->extent_size = tmp;
 			log_error("Format-specific setup for %s failed",
-				  pv_dev_name(pv));
+				  pv_dev_name(pvl->pv));
 			return 0;
+		}
+		vg->extent_size = tmp;
+	}
+
+	if (!vg_write(vg))
+		return_0;
+
+	if (drop_lvmetad && lvmetad_active()) {
+		struct volume_group *vg_lvmetad = lvmetad_vg_lookup(cmd, vg->name, NULL);
+		if (vg_lvmetad) {
+			/* FIXME Cope with failure to update lvmetad */
+			if (!lvmetad_vg_remove(vg_lvmetad))
+				stack;
+			release_vg(vg_lvmetad);
 		}
 	}
 
-	if (!vg_write(vg) || !vg_commit(vg))
+	if (!vg_commit(vg))
 		return_0;
 
 	return 1;
@@ -342,10 +381,11 @@ int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 /* ORPHAN and VG locks held before calling this */
 int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
-			     const char *file)
+			     const char *file, int force)
 {
 	struct volume_group *vg;
 	int missing_pvs, r = 0;
+	const struct lv_list *lvl;
 
 	/*
 	 * Read in the volume group from the text file.
@@ -353,18 +393,35 @@ int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
 	if (!(vg = backup_read_vg(cmd, vg_name, file)))
 		return_0;
 
+	/* FIXME: Restore support is missing for now */
+	dm_list_iterate_items(lvl, &vg->lvs) {
+		if (lv_is_thin_type(lvl->lv)) {
+			if (!force) {
+				log_error("Consider using option --force to restore "
+					  "Volume Group %s with thin volumes.",
+					  vg->name);
+				goto out;
+			} else {
+				log_warn("WARNING: Forced restore of Volume Group "
+					 "%s with thin volumes.", vg->name);
+				break;
+			}
+		}
+	}
+
 	missing_pvs = vg_missing_pv_count(vg);
 	if (missing_pvs == 0)
-		r = backup_restore_vg(cmd, vg);
+		r = backup_restore_vg(cmd, vg, 1);
 	else
 		log_error("Cannot restore Volume Group %s with %i PVs "
 			  "marked as missing.", vg->name, missing_pvs);
 
-	vg_release(vg);
+out:
+	release_vg(vg);
 	return r;
 }
 
-int backup_restore(struct cmd_context *cmd, const char *vg_name)
+int backup_restore(struct cmd_context *cmd, const char *vg_name, int force)
 {
 	char path[PATH_MAX];
 
@@ -374,30 +431,39 @@ int backup_restore(struct cmd_context *cmd, const char *vg_name)
 		return 0;
 	}
 
-	return backup_restore_from_file(cmd, vg_name, path);
+	return backup_restore_from_file(cmd, vg_name, path, force);
 }
 
 int backup_to_file(const char *file, const char *desc, struct volume_group *vg)
 {
 	int r = 0;
 	struct format_instance *tf;
+	struct format_instance_ctx fic;
+	struct text_context tc = {.path_live = file,
+				  .path_edit = NULL,
+				  .desc = desc};
 	struct metadata_area *mda;
-	void *context;
 	struct cmd_context *cmd;
 
 	cmd = vg->cmd;
 
 	log_verbose("Creating volume group backup \"%s\" (seqno %u).", file, vg->seqno);
 
-	if (!(context = create_text_context(cmd, file, desc)) ||
-	    !(tf = cmd->fmt_backup->ops->create_instance(cmd->fmt_backup, NULL,
-							 NULL, context))) {
+	fic.type = FMT_INSTANCE_PRIVATE_MDAS;
+	fic.context.private = &tc;
+	if (!(tf = cmd->fmt_backup->ops->create_instance(cmd->fmt_backup, &fic))) {
 		log_error("Couldn't create backup object.");
 		return 0;
 	}
 
+	if (dm_list_empty(&tf->metadata_areas_in_use)) {
+		log_error(INTERNAL_ERROR "No in use metadata areas to write.");
+		tf->fmt->ops->destroy_instance(tf);
+		return 0;
+	}
+
 	/* Write and commit the metadata area */
-	dm_list_iterate_items(mda, &tf->metadata_areas) {
+	dm_list_iterate_items(mda, &tf->metadata_areas_in_use) {
 		if (!(r = mda->ops->vg_write(tf, vg, mda))) {
 			stack;
 			continue;
@@ -421,6 +487,11 @@ void check_current_backup(struct volume_group *vg)
 	struct volume_group *vg_backup;
 	int old_suppress;
 
+	if (!vg->cmd->backup_params->enabled || !vg->cmd->backup_params->dir) {
+		log_debug("Skipping check for current backup, since backup is disabled.");
+		return;
+	}
+
 	if (vg_is_exported(vg))
 		return;
 
@@ -436,15 +507,18 @@ void check_current_backup(struct volume_group *vg)
 	    (vg->seqno == vg_backup->seqno) &&
 	    (id_equal(&vg->id, &vg_backup->id))) {
 		log_suppress(old_suppress);
-		vg_release(vg_backup);
+		release_vg(vg_backup);
 		return;
 	}
 	log_suppress(old_suppress);
 
 	if (vg_backup) {
-		archive(vg_backup);
-		vg_release(vg_backup);
+		if (!archive(vg_backup))
+			stack;
+		release_vg(vg_backup);
 	}
-	archive(vg);
-	backup_locally(vg);
+	if (!archive(vg))
+		stack;
+	if (!backup_locally(vg))
+		stack;
 }

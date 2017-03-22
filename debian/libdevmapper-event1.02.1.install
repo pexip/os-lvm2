@@ -1,1 +1,1 @@
-lib/libdevmapper-event.so.*
+lib/*/libdevmapper-event.so.*

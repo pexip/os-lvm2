@@ -1,32 +1,25 @@
 --- a/configure.in
 +++ b/configure.in
-@@ -34,7 +34,6 @@
- 		CLDWHOLEARCHIVE="-Wl,-whole-archive"
- 		CLDNOWHOLEARCHIVE="-Wl,-no-whole-archive"
- 		LDDEPS="$LDDEPS .export.sym"
--		LDFLAGS="$LDFLAGS -Wl,--export-dynamic"
- 		LIB_SUFFIX=so
- 		DEVMAPPER=yes
- 		ODIRECT=yes
-@@ -307,7 +306,7 @@
+@@ -587,7 +587,7 @@
  AC_MSG_CHECKING(whether to enable readline)
  AC_ARG_ENABLE([readline],
-   [  --disable-readline      Disable readline support],
--  [READLINE=$enableval], [READLINE=maybe])
-+  [READLINE=$enableval], [READLINE=yes])
+ 	      AC_HELP_STRING([--disable-readline], [disable readline support]),
+-	      READLINE=$enableval, READLINE=maybe)
++	      READLINE=$enableval, READLINE=yes)
  AC_MSG_RESULT($READLINE)
  
  ################################################################################
-@@ -825,20 +824,9 @@
+@@ -1310,21 +1310,9 @@
  ################################################################################
  dnl -- Check for selinux
- if test x$SELINUX = xyes; then
+ if test "$SELINUX" = yes; then
 -	AC_CHECK_LIB([sepol], [sepol_check_context], [
 -		AC_DEFINE([HAVE_SEPOL], 1, [Define to 1 if sepol_check_context is available.])
 -		SELINUX_LIBS="-lsepol"])
 -
 -	AC_CHECK_LIB([selinux], [is_selinux_enabled], [
 -		AC_CHECK_HEADERS([selinux/selinux.h],, hard_bailout)
+-		AC_CHECK_HEADERS([selinux/label.h])
 -		AC_DEFINE([HAVE_SELINUX], 1, [Define to 1 to include support for selinux.])
 -		SELINUX_LIBS="-lselinux $SELINUX_LIBS"
 -		SELINUX_PC="libselinux"
@@ -41,12 +34,12 @@
  fi
  
  ################################################################################
-@@ -859,49 +847,6 @@
+@@ -1345,49 +1333,6 @@
  AC_CHECK_HEADERS(getopt.h, AC_DEFINE([HAVE_GETOPTLONG], 1, [Define to 1 if getopt_long is available.]))
  
  ################################################################################
 -dnl -- Check for readline (Shamelessly copied from parted 1.4.17)
--if test x$READLINE != xno; then
+-if test "$READLINE" != no; then
 -	lvm_saved_libs=$LIBS
 -	AC_SEARCH_LIBS([tgetent], [tinfo ncurses curses termcap termlib],
 -		READLINE_LIBS=$ac_cv_search_tgetent, [
@@ -90,18 +83,18 @@
 -################################################################################
  dnl -- Internationalisation stuff
  AC_MSG_CHECKING(whether to enable internationalisation)
- AC_ARG_ENABLE(nls, [  --enable-nls            Enable Native Language Support],
-@@ -959,7 +904,8 @@
+ AC_ARG_ENABLE(nls,
+@@ -1467,7 +1412,8 @@
  ################################################################################
  dnl -- Ensure additional headers required
- if test x$READLINE = xyes; then
--	AC_CHECK_HEADERS(readline/readline.h readline/history.h,,AC_MSG_ERROR(bailing out))
+ if test "$READLINE" = yes; then
+-	AC_CHECK_HEADERS(readline/readline.h readline/history.h,,hard_bailout)
 +	AC_CHECK_LIB([readline], [readline], [READLINE_LIBS="-lreadline"], AC_MSG_ERROR(bailing out))
 +	AC_DEFINE([READLINE_SUPPORT], 1, [Define to 1 to include the LVM readline shell.])
  fi
  
- if test x$CLVMD != xnone; then
-@@ -1163,6 +1109,7 @@
+ if test "$CLVMD" != none; then
+@@ -1721,6 +1667,7 @@
  AC_SUBST(SALCK_CFLAGS)
  AC_SUBST(SALCK_LIBS)
  AC_SUBST(SELINUX_LIBS)
@@ -109,43 +102,3 @@
  AC_SUBST(SELINUX_PC)
  AC_SUBST(SNAPSHOTS)
  AC_SUBST(STATICDIR)
---- a/tools/Makefile.in
-+++ b/tools/Makefile.in
-@@ -104,8 +104,6 @@
- 	LVMLIBS += -ldevmapper-event
- endif
- 
--LVMLIBS += -ldevmapper
--
- DEFS += -DLVM_SHARED_PATH=\"$(exec_prefix)/sbin/lvm\"
- 
- CFLOW_LIST = lvmcmdlib.c lvm2cmd.c
-@@ -114,17 +112,17 @@
- 
- include $(top_builddir)/make.tmpl
- 
--LIBS += $(UDEV_LIBS)
-+LIBS += -ldevmapper $(UDEV_LIBS)
- 
- device-mapper: $(TARGETS_DM)
- 
- dmsetup: dmsetup.o $(top_builddir)/libdm/libdevmapper.$(LIB_SUFFIX)
- 	$(CC) $(CFLAGS) $(LDFLAGS) -L$(top_builddir)/libdm \
--	      -o $@ dmsetup.o -ldevmapper $(LIBS)
-+	      -o $@ dmsetup.o $(LIBS)
- 
- dmsetup.static: dmsetup.o $(interfacebuilddir)/libdevmapper.a
- 	$(CC) $(CFLAGS) $(LDFLAGS) -static -L$(interfacebuilddir) \
--	      -o $@ dmsetup.o -ldevmapper $(STATIC_LIBS) $(LIBS)
-+	      -o $@ dmsetup.o $(STATIC_LIBS) $(LIBS)
- 
- all: device-mapper
- 
-@@ -144,6 +142,7 @@
- 	cat $(top_builddir)/lib/liblvm-internal.a > $@
- 	$(AR) rs $@ $(OBJECTS) lvmcmdlib.o lvm2cmd-static.o
- 
-+liblvm2cmd.$(LIB_SUFFIX): LIBS += $(DL_LIBS)
- liblvm2cmd.$(LIB_SUFFIX): liblvm2cmd.a $(LDDEPS)
- 	$(CC) -shared -Wl,-soname,$@.$(LIB_VERSION) \
- 	$(CFLAGS) $(CLDFLAGS) -o $@ $(LVMLIBS) $(LIBS) \

@@ -15,7 +15,6 @@
 
 #include "lib.h"
 #include "config.h"
-#include "lvm-string.h"
 #include "sharedlib.h"
 #include "toolcontext.h"
 
@@ -27,15 +26,17 @@ void get_shared_library_path(struct cmd_context *cmd, const char *libname,
 			     char *path, size_t path_len)
 {
 	struct stat info;
-	const char *lib_dir;
 
 	/* If libname doesn't begin with '/' then use lib_dir/libname,
 	 * if present */
 	if (libname[0] == '/' ||
-	    !(lib_dir = find_config_tree_str(cmd, "global/library_dir", 0)) ||
-	    (dm_snprintf(path, path_len, "%s/%s", lib_dir,
-			  libname) == -1) || stat(path, &info) == -1)
-		strncpy(path, libname, path_len);
+            (!cmd->lib_dir &&
+	     !(cmd->lib_dir = find_config_tree_str(cmd, global_library_dir_CFG, NULL))) ||
+	    (dm_snprintf(path, path_len, "%s/%s", cmd->lib_dir,
+			 libname) == -1) || stat(path, &info) == -1) {
+		strncpy(path, libname, path_len - 1);
+		path[path_len - 1] = '\0';
+	}
 }
 
 void *load_shared_library(struct cmd_context *cmd, const char *libname,

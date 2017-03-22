@@ -17,21 +17,19 @@
 #define _LVM_TEXT_LAYOUT_H
 
 #include "config.h"
-#include "lvm-types.h"
 #include "metadata.h"
 #include "uuid.h"
 
-/* On disk */
-struct disk_locn {
-	uint64_t offset;	/* Offset in bytes to start sector */
-	uint64_t size;		/* Bytes */
-} __attribute__ ((packed));
+/* disk_locn and data_area_list are defined in format-text.h */
 
-/* Data areas (holding PEs) */
-struct data_area_list {
-	struct dm_list list;
-	struct disk_locn disk_locn;
-};
+#define PV_HEADER_EXTENSION_VSN 1
+
+struct pv_header_extension {
+	uint32_t version;
+	uint32_t flags;
+	/* NULL-terminated list of bootloader areas */
+	struct disk_locn bootloader_areas_xl[0];
+} __attribute__ ((packed));
 
 /* Fields with the suffix _xl should be xlate'd wherever they appear */
 /* On disk */
@@ -46,13 +44,23 @@ struct pv_header {
 	struct disk_locn disk_areas_xl[0];	/* Two lists */
 } __attribute__ ((packed));
 
+/*
+ * Ignore this raw location.  This allows us to
+ * ignored metadata areas easily, and thus balance
+ * metadata across VGs with many PVs.
+ */
+#define RAW_LOCN_IGNORED 0x00000001
+
 /* On disk */
 struct raw_locn {
 	uint64_t offset;	/* Offset in bytes to start sector */
 	uint64_t size;		/* Bytes */
 	uint32_t checksum;
-	uint32_t filler;
+	uint32_t flags;
 } __attribute__ ((packed));
+
+int rlocn_is_ignored(const struct raw_locn *rlocn);
+void rlocn_set_ignored(struct raw_locn *rlocn, unsigned mda_ignored);
 
 /* On disk */
 /* Structure size limited to one sector */
@@ -65,6 +73,9 @@ struct mda_header {
 
 	struct raw_locn raw_locns[0];	/* NULL-terminated list */
 } __attribute__ ((packed));
+
+struct mda_header *raw_read_mda_header(const struct format_type *fmt,
+				       struct device_area *dev_area);
 
 struct mda_lists {
 	struct dm_list dirs;
@@ -85,5 +96,12 @@ struct mda_context {
 #define MDA_HEADER_SIZE 512
 #define LVM2_LABEL "LVM2 001"
 #define MDA_SIZE_MIN (8 * (unsigned) lvm_getpagesize())
+
+
+const char *vgname_from_mda(const struct format_type *fmt,
+			    struct mda_header *mdah,
+			    struct device_area *dev_area, struct id *vgid,
+			    uint64_t *vgstatus, char **creation_host,
+			    uint64_t *mda_free_sectors);
 
 #endif

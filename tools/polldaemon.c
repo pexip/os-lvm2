@@ -16,87 +16,34 @@
 #include "tools.h"
 #include "polldaemon.h"
 #include "lvm2cmdline.h"
-#include <signal.h>
-#include <sys/wait.h>
-
-static void _sigchld_handler(int sig __attribute((unused)))
-{
-	while (wait4(-1, NULL, WNOHANG | WUNTRACED, NULL) > 0) ;
-}
-
-/*
- * returns:
- * -1 if the fork failed
- *  0 if the parent
- *  1 if the child
- */
-static int _become_daemon(struct cmd_context *cmd)
-{
-	pid_t pid;
-	struct sigaction act = {
-		{_sigchld_handler},
-		.sa_flags = SA_NOCLDSTOP,
-	};
-
-	log_verbose("Forking background process");
-
-	sigaction(SIGCHLD, &act, NULL);
-
-	if ((pid = fork()) == -1) {
-		log_error("fork failed: %s", strerror(errno));
-		return -1;
-	}
-
-	/* Parent */
-	if (pid > 0)
-		return 0;
-
-	/* Child */
-	if (setsid() == -1)
-		log_error("Background process failed to setsid: %s",
-			  strerror(errno));
-	init_verbose(VERBOSE_BASE_LEVEL);
-
-	close(STDIN_FILENO);
-	close(STDOUT_FILENO);
-	close(STDERR_FILENO);
-
-	strncpy(*cmd->argv, "(lvm2)", strlen(*cmd->argv));
-
-	reset_locking();
-	lvmcache_init();
-	dev_close_all();
-
-	return 1;
-}
 
 progress_t poll_mirror_progress(struct cmd_context *cmd,
 				struct logical_volume *lv, const char *name,
 				struct daemon_parms *parms)
 {
-	float segment_percent = 0.0, overall_percent = 0.0;
-	percent_range_t percent_range, overall_percent_range;
+	dm_percent_t segment_percent = DM_PERCENT_0, overall_percent = DM_PERCENT_0;
 	uint32_t event_nr = 0;
 
-	if (!lv_mirror_percent(cmd, lv, !parms->interval, &segment_percent,
-			       &percent_range, &event_nr) ||
-	    (percent_range == PERCENT_INVALID)) {
+	if (!lv_is_mirrored(lv) ||
+	    !lv_mirror_percent(cmd, lv, !parms->interval, &segment_percent,
+			       &event_nr) ||
+	    (segment_percent == DM_PERCENT_INVALID)) {
 		log_error("ABORTING: Mirror percentage check failed.");
 		return PROGRESS_CHECK_FAILED;
 	}
 
-	overall_percent = copy_percent(lv, &overall_percent_range);
+	overall_percent = copy_percent(lv);
 	if (parms->progress_display)
-		log_print("%s: %s: %.1f%%", name, parms->progress_title,
-			  overall_percent);
+		log_print_unless_silent("%s: %s: %.1f%%", name, parms->progress_title,
+					dm_percent_to_float(overall_percent));
 	else
 		log_verbose("%s: %s: %.1f%%", name, parms->progress_title,
-			    overall_percent);
+			    dm_percent_to_float(overall_percent));
 
-	if (percent_range != PERCENT_100)
+	if (segment_percent != DM_PERCENT_100)
 		return PROGRESS_UNFINISHED;
 
-	if (overall_percent_range == PERCENT_100)
+	if (overall_percent == DM_PERCENT_100)
 		return PROGRESS_FINISHED_ALL;
 
 	return PROGRESS_FINISHED_SEGMENT;
@@ -120,8 +67,10 @@ static int _check_lv_status(struct cmd_context *cmd,
 				  "can't abort.");
 			return 0;
 		}
-		parms->poll_fns->finish_copy(cmd, vg, lv, lvs_changed);
-		return 0;
+		if (!parms->poll_fns->finish_copy(cmd, vg, lv, lvs_changed))
+			return_0;
+
+		return 1;
 	}
 
 	progress = parms->poll_fns->poll_progress(cmd, lv, name, parms);
@@ -142,7 +91,7 @@ static int _check_lv_status(struct cmd_context *cmd,
 	/* Finished? Or progress to next segment? */
 	if (progress == PROGRESS_FINISHED_ALL) {
 		if (!parms->poll_fns->finish_copy(cmd, vg, lv, lvs_changed))
-			return 0;
+			return_0;
 	} else {
 		if (parms->poll_fns->update_metadata &&
 		    !parms->poll_fns->update_metadata(cmd, vg, lv, lvs_changed, 0)) {
@@ -181,23 +130,41 @@ static int _wait_for_single_lv(struct cmd_context *cmd, const char *name, const 
 		/* Locks the (possibly renamed) VG again */
 		vg = parms->poll_fns->get_copy_vg(cmd, name, uuid);
 		if (vg_read_error(vg)) {
-			vg_release(vg);
+			release_vg(vg);
 			log_error("ABORTING: Can't reread VG for %s", name);
 			/* What more could we do here? */
 			return 0;
 		}
 
-		if (!(lv = parms->poll_fns->get_copy_lv(cmd, vg, name, uuid,
-							parms->lv_type))) {
+		lv = parms->poll_fns->get_copy_lv(cmd, vg, name, uuid, parms->lv_type);
+
+		if (!lv && parms->lv_type == PVMOVE) {
+			log_print_unless_silent("%s: no pvmove in progress - already finished or aborted.",
+						name);
+			unlock_and_release_vg(cmd, vg, vg->name);
+			return 1;
+		}
+
+		if (!lv) {
 			log_error("ABORTING: Can't find LV in %s for %s",
 				  vg->name, name);
 			unlock_and_release_vg(cmd, vg, vg->name);
 			return 0;
 		}
 
+		/*
+		 * If the LV is not active locally, the kernel cannot be
+		 * queried for its status.  We must exit in this case.
+		 */
+		if (!lv_is_active_locally(lv)) {
+			log_print_unless_silent("%s: Interrupted: No longer active.", name);
+			unlock_and_release_vg(cmd, vg, vg->name);
+			return 1;
+		}
+
 		if (!_check_lv_status(cmd, vg, lv, name, parms, &finished)) {
 			unlock_and_release_vg(cmd, vg, vg->name);
-			return 0;
+			return_0;
 		}
 
 		unlock_and_release_vg(cmd, vg, vg->name);
@@ -230,14 +197,26 @@ static int _poll_vg(struct cmd_context *cmd, const char *vgname,
 	const char *name;
 	int finished;
 
+	if (!parms) {
+		log_error(INTERNAL_ERROR "Handle is undefined.");
+		return ECMD_FAILED;
+	}
+
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
 		if (!(lv->status & parms->lv_type))
 			continue;
-		if (!(name = parms->poll_fns->get_copy_name_from_lv(lv)))
+		name = parms->poll_fns->get_copy_name_from_lv(lv);
+		if (!name && !parms->aborting)
 			continue;
+
 		/* FIXME Need to do the activation from _set_up_pvmove here
-		 *       if it's not running and we're not aborting */
+		 *       if it's not running and we're not aborting. */
+		if (!lv_is_active(lv)) {
+			log_print_unless_silent("%s: Skipping inactive LV. Try lvchange or vgchange.", name);
+			continue;
+		}
+
 		if (_check_lv_status(cmd, vg, lv, name, parms, &finished) &&
 		    !finished)
 			parms->outstanding_count++;
@@ -267,7 +246,7 @@ static void _poll_for_all_vgs(struct cmd_context *cmd,
  */
 int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 		unsigned background,
-		uint32_t lv_type, struct poll_functions *poll_fns,
+		uint64_t lv_type, struct poll_functions *poll_fns,
 		const char *progress_title)
 {
 	struct daemon_parms parms;
@@ -277,12 +256,13 @@ int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 
 	parms.aborting = arg_is_set(cmd, abort_ARG);
 	parms.background = background;
-	interval_sign = arg_sign_value(cmd, interval_ARG, 0);
-	if (interval_sign == SIGN_MINUS)
+	interval_sign = arg_sign_value(cmd, interval_ARG, SIGN_NONE);
+	if (interval_sign == SIGN_MINUS) {
 		log_error("Argument to --interval cannot be negative");
+		return EINVALID_CMD_LINE;
+	}
 	parms.interval = arg_uint_value(cmd, interval_ARG,
-					find_config_tree_int(cmd, "activation/polling_interval",
-							     DEFAULT_INTERVAL));
+					find_config_tree_int(cmd, activation_polling_interval_CFG, NULL));
 	parms.wait_before_testing = (interval_sign == SIGN_PLUS);
 	parms.progress_display = 1;
 	parms.progress_title = progress_title;
@@ -299,12 +279,11 @@ int poll_daemon(struct cmd_context *cmd, const char *name, const char *uuid,
 
 		/* FIXME Disabled multiple-copy wait_event */
 		if (!name)
-			parms.interval = find_config_tree_int(cmd, "activation/polling_interval",
-							      DEFAULT_INTERVAL);
+			parms.interval = find_config_tree_int(cmd, activation_polling_interval_CFG, NULL);
 	}
 
 	if (parms.background) {
-		daemon_mode = _become_daemon(cmd);
+		daemon_mode = become_daemon(cmd, 0);
 		if (daemon_mode == 0)
 			return ECMD_PROCESSED;	    /* Parent */
 		else if (daemon_mode == 1)

@@ -30,31 +30,30 @@ static int _pvdisplay_single(struct cmd_context *cmd,
 	if (!is_orphan(pv) && !vg) {
 		vg_name = pv_vg_name(pv);
 		vg = vg_read(cmd, vg_name, (char *)&pv->vgid, 0);
-		if (vg_read_error(vg)) {
-			log_error("Skipping volume group %s", vg_name);
-			vg_release(vg);
-			/* FIXME If CLUSTERED should return ECMD_PROCESSED here */
-			return ECMD_FAILED;
+		if (ignore_vg(vg, vg_name, 0, &ret)) {
+			release_vg(vg);
+			stack;
+			return ret;
 		}
 
-	 	/*
+		/*
 		 * Replace possibly incomplete PV structure with new one
 		 * allocated in vg_read_internal() path.
 		 */
-		 if (!(pvl = find_pv_in_vg(vg, pv_name))) {
-			 log_error("Unable to find \"%s\" in volume group \"%s\"",
-				   pv_name, vg->name);
-			 ret = ECMD_FAILED;
-			 goto out;
-		 }
+		if (!(pvl = find_pv_in_vg(vg, pv_name))) {
+			log_error("Unable to find \"%s\" in volume group \"%s\"",
+				  pv_name, vg->name);
+			ret = ECMD_FAILED;
+			goto out;
+		}
 
-		 pv = pvl->pv;
+		pv = pvl->pv;
 	}
 
 	if (is_orphan(pv))
 		size = pv_size(pv);
 	else
-		size = (pv_pe_count(pv) - pv_pe_alloc_count(pv)) *
+		size = (uint64_t)(pv_pe_count(pv) - pv_pe_alloc_count(pv)) *
 			pv_pe_size(pv);
 
 	if (arg_count(cmd, short_ARG)) {
@@ -64,12 +63,12 @@ static int _pvdisplay_single(struct cmd_context *cmd,
 	}
 
 	if (pv_status(pv) & EXPORTED_VG)
-		log_print("Physical volume \"%s\" of volume group \"%s\" "
-			  "is exported", pv_name, pv_vg_name(pv));
+		log_print_unless_silent("Physical volume \"%s\" of volume group \"%s\" "
+					"is exported", pv_name, pv_vg_name(pv));
 
 	if (is_orphan(pv))
-		log_print("\"%s\" is a new physical volume of \"%s\"",
-			  pv_name, display_size(cmd, size));
+		log_print_unless_silent("\"%s\" is a new physical volume of \"%s\"",
+					pv_name, display_size(cmd, size));
 
 	if (arg_count(cmd, colon_ARG)) {
 		pvdisplay_colons(pv);
@@ -85,7 +84,7 @@ out:
 	if (vg_name)
 		unlock_vg(cmd, vg_name);
 	if (!old_vg)
-		vg_release(vg);
+		release_vg(vg);
 
 	return ret;
 }
@@ -99,18 +98,27 @@ int pvdisplay(struct cmd_context *cmd, int argc, char **argv)
 			return EINVALID_CMD_LINE;
 		}
 		return pvs(cmd, argc, argv);
-	} else if (arg_count(cmd, aligned_ARG) ||
-		   arg_count(cmd, all_ARG) ||
-		   arg_count(cmd, noheadings_ARG) ||
-		   arg_count(cmd, options_ARG) ||
-		   arg_count(cmd, separator_ARG) ||
-		   arg_count(cmd, sort_ARG) || arg_count(cmd, unbuffered_ARG)) {
+	}
+
+	if (arg_count(cmd, aligned_ARG) ||
+	    arg_count(cmd, all_ARG) ||
+	    arg_count(cmd, noheadings_ARG) ||
+	    arg_count(cmd, options_ARG) ||
+	    arg_count(cmd, select_ARG) ||
+	    arg_count(cmd, separator_ARG) ||
+	    arg_count(cmd, sort_ARG) ||
+	    arg_count(cmd, unbuffered_ARG)) {
 		log_error("Incompatible options selected");
 		return EINVALID_CMD_LINE;
 	}
 
 	if (arg_count(cmd, colon_ARG) && arg_count(cmd, maps_ARG)) {
-		log_error("Option -v not allowed with option -c");
+		log_error("Option -c not allowed with option -m");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_count(cmd, colon_ARG) && arg_count(cmd, short_ARG)) {
+		log_error("Option -c is not allowed with option -s");
 		return EINVALID_CMD_LINE;
 	}
 

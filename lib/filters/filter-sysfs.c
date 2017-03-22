@@ -13,10 +13,9 @@
  */
 
 #include "lib.h"
-#include "filter-sysfs.h"
-#include "lvm-string.h"
+#include "filter.h"
 
-#ifdef linux
+#ifdef __linux__
 
 #include <dirent.h>
 
@@ -24,64 +23,61 @@ static int _locate_sysfs_blocks(const char *sysfs_dir, char *path, size_t len,
 				unsigned *sysfs_depth)
 {
 	struct stat info;
+	unsigned i;
+	static const struct dir_class {
+		const char path[32];
+		int depth;
+	} classes[] = {
+		/*
+		 * unified classification directory for all kernel subsystems
+		 *
+		 * /sys/subsystem/block/devices
+		 * |-- sda -> ../../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda
+		 * |-- sda1 -> ../../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1
+		 *  `-- sr0 -> ../../../devices/pci0000:00/0000:00:1f.2/host1/target1:0:0/1:0:0:0/block/sr0
+		 *
+		 */
+		{ "subsystem/block/devices", 0 },
 
-	/*
-	 * unified classification directory for all kernel subsystems
-	 *
-	 * /sys/subsystem/block/devices
-	 * |-- sda -> ../../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda
-	 * |-- sda1 -> ../../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1
-	 *  `-- sr0 -> ../../../devices/pci0000:00/0000:00:1f.2/host1/target1:0:0/1:0:0:0/block/sr0
-	 *
-	 */
-	if (dm_snprintf(path, len, "%s/%s", sysfs_dir,
-			"subsystem/block/devices") >= 0) {
-		if (!stat(path, &info)) {
-			*sysfs_depth = 0;
+		/*
+		 * block subsystem as a class
+		 *
+		 * /sys/class/block
+		 * |-- sda -> ../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda
+		 * |-- sda1 -> ../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1
+		 *  `-- sr0 -> ../../devices/pci0000:00/0000:00:1f.2/host1/target1:0:0/1:0:0:0/block/sr0
+		 *
+		 */
+		{ "class/block", 0 },
+
+		/*
+		 * old block subsystem layout with nested directories
+		 *
+		 * /sys/block/
+		 * |-- sda
+		 * |   |-- capability
+		 * |   |-- dev
+		 * ...
+		 * |   |-- sda1
+		 * |   |   |-- dev
+		 * ...
+		 * |
+		 * `-- sr0
+		 *     |-- capability
+		 *     |-- dev
+		 * ...
+		 *
+		 */
+
+		{ "block", 1 }
+	};
+
+	for (i = 0; i < DM_ARRAY_SIZE(classes); ++i)
+		if ((dm_snprintf(path, len, "%s%s", sysfs_dir, classes[i].path) >= 0) &&
+		    (stat(path, &info) == 0)) {
+			*sysfs_depth = classes[i].depth;
 			return 1;
 		}
-	}
-
-	/*
-	 * block subsystem as a class
-	 *
-	 * /sys/class/block
-	 * |-- sda -> ../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda
-	 * |-- sda1 -> ../../devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1
-	 *  `-- sr0 -> ../../devices/pci0000:00/0000:00:1f.2/host1/target1:0:0/1:0:0:0/block/sr0
-	 *
-	 */
-	if (dm_snprintf(path, len, "%s/%s", sysfs_dir, "class/block") >= 0) {
-		if (!stat(path, &info)) {
-			*sysfs_depth = 0;
-			return 1;
-		}
-	}
-
-	/*
-	 * old block subsystem layout with nested directories
-	 *
-	 * /sys/block/
-	 * |-- sda
-	 * |   |-- capability
-	 * |   |-- dev
-	 * ...
-	 * |   |-- sda1
-	 * |   |   |-- dev
-	 * ...
-	 * |
-	 * `-- sr0
-	 *     |-- capability
-	 *     |-- dev
-	 * ...
-	 *
-	 */
-	if (dm_snprintf(path, len, "%s/%s", sysfs_dir, "block") >= 0) {
-		if (!stat(path, &info)) {
-			*sysfs_depth = 1;
-			return 1;
-		}
-	}
 
 	return 0;
 }
@@ -113,7 +109,9 @@ static struct dev_set *_dev_set_create(struct dm_pool *mem,
 		return NULL;
 
 	ds->mem = mem;
-	ds->sys_block = dm_pool_strdup(mem, sys_block);
+	if (!(ds->sys_block = dm_pool_strdup(mem, sys_block)))
+		return NULL;
+
 	ds->sysfs_depth = sysfs_depth;
 	ds->initialised = 0;
 
@@ -273,7 +271,7 @@ static int _accept_p(struct dev_filter *f, struct device *dev)
 		return 1;
 
 	if (!_set_lookup(ds, dev->dev)) {
-		log_debug("%s: Skipping (sysfs)", dev_name(dev));
+		log_debug_devs("%s: Skipping (sysfs)", dev_name(dev));
 		return 0;
 	} else
 		return 1;
@@ -282,11 +280,16 @@ static int _accept_p(struct dev_filter *f, struct device *dev)
 static void _destroy(struct dev_filter *f)
 {
 	struct dev_set *ds = (struct dev_set *) f->private;
+
+	if (f->use_count)
+		log_error(INTERNAL_ERROR "Destroying sysfs filter while in use %u times.", f->use_count);
+
 	dm_pool_destroy(ds->mem);
 }
 
-struct dev_filter *sysfs_filter_create(const char *sysfs_dir)
+struct dev_filter *sysfs_filter_create(void)
 {
+	const char *sysfs_dir = dm_sysfs_dir();
 	char sys_block[PATH_MAX];
 	unsigned sysfs_depth;
 	struct dm_pool *mem;
@@ -316,7 +319,11 @@ struct dev_filter *sysfs_filter_create(const char *sysfs_dir)
 
 	f->passes_filter = _accept_p;
 	f->destroy = _destroy;
+	f->use_count = 0;
 	f->private = ds;
+
+	log_debug_devs("Sysfs filter initialised.");
+
 	return f;
 
  bad:
@@ -326,7 +333,7 @@ struct dev_filter *sysfs_filter_create(const char *sysfs_dir)
 
 #else
 
-struct dev_filter *sysfs_filter_create(const char *sysfs_dir __attribute((unused)))
+struct dev_filter *sysfs_filter_create(const char *sysfs_dir __attribute__((unused)))
 {
 	return NULL;
 }

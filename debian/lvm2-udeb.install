@@ -1,4 +1,3 @@
-../../tree/lvm2/* /
 etc/lvm/lvm.conf
 sbin/lv*
 sbin/pv*

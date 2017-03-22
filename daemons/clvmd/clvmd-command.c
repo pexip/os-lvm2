@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -50,35 +50,17 @@
 
 */
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
-#include <configure.h>
-#include <pthread.h>
-#include <sys/types.h>
-#include <sys/utsname.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <fcntl.h>
-#include <string.h>
-#include <stddef.h>
-#include <unistd.h>
-#include <errno.h>
-#include <libdevmapper.h>
-#include <libdlm.h>
-
-#include "locking.h"
-#include "lvm-logging.h"
-#include "lvm-functions.h"
+#include "clvmd-common.h"
 #include "clvmd-comms.h"
 #include "clvm.h"
 #include "clvmd.h"
+#include "lvm-globals.h"
+#include "lvm-functions.h"
 
-extern debug_t debug;
+#include "locking.h"
+
+#include <sys/utsname.h>
+
 extern struct cluster_ops *clops;
 static int restart_clvmd(void);
 
@@ -111,11 +93,13 @@ int do_command(struct local_client *client, struct clvm_header *msg, int msglen,
 			*buf = new_buf;
 		}
 		if (*buf) {
-			uname(&nodeinfo);
-			*retlen = 1 + snprintf(*buf, buflen,
-					       "TEST from %s: %s v%s",
-					       nodeinfo.nodename, args,
-					       nodeinfo.release);
+			if (uname(&nodeinfo))
+				memset(&nodeinfo, 0, sizeof(nodeinfo));
+
+			*retlen = 1 + dm_snprintf(*buf, buflen,
+						  "TEST from %s: %s v%s",
+						  nodeinfo.nodename, args,
+						  nodeinfo.release);
 		}
 		break;
 
@@ -130,15 +114,14 @@ int do_command(struct local_client *client, struct clvm_header *msg, int msglen,
 
 	case CLVMD_CMD_LOCK_LV:
 		/* This is the biggie */
-		lock_cmd = args[0] & (LCK_NONBLOCK | LCK_HOLD | LCK_SCOPE_MASK | LCK_TYPE_MASK);
+		lock_cmd = args[0];
 		lock_flags = args[1];
 		lockname = &args[2];
 		status = do_lock_lv(lock_cmd, lock_flags, lockname);
 		/* Replace EIO with something less scary */
 		if (status == EIO) {
-			*retlen =
-			    1 + snprintf(*buf, buflen, "%s",
-					 get_last_lvm_error());
+			*retlen = 1 + dm_snprintf(*buf, buflen, "%s",
+						  get_last_lvm_error());
 			return EIO;
 		}
 		break;
@@ -148,19 +131,23 @@ int do_command(struct local_client *client, struct clvm_header *msg, int msglen,
 		if (buflen < 3)
 			return EIO;
 		if ((locktype = do_lock_query(lockname)))
-			*retlen = 1 + snprintf(*buf, buflen, "%s", locktype);
+			*retlen = 1 + dm_snprintf(*buf, buflen, "%s", locktype);
 		break;
 
 	case CLVMD_CMD_REFRESH:
 		do_refresh_cache();
 		break;
 
+	case CLVMD_CMD_SYNC_NAMES:
+		lvm_do_fs_unlock();
+		break;
+
 	case CLVMD_CMD_SET_DEBUG:
-		debug = args[0];
+		clvmd_set_debug((debug_t) args[0]);
 		break;
 
 	case CLVMD_CMD_RESTART:
-		restart_clvmd();
+		status = restart_clvmd();
 		break;
 
 	case CLVMD_CMD_GET_CLUSTERNAME:
@@ -184,69 +171,63 @@ int do_command(struct local_client *client, struct clvm_header *msg, int msglen,
 
 	/* Check the status of the command and return the error text */
 	if (status) {
-		*retlen = 1 + snprintf(*buf, buflen, "%s", strerror(status));
+		*retlen = 1 + ((*buf) ? dm_snprintf(*buf, buflen, "%s",
+						    strerror(status)) : -1);
 	}
 
 	return status;
-
 }
 
 static int lock_vg(struct local_client *client)
 {
-    struct dm_hash_table *lock_hash;
-    struct clvm_header *header =
-	(struct clvm_header *) client->bits.localsock.cmd;
-    unsigned char lock_cmd;
-    unsigned char lock_flags;
-    int lock_mode;
-    char *args = header->node + strlen(header->node) + 1;
-    int lkid;
-    int status = 0;
-    char *lockname;
+	struct dm_hash_table *lock_hash;
+	struct clvm_header *header =
+		(struct clvm_header *) client->bits.localsock.cmd;
+	unsigned char lock_cmd;
+	int lock_mode;
+	char *args = header->node + strlen(header->node) + 1;
+	int lkid;
+	int status;
+	char *lockname;
 
-    /* Keep a track of VG locks in our own hash table. In current
-       practice there should only ever be more than two VGs locked
-       if a user tries to merge lots of them at once */
-    if (client->bits.localsock.private) {
-	lock_hash = (struct dm_hash_table *)client->bits.localsock.private;
-    }
-    else {
-	lock_hash = dm_hash_create(3);
-	if (!lock_hash)
-	    return ENOMEM;
-	client->bits.localsock.private = (void *)lock_hash;
-    }
+	/*
+	 * Keep a track of VG locks in our own hash table. In current
+	 * practice there should only ever be more than two VGs locked
+	 * if a user tries to merge lots of them at once
+	 */
+	if (!client->bits.localsock.private) {
+		if (!(lock_hash = dm_hash_create(3)))
+			return ENOMEM;
+		client->bits.localsock.private = (void *) lock_hash;
+	} else
+		lock_hash = (struct dm_hash_table *) client->bits.localsock.private;
 
-    lock_cmd = args[0] & (LCK_NONBLOCK | LCK_HOLD | LCK_SCOPE_MASK | LCK_TYPE_MASK);
-    lock_mode = ((int)lock_cmd & LCK_TYPE_MASK);
-    lock_flags = args[1];
-    lockname = &args[2];
-    DEBUGLOG("doing PRE command LOCK_VG '%s' at %x (client=%p)\n", lockname, lock_cmd, client);
+	lock_cmd = args[0] & (LCK_NONBLOCK | LCK_HOLD | LCK_SCOPE_MASK | LCK_TYPE_MASK);
+	lock_mode = ((int) lock_cmd & LCK_TYPE_MASK);
+	/* lock_flags = args[1]; */
+	lockname = &args[2];
+	DEBUGLOG("doing PRE command LOCK_VG '%s' at %x (client=%p)\n", lockname, lock_cmd, client);
 
-    if (lock_mode == LCK_UNLOCK) {
+	if (lock_mode == LCK_UNLOCK) {
+		if (!(lkid = (int) (long) dm_hash_lookup(lock_hash, lockname)))
+			return EINVAL;
 
-	lkid = (int)(long)dm_hash_lookup(lock_hash, lockname);
-	if (lkid == 0)
-	    return EINVAL;
+		if ((status = sync_unlock(lockname, lkid)))
+			status = errno;
+		else
+			dm_hash_remove(lock_hash, lockname);
+	} else {
+		/* Read locks need to be PR; other modes get passed through */
+		if (lock_mode == LCK_READ)
+			lock_mode = LCK_PREAD;
 
-	status = sync_unlock(lockname, lkid);
-	if (status)
-	    status = errno;
-	else
-	    dm_hash_remove(lock_hash, lockname);
-    }
-    else {
-	/* Read locks need to be PR; other modes get passed through */
-	if (lock_mode == LCK_READ)
-	    lock_mode = LCK_PREAD;
-	status = sync_lock(lockname, lock_mode, (lock_cmd & LCK_NONBLOCK) ? LKF_NOQUEUE : 0, &lkid);
-	if (status)
-	    status = errno;
-	else
-	    dm_hash_insert(lock_hash, lockname, (void *)(long)lkid);
-    }
+		if ((status = sync_lock(lockname, lock_mode, (lock_cmd & LCK_NONBLOCK) ? LCKF_NOQUEUE : 0, &lkid)))
+			status = errno;
+		else if (!dm_hash_insert(lock_hash, lockname, (void *) (long) lkid))
+			return ENOMEM;
+	}
 
-    return status;
+	return status;
 }
 
 
@@ -260,13 +241,13 @@ int do_pre_command(struct local_client *client)
 	unsigned char lock_cmd;
 	unsigned char lock_flags;
 	char *args = header->node + strlen(header->node) + 1;
-	int lockid;
+	int lockid = 0;
 	int status = 0;
 	char *lockname;
 
 	switch (header->cmd) {
 	case CLVMD_CMD_TEST:
-		status = sync_lock("CLVMD_TEST", LKM_EXMODE, 0, &lockid);
+		status = sync_lock("CLVMD_TEST", LCK_EXCL, 0, &lockid);
 		client->bits.localsock.private = (void *)(long)lockid;
 		break;
 
@@ -289,6 +270,7 @@ int do_pre_command(struct local_client *client)
 	case CLVMD_CMD_GET_CLUSTERNAME:
 	case CLVMD_CMD_SET_DEBUG:
 	case CLVMD_CMD_VG_BACKUP:
+	case CLVMD_CMD_SYNC_NAMES:
 	case CLVMD_CMD_LOCK_QUERY:
 	case CLVMD_CMD_RESTART:
 		break;
@@ -314,15 +296,8 @@ int do_post_command(struct local_client *client)
 
 	switch (header->cmd) {
 	case CLVMD_CMD_TEST:
-		status =
-		    sync_unlock("CLVMD_TEST", (int) (long) client->bits.localsock.private);
-		client->bits.localsock.private = 0;
-		break;
-
-	case CLVMD_CMD_LOCK_VG:
-	case CLVMD_CMD_VG_BACKUP:
-	case CLVMD_CMD_LOCK_QUERY:
-		/* Nothing to do here */
+		status = sync_unlock("CLVMD_TEST", (int) (long) client->bits.localsock.private);
+		client->bits.localsock.private = NULL;
 		break;
 
 	case CLVMD_CMD_LOCK_LV:
@@ -330,6 +305,10 @@ int do_post_command(struct local_client *client)
 		lock_flags = args[1];
 		lockname = &args[2];
 		status = post_lock_lv(lock_cmd, lock_flags, lockname);
+		break;
+
+	default:
+		/* Nothing to do here */
 		break;
 	}
 	return status;
@@ -339,69 +318,97 @@ int do_post_command(struct local_client *client)
 /* Called when the client is about to be deleted */
 void cmd_client_cleanup(struct local_client *client)
 {
-    if (client->bits.localsock.private) {
-
 	struct dm_hash_node *v;
-	struct dm_hash_table *lock_hash =
-	    (struct dm_hash_table *)client->bits.localsock.private;
+	struct dm_hash_table *lock_hash;
+	int lkid;
+	char *lockname;
+
+	if (!client->bits.localsock.private)
+		return;
+
+	lock_hash = (struct dm_hash_table *)client->bits.localsock.private;
 
 	dm_hash_iterate(v, lock_hash) {
-		int lkid = (int)(long)dm_hash_get_data(lock_hash, v);
-		char *lockname = dm_hash_get_key(lock_hash, v);
-
+		lkid = (int)(long)dm_hash_get_data(lock_hash, v);
+		lockname = dm_hash_get_key(lock_hash, v);
 		DEBUGLOG("cleanup: Unlocking lock %s %x\n", lockname, lkid);
-		sync_unlock(lockname, lkid);
+		(void) sync_unlock(lockname, lkid);
 	}
 
 	dm_hash_destroy(lock_hash);
-	client->bits.localsock.private = 0;
-    }
+	client->bits.localsock.private = NULL;
 }
 
 
 static int restart_clvmd(void)
 {
-	char *argv[1024];
-	int argc = 1;
-	struct dm_hash_node *hn = NULL;
+	const char **argv;
 	char *lv_name;
+	int argc = 0, max_locks = 0;
+	struct dm_hash_node *hn = NULL;
+	char debug_arg[16];
+	const char *clvmd = getenv("LVM_CLVMD_BINARY") ? : CLVMD_PATH;
 
 	DEBUGLOG("clvmd restart requested\n");
+
+	/* Count exclusively-open LVs */
+	do {
+		hn = get_next_excl_lock(hn, &lv_name);
+		if (lv_name) {
+			max_locks++;
+			if (!*lv_name)
+				break; /* FIXME: Is this error ? */
+		}
+	} while (hn);
+
+	/* clvmd + locks (-E uuid) + debug (-d X) + NULL */
+	if (!(argv = malloc((max_locks * 2 + 6) * sizeof(*argv))))
+		goto_out;
 
 	/*
 	 * Build the command-line
 	 */
-	/* FIXME missing strdup error checks */
-	argv[0] = strdup("clvmd");
+	argv[argc++] = "clvmd";
 
-	/* Propogate debug options */
-	if (debug) {
-		char debug_level[16];
-
-		sprintf(debug_level, "-d%d", debug);
-		argv[argc++] = strdup(debug_level);
+	/* Propagate debug options */
+	if (clvmd_get_debug()) {
+		if (dm_snprintf(debug_arg, sizeof(debug_arg), "-d%u", clvmd_get_debug()) < 0)
+			goto_out;
+		argv[argc++] = debug_arg;
 	}
 
+	/* Propagate foreground options */
+	if (clvmd_get_foreground())
+		argv[argc++] = "-f";
+
+	argv[argc++] = "-I";
+	argv[argc++] = clops->name;
+
 	/* Now add the exclusively-open LVs */
+	hn = NULL;
 	do {
 		hn = get_next_excl_lock(hn, &lv_name);
 		if (lv_name) {
-			argv[argc++] = strdup("-E");
-			argv[argc++] = strdup(lv_name);
-
+			if (!*lv_name)
+				break; /* FIXME: Is this error ? */
+			argv[argc++] = "-E";
+			argv[argc++] = lv_name;
 			DEBUGLOG("excl lock: %s\n", lv_name);
-			hn = get_next_excl_lock(hn, &lv_name);
 		}
-	} while (hn && *lv_name);
-	argv[argc++] = NULL;
-
-	/* Tidy up */
-	destroy_lvm();
+	} while (hn);
+	argv[argc] = NULL;
 
 	/* Exec new clvmd */
-	/* NOTE: This will fail when downgrading! */
-	execve("clvmd", argv, NULL);
+	DEBUGLOG("--- Restarting %s ---\n", clvmd);
+	for (argc = 1; argv[argc]; argc++) DEBUGLOG("--- %d: %s\n", argc, argv[argc]);
 
+	/* NOTE: This will fail when downgrading! */
+	execvp(clvmd, (char **)argv);
+out:
 	/* We failed */
-	return 0;
+	DEBUGLOG("Restart of clvmd failed.\n");
+
+	free(argv);
+
+	return EIO;
 }

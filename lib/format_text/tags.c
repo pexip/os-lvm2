@@ -19,43 +19,60 @@
 #include "str_list.h"
 #include "lvm-string.h"
 
-int print_tags(struct dm_list *tags, char *buffer, size_t size)
+char *alloc_printed_tags(struct dm_list *tagsl)
 {
-	struct str_list *sl;
+	struct dm_str_list *sl;
 	int first = 1;
+	size_t size = 0;
+	char *buffer, *buf;
 
-	if (!emit_to_buffer(&buffer, &size, "["))
-		return_0;
+	dm_list_iterate_items(sl, tagsl)
+		/* '"' + tag + '"' + ',' + ' ' */
+		size += strlen(sl->str) + 4;
+	/* '[' + ']' + '\0' */
+	size += 3;
 
-	dm_list_iterate_items(sl, tags) {
+	if (!(buffer = buf = dm_malloc(size))) {
+		log_error("Could not allocate memory for tag list buffer.");
+		return NULL;
+	}
+
+	if (!emit_to_buffer(&buf, &size, "["))
+		goto_bad;
+
+	dm_list_iterate_items(sl, tagsl) {
 		if (!first) {
-			if (!emit_to_buffer(&buffer, &size, ", "))
-				return_0;
+			if (!emit_to_buffer(&buf, &size, ", "))
+				goto_bad;
 		} else
 			first = 0;
 
-		if (!emit_to_buffer(&buffer, &size, "\"%s\"", sl->str))
-			return_0;
+		if (!emit_to_buffer(&buf, &size, "\"%s\"", sl->str))
+			goto_bad;
 	}
 
-	if (!emit_to_buffer(&buffer, &size, "]"))
-		return_0;
+	if (!emit_to_buffer(&buf, &size, "]"))
+		goto_bad;
 
-	return 1;
+	return buffer;
+
+bad:
+	dm_free(buffer);
+	return_NULL;
 }
 
-int read_tags(struct dm_pool *mem, struct dm_list *tags, struct config_value *cv)
+int read_tags(struct dm_pool *mem, struct dm_list *tagsl, const struct dm_config_value *cv)
 {
-	if (cv->type == CFG_EMPTY_ARRAY)
+	if (cv->type == DM_CFG_EMPTY_ARRAY)
 		return 1;
 
 	while (cv) {
-		if (cv->type != CFG_STRING) {
+		if (cv->type != DM_CFG_STRING) {
 			log_error("Found a tag that is not a string");
 			return 0;
 		}
 
-		if (!str_list_add(mem, tags, dm_pool_strdup(mem, cv->v.str)))
+		if (!str_list_add(mem, tagsl, dm_pool_strdup(mem, cv->v.str)))
 			return_0;
 
 		cv = cv->next;

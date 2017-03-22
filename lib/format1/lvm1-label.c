@@ -30,7 +30,7 @@ static void _not_supported(const char *op)
 		  op);
 }
 
-static int _lvm1_can_handle(struct labeller *l __attribute((unused)), void *buf, uint64_t sector)
+static int _lvm1_can_handle(struct labeller *l __attribute__((unused)), void *buf, uint64_t sector)
 {
 	struct pv_disk *pvd = (struct pv_disk *) buf;
 	uint32_t version;
@@ -48,7 +48,7 @@ static int _lvm1_can_handle(struct labeller *l __attribute((unused)), void *buf,
 	return 0;
 }
 
-static int _lvm1_write(struct label *label __attribute((unused)), void *buf __attribute((unused)))
+static int _lvm1_write(struct label *label __attribute__((unused)), void *buf __attribute__((unused)))
 {
 	_not_supported("write");
 	return 0;
@@ -77,24 +77,23 @@ static int _lvm1_read(struct labeller *l, struct device *dev, void *buf,
 	if (!(info = lvmcache_add(l, (char *)pvd->pv_uuid, dev, vgname, vgid,
 				  exported)))
 		return_0;
-	*label = info->label;
+	*label = lvmcache_get_label(info);
 
-	info->device_size = xlate32(pvd->pv_size) << SECTOR_SHIFT;
-	dm_list_init(&info->mdas);
-
-	info->status &= ~CACHE_INVALID;
+	lvmcache_set_device_size(info, ((uint64_t)xlate32(pvd->pv_size)) << SECTOR_SHIFT);
+	lvmcache_del_mdas(info);
+	lvmcache_make_valid(info);
 
 	return 1;
 }
 
-static int _lvm1_initialise_label(struct labeller *l __attribute((unused)), struct label *label)
+static int _lvm1_initialise_label(struct labeller *l __attribute__((unused)), struct label *label)
 {
 	strcpy(label->type, "LVM1");
 
 	return 1;
 }
 
-static void _lvm1_destroy_label(struct labeller *l __attribute((unused)), struct label *label __attribute((unused)))
+static void _lvm1_destroy_label(struct labeller *l __attribute__((unused)), struct label *label __attribute__((unused)))
 {
 }
 
@@ -123,7 +122,7 @@ struct labeller *lvm1_labeller_create(struct format_type *fmt)
 	}
 
 	l->ops = &_lvm1_ops;
-	l->private = (const void *) fmt;
+	l->fmt = fmt;
 
 	return l;
 }

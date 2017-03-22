@@ -17,13 +17,10 @@
 #include "lvm2cmdline.h"
 #include "label.h"
 #include "memlock.h"
-#include "lvm-version.h"
 
 #include "lvm2cmd.h"
 
 #include <signal.h>
-#include <syslog.h>
-#include <libgen.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <sys/resource.h>
@@ -95,6 +92,10 @@ int lvm2_run(void *handle, const char *cmdline)
 		lvm2_exit(handle);
 
 	return ret;
+}
+
+void lvm2_disable_dmeventd_monitoring(void *handle) {
+	init_dmeventd_monitor(DMEVENTD_MONITOR_IGNORE);
 }
 
 void lvm2_log_level(void *handle, int level)

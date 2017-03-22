@@ -17,9 +17,13 @@
 #include "metadata.h"
 #include "pv_alloc.h"
 #include "toolcontext.h"
-#include "archiver.h"
 #include "locking.h"
+#include "defaults.h"
 #include "lvmcache.h"
+#include "lvmetad.h"
+#include "display.h"
+#include "label.h"
+#include "archiver.h"
 
 static struct pv_segment *_alloc_pv_segment(struct dm_pool *mem,
 					    struct physical_volume *pv,
@@ -188,8 +192,119 @@ struct pv_segment *assign_peg_to_lvseg(struct physical_volume *pv,
 	return peg;
 }
 
+int discard_pv_segment(struct pv_segment *peg, uint32_t discard_area_reduction)
+{
+	uint64_t discard_offset_sectors;
+	uint64_t pe_start = peg->pv->pe_start;
+	char uuid[64] __attribute__((aligned(8)));
+
+	if (!peg->lvseg) {
+		log_error("discard_pv_segment with unallocated segment: "
+			  "%s PE %" PRIu32, pv_dev_name(peg->pv), peg->pe);
+		return 0;
+	}
+
+	/*
+	 * Only issue discards if enabled in lvm.conf and both
+	 * the device and kernel (>= 2.6.35) supports discards.
+	 */
+	if (!find_config_tree_bool(peg->pv->fmt->cmd, devices_issue_discards_CFG, NULL))
+		return 1;
+ 
+	/* Missing PV? */
+	if (is_missing_pv(peg->pv) || !peg->pv->dev) {
+		if (!id_write_format(&peg->pv->id, uuid, sizeof(uuid)))
+			return_0;
+
+		log_verbose("Skipping discard on missing device with uuid %s.", uuid);
+
+		return 1;
+	}
+
+	if (!dev_discard_max_bytes(peg->pv->fmt->cmd->dev_types, peg->pv->dev) ||
+	    !dev_discard_granularity(peg->pv->fmt->cmd->dev_types, peg->pv->dev))
+		return 1;
+
+	discard_offset_sectors = (peg->pe + peg->lvseg->area_len - discard_area_reduction) *
+				 (uint64_t) peg->pv->vg->extent_size + pe_start;
+	if (!discard_offset_sectors) {
+		/*
+		 * pe_start=0 and the PV's first extent contains the label.
+		 * Must skip past the first extent.
+		 */
+		discard_offset_sectors = peg->pv->vg->extent_size;
+		discard_area_reduction--;
+	}
+
+	log_debug_alloc("Discarding %" PRIu32 " extents offset %" PRIu64 " sectors on %s.",
+			discard_area_reduction, discard_offset_sectors, dev_name(peg->pv->dev));
+	if (discard_area_reduction &&
+	    !dev_discard_blocks(peg->pv->dev, discard_offset_sectors << SECTOR_SHIFT,
+				discard_area_reduction * (uint64_t) peg->pv->vg->extent_size * SECTOR_SIZE))
+		return_0;
+
+	return 1;
+}
+
+static int _merge_free_pv_segment(struct pv_segment *peg)
+{
+	struct dm_list *l;
+	struct pv_segment *merge_peg;
+
+	if (peg->lvseg) {
+		log_error(INTERNAL_ERROR
+			  "_merge_free_pv_seg called on a"
+			  " segment that is not free.");
+		return 0;
+	}
+
+	/*
+	 * FIXME:
+	 * Should we free the list element once it is deleted
+	 * from the list?  I think not.  It is likely part of
+	 * a mempool.
+	 */
+	/* Attempt to merge with Free space before */
+	if ((l = dm_list_prev(&peg->pv->segments, &peg->list))) {
+		merge_peg = dm_list_item(l, struct pv_segment);
+		if (!merge_peg->lvseg) {
+			merge_peg->len += peg->len;
+			dm_list_del(&peg->list);
+			peg = merge_peg;
+		}
+	}
+
+	/* Attempt to merge with Free space after */
+	if ((l = dm_list_next(&peg->pv->segments, &peg->list))) {
+		merge_peg = dm_list_item(l, struct pv_segment);
+		if (!merge_peg->lvseg) {
+			peg->len += merge_peg->len;
+			dm_list_del(&merge_peg->list);
+		}
+	}
+
+	return 1;
+}
+
+/*
+ * release_pv_segment
+ * @peg
+ * @area_reduction
+ *
+ * WARNING: When release_pv_segment is called, the freed space may be
+ *          merged into the 'pv_segment's before and after it in the
+ *          list if they are also free.  Thus, any iterators of the
+ *          'pv->segments' list that call this function must be aware
+ *          that the list can change in a way that is unsafe even for
+ *          *_safe iterators.  Restart the iterator in these cases.
+ *
+ * Returns: 1 on success, 0 on failure
+ */
 int release_pv_segment(struct pv_segment *peg, uint32_t area_reduction)
 {
+	struct dm_list *l;
+	struct pv_segment *merge_peg;
+
 	if (!peg->lvseg) {
 		log_error("release_pv_segment with unallocated segment: "
 			  "%s PE %" PRIu32, pv_dev_name(peg->pv), peg->pe);
@@ -203,15 +318,19 @@ int release_pv_segment(struct pv_segment *peg, uint32_t area_reduction)
 		peg->lvseg = NULL;
 		peg->lv_area = 0;
 
-		/* FIXME merge free space */
-
-		return 1;
+		return _merge_free_pv_segment(peg);
 	}
 
 	if (!pv_split_segment(peg->lvseg->lv->vg->vgmem,
 			      peg->pv, peg->pe + peg->lvseg->area_len -
 			      area_reduction, NULL))
 		return_0;
+
+	/* The segment after 'peg' now holds free space, try to merge it */
+	if ((l = dm_list_next(&peg->pv->segments, &peg->list))) {
+		merge_peg = dm_list_item(l, struct pv_segment);
+		return _merge_free_pv_segment(merge_peg);
+	}
 
 	return 1;
 }
@@ -290,10 +409,10 @@ int check_pv_segments(struct volume_group *vg)
 			s = peg->lv_area;
 
 			/* FIXME Remove this next line eventually */
-			log_debug("%s %u: %6u %6u: %s(%u:%u)",
-				  pv_dev_name(pv), segno++, peg->pe, peg->len,
-				  peg->lvseg ? peg->lvseg->lv->name : "NULL",
-				  peg->lvseg ? peg->lvseg->le : 0, s);
+			log_debug_alloc("%s %u: %6u %6u: %s(%u:%u)",
+					pv_dev_name(pv), segno++, peg->pe, peg->len,
+					peg->lvseg ? peg->lvseg->lv->name : "NULL",
+					peg->lvseg ? peg->lvseg->le : 0, s);
 			/* FIXME Add details here on failure instead */
 			if (start_pe != peg->pe) {
 				log_error("Gap in pvsegs: %u, %u",
@@ -357,10 +476,10 @@ int check_pv_segments(struct volume_group *vg)
 	return ret;
 }
 
-static int _reduce_pv(struct physical_volume *pv, struct volume_group *vg, uint32_t new_pe_count)
+static int _reduce_pv(struct physical_volume *pv, struct volume_group *vg,
+		      uint32_t old_pe_count, uint32_t new_pe_count)
 {
 	struct pv_segment *peg, *pegt;
-	uint32_t old_pe_count = pv->pe_count;
 
 	if (new_pe_count < pv->pe_alloc_count) {
 		log_error("%s: cannot resize to %" PRIu32 " extents "
@@ -400,10 +519,9 @@ static int _reduce_pv(struct physical_volume *pv, struct volume_group *vg, uint3
 }
 
 static int _extend_pv(struct physical_volume *pv, struct volume_group *vg,
-		      uint32_t new_pe_count)
+		      uint32_t old_pe_count, uint32_t new_pe_count)
 {
 	struct pv_segment *peg;
-	uint32_t old_pe_count = pv->pe_count;
 
 	if ((uint64_t) new_pe_count * pv->pe_size > pv->size ) {
 		log_error("%s: cannot resize to %" PRIu32 " extents as there "
@@ -412,10 +530,12 @@ static int _extend_pv(struct physical_volume *pv, struct volume_group *vg,
 		return 0;
 	}
 
-	peg = _alloc_pv_segment(pv->fmt->cmd->mem, pv,
-				old_pe_count,
-				new_pe_count - old_pe_count,
-				NULL, 0);
+	if (!(peg = _alloc_pv_segment(pv->fmt->cmd->mem, pv,
+				      old_pe_count,
+				      new_pe_count - old_pe_count,
+				      NULL, 0)))
+		return_0;
+
 	dm_list_add(&pv->segments, &peg->list);
 
 	pv->pe_count = new_pe_count;
@@ -430,22 +550,316 @@ static int _extend_pv(struct physical_volume *pv, struct volume_group *vg,
  * Resize a PV in a VG, adding or removing segments as needed.
  * New size must fit within pv->size.
  */
-int pv_resize(struct physical_volume *pv,
+static int pv_resize(struct physical_volume *pv,
 	      struct volume_group *vg,
-	      uint32_t new_pe_count)
+	      uint64_t size)
 {
-	if ((new_pe_count == pv->pe_count)) {
-		log_verbose("No change to size of physical volume %s.",
-			    pv_dev_name(pv));
-		return 1;
+	uint32_t old_pe_count, new_pe_count = 0;
+
+	if (size < pv_min_size()) {
+		log_error("Size must exceed minimum of %" PRIu64 " sectors on PV %s.",
+			   pv_min_size(), pv_dev_name(pv));
+		return 0;
 	}
 
-	log_verbose("Resizing physical volume %s from %" PRIu32
-		    " to %" PRIu32 " extents.",
-		    pv_dev_name(pv), pv->pe_count, new_pe_count);
+	if (size < pv_pe_start(pv)) {
+		log_error("Size must exceed physical extent start "
+			  "of %" PRIu64 " sectors on PV %s.",
+			  pv_pe_start(pv), pv_dev_name(pv));
+	}
 
-	if (new_pe_count > pv->pe_count)
-		return _extend_pv(pv, vg, new_pe_count);
-	else
-		return _reduce_pv(pv, vg, new_pe_count);
+	old_pe_count = pv->pe_count;
+
+	if (!pv->fmt->ops->pv_resize(pv->fmt, pv, vg, size)) {
+		log_error("Format specific resize of PV %s failed.",
+			   pv_dev_name(pv));
+		return 0;
+	}
+
+	/* pv->pe_count is 0 now! We need to recalculate! */
+
+	/* If there's a VG, calculate new PE count value. */
+	/* Don't do for orphan VG */
+	if (vg && !is_orphan_vg(vg->name)) {
+		/* FIXME: Maybe PE calculation should go into pv->fmt->resize?
+		          (like it is for pv->fmt->setup) */
+		if (!(new_pe_count = pv_size(pv) / vg->extent_size)) {
+			log_error("Size must leave space for at least one physical "
+				  "extent of %" PRIu32 " sectors on PV %s.",
+				   pv_pe_size(pv), pv_dev_name(pv));
+			return 0;
+		}
+
+		if (new_pe_count == old_pe_count) {
+			pv->pe_count = old_pe_count;
+			log_verbose("No change to size of physical volume %s.",
+				    pv_dev_name(pv));
+			return 1;
+		}
+
+		log_verbose("Resizing physical volume %s from %" PRIu32
+			    " to %" PRIu32 " extents.",
+			    pv_dev_name(pv), pv->pe_count, new_pe_count);
+
+		if (new_pe_count > old_pe_count)
+			return _extend_pv(pv, vg, old_pe_count, new_pe_count);
+		else
+			return _reduce_pv(pv, vg, old_pe_count, new_pe_count);
+	}
+
+	return 1;
+}
+
+int pv_resize_single(struct cmd_context *cmd,
+		     struct volume_group *vg,
+		     struct physical_volume *pv,
+		     const uint64_t new_size)
+{
+	struct pv_list *pvl;
+	uint64_t size = 0;
+	int r = 0;
+	const char *pv_name = pv_dev_name(pv);
+	const char *vg_name = pv->vg_name;
+	struct volume_group *old_vg = vg;
+	int vg_needs_pv_write = 0;
+
+	vg = vg_read_for_update(cmd, vg_name, NULL, 0);
+
+	if (vg_read_error(vg)) {
+		release_vg(vg);
+		log_error("Unable to read volume group \"%s\".",
+			  vg_name);
+		return 0;
+	}
+
+	if (!(pvl = find_pv_in_vg(vg, pv_name))) {
+		log_error("Unable to find \"%s\" in volume group \"%s\"",
+			  pv_name, vg->name);
+		goto out;
+	}
+
+	pv = pvl->pv;
+
+	if (!archive(vg))
+		goto out;
+
+	if (!(pv->fmt->features & FMT_RESIZE_PV)) {
+		log_error("Physical volume %s format does not support resizing.",
+			  pv_name);
+		goto out;
+	}
+
+	/* Get new size */
+	if (!dev_get_size(pv_dev(pv), &size)) {
+		log_error("%s: Couldn't get size.", pv_name);
+		goto out;
+	}
+
+	if (new_size) {
+		if (new_size > size)
+			log_warn("WARNING: %s: Overriding real size. "
+				  "You could lose data.", pv_name);
+		log_verbose("%s: Pretending size is %" PRIu64 " not %" PRIu64
+			    " sectors.", pv_name, new_size, pv_size(pv));
+		size = new_size;
+	}
+
+	log_verbose("Resizing volume \"%s\" to %" PRIu64 " sectors.",
+		    pv_name, pv_size(pv));
+
+	if (!pv_resize(pv, vg, size))
+		goto_out;
+
+	log_verbose("Updating physical volume \"%s\"", pv_name);
+
+	/* Write PV label only if this an orphan PV or it has 2nd mda. */
+	if ((is_orphan_vg(vg_name) ||
+	     (vg_needs_pv_write = (fid_get_mda_indexed(vg->fid,
+			(const char *) &pv->id, ID_LEN, 1) != NULL))) &&
+	    !pv_write(cmd, pv, 1)) {
+		log_error("Failed to store physical volume \"%s\"",
+			  pv_name);
+		goto out;
+	}
+
+	if (!is_orphan_vg(vg_name)) {
+		if (!vg_write(vg) || !vg_commit(vg)) {
+			log_error("Failed to store physical volume \"%s\" in "
+				  "volume group \"%s\"", pv_name, vg_name);
+			goto out;
+		}
+		backup(vg);
+	}
+
+	log_print_unless_silent("Physical volume \"%s\" changed", pv_name);
+	r = 1;
+
+out:
+	if (!r && vg_needs_pv_write)
+		log_error("Use pvcreate and vgcfgrestore "
+			  "to repair from archived metadata.");
+	unlock_vg(cmd, vg_name);
+	if (!old_vg)
+		release_vg(vg);
+	return r;
+}
+
+const char _really_wipe[] =
+    "Really WIPE LABELS from physical volume \"%s\" of volume group \"%s\" [y/n]? ";
+
+/*
+ * Decide whether it is "safe" to wipe the labels on this device.
+ * 0 indicates we may not.
+ */
+static int pvremove_check(struct cmd_context *cmd, const char *name,
+		unsigned force_count, unsigned prompt)
+{
+	struct device *dev;
+	struct label *label;
+	struct pv_list *pvl;
+	struct dm_list *pvslist;
+
+	struct physical_volume *pv = NULL;
+	int r = 0;
+
+	/* FIXME Check partition type is LVM unless --force is given */
+
+	if (!(dev = dev_cache_get(name, cmd->filter))) {
+		log_error("Device %s not found", name);
+		return 0;
+	}
+
+	/* Is there a pv here already? */
+	/* If not, this is an error unless you used -f. */
+	if (!label_read(dev, &label, 0)) {
+		if (force_count)
+			return 1;
+		log_error("No PV label found on %s.", name);
+		return 0;
+	}
+
+	lvmcache_seed_infos_from_lvmetad(cmd);
+	if (!(pvslist = get_pvs(cmd)))
+		return_0;
+
+	dm_list_iterate_items(pvl, pvslist)
+		if (pvl->pv->dev == dev)
+			pv = pvl->pv;
+
+	if (!pv) {
+		log_error(INTERNAL_ERROR "Physical Volume %s has a label,"
+			  " but is neither in a VG nor orphan.", name);
+		goto out; /* better safe than sorry */
+	}
+
+	if (is_orphan(pv)) {
+		r = 1;
+		goto out;
+	}
+
+	/* we must have -ff to overwrite a non orphan */
+	if (force_count < 2) {
+		log_error("PV %s belongs to Volume Group %s so please use vgreduce first.", name, pv_vg_name(pv));
+		log_error("(If you are certain you need pvremove, then confirm by using --force twice.)");
+		goto out;
+	}
+
+	/* prompt */
+	if (!prompt &&
+	    yes_no_prompt("Really WIPE LABELS from physical volume \"%s\" "
+			  "of volume group \"%s\" [y/n]? ",
+			  name, pv_vg_name(pv)) == 'n') {
+		log_error("%s: physical volume label not removed", name);
+		goto out;
+	}
+
+	if (force_count) {
+		log_warn("WARNING: Wiping physical volume label from "
+			  "%s%s%s%s", name,
+			  !is_orphan(pv) ? " of volume group \"" : "",
+			  pv_vg_name(pv),
+			  !is_orphan(pv) ? "\"" : "");
+	}
+
+	r = 1;
+out:
+	if (pvslist)
+		dm_list_iterate_items(pvl, pvslist)
+			free_pv_fid(pvl->pv);
+	return r;
+}
+
+int pvremove_single(struct cmd_context *cmd, const char *pv_name,
+		    void *handle __attribute__((unused)), unsigned force_count,
+	            unsigned prompt)
+{
+	struct device *dev;
+	struct lvmcache_info *info;
+	int r = 0;
+
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		return 0;
+	}
+
+	if (!pvremove_check(cmd, pv_name, force_count, prompt))
+		goto out;
+
+	if (!(dev = dev_cache_get(pv_name, cmd->filter))) {
+		log_error("%s: Couldn't find device.  Check your filters?",
+			  pv_name);
+		goto out;
+	}
+
+	info = lvmcache_info_from_pvid(dev->pvid, 1);
+
+	if (!dev_test_excl(dev)) {
+		/* FIXME Detect whether device-mapper is still using the device */
+		log_error("Can't open %s exclusively - not removing. "
+			  "Mounted filesystem?", dev_name(dev));
+		goto out;
+	}
+
+	/* Wipe existing label(s) */
+	if (!label_remove(dev)) {
+		log_error("Failed to wipe existing label(s) on %s", pv_name);
+		goto out;
+	}
+
+	if (info)
+		lvmcache_del(info);
+
+	if (!lvmetad_pv_gone_by_dev(dev, NULL))
+		goto_out;
+
+	log_print_unless_silent("Labels on physical volume \"%s\" successfully wiped",
+				pv_name);
+
+	r = 1;
+
+out:
+	unlock_vg(cmd, VG_ORPHANS);
+
+	return r;
+}
+
+int pvcreate_single(struct cmd_context *cmd, const char *pv_name,
+		    struct pvcreate_params *pp)
+{
+	int r = 0;
+
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		return 0;
+	}
+
+	if (!(pvcreate_vol(cmd, pv_name, pp, 1)))
+		goto_out;
+
+	r = 1;
+
+out:
+	unlock_vg(cmd, VG_ORPHANS);
+
+	return r;
 }

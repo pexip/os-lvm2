@@ -1,6 +1,7 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2005 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2004 Luca Berra
+ * Copyright (C) 2004-2013 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -16,30 +17,29 @@
 #ifndef _LVM_FILTER_H
 #define _LVM_FILTER_H
 
-#include "config.h"
+#include "dev-cache.h"
+#include "dev-type.h"
 
-#include <sys/stat.h>
+struct dev_filter *composite_filter_create(int n, struct dev_filter **filters);
+struct dev_filter *lvm_type_filter_create(struct dev_types *dt);
+struct dev_filter *md_filter_create(struct dev_types *dt);
+struct dev_filter *mpath_filter_create(struct dev_types *dt);
+struct dev_filter *partitioned_filter_create(struct dev_types *dt);
+struct dev_filter *persistent_filter_create(struct dev_types *dt,
+					    struct dev_filter *f,
+					    const char *file);
+struct dev_filter *sysfs_filter_create(void);
 
-#ifdef linux
-#  define MAJOR(dev)	((dev & 0xfff00) >> 8)
-#  define MINOR(dev)	((dev & 0xff) | ((dev >> 12) & 0xfff00))
-#  define MKDEV(ma,mi)	((mi & 0xff) | (ma << 8) | ((mi & ~0xff) << 12))
-#else
-#  define MAJOR(x) major((x))
-#  define MINOR(x) minor((x))
-#  define MKDEV(x,y) makedev((x),(y))
-#endif
+/*
+ * patterns must be an array of strings of the form:
+ * [ra]<sep><regex><sep>, eg,
+ * r/cdrom/          - reject cdroms
+ * a|loop/[0-4]|     - accept loops 0 to 4
+ * r|.*|             - reject everything else
+ */
 
-struct dev_filter *lvm_type_filter_create(const char *proc,
-					  const struct config_node *cn);
+struct dev_filter *regex_filter_create(const struct dm_config_value *patterns);
 
-void lvm_type_filter_destroy(struct dev_filter *f);
+int persistent_filter_load(struct dev_filter *f, struct dm_config_tree **cft_out);
 
-int md_major(void);
-int blkext_major(void);
-int max_partitions(int major);
-
-int dev_subsystem_part_major(const struct device *dev);
-const char *dev_subsystem_name(const struct device *dev);
-
-#endif
+#endif 	/* _LVM_FILTER_H */

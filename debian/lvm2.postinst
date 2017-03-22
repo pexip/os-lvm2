@@ -5,9 +5,7 @@ set -e
 case "$1" in
     configure)
         vgcfgbackup >/dev/null 2>&1 || :
-        if [ -x /etc/init.d/lvm2 ]; then
-            invoke-rc.d lvm2 start || :
-        fi
+        invoke-rc.d lvm2 start || :
         if [ -x /usr/sbin/update-initramfs ]; then
             update-initramfs -u
         fi

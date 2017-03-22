@@ -204,8 +204,8 @@ for ARG
 do
     if [ -b "$ARG" ]
     then
-        PVS_OUT=`"${LVM}" pvs ${LVM_OPTS} --noheadings -o vg_name "$ARG" 2>/dev/null`
-        checkvalue $? "$ARG is not a PV."
+        PVS_OUT=`"${LVM}" pvs ${LVM_OPTS} --noheadings -o vg_name "$ARG"`
+        checkvalue $? "$ARG could not be verified to be a PV without errors."
         PV_VGNAME=$(echo $PVS_OUT | $GREP -v '[[:space:]]+$')
         [ -z "$PV_VGNAME" ] && die 3 "$ARG is not in a VG."
 
@@ -227,7 +227,7 @@ fi
 ### Get the existing state so we can use it later
 #####################################################################
 
-OLDVGS=`"${LVM}" vgs ${LVM_OPTS} -o name --noheadings 2>/dev/null`
+OLDVGS=`"${LVM}" vgs ${LVM_OPTS} -o name --noheadings`
 checkvalue $? "Current VG names could not be collected without errors"
 
 #####################################################################
@@ -242,13 +242,16 @@ export FILTER="filter=[ ${FILTER} \"r|.*|\" ]"
 
 LVMCONF=${TMP_LVM_SYSTEM_DIR}/lvm.conf
 
+# FIXME convert to cmdline override
 "$LVM" dumpconfig ${LVM_OPTS} | \
 "$AWK" -v DEV=${TMP_LVM_SYSTEM_DIR} -v CACHE=${TMP_LVM_SYSTEM_DIR}/.cache \
     -v CACHE_DIR=${TMP_LVM_SYSTEM_DIR}/cache \
-    '/^[[:space:]]*filter[[:space:]]*=/{print ENVIRON["FILTER"];next} \
-     /^[[:space:]]*scan[[:space:]]*=/{print "scan = [ \"" DEV "\" ]";next} \
-     /^[[:space:]]*cache[[:space:]]*=/{print "cache = \"" CACHE "\"";next} \
-     /^[[:space:]]*cache_dir[[:space:]]*=/{print "cache_dir = \"" CACHE_DIR "\"";next} \
+    '/^[ \t]*filter[ \t]*=/{print ENVIRON["FILTER"];next} \
+     /^[ \t]*scan[ \t]*=/{print "scan = [ \"" DEV "\" ]";next} \
+     /^[ \t]*cache[ \t]*=/{print "cache = \"" CACHE "\"";next} \
+     /^[ \t]*use_lvmetad[ \t]*=/{print "use_lvmetad = 0";next} \
+     /^[ \t]*global_filter[ \t]*=/{print "global_filter = [ \"a|.*|\" ]";next} \
+     /^[ \t]*cache_dir[ \t]*=/{print "cache_dir = \"" CACHE_DIR "\"";next} \
      {print $0}' > ${LVMCONF}
 
 checkvalue $? "Failed to generate ${LVMCONF}"
@@ -277,12 +280,12 @@ export LVM_SYSTEM_DIR=${TMP_LVM_SYSTEM_DIR}
 ### Rename the VG(s) and change the VG and PV UUIDs.
 #####################################################################
 
-PVINFO=`"${LVM}" pvs ${LVM_OPTS} -o pv_name,vg_name,vg_attr --noheadings --separator : 2>/dev/null`
+PVINFO=`"${LVM}" pvs ${LVM_OPTS} -o pv_name,vg_name,vg_attr --noheadings --separator :`
 checkvalue $? "PV info could not be collected without errors"
 
 # output VG info so each line looks like: name:exported?:disk1,disk2,...
 VGINFO=`echo "${PVINFO}" | \
-    "$AWK" -F : '{{sub(/^[[:space:]]*/,"")} \
+    "$AWK" -F : '{{sub(/^[ \t]*/,"")} \
     {sub(/unknown device/,"unknown_device")} \
     {vg[$2]=$1","vg[$2]} if($3 ~ /^..x/){x[$2]="x"}} \
     END{for(k in vg){printf("%s:%s:%s\n", k, x[k], vg[k])}}'`

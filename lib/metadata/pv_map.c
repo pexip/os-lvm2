@@ -15,7 +15,6 @@
 
 #include "lib.h"
 #include "pv_map.h"
-#include "pv_alloc.h"
 
 #include <assert.h>
 
@@ -51,8 +50,8 @@ static int _create_single_area(struct dm_pool *mem, struct pv_map *pvm,
 	if (!(pva = dm_pool_zalloc(mem, sizeof(*pva))))
 		return_0;
 
-	log_debug("Allowing allocation on %s start PE %" PRIu32 " length %"
-		  PRIu32, pv_dev_name(pvm->pv), start, length);
+	log_debug_alloc("Allowing allocation on %s start PE %" PRIu32 " length %"
+			PRIu32, pv_dev_name(pvm->pv), start, length);
 	pva->map = pvm;
 	pva->start = start;
 	pva->count = length;
@@ -205,10 +204,10 @@ void consume_pv_area(struct pv_area *pva, uint32_t to_go)
 }
 
 /*
- * Remove an area from list and reinsert it based on its new smaller size
- * after a provisional allocation.
+ * Remove an area from list and reinsert it based on its new size
+ * after a provisional allocation (or reverting one).
  */
-void reinsert_reduced_pv_area(struct pv_area *pva)
+void reinsert_changed_pv_area(struct pv_area *pva)
 {
 	_remove_area(pva);
 	_insert_area(&pva->map->areas, pva, 1);

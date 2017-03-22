@@ -4,13 +4,14 @@
 #
 # chkconfig: - 24 76
 # description: Cluster daemon for userland logical volume management tools.
+# pidfile: @CLVMD_PIDFILE@
 #
 # For Red-Hat-based distributions such as Fedora, RHEL, CentOS.
 #
 ### BEGIN INIT INFO
 # Provides:		clvmd
-# Required-Start:	$local_fs
-# Required-Stop:	$local_fs
+# Required-Start:	$local_fs@CLVMD_CMANAGERS@
+# Required-Stop:	$local_fs@CLVMD_CMANAGERS@
 # Short-Description:	This service is Clusterd LVM Daemon.
 # Description:		Cluster daemon for userland logical volume management tools.
 ### END INIT INFO
@@ -25,7 +26,7 @@ sbindir=@sbindir@
 lvm_vgchange=${sbindir}/vgchange
 lvm_vgdisplay=${sbindir}/vgdisplay
 lvm_vgscan=${sbindir}/vgscan
-lvm_lvs=${sbindir}/lvs
+lvm_lvdisplay=${sbindir}/lvdisplay
 
 CLVMDOPTS="-T30"
 
@@ -47,9 +48,10 @@ clustered_vgs() {
 		awk 'BEGIN {RS="VG Name"} {if (/Clustered/) print $1;}'
 }
 
-clustered_lvs() {
+clustered_active_lvs() {
 	for i in $(clustered_vgs); do
-		${lvm_lvs} -o lv_name --noheadings $i
+		${lvm_lvdisplay} $i 2>/dev/null | \
+		awk 'BEGIN {RS="LV Name"} {if (/[^N^O^T] available/) print $1;}'
 	done
 }
 
@@ -65,7 +67,7 @@ start()
 {
 	if ! rh_status_q; then
 		echo -n "Starting $DAEMON: "
-		daemon $DAEMON $CLVMDOPTS || return $?
+		$DAEMON $CLVMDOPTS || return $?
 		echo
 	fi
 
@@ -86,7 +88,7 @@ start()
 
 	${lvm_vgscan} > /dev/null 2>&1
 
-	action "Activating VG(s):" ${lvm_vgchange} -ayl $LVM_VGS || return $?
+	action "Activating VG(s):" ${lvm_vgchange} -aay $LVM_VGS || return $?
 
 	touch $LOCK_FILE
 
@@ -152,14 +154,21 @@ restart() {
 
 	# Try to get clvmd to restart itself. This will preserve 
 	# exclusive LV locks
-	action "Restarting $DAEMON: " $DAEMON -S || return $?
+	action "Restarting $DAEMON: " $DAEMON -S
 
 	# If that fails then do a normal stop & restart
 	if  [ $? != 0 ]; then
 	    stop && start
+	    return $?
 	else
 	    touch $LOCK_FILE
+	    return 0
 	fi
+}
+
+[ "$EUID" != "0" ] && {
+	echo "clvmd init script can only be executed as root user"
+	exit 4
 }
 
 # See how we were called.
@@ -195,8 +204,8 @@ case "$1" in
 	rtrn=$?
 	if [ $rtrn = 0 ]; then
 		cvgs="$(clustered_vgs)"
-		echo Active clustered Volume Groups: ${cvgs:-"(none)"}
-		clvs="$(clustered_lvs)"
+		echo Clustered Volume Groups: ${cvgs:-"(none)"}
+		clvs="$(clustered_active_lvs)"
 		echo Active clustered Logical Volumes: ${clvs:-"(none)"}
 	fi
 	;;

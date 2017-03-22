@@ -33,10 +33,10 @@
 #include <unistd.h>
 
 #ifndef CLUSTER_LOCKING_INTERNAL
-int lock_resource(struct cmd_context *cmd, const char *resource, uint32_t flags);
+int lock_resource(struct cmd_context *cmd, const char *resource, uint32_t flags, struct logical_volume *lv __attribute__((unused)));
 int query_resource(const char *resource, int *mode);
 void locking_end(void);
-int locking_init(int type, struct config_tree *cf, uint32_t *flags);
+int locking_init(int type, struct dm_config_tree *cf, uint32_t *flags);
 #endif
 
 typedef struct lvm_response {
@@ -62,28 +62,30 @@ static int _clvmd_sock = -1;
 /* FIXME Install SIGPIPE handler? */
 
 /* Open connection to the Cluster Manager daemon */
-static int _open_local_sock(void)
+static int _open_local_sock(int suppress_messages)
 {
 	int local_socket;
-	struct sockaddr_un sockaddr;
+	struct sockaddr_un sockaddr = { .sun_family = AF_UNIX };
 
-	/* Open local socket */
-	if ((local_socket = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
-		log_error("Local socket creation failed: %s", strerror(errno));
+	if (!dm_strncpy(sockaddr.sun_path, CLVMD_SOCKNAME, sizeof(sockaddr.sun_path))) {
+		log_error("%s: clvmd socket name too long.", CLVMD_SOCKNAME);
 		return -1;
 	}
 
-	memset(&sockaddr, 0, sizeof(sockaddr));
-	memcpy(sockaddr.sun_path, CLVMD_SOCKNAME, sizeof(CLVMD_SOCKNAME));
+	/* Open local socket */
+	if ((local_socket = socket(PF_UNIX, SOCK_STREAM, 0)) < 0) {
+		log_error_suppress(suppress_messages, "Local socket "
+				   "creation failed: %s", strerror(errno));
+		return -1;
+	}
 
-	sockaddr.sun_family = AF_UNIX;
 
 	if (connect(local_socket,(struct sockaddr *) &sockaddr,
 		    sizeof(sockaddr))) {
 		int saved_errno = errno;
 
-		log_error("connect() failed on local socket: %s",
-			  strerror(errno));
+		log_error_suppress(suppress_messages, "connect() failed "
+				   "on local socket: %s", strerror(errno));
 		if (close(local_socket))
 			stack;
 
@@ -97,10 +99,10 @@ static int _open_local_sock(void)
 /* Send a request and return the status */
 static int _send_request(char *inbuf, int inlen, char **retbuf)
 {
-	char outbuf[PIPE_BUF] __attribute((aligned(8)));
+	char outbuf[PIPE_BUF] __attribute__((aligned(8)));
 	struct clvm_header *outheader = (struct clvm_header *) outbuf;
 	int len;
-	int off;
+	unsigned off;
 	int buflen;
 	int err;
 
@@ -173,24 +175,23 @@ static void _build_header(struct clvm_header *head, int clvmd_cmd, const char *n
 	head->cmd = clvmd_cmd;
 	head->status = 0;
 	head->flags = 0;
+	head->xid = 0;
 	head->clientid = 0;
 	head->arglen = len;
 
-	if (node) {
-		/*
-		 * Allow a couple of special node names:
-		 * "*" for all nodes,
-		 * "." for the local node only
-		 */
-		if (strcmp(node, "*") == 0) {
-			head->node[0] = '\0';
-		} else if (strcmp(node, ".") == 0) {
-			head->node[0] = '\0';
-			head->flags = CLVMD_FLAG_LOCAL;
-		} else
-			strcpy(head->node, node);
-	} else
+	/*
+	 * Handle special node names.
+	 */
+	if (!node || !strcmp(node, NODE_ALL))
 		head->node[0] = '\0';
+	else if (!strcmp(node, NODE_LOCAL)) {
+		head->node[0] = '\0';
+		head->flags = CLVMD_FLAG_LOCAL;
+	} else if (!strcmp(node, NODE_REMOTE)) {
+		head->node[0] = '\0';
+		head->flags = CLVMD_FLAG_REMOTE;
+	} else
+		strcpy(head->node, node);
 }
 
 /*
@@ -199,7 +200,7 @@ static void _build_header(struct clvm_header *head, int clvmd_cmd, const char *n
 static int _cluster_request(char clvmd_cmd, const char *node, void *data, int len,
 			   lvm_response_t ** response, int *num)
 {
-	char outbuf[sizeof(struct clvm_header) + len + strlen(node) + 1] __attribute((aligned(8)));
+	char outbuf[sizeof(struct clvm_header) + len + strlen(node) + 1] __attribute__((aligned(8)));
 	char *inptr;
 	char *retbuf = NULL;
 	int status;
@@ -211,16 +212,17 @@ static int _cluster_request(char clvmd_cmd, const char *node, void *data, int le
 	*num = 0;
 
 	if (_clvmd_sock == -1)
-		_clvmd_sock = _open_local_sock();
+		_clvmd_sock = _open_local_sock(0);
 
 	if (_clvmd_sock == -1)
 		return 0;
 
-	_build_header(head, clvmd_cmd, node, len);
+	/* 1 byte is used from struct clvm_header.args[1], so -> len - 1 */
+	_build_header(head, clvmd_cmd, node, len - 1);
 	memcpy(head->node + strlen(head->node) + 1, data, len);
 
 	status = _send_request(outbuf, sizeof(struct clvm_header) +
-			      strlen(head->node) + len, &retbuf);
+			      strlen(head->node) + len - 1, &retbuf);
 	if (!status)
 		goto out;
 
@@ -239,14 +241,12 @@ static int _cluster_request(char clvmd_cmd, const char *node, void *data, int le
 	 * With an extra pair of INTs on the front to sanity
 	 * check the pointer when we are given it back to free
 	 */
-	*response = dm_malloc(sizeof(lvm_response_t) * num_responses);
-	if (!*response) {
+	*response = NULL;
+	if (!(rarray = dm_malloc(sizeof(lvm_response_t) * num_responses))) {
 		errno = ENOMEM;
 		status = 0;
 		goto out;
 	}
-
-	rarray = *response;
 
 	/* Unpack the response into an lvm_response_t array */
 	inptr = head->args;
@@ -264,9 +264,9 @@ static int _cluster_request(char clvmd_cmd, const char *node, void *data, int le
 			int j;
 			for (j = 0; j < i; j++)
 				dm_free(rarray[i].response);
-			free(*response);
+			dm_free(rarray);
 			errno = ENOMEM;
-			status = -1;
+			status = 0;
 			goto out;
 		}
 
@@ -279,8 +279,7 @@ static int _cluster_request(char clvmd_cmd, const char *node, void *data, int le
 	*response = rarray;
 
       out:
-	if (retbuf)
-		dm_free(retbuf);
+	dm_free(retbuf);
 
 	return status;
 }
@@ -302,13 +301,15 @@ static int _cluster_free_request(lvm_response_t * response, int num)
 static int _lock_for_cluster(struct cmd_context *cmd, unsigned char clvmd_cmd,
 			     uint32_t flags, const char *name)
 {
+	/* TODO: convert to global usable solution and move static into cmd */
+	static unsigned char last_clvmd_cmd = 0;
 	int status;
 	int i;
 	char *args;
 	const char *node = "";
 	int len;
 	int dmeventd_mode;
-	int saved_errno = errno;
+	int saved_errno;
 	lvm_response_t *response = NULL;
 	int num_responses;
 
@@ -318,19 +319,33 @@ static int _lock_for_cluster(struct cmd_context *cmd, unsigned char clvmd_cmd,
 	args = alloca(len);
 	strcpy(args + 2, name);
 
-	/* Maskoff lock flags */
-	args[0] = flags & (LCK_SCOPE_MASK | LCK_TYPE_MASK | LCK_NONBLOCK | LCK_HOLD); 
-	args[1] = flags & (LCK_LOCAL | LCK_CLUSTER_VG);
+	/* args[0] holds bottom 8 bits except LCK_LOCAL (0x40). */
+	args[0] = flags & (LCK_SCOPE_MASK | LCK_TYPE_MASK | LCK_NONBLOCK | LCK_HOLD | LCK_CLUSTER_VG); 
+
+	args[1] = 0;
+
+	if (flags & LCK_ORIGIN_ONLY)
+		args[1] |= LCK_ORIGIN_ONLY_MODE;
+
+	if (flags & LCK_REVERT)
+		args[1] |= LCK_REVERT_MODE;
 
 	if (mirror_in_sync())
 		args[1] |= LCK_MIRROR_NOSYNC_MODE;
 
+	if (test_mode())
+		args[1] |= LCK_TEST_MODE;
+
 	/*
-	 * Must handle tri-state return from dmeventd_monitor_mode.
-	 * But DMEVENTD_MONITOR_IGNORE is not propagated across the cluster.
+	 * We propagate dmeventd_monitor_mode() to clvmd faithfully, since
+	 * dmeventd monitoring is tied to activation which happens inside clvmd
+	 * when locking_type = 3.
 	 */
 	dmeventd_mode = dmeventd_monitor_mode();
-	if (dmeventd_mode != DMEVENTD_MONITOR_IGNORE && dmeventd_mode)
+	if (dmeventd_mode == DMEVENTD_MONITOR_IGNORE)
+		args[1] |= LCK_DMEVENTD_MONITOR_IGNORE;
+
+	if (dmeventd_mode)
 		args[1] |= LCK_DMEVENTD_MONITOR_MODE;
 
 	if (cmd->partial_activation)
@@ -340,18 +355,31 @@ static int _lock_for_cluster(struct cmd_context *cmd, unsigned char clvmd_cmd,
 	 * VG locks are just that: locks, and have no side effects
 	 * so we only need to do them on the local node because all
 	 * locks are cluster-wide.
-	 * Also, if the lock is exclusive it makes no sense to try to
-	 * acquire it on all nodes, so just do that on the local node too.
-	 * One exception, is that P_ locks /do/ get distributed across
-	 * the cluster because they might have side-effects.
+	 *
+	 * P_ locks /do/ get distributed across the cluster because they might
+	 * have side-effects.
+	 *
+	 * SYNC_NAMES and VG_BACKUP use the VG name directly without prefix.
 	 */
-	if (strncmp(name, "P_", 2) &&
-	    (clvmd_cmd == CLVMD_CMD_LOCK_VG ||
-	     (flags & LCK_TYPE_MASK) == LCK_EXCL ||
-	     (flags & LCK_LOCAL) ||
-	     !(flags & LCK_CLUSTER_VG)))
-		node = ".";
+	if (clvmd_cmd == CLVMD_CMD_SYNC_NAMES) {
+		if (flags & LCK_LOCAL) {
+			node = NODE_LOCAL;
+			if (clvmd_cmd == last_clvmd_cmd) {
+				log_debug("Skipping redundant local sync command.");
+				return 1;
+			}
+		}
+	} else if (clvmd_cmd != CLVMD_CMD_VG_BACKUP) {
+		if (strncmp(name, "P_", 2) &&
+		    (clvmd_cmd == CLVMD_CMD_LOCK_VG ||
+		     (flags & LCK_LOCAL) ||
+		     !(flags & LCK_CLUSTER_VG)))
+			node = NODE_LOCAL;
+		else if (flags & LCK_REMOTE)
+			node = NODE_REMOTE;
+	}
 
+	last_clvmd_cmd = clvmd_cmd;
 	status = _cluster_request(clvmd_cmd, node, args, len,
 				  &response, &num_responses);
 
@@ -383,21 +411,28 @@ static int _lock_for_cluster(struct cmd_context *cmd, unsigned char clvmd_cmd,
 /* API entry point for LVM */
 #ifdef CLUSTER_LOCKING_INTERNAL
 static int _lock_resource(struct cmd_context *cmd, const char *resource,
-			  uint32_t flags)
+			  uint32_t flags, struct logical_volume *lv __attribute__((unused)))
 #else
-int lock_resource(struct cmd_context *cmd, const char *resource, uint32_t flags)
+	int lock_resource(struct cmd_context *cmd, const char *resource, uint32_t flags, struct logical_volume *lv __attribute__((unused)))
 #endif
 {
 	char lockname[PATH_MAX];
 	int clvmd_cmd = 0;
 	const char *lock_scope;
-	const char *lock_type = "";
+	const char *lock_type;
 
 	assert(strlen(resource) < sizeof(lockname));
 	assert(resource);
 
 	switch (flags & LCK_SCOPE_MASK) {
+	case LCK_ACTIVATION:
+		return 1;
 	case LCK_VG:
+		if (!strcmp(resource, VG_SYNC_NAMES)) {
+			log_very_verbose("Requesting sync names.");
+			return _lock_for_cluster(cmd, CLVMD_CMD_SYNC_NAMES,
+						 flags & ~LCK_HOLD, resource);
+		}
 		if (flags == LCK_VG_BACKUP) {
 			log_very_verbose("Requesting backup of VG metadata for %s",
 					 resource);
@@ -406,12 +441,14 @@ int lock_resource(struct cmd_context *cmd, const char *resource, uint32_t flags)
 		}
 
 		/* If the VG name is empty then lock the unused PVs */
-		if (is_orphan_vg(resource) || is_global_vg(resource) || (flags & LCK_CACHE))
-			dm_snprintf(lockname, sizeof(lockname), "P_%s",
-				    resource);
-		else
-			dm_snprintf(lockname, sizeof(lockname), "V_%s",
-				    resource);
+		if (dm_snprintf(lockname, sizeof(lockname), "%c_%s",
+				(is_orphan_vg(resource) ||
+				 is_global_vg(resource) ||
+				 (flags & LCK_CACHE)) ?  'P' : 'V',
+				resource)  < 0) {
+			log_error("Locking resource %s too long.", resource);
+			return 0;
+		}
 
 		lock_scope = "VG";
 		clvmd_cmd = CLVMD_CMD_LOCK_VG;
@@ -462,13 +499,16 @@ int lock_resource(struct cmd_context *cmd, const char *resource, uint32_t flags)
 		return 0;
 	}
 
-	log_very_verbose("Locking %s %s %s (%s%s%s%s%s%s) (0x%x)", lock_scope, lockname,
+	log_very_verbose("Locking %s %s %s (%s%s%s%s%s%s%s%s%s) (0x%x)", lock_scope, lockname,
 			 lock_type, lock_scope,
 			 flags & LCK_NONBLOCK ? "|NONBLOCK" : "",
 			 flags & LCK_HOLD ? "|HOLD" : "",
-			 flags & LCK_LOCAL ? "|LOCAL" : "",
 			 flags & LCK_CLUSTER_VG ? "|CLUSTER" : "",
+			 flags & LCK_LOCAL ? "|LOCAL" : "",
+			 flags & LCK_REMOTE ? "|REMOTE" : "",
 			 flags & LCK_CACHE ? "|CACHE" : "",
+			 flags & LCK_ORIGIN_ONLY ? "|ORIGIN_ONLY" : "",
+			 flags & LCK_REVERT ? "|REVERT" : "",
 			 flags);
 
 	/* Send a message to the cluster manager */
@@ -479,15 +519,14 @@ static int decode_lock_type(const char *response)
 {
 	if (!response)
 		return LCK_NULL;
-	else if (strcmp(response, "EX"))
+	else if (!strcmp(response, "EX"))
 		return LCK_EXCL;
-	else if (strcmp(response, "CR"))
+	else if (!strcmp(response, "CR"))
 		return LCK_READ;
-	else if (strcmp(response, "PR"))
+	else if (!strcmp(response, "PR"))
 		return LCK_PREAD;
 
-	stack;
-	return 0;
+	return_0;
 }
 
 #ifdef CLUSTER_LOCKING_INTERNAL
@@ -507,7 +546,7 @@ int query_resource(const char *resource, int *mode)
 	strcpy(args + 2, resource);
 
 	args[0] = 0;
-	args[1] = LCK_CLUSTER_VG;
+	args[1] = 0;
 
 	status = _cluster_request(CLVMD_CMD_LOCK_QUERY, node, args, len,
 				  &response, &num_responses);
@@ -521,15 +560,15 @@ int query_resource(const char *resource, int *mode)
 
 		/*
 		 * All nodes should use CR, or exactly one node
-		 * should held EX. (PR is obsolete)
-		 * If two nodes node reports different locks,
+		 * should hold EX. (PR is obsolete)
+		 * If two nodes report different locks,
 		 * something is broken - just return more important mode.
 		 */
 		if (decode_lock_type(response[i].response) > *mode)
 			*mode = decode_lock_type(response[i].response);
 
-		log_debug("Lock held for %s, node %s : %s", resource,
-			  response[i].node, response[i].response);
+		log_debug_locking("Lock held for %s, node %s : %s", resource,
+				  response[i].node, response[i].response);
 	}
 
 	_cluster_free_request(response, num_responses);
@@ -559,13 +598,14 @@ void reset_locking(void)
 	if (close(_clvmd_sock))
 		stack;
 
-	_clvmd_sock = _open_local_sock();
+	_clvmd_sock = _open_local_sock(0);
 	if (_clvmd_sock == -1)
 		stack;
 }
 
 #ifdef CLUSTER_LOCKING_INTERNAL
-int init_cluster_locking(struct locking_type *locking, struct cmd_context *cmd)
+int init_cluster_locking(struct locking_type *locking, struct cmd_context *cmd,
+			 int suppress_messages)
 {
 	locking->lock_resource = _lock_resource;
 	locking->query_resource = _query_resource;
@@ -573,16 +613,16 @@ int init_cluster_locking(struct locking_type *locking, struct cmd_context *cmd)
 	locking->reset_locking = _reset_locking;
 	locking->flags = LCK_PRE_MEMLOCK | LCK_CLUSTERED;
 
-	_clvmd_sock = _open_local_sock();
+	_clvmd_sock = _open_local_sock(suppress_messages);
 	if (_clvmd_sock == -1)
 		return 0;
 
 	return 1;
 }
 #else
-int locking_init(int type, struct config_tree *cf, uint32_t *flags)
+int locking_init(int type, struct dm_config_tree *cf, uint32_t *flags)
 {
-	_clvmd_sock = _open_local_sock();
+	_clvmd_sock = _open_local_sock(0);
 	if (_clvmd_sock == -1)
 		return 0;
 

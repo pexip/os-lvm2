@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2009 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,12 +12,17 @@
  * along with this program; if not, write to the Free Software Foundation,
  * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <readline/readline.h>
+#include <ctype.h>
 
+#include "configure.h"
 #include "lvm2app.h"
+
+#ifdef READLINE_SUPPORT
+#include <readline/readline.h>
 
 #define MAX_ARGS 64
 
@@ -67,8 +72,12 @@ static void _show_help(void)
 	       "List the uuids of the VGs that exist in the system\n");
 	printf("'vg_list_pvs vgname': "
 	       "List the PVs that exist in VG vgname\n");
+	printf("'pv_list_pvsegs pvname': "
+	       "List the PV segments that exist in PV pvname\n");
 	printf("'vg_list_lvs vgname': "
 	       "List the LVs that exist in VG vgname\n");
+	printf("'lv_list_lvsegs vgname lvname': "
+	       "List the LV segments that exist in LV vgname/lvname\n");
 	printf("'vgs_open': "
 	       "List the VGs that are currently open\n");
 	printf("'vgs': "
@@ -91,6 +100,14 @@ static void _show_help(void)
 	       "Issue a lvm_config_override() with accept device filter\n");
 	printf("'vg_get_tags vgname': "
 	       "List the tags of a VG\n");
+	printf("'lv_get_property vgname lvname property_name': "
+	       "Display the value of LV property\n");
+	printf("'vg_get_property vgname property_name': "
+	       "Display the value of VG property\n");
+	printf("'pv_get_property pvname property_name': "
+	       "Display the value of PV property\n");
+	printf("'vg_set_property vgname property_name': "
+	       "Set the value of VG property\n");
 	printf("'lv_get_tags vgname lvname': "
 	       "List the tags of a LV\n");
 	printf("'vg_{add|remove}_tag vgname tag': "
@@ -101,6 +118,14 @@ static void _show_help(void)
 	       "Lookup a vgname from a device name\n");
 	printf("'vgname_from_pvid pvid': "
 	       "Lookup a vgname from a pvid\n");
+	printf("'lv_from_uuid vgname lvuuid': "
+	       "Lookup an LV from an LV uuid\n");
+	printf("'lv_from_name vgname lvname': "
+	       "Lookup an LV from an LV name\n");
+	printf("'pv_from_uuid vgname pvuuid': "
+	       "Lookup an LV from an LV uuid\n");
+	printf("'pv_from_name vgname pvname': "
+	       "Lookup an LV from an LV name\n");
 	printf("'quit': exit the program\n");
 }
 
@@ -180,6 +205,19 @@ static vg_t _lookup_vg_by_name(char **argv, int argc)
 	}
 	return vg;
 }
+
+static pv_t _lookup_pv_by_name(const char *name)
+{
+	pv_t pv;
+
+	if (!(pv = dm_hash_lookup(_pvname_hash, name))) {
+		printf ("Can't find %s in open PVs - run vg_open first\n",
+			name);
+		return NULL;
+	}
+	return pv;
+}
+
 static void _add_lvs_to_lvname_hash(struct dm_list *lvs)
 {
 	struct lvm_lv_list *lvl;
@@ -213,6 +251,7 @@ static void _add_device_to_pvname_hash(struct dm_list *pvs, const char *name)
 			dm_hash_insert(_pvname_hash, name, pvl->pv);
 	}
 }
+
 static void _vg_reduce(char **argv, int argc, lvm_t libh)
 {
 	vg_t vg;
@@ -442,6 +481,30 @@ static void _show_one_vg(vg_t vg)
 		lvm_vg_get_pv_count(vg), lvm_vg_get_seqno(vg));
 }
 
+static void _print_pv(pv_t pv)
+{
+	if (!pv)
+		return;
+	printf("%s (%s): size=%"PRIu64", free=%"PRIu64
+	       ", dev_size=%"PRIu64", mda_count=%"PRIu64"\n",
+	       lvm_pv_get_name(pv), lvm_pv_get_uuid(pv),
+	       lvm_pv_get_size(pv), lvm_pv_get_free(pv),
+	       lvm_pv_get_dev_size(pv),
+	       lvm_pv_get_mda_count(pv));
+}
+
+static void _print_lv(vg_t vg, lv_t lv)
+{
+	if (!lv)
+		return;
+	printf("%s/%s (%s): size=%"PRIu64", %sACTIVE / %sSUSPENDED\n",
+	       lvm_vg_get_name(vg),
+	       lvm_lv_get_name(lv), lvm_lv_get_uuid(lv),
+	       lvm_lv_get_size(lv),
+	       lvm_lv_is_active(lv) ? "" : "IN",
+	       lvm_lv_is_suspended(lv) ? "" : "NOT ");
+}
+
 static void _list_open_vgs(void)
 {
 	dm_hash_iter(_vgid_hash, (dm_hash_iterate_fn) _show_one_vg);
@@ -462,12 +525,41 @@ static void _pvs_in_vg(char **argv, int argc)
 	}
 	printf("PVs in VG %s:\n", lvm_vg_get_name(vg));
 	dm_list_iterate_items(pvl, pvs) {
-		printf("%s (%s): size=%"PRIu64", free=%"PRIu64
-			", dev_size=%"PRIu64", mda_count=%"PRIu64"\n",
-			lvm_pv_get_name(pvl->pv), lvm_pv_get_uuid(pvl->pv),
-			lvm_pv_get_size(pvl->pv), lvm_pv_get_free(pvl->pv),
-			lvm_pv_get_dev_size(pvl->pv),
-			lvm_pv_get_mda_count(pvl->pv));
+		_print_pv(pvl->pv);
+	}
+}
+
+static void _print_property_value(const char *name,
+				  struct lvm_property_value v)
+{
+	if (!v.is_valid)
+		printf("%s = INVALID\n", name);
+	else if (v.is_string)
+		printf("%s = %s\n", name, v.value.string);
+	else
+		printf("%s = %"PRIu64"\n", name, v.value.integer);
+}
+
+static void _pvsegs_in_pv(char **argv, int argc)
+{
+	struct dm_list *pvsegs;
+	struct lvm_pvseg_list *pvl;
+	pv_t pv;
+
+	if (!(pv = _lookup_pv_by_name(argv[1])))
+		return;
+	pvsegs = lvm_pv_list_pvsegs(pv);
+	if (!pvsegs || dm_list_empty(pvsegs)) {
+		printf("No PV segments in pv %s\n", argv[1]);
+		return;
+	}
+	printf("PV segments in pv %s:\n", argv[1]);
+	dm_list_iterate_items(pvl, pvsegs) {
+		struct lvm_property_value v;
+		v = lvm_pvseg_get_property(pvl->pvseg, "pvseg_start");
+		_print_property_value("pvseg_start", v);
+		v = lvm_pvseg_get_property(pvl->pvseg, "pvseg_size");
+		_print_property_value("pvseg_size", v);
 	}
 }
 
@@ -546,6 +638,81 @@ static void _vg_tag(char **argv, int argc, int add)
 	       add ? "adding":"removing", argv[2], argv[1]);
 }
 
+static void _pv_get_property(char **argv, int argc)
+{
+	pv_t pv;
+	struct lvm_property_value v;
+
+	if (argc < 3) {
+		printf("Please enter pvname, field_id\n");
+		return;
+	}
+	if (!(pv = _lookup_pv_by_name(argv[1])))
+		return;
+	v = lvm_pv_get_property(pv, argv[2]);
+	_print_property_value(argv[2], v);
+}
+
+static void _vg_get_property(char **argv, int argc)
+{
+	vg_t vg;
+	struct lvm_property_value v;
+
+	if (argc < 3) {
+		printf("Please enter vgname, field_id\n");
+		return;
+	}
+	if (!(vg = _lookup_vg_by_name(argv, argc)))
+		return;
+	v =  lvm_vg_get_property(vg, argv[2]);
+	_print_property_value(argv[2], v);
+}
+
+static void _lv_get_property(char **argv, int argc)
+{
+	lv_t lv;
+	struct lvm_property_value v;
+
+	if (argc < 4) {
+		printf("Please enter vgname, lvname, field_id\n");
+		return;
+	}
+	if (!(lv = _lookup_lv_by_name(argv[2])))
+		return;
+	v = lvm_lv_get_property(lv, argv[3]);
+	_print_property_value(argv[3], v);
+}
+
+static void _vg_set_property(char **argv, int argc)
+{
+	vg_t vg;
+	struct lvm_property_value value;
+	int rc;
+
+	if (argc < 4) {
+		printf("Please enter vgname, field_id, value\n");
+		return;
+	}
+	if (!(vg = _lookup_vg_by_name(argv, argc)))
+		return;
+	value = lvm_vg_get_property(vg, argv[2]);
+	if (!value.is_valid) {
+		printf("Error obtaining property value\n");
+		return;
+	}
+	if (value.is_string)
+		value.value.string = argv[3];
+	else
+		value.value.integer = atoi(argv[3]);
+	rc = lvm_vg_set_property(vg, argv[2], &value);
+	if (rc)
+		printf("Error ");
+	else
+		printf("Success ");
+	printf("setting value of property %s in VG %s\n",
+	       argv[2], argv[1]);
+}
+
 static void _lv_get_tags(char **argv, int argc)
 {
 	lv_t lv;
@@ -580,6 +747,59 @@ static void _lv_tag(char **argv, int argc, int add)
 	printf("%s tag %s to LV %s\n",
 	       add ? "adding":"removing", argv[3], argv[2]);
 }
+
+static void _lv_from_uuid(char **argv, int argc)
+{
+	vg_t vg;
+
+	if (argc < 3) {
+		printf("Please enter vgname, lv_uuid\n");
+		return;
+	}
+	if (!(vg = _lookup_vg_by_name(argv, argc)))
+		return;
+	_print_lv(vg, lvm_lv_from_uuid(vg, argv[2]));
+}
+
+static void _lv_from_name(char **argv, int argc)
+{
+	vg_t vg;
+
+	if (argc < 3) {
+		printf("Please enter vgname, lv_uuid\n");
+		return;
+	}
+	if (!(vg = _lookup_vg_by_name(argv, argc)))
+		return;
+	_print_lv(vg, lvm_lv_from_name(vg, argv[2]));
+}
+
+static void _pv_from_uuid(char **argv, int argc)
+{
+	vg_t vg;
+
+	if (argc < 3) {
+		printf("Please enter vgname, pv_uuid\n");
+		return;
+	}
+	if (!(vg = _lookup_vg_by_name(argv, argc)))
+		return;
+	_print_pv(lvm_pv_from_uuid(vg, argv[2]));
+}
+
+static void _pv_from_name(char **argv, int argc)
+{
+	vg_t vg;
+
+	if (argc < 3) {
+		printf("Please enter vgname, pv_uuid\n");
+		return;
+	}
+	if (!(vg = _lookup_vg_by_name(argv, argc)))
+		return;
+	_print_pv(lvm_pv_from_name(vg, argv[2]));
+}
+
 static void _vgname_from_pvid(char **argv, int argc, lvm_t libh)
 {
 	const char *vgname;
@@ -627,12 +847,36 @@ static void _lvs_in_vg(char **argv, int argc)
 	}
 	printf("LVs in VG %s:\n", lvm_vg_get_name(vg));
 	dm_list_iterate_items(lvl, lvs) {
-		printf("%s/%s (%s): size=%"PRIu64", %sACTIVE / %sSUSPENDED\n",
-			lvm_vg_get_name(vg),
-			lvm_lv_get_name(lvl->lv), lvm_lv_get_uuid(lvl->lv),
-			lvm_lv_get_size(lvl->lv),
-			lvm_lv_is_active(lvl->lv) ? "" : "IN",
-			lvm_lv_is_suspended(lvl->lv) ? "" : "NOT ");
+		_print_lv(vg, lvl->lv);
+	}
+}
+
+static void _lvsegs_in_lv(char **argv, int argc)
+{
+	struct dm_list *lvsegs;
+	struct lvm_lvseg_list *lvl;
+	lv_t lv;
+
+	if (!(lv = _lookup_lv_by_name(argv[2])))
+		return;
+	lvsegs = lvm_lv_list_lvsegs(lv);
+	if (!lvsegs || dm_list_empty(lvsegs)) {
+		printf("No LV segments in lv %s\n", lvm_lv_get_name(lv));
+		return;
+	}
+	printf("LV segments in lv %s:\n", lvm_lv_get_name(lv));
+	dm_list_iterate_items(lvl, lvsegs) {
+		struct lvm_property_value v;
+		v = lvm_lvseg_get_property(lvl->lvseg, "segtype");
+		_print_property_value("segtype", v);
+		v = lvm_lvseg_get_property(lvl->lvseg, "seg_start_pe");
+		_print_property_value("seg_start_pe", v);
+		v = lvm_lvseg_get_property(lvl->lvseg, "seg_size");
+		_print_property_value("seg_size", v);
+		v = lvm_lvseg_get_property(lvl->lvseg, "devices");
+		_print_property_value("devices", v);
+		v = lvm_lvseg_get_property(lvl->lvseg, "seg_pe_ranges");
+		_print_property_value("seg_pe_ranges", v);
 	}
 }
 
@@ -780,8 +1024,12 @@ static int lvmapi_test_shell(lvm_t libh)
 			_list_open_vgs();
 		} else if (!strcmp(argv[0], "vg_list_pvs")) {
 			_pvs_in_vg(argv, argc);
+		} else if (!strcmp(argv[0], "pv_list_pvsegs")) {
+			_pvsegs_in_pv(argv, argc);
 		} else if (!strcmp(argv[0], "vg_list_lvs")) {
 			_lvs_in_vg(argv, argc);
+		} else if (!strcmp(argv[0], "lv_list_lvsegs")) {
+			_lvsegs_in_lv(argv, argc);
 		} else if (!strcmp(argv[0], "list_vg_names")) {
 			_list_vg_names(libh);
 		} else if (!strcmp(argv[0], "list_vg_ids")) {
@@ -796,6 +1044,14 @@ static int lvmapi_test_shell(lvm_t libh)
 			_vg_tag(argv, argc, 0);
 		} else if (!strcmp(argv[0], "vg_get_tags")) {
 			_vg_get_tags(argv, argc);
+		} else if (!strcmp(argv[0], "lv_get_property")) {
+			_lv_get_property(argv, argc);
+		} else if (!strcmp(argv[0], "vg_get_property")) {
+			_vg_get_property(argv, argc);
+		} else if (!strcmp(argv[0], "pv_get_property")) {
+			_pv_get_property(argv, argc);
+		} else if (!strcmp(argv[0], "vg_set_property")) {
+			_vg_set_property(argv, argc);
 		} else if (!strcmp(argv[0], "lv_add_tag")) {
 			_lv_tag(argv, argc, 1);
 		} else if (!strcmp(argv[0], "lv_remove_tag")) {
@@ -806,6 +1062,14 @@ static int lvmapi_test_shell(lvm_t libh)
 			_vgname_from_devname(argv, argc, libh);
 		} else if (!strcmp(argv[0], "vgname_from_pvid")) {
 			_vgname_from_pvid(argv, argc, libh);
+		} else if (!strcmp(argv[0], "lv_from_uuid")) {
+			_lv_from_uuid(argv, argc);
+		} else if (!strcmp(argv[0], "lv_from_name")) {
+			_lv_from_name(argv, argc);
+		} else if (!strcmp(argv[0], "pv_from_uuid")) {
+			_pv_from_uuid(argv, argc);
+		} else if (!strcmp(argv[0], "pv_from_name")) {
+			_pv_from_name(argv, argc);
 		} else {
 			printf ("Unrecognized command %s\n", argv[0]);
 		}
@@ -816,6 +1080,13 @@ static int lvmapi_test_shell(lvm_t libh)
 	free(input);
 	return 0;
 }
+#else /* !READLINE_SUPPORT */
+static int lvmapi_test_shell(lvm_t libh)
+{
+	printf("Build without readline library, no interactive testing.\n");
+	return 1;
+}
+#endif
 
 int main (int argc, char *argv[])
 {

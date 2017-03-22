@@ -2,11 +2,10 @@ Source: lvm2
 Section: admin
 Priority: optional
 Maintainer: Pexip AS <packaging@pexip.com>
-XSBC-Pexip-Original-Maintainer: Ubuntu Core Developers <ubuntu-devel-discuss@lists.ubuntu.com>
-XSBC-Original-Maintainer: Debian LVM Team <pkg-lvm-maintainers@lists.alioth.debian.org>
+XSBC-Pexip-Original-Maintainer: Debian LVM Team <pkg-lvm-maintainers@lists.alioth.debian.org>
 XSBC-Pexip-Original-Uploaders: Bastian Blank <waldi@debian.org>
-Build-Depends: debhelper (>> 4.2), automake, libcman-dev (>> 2), libcorosync-dev, openais-dev, libdlm-dev (>> 2), libreadline-dev, libselinux1-dev, libudev-dev, pkg-config, quilt
-Standards-Version: 3.7.3
+Build-Depends: dpkg-dev (>= 1.16.1~), debhelper (>= 8.1.3~), dh-systemd, automake, libcman-dev (>> 2), libcorosync-dev, libdlm-dev (>> 2), libreadline-gplv2-dev, libselinux1-dev, libudev-dev, openais-dev, pkg-config
+Standards-Version: 3.9.5
 Homepage: http://sources.redhat.com/lvm2/
 Vcs-Svn: svn://svn.debian.org/pkg-lvm/lvm2/trunk/
 Vcs-Browser: http://svn.debian.org/wsvn/pkg-lvm/lvm2/trunk/
@@ -14,11 +13,11 @@ XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
 
 Package: lvm2
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, lsb-base, dmsetup (>> 2:1.02.47), watershed (>= 2)
-Breaks: grub-common (<<1.98+20100527-1)
-Conflicts: lvm-common
-Replaces: lvm-common
-Description: The Linux Logical Volume Manager
+Depends: ${shlibs:Depends}, ${misc:Depends}, lsb-base, dmsetup (>> 2:1.02.47), dmeventd (>> 2:1.02.90), initscripts (>= 2.88dsf-13.3)
+Suggests: thin-provisioning-tools
+Breaks: initramfs-tools (<< 0.99), thin-provisioning-tools (<< 0.3.2)
+Multi-Arch: foreign
+Description: Linux Logical Volume Manager
  This is LVM2, the rewrite of The Linux Logical Volume Manager.  LVM
  supports enterprise level volume management of disk and disk subsystems
  by grouping arbitrary disks into volume groups. The total capacity of
@@ -26,11 +25,11 @@ Description: The Linux Logical Volume Manager
  regular block devices.
 
 Package: lvm2-udeb
-XC-Package-Type: udeb
+Package-Type: udeb
 Section: debian-installer
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, watershed-udeb
-Description: The Linux Logical Volume Manager
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Linux Logical Volume Manager
  This is a udeb, or a microdeb, for the debian-installer.
  .
  This is LVM2, the rewrite of The Linux Logical Volume Manager.  LVM
@@ -42,7 +41,9 @@ Description: The Linux Logical Volume Manager
 Package: clvm
 Priority: extra
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, lvm2 (= ${binary:Version}), lsb-base, corosync | cman
+Depends: ${shlibs:Depends}, ${misc:Depends}, lvm2 (= ${binary:Version}), lsb-base
+Recommends: corosync | openais | cman
+Multi-Arch: foreign
 Description: Cluster LVM Daemon for lvm2
  This package provides the clustering interface for lvm2, when used with
  Red Hat's "cman" or corosync based (eg Pacemaker) cluster infrastructure.
@@ -52,8 +53,8 @@ Description: Cluster LVM Daemon for lvm2
 Package: libdevmapper-dev
 Section: libdevel
 Architecture: any
-Depends: ${misc:Depends}, libdevmapper1.02.1 (= ${binary:Version}), libdevmapper-event1.02.1 (= ${binary:Version}), libselinux1-dev, libudev-dev
-Description: The Linux Kernel Device Mapper header files
+Depends: ${misc:Depends}, libdevmapper1.02.1 (= ${binary:Version}), libdevmapper-event1.02.1 (= ${binary:Version}), libselinux1-dev
+Description: Linux Kernel Device Mapper header files
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
  Team's implementation of a minimalistic kernel-space driver that handles
  volume management, while keeping knowledge of the underlying device layout
@@ -68,10 +69,12 @@ Package: libdevmapper1.02.1
 Section: libs
 Priority: required
 Architecture: any
+Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends}, ${misc:Depends}, dmsetup (>= ${binary:Version})
 Breaks: lvm2 (<< 2.02.66)
-Provides: libdevmapper
-Description: The Linux Kernel Device Mapper userspace library
+Conflicts: libdevmapper1.02
+Multi-Arch: same
+Description: Linux Kernel Device Mapper userspace library
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
  Team's implementation of a minimalistic kernel-space driver that handles
  volume management, while keeping knowledge of the underlying device layout
@@ -83,12 +86,11 @@ Description: The Linux Kernel Device Mapper userspace library
  consistent interface (as opposed to through kernel ioctls).
 
 Package: libdevmapper1.02.1-udeb
-XC-Package-Type: udeb
+Package-Type: udeb
 Section: debian-installer
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Recommends: dmsetup-udeb
-Description: The Linux Kernel Device Mapper userspace library
+Description: Linux Kernel Device Mapper userspace library
  This is a udeb, or a microdeb, for the debian-installer.
  .
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
@@ -99,10 +101,10 @@ Description: The Linux Kernel Device Mapper userspace library
 
 Package: dmsetup
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, initramfs-tools, util-linux (>> 2.16), udev (>> 141-2)
+Depends: ${shlibs:Depends}, ${misc:Depends}, util-linux (>> 2.16)
 Conflicts: devicekit-disks (<< 009)
-Breaks: udev (<< 138-1)
-Description: The Linux Kernel Device Mapper userspace library
+Multi-Arch: foreign
+Description: Linux Kernel Device Mapper userspace library
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
  Team's implementation of a minimalistic kernel-space driver that handles
  volume management, while keeping knowledge of the underlying device layout
@@ -112,11 +114,11 @@ Description: The Linux Kernel Device Mapper userspace library
  This package contains a utility for modifying device mappings.
 
 Package: dmsetup-udeb
-XC-Package-Type: udeb
+Package-Type: udeb
 Section: debian-installer
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: The Linux Kernel Device Mapper userspace library
+Description: Linux Kernel Device Mapper userspace library
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
  Team's implementation of a minimalistic kernel-space driver that handles
  volume management, while keeping knowledge of the underlying device layout
@@ -127,10 +129,11 @@ Description: The Linux Kernel Device Mapper userspace library
 
 Package: libdevmapper-event1.02.1
 Section: libs
-Priority: optional
 Architecture: any
-Depends: ${shlibs:Depends}
-Description: The Linux Kernel Device Mapper userspace library
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Multi-Arch: same
+Description: Linux Kernel Device Mapper event support library
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
  Team's implementation of a minimalistic kernel-space driver that handles
  volume management, while keeping knowledge of the underlying device layout
@@ -141,10 +144,10 @@ Description: The Linux Kernel Device Mapper userspace library
  for devmapper devices, in conjunction with the dmevent daemon.
 
 Package: dmeventd
-Section: admin
 Architecture: any
-Depends: ${shlibs:Depends}
-Description: The Linux Kernel Device Mapper userspace library
+Depends: ${shlibs:Depends}, ${misc:Depends}
+# No Multi-Arch: foreign, plugins depend on the current architecture
+Description: Linux Kernel Device Mapper event daemon
  The Linux Kernel Device Mapper is the LVM (Linux Logical Volume Management)
  Team's implementation of a minimalistic kernel-space driver that handles
  volume management, while keeping knowledge of the underlying device layout
@@ -156,7 +159,9 @@ Description: The Linux Kernel Device Mapper userspace library
 Package: liblvm2app2.2
 Section: libs
 Architecture: any
+Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Multi-Arch: same
 Description: LVM2 application library
  This package contains the lvm2app shared library. It allows easier access
  to the basic LVM objects and provides functions to enumerate, create or
@@ -165,7 +170,9 @@ Description: LVM2 application library
 Package: liblvm2cmd2.02
 Section: libs
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, dmeventd (>> 2:1.02.90)
+Multi-Arch: same
 Description: LVM2 command library
  This package contains the lvm2cmd shared library.
 

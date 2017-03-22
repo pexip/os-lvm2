@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001 - 2003 Sistina Software (UK) Limited.
- * Copyright (C) 2004 - 2009 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004 - 2014 Red Hat, Inc. All rights reserved.
  *
  * This file is released under the LGPL.
  */
@@ -8,11 +8,12 @@
 #ifndef _LINUX_DM_IOCTL_V4_H
 #define _LINUX_DM_IOCTL_V4_H
 
-#ifdef linux
+#ifdef __linux__
 #  include <linux/types.h>
 #endif
 
 #define DM_DIR "mapper"		/* Slashes not supported */
+#define DM_CONTROL_NODE "control"
 #define DM_MAX_TYPE_NAME 16
 #define DM_NAME_LEN 128
 #define DM_UUID_LEN 129
@@ -45,7 +46,7 @@
  * Remove a device, destroy any tables.
  *
  * DM_DEV_RENAME:
- * Rename a device.
+ * Rename a device or set its uuid if none was previously supplied.
  *
  * DM_SUSPEND:
  * This performs both suspend and resume, depending which flag is
@@ -268,9 +269,9 @@ enum {
 #define DM_DEV_SET_GEOMETRY	_IOWR(DM_IOCTL, DM_DEV_SET_GEOMETRY_CMD, struct dm_ioctl)
 
 #define DM_VERSION_MAJOR	4
-#define DM_VERSION_MINOR	17
+#define DM_VERSION_MINOR	27
 #define DM_VERSION_PATCHLEVEL	0
-#define DM_VERSION_EXTRA	"-ioctl (2010-03-05)"
+#define DM_VERSION_EXTRA	"-ioctl (2013-10-30)"
 
 /* Status bits */
 #define DM_READONLY_FLAG	(1 << 0) /* In/Out */
@@ -308,6 +309,8 @@ enum {
 
 /*
  * Set this to suspend without flushing queued ios.
+ * Also disables flushing uncommitted changes in the thin target before
+ * generating statistics for DM_TABLE_STATUS and DM_DEV_WAIT.
  */
 #define DM_NOFLUSH_FLAG		(1 << 11) /* In */
 
@@ -322,5 +325,33 @@ enum {
  * If set, a uevent was generated for which the caller may need to wait.
  */
 #define DM_UEVENT_GENERATED_FLAG	(1 << 13) /* Out */
+
+/*
+ * If set, rename changes the uuid not the name.  Only permitted
+ * if no uuid was previously supplied: an existing uuid cannot be changed.
+ */
+#define DM_UUID_FLAG			(1 << 14) /* In */
+
+/*
+ * If set, all buffers are wiped after use. Use when sending
+ * or requesting sensitive data such as an encryption key.
+ */
+#define DM_SECURE_DATA_FLAG		(1 << 15) /* In */
+
+/*
+ * If set, a message generated output data.
+ */
+#define DM_DATA_OUT_FLAG		(1 << 16) /* Out */
+
+/*
+ * If set with DM_DEV_REMOVE or DM_REMOVE_ALL this indicates that if
+ * the device cannot be removed immediately because it is still in use
+ * it should instead be scheduled for removal when it gets closed.
+ *
+ * On return from DM_DEV_REMOVE, DM_DEV_STATUS or other ioctls, this
+ * flag indicates that the device is scheduled to be removed when it
+ * gets closed.
+ */
+#define DM_DEFERRED_REMOVE		(1 << 17) /* In/Out */
 
 #endif				/* _LINUX_DM_IOCTL_H */

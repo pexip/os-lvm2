@@ -1,6 +1,6 @@
 #
 # Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
-# Copyright (C) 2004-2010 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2004-2013 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -18,6 +18,7 @@ top_builddir = @top_builddir@
 
 SOURCES =\
 	lvm_misc.c \
+	lvm_prop.c \
 	lvm_base.c \
 	lvm_lv.c \
 	lvm_pv.c \
@@ -33,6 +34,11 @@ endif
 LIB_SHARED = $(LIB_NAME).$(LIB_SUFFIX)
 
 CLEAN_TARGETS += liblvm.cflow $(LIB_NAME).a
+
+EXPORTED_HEADER = $(srcdir)/lvm2app.h
+EXPORTED_FN_PREFIX = lvm
+
+LDDEPS += $(top_builddir)/lib/liblvm-internal.a
 
 include $(top_builddir)/make.tmpl
 
@@ -75,4 +81,4 @@ liblvm.cflow: $(SOURCES)
 
 cflow: liblvm.cflow
 
-DISTCLEAN_TARGETS += $(LIB_NAME).pc
+DISTCLEAN_TARGETS += $(LIB_NAME).pc .exported_symbols_generated

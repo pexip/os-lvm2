@@ -1,14 +1,39 @@
 --- a/make.tmpl.in
 +++ b/make.tmpl.in
-@@ -21,6 +21,7 @@
+@@ -17,20 +17,10 @@
+ 
+ @SET_MAKE@
+ 
+-# Allow environment to override any built-in default value for CC.
+-# If there is a built-in default, CC is NOT set to @CC@ here.
+-CC ?= @CC@
+-
+-# If $(CC) holds the usual built-in default value of 'cc' then replace it with
+-# the configured value.
+-# (To avoid this and force the use of 'cc' from the environment, supply its
+-# full path.)
+-ifeq ($(CC), cc)
+-  CC = @CC@
+-endif
+-
++CC = @CC@
  RANLIB = @RANLIB@
- SHELL = /bin/sh
  INSTALL = @INSTALL@
 +INSTALL_DATA = @INSTALL@ -m 644
  MKDIR_P = @MKDIR_P@
  MSGFMT = @MSGFMT@
  LCOV = @LCOV@
-@@ -88,22 +89,14 @@
+@@ -91,8 +81,7 @@
+ ocf_scriptdir = $(DESTDIR)@OCFDIR@
+ pyexecdir = $(DESTDIR)$(prefix)
+ 
+-USRLIB_RELPATH = $(shell echo $(abspath $(usrlibdir) $(libdir)) | \
+-  $(AWK) -f $(top_srcdir)/scripts/relpath.awk)
++USRLIB_RELPATH = @libdir@/
+ 
+ SYSTEMD_GENERATOR_DIR = @systemdutildir@/system-generators
+ DEFAULT_SYS_DIR = @DEFAULT_SYS_DIR@
+@@ -119,22 +108,14 @@
  endif
  
  # Handle installation of files
@@ -27,20 +52,84 @@
 +INSTALL_DATA = $(INSTALL) -m 644
 +INSTALL_WDATA = $(INSTALL_DATA)
  
- INSTALL_DIR = $(INSTALL) -m 0755 -d
- INSTALL_ROOT_DIR = $(INSTALL) -m 0700 -d
- INSTALL_ROOT_DATA = $(INSTALL) -m 0600
+ INSTALL_DIR = $(INSTALL) -m 755 -d
+ INSTALL_ROOT_DIR = $(INSTALL) -m 700 -d
+ INSTALL_ROOT_DATA = $(INSTALL) -m 600
 -INSTALL_SCRIPT = $(INSTALL) -p $(M_INSTALL_PROGRAM)
 +INSTALL_SCRIPT = $(INSTALL_PROGRAM)
  
  .SUFFIXES: .c .d .o .so .a .po .pot .mo .dylib
  
-@@ -313,7 +306,7 @@
- install_lib_shared: $(LIB_SHARED)
- 	$(INSTALL_PROGRAM) -D $< $(libdir)/$(<F).$(LIB_VERSION)
- 	$(INSTALL) -d $(usrlibdir)
--	$(LN_S) -f $(USRLIB_RELPATH)$(<F).$(LIB_VERSION) $(usrlibdir)/$(<F)
-+	$(LN_S) -f @libdir@/$(<F).$(LIB_VERSION) $(usrlibdir)/$(<F)
+@@ -389,17 +370,14 @@
+ 	$(INSTALL_DIR) $(usrlibdir)
+ 	$(LN_S) -f $(USRLIB_RELPATH)$(<F).$(LIB_VERSION) $(usrlibdir)/$(<F)
  
- # FIXME: plugins are installed to subdirs 
- #        and for compatibility links in libdir are created
+-# FIXME: plugins are installed to subdirs 
+-#        and for compatibility links in libdir are created
+-#        when the code is fixed links could be removed.
++install_dm_lib: $(LIB_SHARED)
++	$(INSTALL_PROGRAM) -D $< $(libdir)/device-mapper/$(<F).$(LIB_VERSION)
++
+ install_dm_plugin: $(LIB_SHARED)
+ 	$(INSTALL_PROGRAM) -D $< $(libdir)/device-mapper/$(<F)
+-	$(LN_S) -f device-mapper/$(<F) $(libdir)/$(<F)
+ 
+ install_lvm2_plugin: $(LIB_SHARED)
+ 	$(INSTALL_PROGRAM) -D $< $(libdir)/lvm2/$(<F)
+-	$(LN_S) -f lvm2/$(<F) $(libdir)/$(<F)
+-	$(LN_S) -f $(<F) $(libdir)/$(<F).$(LIB_VERSION)
+ endif
+ 
+ $(LIB_STATIC): $(OBJECTS)
+--- a/daemons/dmeventd/plugins/mirror/Makefile.in
++++ b/daemons/dmeventd/plugins/mirror/Makefile.in
+@@ -17,7 +17,7 @@
+ top_builddir = @top_builddir@
+ 
+ INCLUDES += -I$(top_srcdir)/daemons/dmeventd/plugins/lvm2
+-CLDFLAGS += -L$(top_builddir)/daemons/dmeventd/plugins/lvm2
++CLDFLAGS += -L$(top_builddir)/daemons/dmeventd/plugins/lvm2 -Wl,-rpath,'$$ORIGIN'
+ 
+ SOURCES = dmeventd_mirror.c
+ 
+--- a/daemons/dmeventd/plugins/raid/Makefile.in
++++ b/daemons/dmeventd/plugins/raid/Makefile.in
+@@ -29,6 +29,7 @@
+ 
+ include $(top_builddir)/make.tmpl
+ 
++CLDFLAGS += -Wl,-rpath,'$$ORIGIN'
+ LIBS += -ldevmapper-event-lvm2 -ldevmapper
+ 
+ install_lvm2: install_dm_plugin
+--- a/daemons/dmeventd/plugins/snapshot/Makefile.in
++++ b/daemons/dmeventd/plugins/snapshot/Makefile.in
+@@ -17,7 +17,7 @@
+ top_builddir = @top_builddir@
+ 
+ INCLUDES += -I$(top_srcdir)/daemons/dmeventd/plugins/lvm2
+-CLDFLAGS += -L$(top_builddir)/daemons/dmeventd/plugins/lvm2
++CLDFLAGS += -L$(top_builddir)/daemons/dmeventd/plugins/lvm2 -Wl,-rpath,'$$ORIGIN'
+ 
+ SOURCES = dmeventd_snapshot.c
+ 
+--- a/daemons/dmeventd/plugins/thin/Makefile.in
++++ b/daemons/dmeventd/plugins/thin/Makefile.in
+@@ -29,6 +29,7 @@
+ 
+ include $(top_builddir)/make.tmpl
+ 
++CLDFLAGS += -Wl,-rpath,'$$ORIGIN'
+ LIBS += -ldevmapper-event-lvm2 -ldevmapper
+ 
+ install_lvm2: install_dm_plugin
+--- a/daemons/dmeventd/plugins/lvm2/Makefile.in
++++ b/daemons/dmeventd/plugins/lvm2/Makefile.in
+@@ -26,6 +26,6 @@
+ 
+ LIBS += @LVM2CMD_LIB@ -ldevmapper $(PTHREAD_LIBS)
+ 
+-install_lvm2: install_lib_shared
++install_lvm2: install_dm_lib
+ 
+ install: install_lvm2
