@@ -9,7 +9,7 @@ Standards-Version: 3.9.5
 Homepage: http://sources.redhat.com/lvm2/
 Vcs-Svn: svn://svn.debian.org/pkg-lvm/lvm2/trunk/
 Vcs-Browser: http://svn.debian.org/wsvn/pkg-lvm/lvm2/trunk/
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
 
 Package: lvm2
 Architecture: any
