@@ -7,9 +7,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # 'Test for proper escaping of strings in metadata (bz431474)'
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -35,7 +38,7 @@ dm_table | grep -F "$pv_ugly"
 created="$dev1"
 # when used with real udev without fallback, it will fail here
 pvcreate "$dev1" || created="$dev2"
-pvdisplay 2>&1 | tee >err
+pvdisplay 2>&1 | tee err
 should grep -F "$pv_ugly" err
 should check pv_field "$dev1" pv_name "$dev1"
 vgcreate $vg "$created"

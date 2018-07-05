@@ -7,15 +7,24 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # Test vgsplit command options for validity
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux prepare_devs 5
 
-for mdatype in 1 2
+if test -n "$LVM_TEST_LVM1" ; then
+mdatypes='1 2'
+else
+mdatypes='2'
+fi
+
+for mdatype in $mdatypes
 do
 
 pvcreate -M$mdatype $(cat DEVICES)
@@ -143,8 +152,22 @@ lvcreate -l 4 -n $lv2 $vg1
 vgchange -an $vg1
 not vgsplit $vg1 $vg2 "$dev3" 2>err;
 vgremove -f $vg2 $vg1
+
+# Restart clvm because using the same
+# devs as lvm1 and then lvm2 causes problems.
+if test -e LOCAL_CLVMD ; then
+	kill $(< LOCAL_CLVMD)
+	for i in $(seq 1 100) ; do
+		test $i -eq 100 && die "Shutdown of clvmd is too slow."
+		pgrep clvmd || break
+		sleep .1
+	done # wait for the pid removal
+	aux prepare_clvmd
+fi
+
 done
 
+if test -z "$LVM_TEST_LVM1" ; then
 # ONLY LVM2 metadata
 # setup PVs" '
 pvcreate --metadatacopies 0 "$dev5"
@@ -166,3 +189,4 @@ vgcreate $vg2 "$dev1" "$dev2"
 not vgsplit $vg1 $vg2 "$dev3" 2>err;
 grep "Metadata types differ" err
 vgremove -f $vg1 $vg2
+fi

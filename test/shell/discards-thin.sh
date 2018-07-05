@@ -8,10 +8,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 #
 # test support of thin discards
 #
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
+export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
 
@@ -22,14 +27,19 @@ aux have_thin 1 1 0 || skip
 
 aux prepare_pvs 2 64
 
+aux extend_filter_LVMTEST
+
 vgcreate $vg -s 64K $(cat DEVICES)
 
 # Create named pool only
 lvcreate -l1 --discards ignore -T $vg/pool
 check lv_field $vg/pool discards "ignore"
+check lv_field $vg/pool kernel_discards "ignore"
 lvcreate -l1 --discards nopassdown -T $vg/pool1
 check lv_field $vg/pool1 discards "nopassdown"
+check lv_field $vg/pool1 kernel_discards "nopassdown"
 lvcreate -l1 --discards passdown -T $vg/pool2
+check lv_field $vg/pool2 discards "passdown"
 check lv_field $vg/pool2 discards "passdown"
 
 lvchange --discards nopassdown $vg/pool2
@@ -62,3 +72,25 @@ lvchange --discards ignore $vg/pool1
 check lv_field $vg/pool1 discards "ignore"
 
 vgremove -ff $vg
+
+# Create thin pool with discards set to "ignore".
+# If we create a thin volume which we use for a PV
+# which we use to create another thin pool on top
+# with discards set to "passdown", the discards value
+# in metadata is still "passdown", but because the
+# device below does not support it, the kernel value
+# of discards actually used will be "nopassdown".
+# This is why we have "-o discards" and "-o kernel_discards".
+vgcreate -s 1m ${vg}_1 $(cat DEVICES)
+lvcreate -l 10 -T ${vg}_1/pool --discards ignore
+lvcreate -V 9m -T ${vg}_1/pool -n device_with_ignored_discards
+vgcreate -s 1m ${vg}_2 "$DM_DEV_DIR/${vg}_1/device_with_ignored_discards"
+lvcreate -l 1 -T ${vg}_2/pool --discards passdown
+lvcreate -V 1 -T ${vg}_2/pool
+check lv_field ${vg}_1/pool discards "ignore"
+check lv_field ${vg}_1/pool kernel_discards "ignore"
+check lv_field ${vg}_2/pool discards "passdown"
+check lv_field ${vg}_2/pool kernel_discards "nopassdown"
+
+vgremove -ff ${vg}_2
+vgremove -ff ${vg}_1

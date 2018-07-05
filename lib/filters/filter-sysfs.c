@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -17,6 +17,7 @@
 
 #ifdef __linux__
 
+#include <sys/sysmacros.h>
 #include <dirent.h>
 
 static int _locate_sysfs_blocks(const char *sysfs_dir, char *path, size_t len,
@@ -167,7 +168,7 @@ static int _parse_dev(const char *file, FILE *fp, dev_t *result)
 	}
 
 	if (sscanf(buffer, "%u:%u", &major, &minor) != 2) {
-		log_info("sysfs device file not correct format");
+		log_error("Incorrect format for sysfs device file: %s.", file);
 		return 0;
 	}
 

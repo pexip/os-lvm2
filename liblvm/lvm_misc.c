@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -88,6 +88,7 @@ struct lvm_property_value get_property(const pv_t pv, const vg_t vg,
 	v.is_settable = prop.is_settable;
 	v.is_string = prop.is_string;
 	v.is_integer = prop.is_integer;
+	v.is_signed = prop.is_signed;
 	if (v.is_string)
 		v.value.string = prop.value.string;
 	if (v.is_integer)

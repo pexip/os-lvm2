@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -42,5 +45,15 @@ aux enable_dev "$dev1"
 check_
 test -e LOCAL_LVMETAD && lvremove $vg/boo # FIXME trigger a write :-(
 check_ not
+
+aux disable_dev "$dev1"
+vgreduce --removemissing --force $vg
+aux enable_dev "$dev1"
+
+vgscan 2>&1 | tee out
+grep 'Removing PV' out
+
+vgs 2>&1 | tee out
+not grep 'Removing PV' out
 
 vgremove -ff $vg

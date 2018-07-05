@@ -9,20 +9,13 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
 #include "segtype.h"
-#include "display.h"
-#include "config.h"
 #include "str_list.h"
 #include "activate.h"
-
-static const char *_zero_name(const struct lv_segment *seg)
-{
-	return seg->segtype->name;
-}
 
 static int _zero_merge_segments(struct lv_segment *seg1, struct lv_segment *seg2)
 {
@@ -52,10 +45,13 @@ static int _zero_target_present(struct cmd_context *cmd,
 	static int _zero_checked = 0;
 	static int _zero_present = 0;
 
-	if (!_zero_checked)
-		_zero_present = target_present(cmd, "zero", 1);
+	if (!activation())
+		return 0;
 
-	_zero_checked = 1;
+	if (!_zero_checked) {
+		_zero_checked = 1;
+		_zero_present = target_present(cmd, TARGET_NAME_ZERO, 1);
+	}
 
 	return _zero_present;
 }
@@ -64,7 +60,7 @@ static int _zero_modules_needed(struct dm_pool *mem,
 				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, "zero")) {
+	if (!str_list_add(mem, modules, MODULE_NAME_ZERO)) {
 		log_error("zero module string list allocation failed");
 		return 0;
 	}
@@ -79,7 +75,6 @@ static void _zero_destroy(struct segment_type *segtype)
 }
 
 static struct segtype_handler _zero_ops = {
-	.name = _zero_name,
 	.merge_segments = _zero_merge_segments,
 #ifdef DEVMAPPER_SUPPORT
 	.add_target_line = _zero_add_target_line,
@@ -96,10 +91,8 @@ struct segment_type *init_zero_segtype(struct cmd_context *cmd)
 	if (!segtype)
 		return_NULL;
 
-	segtype->cmd = cmd;
 	segtype->ops = &_zero_ops;
-	segtype->name = "zero";
-	segtype->private = NULL;
+	segtype->name = SEG_TYPE_NAME_ZERO;
 	segtype->flags = SEG_CAN_SPLIT | SEG_VIRTUAL | SEG_CANNOT_BE_ZEROED;
 
 	log_very_verbose("Initialised segtype: %s", segtype->name);

@@ -25,6 +25,23 @@
 #include "lvm2app.h"
 #include "defaults.h"
 
+#if PY_MAJOR_VERSION >= 3
+#define IS_PY3K
+#define PYINTTYPE_CHECK PyLong_Check
+#define PYINTTYPE_ASLONG PyLong_AsLong
+#define PYINTTYPE_FROMLONG PyLong_FromLong
+#define PYSTRYPE_CHECK PyUnicode_Check
+#define PYSTRTYPE_ASSTRING PyUnicode_AsUTF8
+#define PYSTRTYPE_FROMSTRING PyUnicode_FromString
+#else
+#define PYINTTYPE_CHECK PyInt_Check
+#define PYINTTYPE_ASLONG PyInt_AsLong
+#define PYINTTYPE_FROMLONG PyInt_FromLong
+#define PYSTRYPE_CHECK PyString_Check
+#define PYSTRTYPE_ASSTRING PyString_AsString
+#define PYSTRTYPE_FROMSTRING PyString_FromString
+#endif
+
 static lvm_t _libh;
 
 
@@ -76,6 +93,9 @@ static PyObject *_LibLVMError;
 
 #define LVM_VALID(ptr) \
 	do { \
+		if (!_libh) { \
+			_libh = lvm_init(NULL); \
+		} \
 		if (ptr && _libh) { \
 			if (ptr != _libh) { \
 				PyErr_SetString(PyExc_UnboundLocalError, "LVM handle reference stale"); \
@@ -148,18 +168,16 @@ static PyObject *_liblvm_get_last_error(void)
 	if (!(info = PyTuple_New(2)))
 		return NULL;
 
-	PyTuple_SetItem(info, 0, PyInt_FromLong((long) lvm_errno(_libh)));
+	PyTuple_SetItem(info, 0, PYINTTYPE_FROMLONG((long) lvm_errno(_libh)));
 	msg = lvm_errmsg(_libh);
-	PyTuple_SetItem(info, 1, ((msg) ? PyString_FromString(msg) :
-			PyString_FromString("Memory error while retrieving error message")));
+	PyTuple_SetItem(info, 1, ((msg) ? PYSTRTYPE_FROMSTRING(msg) :
+			PYSTRTYPE_FROMSTRING("Memory error while retrieving error message")));
 
 	return info;
 }
 
 static PyObject *_liblvm_library_get_version(void)
 {
-	LVM_VALID(NULL);
-
 	return Py_BuildValue("s", lvm_library_get_version());
 }
 
@@ -167,13 +185,9 @@ static const char _gc_doc[] = "Garbage collect the C library";
 
 static PyObject *_liblvm_lvm_gc(void)
 {
-	LVM_VALID(NULL);
-
-	lvm_quit(_libh);
-
-	if (!(_libh = lvm_init(NULL))) {
-		PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
-		return NULL;
+	if (_libh) {
+		lvm_quit(_libh);
+		_libh = NULL;
 	}
 
 	Py_INCREF(Py_None);
@@ -199,7 +213,7 @@ static PyObject *_liblvm_lvm_list_vg_names(void)
 		return NULL;
 
 	dm_list_iterate_items(strl, vgnames) {
-		PyTuple_SET_ITEM(pytuple, i, PyString_FromString(strl->str));
+		PyTuple_SET_ITEM(pytuple, i, PYSTRTYPE_FROMSTRING(strl->str));
 		i++;
 	}
 
@@ -224,7 +238,7 @@ static PyObject *_liblvm_lvm_list_vg_uuids(void)
 		return NULL;
 
 	dm_list_iterate_items(strl, uuids) {
-		PyTuple_SET_ITEM(pytuple, i, PyString_FromString(strl->str));
+		PyTuple_SET_ITEM(pytuple, i, PYSTRTYPE_FROMSTRING(strl->str));
 		i++;
 	}
 
@@ -324,9 +338,10 @@ static PyObject *_liblvm_lvm_pv_remove(PyObject *self, PyObject *arg)
 static int _set_pv_numeric_prop(pv_create_params_t pv_params, const char *name,
 								unsigned long long value)
 {
-	struct lvm_property_value prop_value;
-	prop_value.is_integer = 1;
-	prop_value.value.integer = value;
+	struct lvm_property_value prop_value = {
+		.is_integer = 1,
+		.value.integer = value,
+	};
 
 	return lvm_pv_params_set_property(pv_params, name, &prop_value);
 }
@@ -611,7 +626,10 @@ static PyObject *_liblvm_lvm_vg_close(vgobject *self)
 {
 	/* if already closed, don't reclose it */
 	if (self->vg) {
-		lvm_vg_close(self->vg);
+		if (lvm_vg_close(self->vg) == -1) {
+			PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
+			return NULL;
+		}
 		self->vg = NULL;
 		self->libh_copy = NULL;
 	}
@@ -647,14 +665,7 @@ static PyObject *_liblvm_lvm_vg_remove(vgobject *self)
 		goto error;
 
 	/* Not much you can do with a vg that is removed so close it */
-	if (lvm_vg_close(self->vg) == -1)
-		goto error;
-
-	self->vg = NULL;
-
-	Py_INCREF(Py_None);
-
-	return Py_None;
+	return _liblvm_lvm_vg_close(self);
 
 error:
 	PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
@@ -856,10 +867,19 @@ static PyObject *get_property(struct lvm_property_value *prop)
 	if (!(pytuple = PyTuple_New(2)))
 		return NULL;
 
-	if (prop->is_integer)
-		PyTuple_SET_ITEM(pytuple, 0, Py_BuildValue("K", prop->value.integer));
-	else
-		PyTuple_SET_ITEM(pytuple, 0, PyString_FromString(prop->value.string));
+	if (prop->is_integer) {
+		if (prop->is_signed) {
+			PyTuple_SET_ITEM(pytuple, 0, Py_BuildValue("L", prop->value.signed_integer));
+		} else {
+			PyTuple_SET_ITEM(pytuple, 0, Py_BuildValue("K", prop->value.integer));
+		}
+	} else {
+		if ( prop->value.string ) {
+			PyTuple_SET_ITEM(pytuple, 0, PYSTRTYPE_FROMSTRING(prop->value.string));
+		} else {
+			PyTuple_SET_ITEM(pytuple, 0, Py_None);
+		}
+	}
 
 	if (prop->is_settable)
 		setable = Py_True;
@@ -907,14 +927,14 @@ static PyObject *_liblvm_lvm_vg_set_property(vgobject *self, PyObject *args)
 	if (!lvm_property.is_valid)
 		goto lvmerror;
 
-	if (PyObject_IsInstance(variant_type_arg, (PyObject*)&PyString_Type)) {
+	if (PYSTRYPE_CHECK(variant_type_arg)) {
 
 		if (!lvm_property.is_string) {
 			PyErr_Format(PyExc_ValueError, "Property requires string value");
 			goto bail;
 		}
 
-		if (!(string_value = PyString_AsString(variant_type_arg))) {
+		if (!(string_value = PYSTRTYPE_ASSTRING(variant_type_arg))) {
 			PyErr_NoMemory();
 			goto bail;
 		}
@@ -927,8 +947,8 @@ static PyObject *_liblvm_lvm_vg_set_property(vgobject *self, PyObject *args)
 			goto bail;
 		}
 
-		if (PyObject_IsInstance(variant_type_arg, (PyObject*)&PyInt_Type)) {
-			temp_py_int = PyInt_AsLong(variant_type_arg);
+		if (PYINTTYPE_CHECK(variant_type_arg)) {
+			temp_py_int = PYINTTYPE_ASLONG(variant_type_arg);
 
 			/* -1 could be valid, need to see if an exception was gen. */
 			if (temp_py_int == -1 && PyErr_Occurred())
@@ -1059,7 +1079,7 @@ static PyObject *_liblvm_lvm_vg_get_tags(vgobject *self)
 		return NULL;
 
 	dm_list_iterate_items(strl, tagsl) {
-		PyTuple_SET_ITEM(pytuple, i, PyString_FromString(strl->str));
+		PyTuple_SET_ITEM(pytuple, i, PYSTRTYPE_FROMSTRING(strl->str));
 		i++;
 	}
 
@@ -1447,13 +1467,18 @@ static PyObject *_liblvm_lvm_lv_add_tag(lvobject *self, PyObject *args)
 	if (!PyArg_ParseTuple(args, "s", &tag))
 		return NULL;
 
-	if (lvm_lv_add_tag(self->lv, tag) == -1) {
-		PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
-		return NULL;
-	}
+	if (lvm_lv_add_tag(self->lv, tag) == -1)
+		goto error;
+
+	if (lvm_vg_write(self->parent_vgobj->vg) == -1)
+		goto error;
 
 	Py_INCREF(Py_None);
 	return Py_None;
+
+error:
+	PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
+	return NULL;
 }
 
 static PyObject *_liblvm_lvm_lv_remove_tag(lvobject *self, PyObject *args)
@@ -1465,14 +1490,18 @@ static PyObject *_liblvm_lvm_lv_remove_tag(lvobject *self, PyObject *args)
 	if (!PyArg_ParseTuple(args, "s", &tag))
 		return NULL;
 
-	if (lvm_lv_remove_tag(self->lv, tag) == -1) {
-		PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
-		return NULL;
-	}
+	if (lvm_lv_remove_tag(self->lv, tag) == -1)
+		goto error;
+
+	if (lvm_vg_write(self->parent_vgobj->vg) == -1)
+		goto error;
 
 	Py_INCREF(Py_None);
-
 	return Py_None;
+
+error:
+	PyErr_SetObject(_LibLVMError, _liblvm_get_last_error());
+	return NULL;
 }
 
 static PyObject *_liblvm_lvm_lv_get_tags(lvobject *self)
@@ -1493,7 +1522,7 @@ static PyObject *_liblvm_lvm_lv_get_tags(lvobject *self)
 		return NULL;
 
 	dm_list_iterate_items(strl, tagsl) {
-		PyTuple_SET_ITEM(pytuple, i, PyString_FromString(strl->str));
+		PyTuple_SET_ITEM(pytuple, i, PYSTRTYPE_FROMSTRING(strl->str));
 		i++;
 	}
 
@@ -1917,7 +1946,7 @@ static PyMethodDef _liblvm_pvseg_methods[] = {
 };
 
 static PyTypeObject _LibLVMvgType = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	.tp_name = "lvm.Liblvm_vg",
 	.tp_basicsize = sizeof(vgobject),
 	.tp_new = PyType_GenericNew,
@@ -1928,7 +1957,7 @@ static PyTypeObject _LibLVMvgType = {
 };
 
 static PyTypeObject _LibLVMlvType = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	.tp_name = "lvm.Liblvm_lv",
 	.tp_basicsize = sizeof(lvobject),
 	.tp_new = PyType_GenericNew,
@@ -1939,7 +1968,7 @@ static PyTypeObject _LibLVMlvType = {
 };
 
 static PyTypeObject _LibLVMpvlistType = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	.tp_name = "lvm.Liblvm_pvlist",
 	.tp_basicsize = sizeof(pvslistobject),
 	.tp_new = PyType_GenericNew,
@@ -1950,7 +1979,7 @@ static PyTypeObject _LibLVMpvlistType = {
 };
 
 static PyTypeObject _LibLVMpvType = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	.tp_name = "lvm.Liblvm_pv",
 	.tp_basicsize = sizeof(pvobject),
 	.tp_new = PyType_GenericNew,
@@ -1961,7 +1990,7 @@ static PyTypeObject _LibLVMpvType = {
 };
 
 static PyTypeObject _LibLVMlvsegType = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	.tp_name = "lvm.Liblvm_lvseg",
 	.tp_basicsize = sizeof(lvsegobject),
 	.tp_new = PyType_GenericNew,
@@ -1972,7 +2001,7 @@ static PyTypeObject _LibLVMlvsegType = {
 };
 
 static PyTypeObject _LibLVMpvsegType = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyVarObject_HEAD_INIT(&PyType_Type, 0)
 	.tp_name = "lvm.Liblvm_pvseg",
 	.tp_basicsize = sizeof(pvsegobject),
 	.tp_new = PyType_GenericNew,
@@ -1990,41 +2019,65 @@ static void _liblvm_cleanup(void)
 	}
 }
 
+#ifdef IS_PY3K
+static struct PyModuleDef moduledef = {
+	PyModuleDef_HEAD_INIT,
+	"lvm",
+	"Liblvm module",
+	-1,
+	_Liblvm_methods,
+	NULL,
+	NULL,
+	NULL,
+	NULL
+};
+
+#define MODINITERROR return NULL
+PyObject *
+PyInit_lvm(void)
+
+#else
+#define MODINITERROR return
+PyMODINIT_FUNC initlvm(void);
 PyMODINIT_FUNC initlvm(void)
+#endif
 {
 	PyObject *m;
 
-	_libh = lvm_init(NULL);
-
 	if (PyType_Ready(&_LibLVMvgType) < 0)
-		return;
+		MODINITERROR;
 	if (PyType_Ready(&_LibLVMlvType) < 0)
-		return;
+		MODINITERROR;
 	if (PyType_Ready(&_LibLVMpvType) < 0)
-		return;
+		MODINITERROR;
 	if (PyType_Ready(&_LibLVMlvsegType) < 0)
-		return;
+		MODINITERROR;
 	if (PyType_Ready(&_LibLVMpvsegType) < 0)
-		return;
+		MODINITERROR;
 	if (PyType_Ready(&_LibLVMpvlistType) < 0)
-		return;
+		MODINITERROR;
 
-	if (!(m = Py_InitModule3("lvm", _Liblvm_methods, "Liblvm module")))
-		return;
+#ifdef IS_PY3K
+	m = PyModule_Create(&moduledef);
+#else
+	m = Py_InitModule3("lvm", _Liblvm_methods, "Liblvm module");
+#endif
+	if (m == NULL)
+		MODINITERROR;
 
 	if (PyModule_AddIntConstant(m, "THIN_DISCARDS_IGNORE",
 				    LVM_THIN_DISCARDS_IGNORE) < 0)
-		return;
+		MODINITERROR;
 
 	if (PyModule_AddIntConstant(m, "THIN_DISCARDS_NO_PASSDOWN",
 				    LVM_THIN_DISCARDS_NO_PASSDOWN) < 0)
-		return;
+		MODINITERROR;
 
 	if (PyModule_AddIntConstant(m, "THIN_DISCARDS_PASSDOWN",
 				    LVM_THIN_DISCARDS_PASSDOWN) < 0)
-		return;
+		MODINITERROR;
 
-	if ((_LibLVMError = PyErr_NewException("lvm.LibLVMError", NULL, NULL))) {
+	if ((_LibLVMError = PyErr_NewException((char*)"lvm.LibLVMError", NULL, NULL))) {
 		/* Each call to PyModule_AddObject decrefs it; compensate: */
 		Py_INCREF(_LibLVMError);
 		Py_INCREF(_LibLVMError);
@@ -2033,4 +2086,7 @@ PyMODINIT_FUNC initlvm(void)
 	}
 
 	Py_AtExit(_liblvm_cleanup);
+#ifdef IS_PY3K
+	return m;
+#endif
 }

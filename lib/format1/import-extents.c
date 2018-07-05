@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -219,14 +219,14 @@ static int _read_linear(struct cmd_context *cmd, struct lv_map *lvm)
 	struct lv_segment *seg;
 	struct segment_type *segtype;
 
-	if (!(segtype = get_segtype_from_string(cmd, "striped")))
+	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_STRIPED)))
 		return_0;
 
 	while (le < lvm->lv->le_count) {
 		len = _area_length(lvm, le);
 
 		if (!(seg = alloc_lv_segment(segtype, lvm->lv, le, len, 0, 0,
-					     NULL, NULL, 1, len, 0, 0, 0, NULL))) {
+					     NULL, 1, len, 0, 0, 0, NULL))) {
 			log_error("Failed to allocate linear segment.");
 			return 0;
 		}
@@ -281,7 +281,7 @@ static int _read_stripes(struct cmd_context *cmd, struct lv_map *lvm)
 
 	total_area_len = lvm->lv->le_count / lvm->stripes;
 
-	if (!(segtype = get_segtype_from_string(cmd, "striped")))
+	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_STRIPED)))
 		return_0;
 
 	while (first_area_le < total_area_len) {
@@ -298,7 +298,7 @@ static int _read_stripes(struct cmd_context *cmd, struct lv_map *lvm)
 		if (!(seg = alloc_lv_segment(segtype, lvm->lv,
 					     lvm->stripes * first_area_le,
 					     lvm->stripes * area_len,
-					     0, lvm->stripe_size, NULL, NULL,
+					     0, lvm->stripe_size, NULL,
 					     lvm->stripes,
 					     area_len, 0, 0, 0, NULL))) {
 			log_error("Failed to allocate striped segment.");

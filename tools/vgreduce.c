@@ -10,29 +10,35 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
+
+struct vgreduce_params {
+	int force;
+	int fixed;
+	int already_consistent;
+};
 
 static int _remove_pv(struct volume_group *vg, struct pv_list *pvl, int silent)
 {
 	char uuid[64] __attribute__((aligned(8)));
 
 	if (vg->pv_count == 1) {
-		log_error("Volume Groups must always contain at least one PV");
+		log_error("Volume Groups must always contain at least one PV.");
 		return 0;
 	}
 
 	if (!id_write_format(&pvl->pv->id, uuid, sizeof(uuid)))
 		return_0;
 
-	log_verbose("Removing PV with UUID %s from VG %s", uuid, vg->name);
+	log_verbose("Removing PV with UUID %s from VG %s.", uuid, vg->name);
 
 	if (pvl->pv->pe_alloc_count) {
 		if (!silent)
 			log_error("LVs still present on PV with UUID %s: "
-				  "Can't remove from VG %s", uuid, vg->name);
+				  "Can't remove from VG %s.", uuid, vg->name);
 		return 0;
 	}
 
@@ -51,7 +57,7 @@ static int _consolidate_vg(struct cmd_context *cmd, struct volume_group *vg)
 	int r = 1;
 
 	dm_list_iterate_items(lvl, &vg->lvs)
-		if (lvl->lv->status & PARTIAL_LV) {
+		if (lv_is_partial(lvl->lv)) {
 			log_warn("WARNING: Partial LV %s needs to be repaired "
 				 "or removed. ", lvl->lv->name);
 			r = 0;
@@ -61,7 +67,7 @@ static int _consolidate_vg(struct cmd_context *cmd, struct volume_group *vg)
 		cmd->handles_missing_pvs = 1;
 		log_error("There are still partial LVs in VG %s.", vg->name);
 		log_error("To remove them unconditionally use: vgreduce --removemissing --force.");
-		log_warn("Proceeding to remove empty missing PVs.");
+		log_warn("WARNING: Proceeding to remove empty missing PVs.");
 	}
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
@@ -88,27 +94,29 @@ static int _make_vg_consistent(struct cmd_context *cmd, struct volume_group *vg)
 		lv = lvl->lv;
 
 		/* Are any segments of this LV on missing PVs? */
-		if (lv->status & PARTIAL_LV) {
+		if (lv_is_partial(lv)) {
 			if (seg_is_raid(first_seg(lv))) {
 				if (!lv_raid_remove_missing(lv))
 					return_0;
 				goto restart;
 			}
 
-			if (lv->status & MIRRORED) {
+			if (lv_is_mirror(lv)) {
 				if (!mirror_remove_missing(cmd, lv, 1))
 					return_0;
 				goto restart;
 			}
 
-			if (arg_count(cmd, mirrorsonly_ARG) &&!(lv->status & MIRRORED)) {
+			if (arg_is_set(cmd, mirrorsonly_ARG) && !lv_is_mirrored(lv)) {
 				log_error("Non-mirror-image LV %s found: can't remove.", lv->name);
 				continue;
 			}
 
 			if (!lv_is_visible(lv))
 				continue;
-			log_warn("Removing partial LV %s.", lv->name);
+
+			log_warn("WARNING: Removing partial LV %s.", display_lvname(lv));
+
 			if (!lv_remove_with_dependencies(cmd, lv, DONT_PROMPT, 0))
 				return_0;
 			goto restart;
@@ -123,57 +131,87 @@ static int _make_vg_consistent(struct cmd_context *cmd, struct volume_group *vg)
 /* Or take pv_name instead? */
 static int _vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 			    struct physical_volume *pv,
-			    void *handle __attribute__((unused)))
+			    struct processing_handle *handle __attribute__((unused)))
 {
-	int r = vgreduce_single(cmd, vg, pv, 1);
+	int r;
 
+	if (!vg_check_status(vg, EXPORTED_VG | LVM_WRITE | RESIZEABLE_VG))
+		return ECMD_FAILED;
+
+	r = vgreduce_single(cmd, vg, pv, 1);
 	if (!r)
 		return ECMD_FAILED;
 
 	return ECMD_PROCESSED;
 }
 
+static int _vgreduce_repair_single(struct cmd_context *cmd, const char *vg_name,
+		                   struct volume_group *vg, struct processing_handle *handle)
+{
+	struct vgreduce_params *vp = (struct vgreduce_params *) handle->custom_handle;
 
+	if (!vg_missing_pv_count(vg)) {
+		vp->already_consistent = 1;
+		return ECMD_PROCESSED;
+	}
+
+	if (!archive(vg))
+		return_ECMD_FAILED;
+
+	if (vp->force) {
+		if (!_make_vg_consistent(cmd, vg))
+			return_ECMD_FAILED;
+		vp->fixed = 1;
+	} else
+		vp->fixed = _consolidate_vg(cmd, vg);
+
+	if (!vg_write(vg) || !vg_commit(vg)) {
+		log_error("Failed to write out a consistent VG for %s", vg_name);
+		return ECMD_FAILED;
+	}
+
+	backup(vg);
+	return ECMD_PROCESSED;
+}
 
 int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 {
-	struct volume_group *vg;
+	struct processing_handle *handle;
+	struct vgreduce_params vp = { 0 };
 	const char *vg_name;
-	int ret = ECMD_FAILED;
-	int fixed = 1;
-	int repairing = arg_count(cmd, removemissing_ARG);
+	int repairing = arg_is_set(cmd, removemissing_ARG);
 	int saved_ignore_suspended_devices = ignore_suspended_devices();
-	int locked = 0;
+	int ret;
 
 	if (!argc && !repairing) {
 		log_error("Please give volume group name and "
-			  "physical volume paths");
+			  "physical volume paths.");
 		return EINVALID_CMD_LINE;
 	}
 	
 	if (!argc) { /* repairing */
-		log_error("Please give volume group name");
+		log_error("Please give volume group name.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, mirrorsonly_ARG) && !repairing) {
-		log_error("--mirrorsonly requires --removemissing");
+	if (arg_is_set(cmd, mirrorsonly_ARG) && !repairing) {
+		log_error("--mirrorsonly requires --removemissing.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (argc == 1 && !arg_count(cmd, all_ARG) && !repairing) {
-		log_error("Please enter physical volume paths or option -a");
+	if (argc == 1 && !arg_is_set(cmd, all_ARG) && !repairing) {
+		log_error("Please enter physical volume paths or option -a.");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (argc > 1 && arg_count(cmd, all_ARG)) {
+	if (argc > 1 && arg_is_set(cmd, all_ARG)) {
 		log_error("Option -a and physical volume paths mutually "
-			  "exclusive");
+			  "exclusive.");
 		return EINVALID_CMD_LINE;
 	}
 
 	if (argc > 1 && repairing) {
-		log_error("Please only specify the volume group");
+		log_error("Please only specify the volume group.");
 		return EINVALID_CMD_LINE;
 	}
 
@@ -181,100 +219,49 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 	argv++;
 	argc--;
 
-	log_verbose("Finding volume group \"%s\"", vg_name);
+	/* Needed to change the set of orphan PVs. */
+	if (!lockd_gl(cmd, "ex", 0))
+		return_ECMD_FAILED;
+	cmd->lockd_gl_disable = 1;
 
-	if (repairing) {
-		init_ignore_suspended_devices(1);
-		cmd->handles_missing_pvs = 1;
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
 	}
+	handle->custom_handle = &vp;
 
-	vg = vg_read_for_update(cmd, vg_name, NULL, READ_ALLOW_EXPORTED);
-	if (vg_read_error(vg) == FAILED_ALLOCATION ||
-	    vg_read_error(vg) == FAILED_NOTFOUND)
-		goto_out;
-
-	/* FIXME We want to allow read-only VGs to be changed here? */
-	if (vg_read_error(vg) && vg_read_error(vg) != FAILED_READ_ONLY
-	    && !arg_count(cmd, removemissing_ARG))
-		goto_out;
-
-	locked = !vg_read_error(vg);
-
-	if (repairing) {
-		if (!vg_read_error(vg) && !vg_missing_pv_count(vg)) {
-			log_error("Volume group \"%s\" is already consistent",
-				  vg_name);
-			ret = ECMD_PROCESSED;
-			goto out;
-		}
-
-		release_vg(vg);
-		log_verbose("Trying to open VG %s for recovery...", vg_name);
-
-		vg = vg_read_for_update(cmd, vg_name, NULL,
-					READ_ALLOW_INCONSISTENT
-					| READ_ALLOW_EXPORTED);
-
-		locked |= !vg_read_error(vg);
-		if (vg_read_error(vg) && vg_read_error(vg) != FAILED_READ_ONLY
-		    && vg_read_error(vg) != FAILED_INCONSISTENT)
-			goto_out;
-
-		if (!archive(vg))
-			goto_out;
-
-		if (arg_count(cmd, force_ARG)) {
-			if (!_make_vg_consistent(cmd, vg))
-				goto_out;
-		} else
-			fixed = _consolidate_vg(cmd, vg);
-
-		if (!vg_write(vg) || !vg_commit(vg)) {
-			log_error("Failed to write out a consistent VG for %s",
-				  vg_name);
-			goto out;
-		}
-		backup(vg);
-
-		if (fixed) {
-			log_print_unless_silent("Wrote out consistent volume group %s",
-						vg_name);
-			ret = ECMD_PROCESSED;
-		} else
-			ret = ECMD_FAILED;
-
-	} else {
-		if (!vg_check_status(vg, EXPORTED_VG | LVM_WRITE | RESIZEABLE_VG))
-			goto_out;
-
+	if (!repairing) {
 		/* FIXME: Pass private struct through to all these functions */
-		/* and update in batch here? */
-		ret = process_each_pv(cmd, argc, argv, vg, READ_FOR_UPDATE, 0, NULL,
-				      _vgreduce_single);
-
+		/* and update in batch afterwards? */
+		ret = process_each_pv(cmd, argc, argv, vg_name, 0, READ_FOR_UPDATE, handle, _vgreduce_single);
+		goto out;
 	}
+
+	/*
+	 * VG repair (removemissing)
+	 */
+
+	vp.force = arg_count(cmd, force_ARG);
+
+	cmd->handles_missing_pvs = 1;
+
+	init_ignore_suspended_devices(1);
+
+	process_each_vg(cmd, 0, NULL, vg_name, NULL,
+			READ_FOR_UPDATE | READ_ALLOW_EXPORTED,
+			0, handle, &_vgreduce_repair_single);
+
+	if (vp.already_consistent) {
+		log_print_unless_silent("Volume group \"%s\" is already consistent.", vg_name);
+		ret = ECMD_PROCESSED;
+	} else if (vp.fixed) {
+		log_print_unless_silent("Wrote out consistent volume group %s.", vg_name);
+		ret = ECMD_PROCESSED;
+	} else
+		ret = ECMD_FAILED;
 out:
 	init_ignore_suspended_devices(saved_ignore_suspended_devices);
-	if (locked)
-		unlock_vg(cmd, vg_name);
-
-	release_vg(vg);
+	destroy_processing_handle(cmd, handle);
 
 	return ret;
-
-/******* FIXME
-	log_error ("no empty physical volumes found in volume group \"%s\"", vg_name);
-
-	log_verbose
-	    ("volume group \"%s\" will be reduced by %d physical volume%s",
-	     vg_name, np, np > 1 ? "s" : "");
-	log_verbose ("reducing volume group \"%s\" by physical volume \"%s\"",
-		     vg_name, pv_names[p]);
-
-	log_print
-	    ("volume group \"%s\" %ssuccessfully reduced by physical volume%s:",
-	     vg_name, error > 0 ? "NOT " : "", p > 1 ? "s" : "");
-		log_print("%s", pv_this[p]->pv_name);
-********/
-
 }

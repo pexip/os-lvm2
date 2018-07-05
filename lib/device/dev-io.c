@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -54,6 +54,7 @@
 #endif
 
 static DM_LIST_INIT(_open_devices);
+static unsigned _dev_size_seqno = 1;
 
 /*-----------------------------------------------------------------
  * The standard io loop that keeps submitting an io until it's
@@ -154,7 +155,7 @@ int dev_get_block_size(struct device *dev, unsigned int *physical_block_size, un
 		}
 		log_debug_devs("%s: physical block size is %u bytes", name, dev->phys_block_size);
 	}
-#elif BLKSSZGET
+#elif defined (BLKSSZGET)
 	/* if we can't get physical block size, just use logical block size instead */
 	if (dev->phys_block_size == -1) {
 		if (ioctl(dev_fd(dev), BLKSSZGET, &dev->phys_block_size) < 0) {
@@ -271,10 +272,17 @@ out:
 	return r;
 }
 
-static int _dev_get_size_file(const struct device *dev, uint64_t *size)
+static int _dev_get_size_file(struct device *dev, uint64_t *size)
 {
 	const char *name = dev_name(dev);
 	struct stat info;
+
+	if (dev->size_seqno == _dev_size_seqno) {
+		log_very_verbose("%s: using cached size %" PRIu64 " sectors",
+				 name, dev->size);
+		*size = dev->size;
+		return 1;
+	}
 
 	if (stat(name, &info)) {
 		log_sys_error("stat", name);
@@ -283,31 +291,40 @@ static int _dev_get_size_file(const struct device *dev, uint64_t *size)
 
 	*size = info.st_size;
 	*size >>= SECTOR_SHIFT;	/* Convert to sectors */
+	dev->size = *size;
+	dev->size_seqno = _dev_size_seqno;
 
 	log_very_verbose("%s: size is %" PRIu64 " sectors", name, *size);
 
 	return 1;
 }
 
-static int _dev_get_size_dev(const struct device *dev, uint64_t *size)
+static int _dev_get_size_dev(struct device *dev, uint64_t *size)
 {
-	int fd;
 	const char *name = dev_name(dev);
 
-	if ((fd = open(name, O_RDONLY)) < 0) {
-		log_sys_error("open", name);
-		return 0;
+	if (dev->size_seqno == _dev_size_seqno) {
+		log_very_verbose("%s: using cached size %" PRIu64 " sectors",
+				 name, dev->size);
+		*size = dev->size;
+		return 1;
 	}
 
-	if (ioctl(fd, BLKGETSIZE64, size) < 0) {
+	if (!dev_open_readonly(dev))
+		return_0;
+
+	if (ioctl(dev_fd(dev), BLKGETSIZE64, size) < 0) {
 		log_sys_error("ioctl BLKGETSIZE64", name);
-		if (close(fd))
+		if (!dev_close(dev))
 			log_sys_error("close", name);
 		return 0;
 	}
 
 	*size >>= BLKSIZE_SHIFT;	/* Convert to sectors */
-	if (close(fd))
+	dev->size = *size;
+	dev->size_seqno = _dev_size_seqno;
+
+	if (!dev_close(dev))
 		log_sys_error("close", name);
 
 	log_very_verbose("%s: size is %" PRIu64 " sectors", name, *size);
@@ -376,8 +393,12 @@ static int _dev_discard_blocks(struct device *dev, uint64_t offset_bytes, uint64
 /*-----------------------------------------------------------------
  * Public functions
  *---------------------------------------------------------------*/
+void dev_size_seqno_inc(void)
+{
+	_dev_size_seqno++;
+}
 
-int dev_get_size(const struct device *dev, uint64_t *size)
+int dev_get_size(struct device *dev, uint64_t *size)
 {
 	if (!dev)
 		return 0;
@@ -473,11 +494,22 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 
 #ifdef O_NOATIME
 	/* Don't update atime on device inodes */
-	if (!(dev->flags & DEV_REGULAR))
+	if (!(dev->flags & DEV_REGULAR) && !(dev->flags & DEV_NOT_O_NOATIME))
 		flags |= O_NOATIME;
 #endif
 
 	if ((dev->fd = open(name, flags, 0777)) < 0) {
+#ifdef O_NOATIME
+		if ((errno == EPERM) && (flags & O_NOATIME)) {
+			flags &= ~O_NOATIME;
+			dev->flags |= DEV_NOT_O_NOATIME;
+			if ((dev->fd = open(name, flags, 0777)) >= 0) {
+				log_debug_devs("%s: Not using O_NOATIME", name);
+				goto opened;
+			}
+		}
+#endif
+
 #ifdef O_DIRECT_SUPPORT
 		if (direct && !(dev->flags & DEV_O_DIRECT_TESTED)) {
 			flags &= ~O_DIRECT;
@@ -492,6 +524,8 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 			log_sys_debug("open", name);
 		else
 			log_sys_error("open", name);
+
+		dev->flags |= DEV_OPEN_FAILURE;
 		return 0;
 	}
 
@@ -535,6 +569,7 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 		       dev->flags & DEV_OPENED_EXCL ? " O_EXCL" : "",
 		       dev->flags & DEV_O_DIRECT ? " O_DIRECT" : "");
 
+	dev->flags &= ~DEV_OPEN_FAILURE;
 	return 1;
 }
 
@@ -589,12 +624,8 @@ static void _close(struct device *dev)
 
 	log_debug_devs("Closed %s", dev_name(dev));
 
-	if (dev->flags & DEV_ALLOCED) {
-		dm_free((void *) dm_list_item(dev->aliases.n, struct dm_str_list)->
-			 str);
-		dm_free(dev->aliases.n);
-		dm_free(dev);
-	}
+	if (dev->flags & DEV_ALLOCED)
+		dev_destroy_file(dev);
 }
 
 static int _dev_close(struct device *dev, int immediate)

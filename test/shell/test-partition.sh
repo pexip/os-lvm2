@@ -7,13 +7,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 #
 # Testcase for bugzilla #621173 
 # excercises partition table scanning code path
 #
 
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 LVM_TEST_CONFIG_DEVICES="types = [\"device-mapper\", 142]"
 
@@ -26,6 +29,7 @@ aux prepare_pvs 1 30
 pvs "$dev1"
 
 # create small partition table
-echo "1 2" | sfdisk "$dev1"
+echo "1 2" | sfdisk --force "$dev1"
 
-pvs "$dev1"
+aux notify_lvmetad "$dev1"
+not pvs "$dev1"

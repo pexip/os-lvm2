@@ -7,9 +7,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description="ensure pvmove works with the cache segment types"
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_CLVMD=1
 
 . lib/inittest
 
@@ -19,7 +21,6 @@ test_description="ensure pvmove works with the cache segment types"
 # This allows us to ensure that it is disallowed even when there are
 # stacking complications to consider.
 
-test -e LOCAL_CLVMD && skip
 which md5sum || skip
 
 aux have_cache 1 3 0 || skip
@@ -56,6 +57,7 @@ not check lv_tree_on $vg ${lv1}_pool "$dev5"
 #check lv_tree_on $vg ${lv1}_foo "$dev5"
 
 lvremove -ff $vg
+dmsetup info -c | not grep $vg
 
 # Testing pvmove of origin LV
 #############################
@@ -82,6 +84,7 @@ not check lv_tree_on $vg ${lv1} "$dev3"
 #check lv_tree_on $vg ${lv1} "$dev1"
 #check dev_md5sum $vg $lv1
 lvremove -ff $vg
+dmsetup info -c | not grep $vg
 
 # Testing pvmove of a RAID origin LV
 ####################################
@@ -106,6 +109,7 @@ not check lv_tree_on $vg ${lv1} "$dev2" "$dev3"
 #check lv_tree_on $vg ${lv1}_pool "$dev5"
 #check dev_md5sum $vg $lv1
 lvremove -ff $vg
+dmsetup info -c | not grep $vg
 
 # Testing pvmove of a RAID cachepool (metadata and data)
 ########################################################
@@ -137,6 +141,7 @@ not check lv_tree_on $vg ${lv1}_pool "$dev2" "$dev3"
 #check lv_tree_on $vg ${lv1} "$dev5"
 #check dev_md5sum $vg $lv1
 lvremove -ff $vg
+dmsetup info -c | not grep $vg
 
 # Testing pvmove of Thin-pool on cache LV on RAID
 #################################################
@@ -148,7 +153,7 @@ lvconvert --yes --type cache-pool $vg/cachepool --poolmetadata $vg/meta
 # RAID for thin pool data LV
 lvcreate --type raid1 -m 1 -L 8 -n thinpool $vg "$dev3" "$dev4"
 # Convert thin pool data to a cached LV
-lvconvert --type cache $vg/thinpool --cachepool $vg/cachepool
+lvconvert --type cache -Zy $vg/thinpool --cachepool $vg/cachepool
 # Create simple thin pool meta
 lvcreate -L 2M -n meta $vg "$dev1"
 # Use thin pool data LV to build a thin pool
@@ -177,5 +182,6 @@ check lv_tree_on $vg thinpool "$dev3" "$dev4" "$dev5" # Move non-cache tmeta
 #check dev_md5sum $vg/thin_lv
 
 lvremove -ff $vg
+dmsetup info -c | not grep $vg
 
 done

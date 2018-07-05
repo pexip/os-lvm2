@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -44,12 +47,12 @@ check mirror_images_redundant $vg $lv7
 lvremove -ff $vg
 
 lvcreate -aey --nosync -i3 -l4 --type mirror -m1 --mirrorlog core -n $lv1 $vg 2>&1 | tee log
-grep "Rounding size (4 extents) up to .* (6 extents)" log
+grep "Rounding size .*(4 extents) up to .*(6 extents)" log
 
 lvcreate -aey --nosync -i3 -l4 --type mirror -m2 --mirrorlog core -n $lv2 $vg 2>&1 | tee log
-grep "Rounding size (4 extents) up to .* (6 extents)" log
+grep "Rounding size .*(4 extents) up to .*(6 extents)" log
 
 lvcreate -aey --nosync -i3 -l2 --type mirror -m2 --mirrorlog core -n $lv3 $vg 2>&1 | tee log
-grep "Rounding size (2 extents) up to .* (3 extents)" log
+grep "Rounding size .*(2 extents) up to .*(3 extents)" log
 
 lvremove -ff $vg

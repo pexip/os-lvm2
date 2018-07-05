@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -43,7 +46,9 @@ for mdacp in 1 0; do
 done
 not grep "Cached VG .* incorrect PV list" out0
 
-# some M1 metadata tests
+# begin M1 metadata tests
+if test -n "$LVM_TEST_LVM1" ; then
+
 pvcreate -M1 "$dev1" "$dev2" "$dev3"
 pv3_uuid=$(get pv_field "$dev3" pv_uuid)
 vgcreate -M1 $vg "$dev1" "$dev2" "$dev3"
@@ -74,3 +79,7 @@ vgcfgrestore -f $TESTDIR/bak-$vg $vg
 
 # verify pe_start of $dev3
 check pv_field "$dev3" pe_start $pv_align
+
+fi
+# end M1 metadata tests
+

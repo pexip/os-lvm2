@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_DEVICE_H
@@ -27,6 +27,27 @@
 #define DEV_OPENED_EXCL		0x00000010	/* Opened EXCL */
 #define DEV_O_DIRECT		0x00000020	/* Use O_DIRECT */
 #define DEV_O_DIRECT_TESTED	0x00000040	/* DEV_O_DIRECT is reliable */
+#define DEV_OPEN_FAILURE	0x00000080	/* Has last open failed? */
+#define DEV_USED_FOR_LV		0x00000100	/* Is device used for an LV */
+#define DEV_ASSUMED_FOR_LV	0x00000200	/* Is device assumed for an LV */
+#define DEV_NOT_O_NOATIME	0x00000400	/* Don't use O_NOATIME */
+
+/*
+ * Support for external device info.
+ * Any new external device info source needs to be
+ * registered using EXT_REGISTER macro in dev-ext.c.
+ */
+typedef enum dev_ext_e {
+	DEV_EXT_NONE,
+	DEV_EXT_UDEV,
+	DEV_EXT_NUM
+} dev_ext_t;
+
+struct dev_ext {
+	int enabled;
+	dev_ext_t src;
+	void *handle;
+};
 
 /*
  * All devices in LVM will be represented by one of these.
@@ -45,10 +66,16 @@ struct device {
 	int block_size;
 	int read_ahead;
 	uint32_t flags;
+	unsigned size_seqno;
+	uint64_t size;
 	uint64_t end;
 	struct dm_list open_list;
+	struct dev_ext ext;
 
-	char pvid[ID_LEN + 1];
+	const char *vgid; /* if device is an LV */
+	const char *lvid; /* if device is an LV */
+
+	char pvid[ID_LEN + 1]; /* if device is a PV */
 	char _padding[7];
 };
 
@@ -64,10 +91,26 @@ struct device_area {
 };
 
 /*
+ * Support for external device info.
+ */
+const char *dev_ext_name(struct device *dev);
+int dev_ext_enable(struct device *dev, dev_ext_t src);
+int dev_ext_disable(struct device *dev);
+struct dev_ext *dev_ext_get(struct device *dev);
+int dev_ext_release(struct device *dev);
+
+/*
+ * Increment current dev_size_seqno.
+ * This is used to control lifetime
+ * of cached device size.
+ */
+void dev_size_seqno_inc(void);
+
+/*
  * All io should use these routines.
  */
 int dev_get_block_size(struct device *dev, unsigned int *phys_block_size, unsigned int *block_size);
-int dev_get_size(const struct device *dev, uint64_t *size);
+int dev_get_size(struct device *dev, uint64_t *size);
 int dev_get_read_ahead(struct device *dev, uint32_t *read_ahead);
 int dev_discard_blocks(struct device *dev, uint64_t offset_bytes, uint64_t size_bytes);
 
@@ -96,6 +139,7 @@ void dev_flush(struct device *dev);
 
 struct device *dev_create_file(const char *filename, struct device *dev,
 			       struct dm_str_list *alias, int use_malloc);
+void dev_destroy_file(struct device *dev);
 
 /* Return a valid device name from the alias list; NULL otherwise */
 const char *dev_name_confirmed(struct device *dev, int quiet);

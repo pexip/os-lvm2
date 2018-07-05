@@ -10,20 +10,19 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
 #include "filter.h"
 #include "config.h"
 #include "lvm-file.h"
-#include "activate.h"
 
 struct pfilter {
 	char *file;
 	struct dm_hash_table *devices;
 	struct dev_filter *real;
-	time_t ctime;
+	struct timespec ctime;
 	struct dev_types *dt;
 };
 
@@ -107,7 +106,7 @@ int persistent_filter_load(struct dev_filter *f, struct dm_config_tree **cft_out
 	}
 
 	if (!stat(pf->file, &info))
-		pf->ctime = info.st_ctime;
+		lvm_stat_ctim(&pf->ctime, &info);
 	else {
 		log_very_verbose("%s: stat failed: %s", pf->file,
 				 strerror(errno));
@@ -130,6 +129,8 @@ int persistent_filter_load(struct dev_filter *f, struct dm_config_tree **cft_out
 	if (dm_hash_get_num_entries(pf->devices)) {
 		/* We populated dev_cache ourselves */
 		dev_cache_scan(0);
+		if (!dev_cache_index_devs())
+			stack;
 		r = 1;
 	}
 
@@ -178,6 +179,7 @@ static int _persistent_filter_dump(struct dev_filter *f, int merge_existing)
 	struct pfilter *pf;
 	char *tmp_file;
 	struct stat info, info2;
+	struct timespec ts;
 	struct dm_config_tree *cft = NULL;
 	FILE *fp;
 	int lockfd;
@@ -193,7 +195,7 @@ static int _persistent_filter_dump(struct dev_filter *f, int merge_existing)
 	if (!dm_hash_get_num_entries(pf->devices)) {
 		log_very_verbose("Internal persistent device cache empty "
 				 "- not writing to %s", pf->file);
-		return 0;
+		return 1;
 	}
 	if (!dev_cache_has_scanned()) {
 		log_very_verbose("Device cache incomplete - not writing "
@@ -228,7 +230,8 @@ static int _persistent_filter_dump(struct dev_filter *f, int merge_existing)
 	/*
 	 * If file contents changed since we loaded it, merge new contents
 	 */
-	if (merge_existing && info.st_ctime != pf->ctime)
+	lvm_stat_ctim(&ts, &info);
+	if (merge_existing && timespeccmp(&ts, &pf->ctime, !=))
 		/* Keep cft open to avoid losing lock */
 		persistent_filter_load(f, &cft);
 
@@ -288,10 +291,6 @@ static int _lookup_p(struct dev_filter *f, struct device *dev)
 					log_error("Failed to hash device to filter.");
 					return 0;
 				}
-		if (!device_is_usable(dev)) {
-			log_debug_devs("%s: Skipping unusable device", dev_name(dev));
-			return 0;
-		}
 		return pf->real->passes_filter(pf->real, dev);
 	}
 
@@ -357,7 +356,7 @@ struct dev_filter *persistent_filter_create(struct dev_types *dt,
 
 	/* Only merge cache file before dumping it if it changed externally. */
 	if (!stat(pf->file, &info))
-		pf->ctime = info.st_ctime;
+		lvm_stat_ctim(&pf->ctime, &info);
 
 	f->passes_filter = _lookup_p;
 	f->destroy = _persistent_destroy;

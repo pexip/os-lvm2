@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -19,6 +19,7 @@
 #include "lvm-string.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "memlock.h"
 #include "toolcontext.h"
 #include "locking.h"
 
@@ -97,20 +98,10 @@ static char *_build_desc(struct dm_pool *mem, const char *line, int before)
 	return buffer;
 }
 
-static int __archive(struct volume_group *vg)
+static int _archive(struct volume_group *vg, int compulsory)
 {
 	char *desc;
 
-	if (!(desc = _build_desc(vg->cmd->mem, vg->cmd->cmd_line, 1)))
-		return_0;
-
-	return archive_vg(vg, vg->cmd->archive_params->dir, desc,
-			  vg->cmd->archive_params->keep_days,
-			  vg->cmd->archive_params->keep_number);
-}
-
-int archive(struct volume_group *vg)
-{
 	/* Don't archive orphan VGs. */
 	if (is_orphan_vg(vg->name))
 		return 1;
@@ -129,25 +120,42 @@ int archive(struct volume_group *vg)
 		return 1;
 	}
 
-	if (!dm_create_dir(vg->cmd->archive_params->dir))
-		return 0;
+	if (!dm_create_dir(vg->cmd->archive_params->dir)) {
+		if (compulsory)
+			return_0;
+		return 1;
+	}
 
 	/* Trap a read-only file system */
 	if ((access(vg->cmd->archive_params->dir, R_OK | W_OK | X_OK) == -1) &&
-	     (errno == EROFS))
-		return 0;
+	    (errno == EROFS)) {
+		if (compulsory) {
+			log_error("Cannot archive volume group metadata for %s to read-only filesystem.",
+				  vg->name);
+			return 0;
+		}
+		return 1;
+	}
 
 	log_verbose("Archiving volume group \"%s\" metadata (seqno %u).", vg->name,
 		    vg->seqno);
-	if (!__archive(vg)) {
-		log_error("Volume group \"%s\" metadata archive failed.",
-			  vg->name);
-		return 0;
-	}
+
+	if (!(desc = _build_desc(vg->cmd->mem, vg->cmd->cmd_line, 1)))
+		return_0;
+
+	if (!archive_vg(vg, vg->cmd->archive_params->dir, desc,
+			vg->cmd->archive_params->keep_days,
+			vg->cmd->archive_params->keep_number))
+		return_0;
 
 	vg->status |= ARCHIVED_VG;
 
 	return 1;
+}
+
+int archive(struct volume_group *vg)
+{
+	return _archive(vg, 1);
 }
 
 int archive_display(struct cmd_context *cmd, const char *vg_name)
@@ -206,7 +214,7 @@ void backup_enable(struct cmd_context *cmd, int flag)
 	cmd->backup_params->enabled = flag;
 }
 
-static int __backup(struct volume_group *vg)
+static int _backup(struct volume_group *vg)
 {
 	char name[PATH_MAX];
 	char *desc;
@@ -241,10 +249,13 @@ int backup_locally(struct volume_group *vg)
 
 	/* Trap a read-only file system */
 	if ((access(vg->cmd->backup_params->dir, R_OK | W_OK | X_OK) == -1) &&
-	    (errno == EROFS))
+	    (errno == EROFS)) {
+		/* Will take a backup next time when FS is writable */
+		log_debug("Skipping backup of volume group on read-only filesystem.");
 		return 0;
+	}
 
-	if (!__backup(vg)) {
+	if (!_backup(vg)) {
 		log_error("Backup of volume group %s metadata failed.",
 			  vg->name);
 		return 0;
@@ -255,6 +266,9 @@ int backup_locally(struct volume_group *vg)
 
 int backup(struct volume_group *vg)
 {
+	/* Unlock memory if possible */
+	memlock_unlock(vg->cmd);
+
 	/* Don't back up orphan VGs. */
 	if (is_orphan_vg(vg->name))
 		return 1;
@@ -304,7 +318,7 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 	}
 
 	dm_list_iterate_items(mda, &tf->metadata_areas_in_use) {
-		if (!(vg = mda->ops->vg_read(tf, vg_name, mda, 0)))
+		if (!(vg = mda->ops->vg_read(tf, vg_name, mda, NULL, NULL, 0)))
 			stack;
 		break;
 	}
@@ -315,27 +329,113 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 	return vg;
 }
 
-/* ORPHAN and VG locks held before calling this */
-int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg, int drop_lvmetad)
+static int _restore_vg_should_write_pv(struct physical_volume *pv, int do_pvcreate)
 {
-	struct pv_list *pvl;
+	struct lvmcache_info *info;
+
+	if (do_pvcreate)
+		return 1;
+
+	if (!(pv->fmt->features & FMT_PV_FLAGS))
+		return 0;
+
+	if (!pv->dev) {
+		log_error("Failed to find device for PV.");
+		return -1;
+	}
+
+	if (!(info = lvmcache_info_from_pvid(pv->dev->pvid, pv->dev, 0))) {
+		log_error("Failed to find cached info for PV %s.", pv_dev_name(pv));
+		return -1;
+	}
+
+	/*
+	 * We're restoring a VG and if the PV_EXT_USED
+	 * flag is not set yet in PV, we need to set it now!
+	 * This may happen if we have plain PVs without a VG
+	 * and we're restoring former VG from backup on top
+	 * of these PVs.
+	 */
+	if (!(lvmcache_ext_flags(info) & PV_EXT_USED))
+		return 1;
+
+	return 0;
+}
+
+/* ORPHAN and VG locks held before calling this */
+int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg,
+		      int do_pvcreate, struct pv_create_args *pva)
+{
+	struct dm_list new_pvs;
+	struct pv_list *pvl, *new_pvl;
+	struct physical_volume *existing_pv, *pv;
+	struct dm_list *pvs = &vg->pvs;
 	struct format_instance *fid;
 	struct format_instance_ctx fic;
-	uint32_t tmp;
+	int should_write_pv;
+	uint32_t tmp_extent_size;
 
 	/*
 	 * FIXME: Check that the PVs referenced in the backup are
 	 * not members of other existing VGs.
 	 */
 
+	/* Prepare new PVs if needed. */
+	if (do_pvcreate) {
+		dm_list_init(&new_pvs);
+
+		dm_list_iterate_items(pvl, &vg->pvs) {
+			existing_pv = pvl->pv;
+
+			pva->id = existing_pv->id;
+			pva->idp = &pva->id;
+			pva->pe_start = pv_pe_start(existing_pv);
+			pva->extent_count = pv_pe_count(existing_pv);
+			pva->extent_size = pv_pe_size(existing_pv);
+			/* pe_end = pv_pe_count(existing_pv) * pv_pe_size(existing_pv) + pe_start - 1 */
+
+			if (!(pv = pv_create(cmd, pv_dev(existing_pv), pva))) {
+				log_error("Failed to setup physical volume \"%s\".",
+					  pv_dev_name(existing_pv));
+				return 0;
+			}
+			pv->vg_name = vg->name;
+			pv->vgid = vg->id;
+
+			if (!(new_pvl = dm_pool_zalloc(vg->vgmem, sizeof(*new_pvl)))) {
+				log_error("Failed to allocate PV list item for \"%s\".",
+					  pv_dev_name(pvl->pv));
+				return 0;
+			}
+
+			new_pvl->pv = pv;
+			dm_list_add(&new_pvs, &new_pvl->list);
+
+			log_verbose("Set up physical volume for \"%s\" with %" PRIu64
+				    " available sectors.", pv_dev_name(pv), pv_size(pv));
+		}
+
+		pvs = &new_pvs;
+	}
+
 	/* Attempt to write out using currently active format */
 	fic.type = FMT_INSTANCE_AUX_MDAS;
 	fic.context.vg_ref.vg_name = vg->name;
 	fic.context.vg_ref.vg_id = NULL;
 	if (!(fid = cmd->fmt->ops->create_instance(cmd->fmt, &fic))) {
-		log_error("Failed to allocate format instance");
+		log_error("Failed to allocate format instance.");
 		return 0;
 	}
+
+	if (do_pvcreate) {
+		log_verbose("Deleting existing metadata for VG %s.", vg->name);
+		if (!vg_remove_mdas(vg)) {
+			cmd->fmt->ops->destroy_instance(fid);
+			log_error("Removal of existing metadata for VG %s failed.", vg->name);
+			return 0;
+		}
+	}
+
 	vg_set_fid(vg, fid);
 
 	/*
@@ -348,30 +448,62 @@ int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg, int drop
 	}
 
 	/* Add any metadata areas on the PVs */
-	dm_list_iterate_items(pvl, &vg->pvs) {
-		tmp = vg->extent_size;
+	dm_list_iterate_items(pvl, pvs) {
+		if ((should_write_pv = _restore_vg_should_write_pv(pvl->pv, do_pvcreate)) < 0)
+			return_0;
+
+		if (should_write_pv) {
+			if (!(new_pvl = dm_pool_zalloc(vg->vgmem, sizeof(*new_pvl)))) {
+				log_error("Failed to allocate structure for scheduled "
+					  "writing of PV '%s'.", pv_dev_name(pvl->pv));
+				return 0;
+			}
+
+			new_pvl->pv = pvl->pv;
+			dm_list_add(&vg->pv_write_list, &new_pvl->list);
+		}
+
+		/* Add any metadata areas on the PV. */
+		tmp_extent_size = vg->extent_size;
 		vg->extent_size = 0;
 		if (!vg->fid->fmt->ops->pv_setup(vg->fid->fmt, pvl->pv, vg)) {
-			vg->extent_size = tmp;
-			log_error("Format-specific setup for %s failed",
+			vg->extent_size = tmp_extent_size;
+			log_error("Format-specific setup for %s failed.",
 				  pv_dev_name(pvl->pv));
 			return 0;
 		}
-		vg->extent_size = tmp;
+		vg->extent_size = tmp_extent_size;
+	}
+
+	if (do_pvcreate) {
+		dm_list_iterate_items(pvl, &vg->pv_write_list) {
+			struct device *dev = pv_dev(pvl->pv);
+			const char *pv_name = dev_name(dev);
+
+			if (!label_remove(dev)) {
+				log_error("Failed to wipe existing label on %s", pv_name);
+				return 0;
+			}
+
+			log_verbose("Zeroing start of device %s", pv_name);
+			if (!dev_open_quiet(dev)) {
+				log_error("%s not opened: device not zeroed", pv_name);
+				return 0;
+			}
+
+			if (!dev_set(dev, UINT64_C(0), (size_t) 2048, 0)) {
+				log_error("%s not wiped: aborting", pv_name);
+				if (!dev_close(dev))
+					stack;
+				return 0;
+			}
+			if (!dev_close(dev))
+				stack;
+		}
 	}
 
 	if (!vg_write(vg))
 		return_0;
-
-	if (drop_lvmetad && lvmetad_active()) {
-		struct volume_group *vg_lvmetad = lvmetad_vg_lookup(cmd, vg->name, NULL);
-		if (vg_lvmetad) {
-			/* FIXME Cope with failure to update lvmetad */
-			if (!lvmetad_vg_remove(vg_lvmetad))
-				stack;
-			release_vg(vg_lvmetad);
-		}
-	}
 
 	if (!vg_commit(vg))
 		return_0;
@@ -411,7 +543,7 @@ int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
 
 	missing_pvs = vg_missing_pv_count(vg);
 	if (missing_pvs == 0)
-		r = backup_restore_vg(cmd, vg, 1);
+		r = backup_restore_vg(cmd, vg, 0, NULL);
 	else
 		log_error("Cannot restore Volume Group %s with %i PVs "
 			  "marked as missing.", vg->name, missing_pvs);
@@ -480,6 +612,9 @@ int backup_to_file(const char *file, const char *desc, struct volume_group *vg)
 
 /*
  * Update backup (and archive) if they're out-of-date or don't exist.
+ *
+ * This function is not supposed to log_error
+ * when the filesystem with archive/backup dir is read-only.
  */
 void check_current_backup(struct volume_group *vg)
 {
@@ -496,8 +631,9 @@ void check_current_backup(struct volume_group *vg)
 		return;
 
 	if (dm_snprintf(path, sizeof(path), "%s/%s",
-			 vg->cmd->backup_params->dir, vg->name) < 0) {
-		log_debug("Failed to generate backup filename.");
+			vg->cmd->backup_params->dir, vg->name) < 0) {
+		log_warn("WARNING: Failed to generate backup pathname %s/%s.",
+			 vg->cmd->backup_params->dir, vg->name);
 		return;
 	}
 
@@ -513,11 +649,11 @@ void check_current_backup(struct volume_group *vg)
 	log_suppress(old_suppress);
 
 	if (vg_backup) {
-		if (!archive(vg_backup))
+		if (!_archive(vg_backup, 0))
 			stack;
 		release_vg(vg_backup);
 	}
-	if (!archive(vg))
+	if (!_archive(vg, 0))
 		stack;
 	if (!backup_locally(vg))
 		stack;

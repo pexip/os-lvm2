@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_TOOL_ARCHIVE_H
@@ -51,7 +51,10 @@ int backup_remove(struct cmd_context *cmd, const char *vg_name);
 
 struct volume_group *backup_read_vg(struct cmd_context *cmd,
 				    const char *vg_name, const char *file);
-int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg, int drop_lvmetad);
+
+int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg,
+                      int do_pvcreate, struct pv_create_args *pva);
+
 int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
 			     const char *file, int force);
 int backup_restore(struct cmd_context *cmd, const char *vg_name, int force);

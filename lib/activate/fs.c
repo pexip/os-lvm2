@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -468,8 +468,8 @@ int fs_del_lv_byname(const char *dev_dir, const char *vg_name,
 	return _fs_op(FS_DEL, dev_dir, vg_name, lv_name, "", "", check_udev);
 }
 
-int fs_rename_lv(struct logical_volume *lv, const char *dev, 
-		const char *old_vgname, const char *old_lvname)
+int fs_rename_lv(const struct logical_volume *lv, const char *dev,
+		 const char *old_vgname, const char *old_lvname)
 {
 	if (strcmp(old_vgname, lv->vg->name)) {
 		return

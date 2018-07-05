@@ -8,9 +8,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # Test conversion to thin external origin
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
+export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
 
@@ -53,6 +58,8 @@ lvcreate -l10 -T $vg/pool1 -c 192k
 not lvconvert -T --thinpool $vg/pool1 $vg/pool --originname origin
 # Create pool1 chunk_size unaligned LV and check failing conversion
 lvcreate -l2 -n $lv1 $vg
+# Newer thin-pool target (>= 1.13) supports unaligned external origin
+aux lvmconf 'global/thin_disabled_features = [ "external_origin_extend" ]'
 not lvconvert -T --thinpool $vg/pool1 $vg/$lv1
 
 lvremove -f $vg/pool1 $vg/$lv1
@@ -160,5 +167,13 @@ lvcreate -l100 -n thin $vg
 lvconvert --yes --thin --thinpool $vg/pool $vg/thin --originname thin-origin
 check lv_field $vg/thin segtype thin
 check lv_field $vg/thin-origin segtype linear
+lvremove -ff $vg
+
+# Test conversion with non-zeroing thin-pool, should not WARN about zeroing
+lvcreate -l50 -n pool $vg
+lvcreate -l100 -n thin $vg
+lvconvert --yes --thin --thinpool $vg/pool $vg/thin --zero n --originname thin-origin 2>&1 | tee out
+not grep "not zeroed" out
+check lv_field $vg/pool zero ""
 
 vgremove -ff $vg

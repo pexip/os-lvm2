@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
@@ -49,12 +49,12 @@ static char *_expand_filename(const char *template, const char *vg_name,
 
 static int vg_backup_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg,
-			    void *handle)
+			    struct processing_handle *handle)
 {
-	char **last_filename = (char **)handle;
+	char **last_filename = (char **)handle->custom_handle;
 	char *filename;
 
-	if (arg_count(cmd, file_ARG)) {
+	if (arg_is_set(cmd, file_ARG)) {
 		if (!(filename = _expand_filename(arg_value(cmd, file_ARG),
 						  vg->name, last_filename)))
 			return_ECMD_FAILED;
@@ -83,15 +83,24 @@ int vgcfgbackup(struct cmd_context *cmd, int argc, char **argv)
 {
 	int ret;
 	char *last_filename = NULL;
+	struct processing_handle *handle = NULL;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	handle->custom_handle = &last_filename;
 
 	init_pvmove(1);
 
-	ret = process_each_vg(cmd, argc, argv, READ_ALLOW_INCONSISTENT,
-			      &last_filename, &vg_backup_single);
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_ALLOW_INCONSISTENT, 0,
+			      handle, &vg_backup_single);
 
 	dm_free(last_filename);
 
 	init_pvmove(0);
 
+	destroy_processing_handle(cmd, handle);
 	return ret;
 }

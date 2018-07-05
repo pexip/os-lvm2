@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "dmlib.h"
@@ -18,6 +18,24 @@
 #include <sys/file.h>
 #include <fcntl.h>
 #include <dirent.h>
+
+static int _is_dir(const char *path)
+{
+	struct stat st;
+
+	if (stat(path, &st) < 0) {
+		log_sys_error("stat", path);
+		return 0;
+	}
+
+	if (!S_ISDIR(st.st_mode)) {
+		log_error("Existing path %s is not "
+			  "a directory.", path);
+		return 0;
+	}
+
+	return 1;
+}
 
 static int _create_dir_recursive(const char *dir)
 {
@@ -36,10 +54,15 @@ static int _create_dir_recursive(const char *dir)
 		*s = '\0';
 		if (*orig) {
 			rc = mkdir(orig, 0777);
-			if (rc < 0 && errno != EEXIST) {
-				if (errno != EROFS)
-					log_sys_error("mkdir", orig);
-				goto out;
+			if (rc < 0) {
+				if (errno == EEXIST) {
+					if (!_is_dir(orig))
+						goto_out;
+				} else {
+					if (errno != EROFS)
+						log_sys_error("mkdir", orig);
+					goto out;
+				}
 			}
 		}
 		*s++ = '/';
@@ -47,10 +70,15 @@ static int _create_dir_recursive(const char *dir)
 
 	/* Create final directory */
 	rc = mkdir(dir, 0777);
-	if (rc < 0 && errno != EEXIST) {
-		if (errno != EROFS)
-			log_sys_error("mkdir", orig);
-		goto out;
+	if (rc < 0) {
+		if (errno == EEXIST) {
+			if (!_is_dir(dir))
+				goto_out;
+		} else {
+			if (errno != EROFS)
+				log_sys_error("mkdir", orig);
+			goto out;
+		}
 	}
 
 	r = 1;
@@ -66,14 +94,13 @@ int dm_create_dir(const char *dir)
 	if (!*dir)
 		return 1;
 
-	if (stat(dir, &info) < 0)
-		return _create_dir_recursive(dir);
-
-	if (S_ISDIR(info.st_mode))
+	if (stat(dir, &info) == 0 && S_ISDIR(info.st_mode))
 		return 1;
 
-	log_error("Directory \"%s\" not found", dir);
-	return 0;
+	if (!_create_dir_recursive(dir))
+		return_0;
+
+	return 1;
 }
 
 int dm_is_empty_dir(const char *dir)
@@ -119,8 +146,8 @@ int dm_create_lockfile(const char *lockfile)
 	char buffer[50];
 	int retries = 0;
 
-	if((fd = open(lockfile, O_CREAT | O_WRONLY,
-		      (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH))) < 0) {
+	if ((fd = open(lockfile, O_CREAT | O_WRONLY,
+		       (S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH))) < 0) {
 		log_error("Cannot open lockfile [%s], error was [%s]",
 			  lockfile, strerror(errno));
 		return 0;
@@ -199,10 +226,10 @@ retry_fcntl:
 
 fail_close_unlink:
 	if (unlink(lockfile))
-		stack;
+		log_sys_debug("unlink", lockfile);
 fail_close:
 	if (close(fd))
-		stack;
+		log_sys_debug("close", lockfile);
 
 	return 0;
 }

@@ -7,11 +7,12 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 #include "logging.h"
 #include "functions.h"
 
+#include <sys/sysmacros.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -32,12 +33,13 @@
 #define LOG_OFFSET 2
 
 #define RESYNC_HISTORY 50
+#define RESYNC_BUFLEN 128
 //static char resync_history[RESYNC_HISTORY][128];
 //static int idx = 0;
 #define LOG_SPRINT(_lc, f, arg...) do {					\
 		lc->idx++;						\
 		lc->idx = lc->idx % RESYNC_HISTORY;			\
-		sprintf(lc->resync_history[lc->idx], f, ## arg);	\
+		snprintf(lc->resync_history[lc->idx], RESYNC_BUFLEN, f, ## arg); \
 	} while (0)
 
 struct log_header {
@@ -88,7 +90,7 @@ struct log_c {
 	size_t disk_size;       /* size of disk_buffer in bytes */
 	void *disk_buffer;      /* aligned memory for O_DIRECT */
 	int idx;
-	char resync_history[RESYNC_HISTORY][128];
+	char resync_history[RESYNC_HISTORY][RESYNC_BUFLEN];
 };
 
 struct mark_entry {
@@ -571,6 +573,12 @@ static int clog_ctr(struct dm_ulog_request *rq)
 	/* Split up args */
 	for (argc = 0, p = rq->data; (p = strstr(p, " ")); p++, argc++)
 		*p = '\0';
+
+	if (!argc) {
+		LOG_ERROR("Received constructor request with bad data %s",
+			  rq->data);
+		return -EINVAL;
+	}
 
 	argv = malloc(argc * sizeof(char *));
 	if (!argv)
@@ -1444,7 +1452,7 @@ static int disk_status_info(struct log_c *lc, struct dm_ulog_request *rq)
 	char *data = (char *)rq->data;
 	struct stat statbuf;
 
-	if(fstat(lc->disk_fd, &statbuf)) {
+	if (fstat(lc->disk_fd, &statbuf)) {
 		rq->error = -errno;
 		return -errno;
 	}
@@ -1507,7 +1515,7 @@ static int disk_status_table(struct log_c *lc, struct dm_ulog_request *rq)
 	char *data = (char *)rq->data;
 	struct stat statbuf;
 
-	if(fstat(lc->disk_fd, &statbuf)) {
+	if (fstat(lc->disk_fd, &statbuf)) {
 		rq->error = -errno;
 		return -errno;
 	}

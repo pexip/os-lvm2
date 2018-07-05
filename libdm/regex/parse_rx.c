@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "dmlib.h"
@@ -19,6 +19,7 @@
 #ifdef DEBUG
 #include <ctype.h>
 
+__attribute__ ((__unused__))
 static void _regex_print(struct rx_node *rx, int depth, unsigned show_nodes)
 {
 	int i, numchars;

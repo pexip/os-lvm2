@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -60,7 +60,8 @@ static void _add_pl_to_list(struct cmd_context *cmd, struct dm_list *head, struc
 		if (id_equal(&data->pv_uuid, &pl->pv_uuid)) {
 			char uuid[ID_LEN + 7] __attribute__((aligned(8)));
 
-			id_write_format(&pl->pv_uuid, uuid, ID_LEN + 7);
+			if (!id_write_format(&pl->pv_uuid, uuid, ID_LEN + 7))
+				stack;
 
 			if (!dev_subsystem_part_major(cmd->dev_types, data->dev)) {
 				log_very_verbose("Ignoring duplicate PV %s on "
@@ -90,11 +91,13 @@ int read_pool_label(struct pool_list *pl, struct labeller *l,
 	pool_label_in(pd, buf);
 
 	get_pool_pv_uuid(&pvid, pd);
-	id_write_format(&pvid, uuid, ID_LEN + 7);
+	if (!id_write_format(&pvid, uuid, ID_LEN + 7))
+		stack;
 	log_debug_metadata("Calculated uuid %s for %s", uuid, dev_name(dev));
 
 	get_pool_vg_uuid(&vgid, pd);
-	id_write_format(&vgid, uuid, ID_LEN + 7);
+	if (!id_write_format(&vgid, uuid, ID_LEN + 7))
+		stack;
 	log_debug_metadata("Calculated uuid %s for %s", uuid, pd->pl_pool_name);
 
 	if (!(info = lvmcache_add(l, (char *) &pvid, dev, pd->pl_pool_name,
@@ -104,7 +107,10 @@ int read_pool_label(struct pool_list *pl, struct labeller *l,
 		*label = lvmcache_get_label(info);
 
 	lvmcache_set_device_size(info, ((uint64_t)xlate32_be(pd->pl_blocks)) << SECTOR_SHIFT);
+	lvmcache_set_ext_version(info, 0);
+	lvmcache_set_ext_flags(info, 0);
 	lvmcache_del_mdas(info);
+	lvmcache_del_bas(info);
 	lvmcache_make_valid(info);
 
 	pl->dev = dev;
@@ -373,7 +379,9 @@ int read_pool_pds(const struct format_type *fmt, const char *vg_name,
 					   vg_name);
 			return 0;
 		}
-		lvmcache_label_scan(fmt->cmd, full_scan);
+		if (full_scan > 0)
+			lvmcache_force_next_label_scan();
+		lvmcache_label_scan(fmt->cmd);
 
 	} while (1);
 

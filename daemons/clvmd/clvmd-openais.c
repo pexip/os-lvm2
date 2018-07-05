@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 /*
@@ -243,7 +243,7 @@ static void openais_cpg_confchg_callback(cpg_handle_t handle,
 	struct node_info *ninfo;
 
 	DEBUGLOG("confchg callback. %" PRIsize_t " joined, "
-		 "%" PRIsize_t " left, %" PRIsize_t " members\n",
+		 FMTsize_t " left, %" PRIsize_t " members\n",
 		 joined_list_entries, left_list_entries, member_list_entries);
 
 	for (i=0; i<joined_list_entries; i++) {

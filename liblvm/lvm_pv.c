@@ -9,18 +9,20 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include <stddef.h>
 #include "lib.h"
 #include "metadata.h"
 #include "lvm-string.h"
+#include "str_list.h"
 #include "lvm_misc.h"
 #include "lvm2app.h"
 #include "locking.h"
 #include "toolcontext.h"
 #include "lvm_misc.h"
+#include "lvmetad.h"
 
 struct lvm_pv_create_params
 {
@@ -36,7 +38,7 @@ const char *lvm_pv_get_uuid(const pv_t pv)
 {
 	const char *rc;
 	struct saved_env e = store_user_env(pv->vg->cmd);
-	rc = pv_uuid_dup(pv);
+	rc = pv_uuid_dup(pv->vg->vgmem, pv);
 	restore_user_env(&e);
 	return rc;
 }
@@ -118,8 +120,14 @@ int lvm_pv_remove(lvm_t libh, const char *pv_name)
 	int rc = 0;
 	struct cmd_context *cmd = (struct cmd_context *)libh;
 	struct saved_env e = store_user_env(cmd);
+	struct dm_list pv_names;
 
-	if (!pvremove_single(cmd, pv_name, NULL, 0, 0))
+	dm_list_init(&pv_names);
+
+	if (!str_list_add(cmd->mem, &pv_names, pv_name))
+		rc = -1;
+
+	if (rc >= 0 && !pvremove_many(cmd, &pv_names, 0, 0))
 		rc = -1;
 
 	restore_user_env(&e);
@@ -148,9 +156,8 @@ static struct dm_list *_lvm_list_pvs(lvm_t libh)
 	} else {
 		dm_list_init(&rc->pvslist);
 		dm_list_init(&rc->vgslist);
-		if( !get_pvs_perserve_vg(cmd, &rc->pvslist, &rc->vgslist) ) {
-			return NULL;
-		}
+		if (!get_pvs_perserve_vg(cmd, &rc->pvslist, &rc->vgslist))
+			return_NULL;
 
 		/*
 		 * If we have no PVs we still need to have access to cmd
@@ -199,7 +206,7 @@ int lvm_list_pvs_free(struct dm_list *pvlist)
 		dm_list_iterate_items(pvl, &to_delete->pvslist)
 			free_pv_fid(pvl->pv);
 
-		unlock_vg(to_delete->cmd, VG_GLOBAL);
+		unlock_vg(to_delete->cmd, NULL, VG_GLOBAL);
 		to_delete->magic = 0xA5A5A5A5;
 
 		restore_user_env(&e);
@@ -413,18 +420,26 @@ int lvm_pv_params_set_property(pv_create_params_t params, const char *name,
 static int _pv_create(pv_create_params_t params)
 {
 	struct cmd_context *cmd = (struct cmd_context *)params->libh;
+	int rc = 0;
 
-	if (params->pv_p.size) {
-		if (params->pv_p.size % SECTOR_SIZE) {
+	if (params->pv_p.pva.size) {
+		if (params->pv_p.pva.size % SECTOR_SIZE) {
 			log_errno(EINVAL, "Size not a multiple of 512");
 			return -1;
 		}
-		params->pv_p.size = params->pv_p.size >> SECTOR_SHIFT;
+		params->pv_p.pva.size = params->pv_p.pva.size >> SECTOR_SHIFT;
 	}
 
-	if (!pvcreate_single(cmd, params->pv_name, &params->pv_p))
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_errno(EINVAL, "Can't get lock for orphan PVs");
 		return -1;
-	return 0;
+	}
+
+	if (!(pvcreate_vol(cmd, params->pv_name, &params->pv_p, 1)))
+		rc = -1;
+
+	unlock_vg(cmd, NULL, VG_ORPHANS);
+	return rc;
 }
 
 int lvm_pv_create(lvm_t libh, const char *pv_name, uint64_t size)
@@ -434,7 +449,7 @@ int lvm_pv_create(lvm_t libh, const char *pv_name, uint64_t size)
 	struct saved_env e = store_user_env((struct cmd_context *)libh);
 
 	if (_lvm_pv_params_create(libh, pv_name, &pp)) {
-		pp.pv_p.size = size;
+		pp.pv_p.pva.size = size;
 		rc = _pv_create(&pp);
 	}
 

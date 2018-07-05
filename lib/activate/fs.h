@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_FS_H
@@ -27,7 +27,7 @@ int fs_add_lv(const struct logical_volume *lv, const char *dev);
 int fs_del_lv(const struct logical_volume *lv);
 int fs_del_lv_byname(const char *dev_dir, const char *vg_name,
 		     const char *lv_name, int check_udev);
-int fs_rename_lv(struct logical_volume *lv, const char *dev, 
+int fs_rename_lv(const struct logical_volume *lv, const char *dev,
 		 const char *old_vgname, const char *old_lvname);
 /* void fs_unlock(void);  moved to activate.h */
 uint32_t fs_get_cookie(void);

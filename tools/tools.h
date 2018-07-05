@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -10,24 +10,21 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_TOOLS_H
 #define _LVM_TOOLS_H
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
-#include "configure.h"
-#include <assert.h>
-#include "libdevmapper.h"
+#include "tool.h"
 
 #include "lvm-logging.h"
+
 #include "activate.h"
 #include "archiver.h"
 #include "lvmcache.h"
 #include "lvmetad.h"
+#include "lvmlockd.h"
 #include "lvm-version.h"
 #include "config.h"
 #include "defaults.h"
@@ -45,12 +42,9 @@
 #include "str_list.h"
 #include "toolcontext.h"
 #include "toollib.h"
+#include "lvmnotify.h"
 
-#include <stdlib.h>
-#include <unistd.h>
 #include <ctype.h>
-#include <limits.h>
-#include <stdarg.h>
 #include <sys/types.h>
 
 #define CMD_LEN 256
@@ -65,7 +59,7 @@ typedef int (*command_fn) (struct cmd_context * cmd, int argc, char **argv);
 
 /* define the enums for the command line switches */
 enum {
-#define arg(a, b, c, d, e) a ,
+#define arg(a, b, c, d, e, f) a ,
 #include "args.h"
 #undef arg
 };
@@ -93,16 +87,38 @@ struct arg_props {
 
 	int (*fn) (struct cmd_context *cmd, struct arg_values *av);
 	uint32_t flags;
+	uint32_t prio;
 };
 
 struct arg_value_group_list {
         struct dm_list list;
         struct arg_values arg_values[0];
+	uint32_t prio;
 };
 
 #define CACHE_VGMETADATA	0x00000001
 #define PERMITTED_READ_ONLY 	0x00000002
-
+/* Process all VGs if none specified on the command line. */
+#define ALL_VGS_IS_DEFAULT	0x00000004
+/* Process all devices with --all if none are specified on the command line. */
+#define ENABLE_ALL_DEVS		0x00000008	
+/* Command may try to interpret a vgname arg as a uuid. */
+#define ALLOW_UUID_AS_NAME	0x00000010
+/* Command needs a shared lock on a VG; it only reads the VG. */
+#define LOCKD_VG_SH		0x00000020
+/* Command does not process any metadata. */
+#define NO_METADATA_PROCESSING	0x00000040
+/* Command wants to scan for new devices and force labels to be read from them all. */
+#define REQUIRES_FULL_LABEL_SCAN 0x00000080
+/* Command must use all specified arg names and fail if all cannot be used. */
+#define MUST_USE_ALL_ARGS        0x00000100
+/* Command wants to control the device scan for lvmetad itself. */
+#define NO_LVMETAD_AUTOSCAN      0x00000200
+/* Command should process unused duplicate devices. */
+#define ENABLE_DUPLICATE_DEVS    0x00000400
+/* Command does not accept tags as args. */
+#define DISALLOW_TAG_ARGS        0x00000800
+ 
 /* a register of the lvm commands */
 struct command {
 	const char *name;
@@ -121,9 +137,12 @@ void usage(const char *name);
 /* the argument verify/normalise functions */
 int yes_no_arg(struct cmd_context *cmd, struct arg_values *av);
 int activation_arg(struct cmd_context *cmd, struct arg_values *av);
+int cachemode_arg(struct cmd_context *cmd, struct arg_values *av);
 int discards_arg(struct cmd_context *cmd, struct arg_values *av);
+int mirrorlog_arg(struct cmd_context *cmd, struct arg_values *av);
 int size_kb_arg(struct cmd_context *cmd, struct arg_values *av);
 int size_mb_arg(struct cmd_context *cmd, struct arg_values *av);
+int size_mb_arg_with_percent(struct cmd_context *cmd, struct arg_values *av);
 int int_arg(struct cmd_context *cmd, struct arg_values *av);
 int int_arg_with_sign(struct cmd_context *cmd, struct arg_values *av);
 int int_arg_with_sign_and_percent(struct cmd_context *cmd, struct arg_values *av);
@@ -136,27 +155,28 @@ int metadatatype_arg(struct cmd_context *cmd, struct arg_values *av);
 int units_arg(struct cmd_context *cmd, struct arg_values *av);
 int segtype_arg(struct cmd_context *cmd, struct arg_values *av);
 int alloc_arg(struct cmd_context *cmd, struct arg_values *av);
+int locktype_arg(struct cmd_context *cmd, struct arg_values *av);
 int readahead_arg(struct cmd_context *cmd, struct arg_values *av);
 int metadatacopies_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int major_minor_valid(const struct cmd_context * cmd, const struct format_type *fmt,
-		      int32_t major, int32_t minor);
 
 /* we use the enums to access the switches */
 unsigned arg_count(const struct cmd_context *cmd, int a);
 unsigned arg_is_set(const struct cmd_context *cmd, int a);
 int arg_from_list_is_set(const struct cmd_context *cmd, const char *err_found, ...);
 int arg_outside_list_is_set(const struct cmd_context *cmd, const char *err_found, ...);
+int arg_from_list_is_negative(const struct cmd_context *cmd, const char *err_found, ...);
+int arg_from_list_is_zero(const struct cmd_context *cmd, const char *err_found, ...);
 const char *arg_long_option_name(int a);
-const char *arg_value(struct cmd_context *cmd, int a);
-const char *arg_str_value(struct cmd_context *cmd, int a, const char *def);
-int32_t arg_int_value(struct cmd_context *cmd, int a, const int32_t def); 
-int32_t first_grouped_arg_int_value(struct cmd_context *cmd, int a, const int32_t def); 
-uint32_t arg_uint_value(struct cmd_context *cmd, int a, const uint32_t def);
-int64_t arg_int64_value(struct cmd_context *cmd, int a, const int64_t def);
-uint64_t arg_uint64_value(struct cmd_context *cmd, int a, const uint64_t def);
-const void *arg_ptr_value(struct cmd_context *cmd, int a, const void *def);
-sign_t arg_sign_value(struct cmd_context *cmd, int a, const sign_t def);
-percent_type_t arg_percent_value(struct cmd_context *cmd, int a, const percent_type_t def);
+const char *arg_value(const struct cmd_context *cmd, int a);
+const char *arg_str_value(const struct cmd_context *cmd, int a, const char *def);
+int32_t arg_int_value(const struct cmd_context *cmd, int a, const int32_t def);
+int32_t first_grouped_arg_int_value(const struct cmd_context *cmd, int a, const int32_t def);
+uint32_t arg_uint_value(const struct cmd_context *cmd, int a, const uint32_t def);
+int64_t arg_int64_value(const struct cmd_context *cmd, int a, const int64_t def);
+uint64_t arg_uint64_value(const struct cmd_context *cmd, int a, const uint64_t def);
+const void *arg_ptr_value(const struct cmd_context *cmd, int a, const void *def);
+sign_t arg_sign_value(const struct cmd_context *cmd, int a, const sign_t def);
+percent_type_t arg_percent_value(const struct cmd_context *cmd, int a, const percent_type_t def);
 int arg_count_increment(struct cmd_context *cmd, int a);
 
 unsigned grouped_arg_count(const struct arg_values *av, int a);
@@ -166,7 +186,8 @@ int32_t grouped_arg_int_value(const struct arg_values *av, int a, const int32_t 
 
 const char *command_name(struct cmd_context *cmd);
 
-int pvmove_poll(struct cmd_context *cmd, const char *pv, unsigned background);
+int pvmove_poll(struct cmd_context *cmd, const char *pv_name, const char *uuid,
+		const char *vg_name, const char *lv_name, unsigned background);
 int lvconvert_poll(struct cmd_context *cmd, struct logical_volume *lv, unsigned background);
 
 int mirror_remove_missing(struct cmd_context *cmd,
@@ -175,4 +196,7 @@ int mirror_remove_missing(struct cmd_context *cmd,
 
 int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 		       activation_change_t activate);
+
+int vgchange_background_polling(struct cmd_context *cmd, struct volume_group *vg);
+
 #endif

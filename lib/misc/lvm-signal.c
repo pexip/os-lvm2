@@ -10,11 +10,12 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
 #include "lvm-signal.h"
+#include "memlock.h"
 
 #include <signal.h>
 
@@ -60,6 +61,8 @@ void sigint_allow(void)
 	struct sigaction handler;
 	sigset_t sigs;
 
+	if (memlock_count_daemon())
+		return;
 	/*
 	 * Do not overwrite the backed-up handler data -
 	 * just increase nesting count.
@@ -91,11 +94,14 @@ void sigint_allow(void)
 
 void sigint_restore(void)
 {
+	if (memlock_count_daemon())
+		return;
+
 	if (!_handler_installed ||
 	    --_handler_installed >= MAX_SIGINTS)
 		return;
 
-	/* Nesting count went bellow MAX_SIGINTS. */
+	/* Nesting count went below MAX_SIGINTS. */
 	if (_oldmasked[_handler_installed]) {
 		sigset_t sigs;
 		sigprocmask(0, NULL, &sigs);
@@ -111,6 +117,9 @@ void sigint_restore(void)
 void block_signals(uint32_t flags __attribute__((unused)))
 {
 	sigset_t set;
+
+	if (memlock_count_daemon())
+		return;
 
 	if (_signals_blocked)
 		return;
@@ -130,6 +139,9 @@ void block_signals(uint32_t flags __attribute__((unused)))
 
 void unblock_signals(void)
 {
+	if (memlock_count_daemon())
+		return;
+
 	/* Don't unblock signals while any locks are held */
 	if (!_signals_blocked)
 		return;

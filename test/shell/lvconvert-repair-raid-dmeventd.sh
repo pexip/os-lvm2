@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -21,6 +24,7 @@ lvcreate -aey --type raid1 -m 3 --ignoremonitoring -L 1 -n 4way $vg
 lvchange --monitor y $vg/4way
 lvs -a -o all,lv_modules $vg
 lvdisplay --maps $vg
+aux wait_for_sync $vg 4way
 aux disable_dev "$dev2" "$dev4"
 mkfs.ext3 "$DM_DEV_DIR/$vg/4way"
 sleep 10 # FIXME: need a "poll" utility, akin to "check"

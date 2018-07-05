@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -181,20 +181,19 @@ static int _add_stripe_seg(struct dm_pool *mem,
 	unsigned j;
 	uint32_t area_len;
 
-	if (usp->striping & (usp->striping - 1)) {
+	if (!is_power_of_2(usp->striping)) {
 		log_error("Stripe size must be a power of 2");
 		return 0;
 	}
 
 	area_len = (usp->devs[0].blocks) / POOL_PE_SIZE;
 
-	if (!(segtype = get_segtype_from_string(lv->vg->cmd,
-						     "striped")))
+	if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
 		return_0;
 
 	if (!(seg = alloc_lv_segment(segtype, lv, *le_cur,
 				     area_len * usp->num_devs, 0,
-				     usp->striping, NULL, NULL, usp->num_devs,
+				     usp->striping, NULL, usp->num_devs,
 				     area_len, 0, 0, 0, NULL))) {
 		log_error("Unable to allocate striped lv_segment structure");
 		return 0;
@@ -226,7 +225,7 @@ static int _add_linear_seg(struct dm_pool *mem,
 	unsigned j;
 	uint32_t area_len;
 
-	if (!(segtype = get_segtype_from_string(lv->vg->cmd, "striped")))
+	if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
 		return_0;
 
 	for (j = 0; j < usp->num_devs; j++) {
@@ -234,7 +233,7 @@ static int _add_linear_seg(struct dm_pool *mem,
 
 		if (!(seg = alloc_lv_segment(segtype, lv, *le_cur,
 					     area_len, 0, usp->striping,
-					     NULL, NULL, 1, area_len,
+					     NULL, 1, area_len,
 					     POOL_PE_SIZE, 0, 0, NULL))) {
 			log_error("Unable to allocate linear lv_segment "
 				  "structure");
