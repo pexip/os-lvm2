@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -30,7 +30,7 @@ static int (*_init_fn) (int type, struct dm_config_tree * cft,
 static int (*_lock_query_fn) (const char *resource, int *mode) = NULL;
 
 static int _lock_resource(struct cmd_context *cmd, const char *resource,
-			  uint32_t flags, struct logical_volume *lv __attribute__((unused)))
+			  uint32_t flags, const struct logical_volume *lv __attribute__((unused)))
 {
 	if (!_lock_fn)
 		return 0;

@@ -7,13 +7,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
 aux prepare_vg 6
-aux lvmconf 'allocation/maximise_cling = 0'
-aux lvmconf 'allocation/mirror_logs_require_separate_pvs = 1'
+aux lvmconf 'allocation/maximise_cling = 0' \
+	    'allocation/mirror_logs_require_separate_pvs = 1'
 
 # 3-way, disk log
 # multiple failures, full replace
@@ -67,7 +69,7 @@ check mirror $vg mirror2
 vgs $vg
 vgremove -ff $vg
 
-if kernel_at_least 3 0 0; then
+if aux kernel_at_least 3 0 0; then
 	# 2-way, mirrored log
 	# Double log failure, full replace
 	vgcreate $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"

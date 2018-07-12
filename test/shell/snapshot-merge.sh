@@ -7,9 +7,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
+
+# test if snapshot-merge target is available
+aux target_at_least dm-snapshot-merge 1 0 0 || skip
 
 which mkfs.ext3 || skip
 
@@ -45,8 +50,6 @@ mkdir test_mnt
 
 # test full merge of a single LV
 setup_merge_ $vg $lv1
-# now that snapshot LV is created: test if snapshot-merge target is available
-aux target_at_least snapshot-merge 1 0 0 || skip
 
 # make sure lvconvert --merge requires explicit LV listing
 not lvconvert --merge

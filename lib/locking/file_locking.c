@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -42,7 +42,7 @@ static void _reset_file_locking(void)
 }
 
 static int _file_lock_resource(struct cmd_context *cmd, const char *resource,
-			       uint32_t flags, struct logical_volume *lv)
+			       uint32_t flags, const struct logical_volume *lv)
 {
 	char lockfile[PATH_MAX];
 	unsigned origin_only = (flags & LCK_ORIGIN_ONLY) ? 1 : 0;
@@ -60,12 +60,11 @@ static int _file_lock_resource(struct cmd_context *cmd, const char *resource,
 			return_0;
 		break;
 	case LCK_VG:
-		/* Skip cache refresh for VG_GLOBAL - the caller handles it */
-		if (strcmp(resource, VG_GLOBAL))
-			lvmcache_drop_metadata(resource, 0);
-
-		if (!strcmp(resource, VG_SYNC_NAMES))
+		if (!strcmp(resource, VG_SYNC_NAMES)) {
 			fs_unlock();
+		} else if (strcmp(resource, VG_GLOBAL))
+			/* Skip cache refresh for VG_GLOBAL - the caller handles it */
+			lvmcache_drop_metadata(resource, 0);
 
 		/* LCK_CACHE does not require a real lock */
 		if (flags & LCK_CACHE)
@@ -93,18 +92,18 @@ static int _file_lock_resource(struct cmd_context *cmd, const char *resource,
 		switch (flags & LCK_TYPE_MASK) {
 		case LCK_UNLOCK:
 			log_very_verbose("Unlocking LV %s%s%s", resource, origin_only ? " without snapshots" : "", revert ? " (reverting)" : "");
-			if (!lv_resume_if_active(cmd, resource, origin_only, 0, revert, lv_ondisk(lv)))
+			if (!lv_resume_if_active(cmd, resource, origin_only, 0, revert, lv_committed(lv)))
 				return 0;
 			break;
 		case LCK_NULL:
 			log_very_verbose("Locking LV %s (NL)", resource);
-			if (!lv_deactivate(cmd, resource, lv_ondisk(lv)))
+			if (!lv_deactivate(cmd, resource, lv_committed(lv)))
 				return 0;
 			break;
 		case LCK_READ:
 			log_very_verbose("Locking LV %s (R)", resource);
-			if (!lv_activate_with_filter(cmd, resource, 0, lv->status & LV_NOSCAN ? 1 : 0,
-						     lv->status & LV_TEMPORARY ? 1 : 0, lv_ondisk(lv)))
+			if (!lv_activate_with_filter(cmd, resource, 0, (lv->status & LV_NOSCAN) ? 1 : 0,
+						     (lv->status & LV_TEMPORARY) ? 1 : 0, lv_committed(lv)))
 				return 0;
 			break;
 		case LCK_PREAD:
@@ -112,13 +111,13 @@ static int _file_lock_resource(struct cmd_context *cmd, const char *resource,
 			break;
 		case LCK_WRITE:
 			log_very_verbose("Locking LV %s (W)%s", resource, origin_only ? " without snapshots" : "");
-			if (!lv_suspend_if_active(cmd, resource, origin_only, 0, lv_ondisk(lv), lv))
+			if (!lv_suspend_if_active(cmd, resource, origin_only, 0, lv_committed(lv), lv))
 				return 0;
 			break;
 		case LCK_EXCL:
 			log_very_verbose("Locking LV %s (EX)", resource);
-			if (!lv_activate_with_filter(cmd, resource, 1, lv->status & LV_NOSCAN ? 1 : 0,
-						     lv->status & LV_TEMPORARY ? 1 : 0, lv_ondisk(lv)))
+			if (!lv_activate_with_filter(cmd, resource, 1, (lv->status & LV_NOSCAN) ? 1 : 0,
+						     (lv->status & LV_TEMPORARY) ? 1 : 0, lv_committed(lv)))
 				return 0;
 			break;
 		default:
@@ -149,12 +148,10 @@ int init_file_locking(struct locking_type *locking, struct cmd_context *cmd,
 
 	/* Get lockfile directory from config file */
 	locking_dir = find_config_tree_str(cmd, global_locking_dir_CFG, NULL);
-	if (strlen(locking_dir) >= sizeof(_lock_dir)) {
+	if (!dm_strncpy(_lock_dir, locking_dir, sizeof(_lock_dir))) {
 		log_error("Path for locking_dir %s is invalid.", locking_dir);
 		return 0;
 	}
-
-	strcpy(_lock_dir, locking_dir);
 
 	(void) dm_prepare_selinux_context(_lock_dir, S_IFDIR);
 	r = dm_create_dir(_lock_dir);

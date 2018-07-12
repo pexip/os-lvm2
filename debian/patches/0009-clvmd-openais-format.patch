@@ -1,0 +1,21 @@
+From d0da93ac31f93beda01cb090a5cca71e674cdd71 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Tue, 30 Jun 2015 11:46:13 +0200
+Subject: clvmd-openais-format
+
+---
+ daemons/clvmd/clvmd-openais.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/daemons/clvmd/clvmd-openais.c b/daemons/clvmd/clvmd-openais.c
+index 2f1a4fdeb..619499420 100644
+--- a/daemons/clvmd/clvmd-openais.c
++++ b/daemons/clvmd/clvmd-openais.c
+@@ -34,6 +34,7 @@
+ #include "clvmd-comms.h"
+ #include "lvm-functions.h"
+ #include "clvmd.h"
++#include "lib.h"
+ 
+ /* Timeout value for several openais calls */
+ #define TIMEOUT 10

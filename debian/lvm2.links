@@ -1,1 +1,1 @@
-lib/systemd/system/lvm2-activation.service lib/systemd/system/lvm2.service
+dev/null lib/systemd/system/lvm2.service

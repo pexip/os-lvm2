@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -39,10 +39,6 @@
 /*
  *  Replicator target
  */
-static const char *_replicator_name(const struct lv_segment *seg)
-{
-	return seg->segtype->name;
-}
 
 /* FIXME: missing implementation */
 static void _replicator_display(const struct lv_segment *seg)
@@ -381,9 +377,12 @@ static int _replicator_target_present(struct cmd_context *cmd,
 	static int _checked = 0;
 	static int _present = 0;
 
+	if (!activation())
+		return 0;
+
 	if (!_checked) {
-		_present = target_present(cmd, REPLICATOR_MODULE, 1);
 		_checked = 1;
+		_present = target_present(cmd, REPLICATOR_MODULE, 1);
 	}
 
 	return _present;
@@ -410,7 +409,6 @@ static void _replicator_destroy(struct segment_type *segtype)
 }
 
 static struct segtype_handler _replicator_ops = {
-	.name = _replicator_name,
 	.display = _replicator_display,
 	.text_import = _replicator_text_import,
 	.text_export = _replicator_text_export,
@@ -677,7 +675,7 @@ static int _replicator_dev_add_target_line(struct dev_manager *dm,
 			if (!(slog_dlid = build_dm_uuid(mem, rdev->slog, NULL)))
 				return_0;
 		} else if (rdev->slog_name &&
-			   sscanf(rdev->slog_name, "%" PRIu32, &slog_size) == 1) {
+			   sscanf(rdev->slog_name, FMTu32, &slog_size) == 1) {
 			slog_flags = DM_CORELOG | DM_FORCESYNC;
 			if (slog_size == 0) {
 				log_error("Failed to use empty corelog size "
@@ -739,7 +737,6 @@ static int _replicator_dev_target_present(struct cmd_context *cmd,
 #endif
 
 static struct segtype_handler _replicator_dev_ops = {
-	.name = _replicator_name,
 	.display = _replicator_dev_display,
 	.text_import = _replicator_dev_text_import,
 	.text_export = _replicator_dev_text_export,

@@ -8,9 +8,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description="ensure that pvmove works with basic options"
+
+SKIP_WITH_LVMLOCKD=1
+
+# disable lvmetad logging as it bogs down test systems
+export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
@@ -66,8 +71,8 @@ check_and_cleanup_lvs_() {
 	check dev_md5sum $vg $lv1
 	check dev_md5sum $vg $lv2
 	check dev_md5sum $vg $lv3
-	get lv_field $vg name >out
-	not grep ^pvmove out
+	get lv_field $vg name -a >out
+	not grep "^\[pvmove" out
 	vgchange -an $vg
 	lvremove -ff $vg
 	(dm_table | not grep $vg) || \
@@ -331,7 +336,7 @@ check_and_cleanup_lvs_
 
 #COMM "pvmove abort"
 restore_lvs_
-pvmove $mode -i100 -b "$dev1" "$dev3"
+LVM_TEST_TAG="kill_me_$PREFIX" pvmove $mode -i100 -b "$dev1" "$dev3"
 pvmove --abort
 check_and_cleanup_lvs_
 

@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 #ifndef _LVM_PROP_COMMON_H
 #define _LVM_PROP_COMMON_H
@@ -26,9 +26,11 @@ struct lvm_property_type {
 	unsigned is_settable:1;
 	unsigned is_string:1;
 	unsigned is_integer:1;
+	unsigned is_signed:1;
 	union {
 		const char *string;
 		uint64_t integer;
+		int64_t signed_integer;
 	} value;
 	int (*get) (const void *obj, struct lvm_property_type *prop);
 	int (*set) (void *obj, struct lvm_property_type *prop);
@@ -125,10 +127,12 @@ static int _ ## NAME ## _get (const void *obj, struct lvm_property_type *prop) \
 #define BIN 3
 #define SIZ 4
 #define PCT 5
-#define STR_LIST 6
+#define TIM 6
+#define SNUM 7              /* Signed Number */
+#define STR_LIST 8
 
 #define FIELD_MODIFIABLE 0x00000001
 #define FIELD(type, strct, field_type, head, field, width, fn, id, desc, settable) \
-	{ type, #id, settable, field_type == STR, ((field_type == NUM) || (field_type == BIN) || (field_type == SIZ) || (field_type == PCT)), { .integer = 0 }, _ ## id ## _get, _ ## id ## _set },
+	{ type, #id, settable, (field_type == STR || field_type == STR_LIST), ((field_type == NUM) || (field_type == BIN) || (field_type == SIZ) || (field_type == PCT) || (field_type == SNUM)), ((field_type == SNUM) || (field_type == PCT)), { .integer = 0 }, _ ## id ## _get, _ ## id ## _set },
 
 #endif

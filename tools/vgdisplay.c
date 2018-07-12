@@ -10,40 +10,38 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
 
 static int vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg,
-			    void *handle __attribute__((unused)))
+			    struct processing_handle *handle __attribute__((unused)))
 {
-	if (arg_count(cmd, activevolumegroups_ARG) && !lvs_in_vg_activated(vg))
+	if (arg_is_set(cmd, activevolumegroups_ARG) && !lvs_in_vg_activated(vg))
 		return ECMD_PROCESSED;
 
-	vg_check_status(vg, EXPORTED_VG);
-
-	if (arg_count(cmd, colon_ARG)) {
+	if (arg_is_set(cmd, colon_ARG)) {
 		vgdisplay_colons(vg);
 		return ECMD_PROCESSED;
 	}
 
-	if (arg_count(cmd, short_ARG)) {
+	if (arg_is_set(cmd, short_ARG)) {
 		vgdisplay_short(vg);
 		return ECMD_PROCESSED;
 	}
 
 	vgdisplay_full(vg);	/* was vg_show */
 
-	if (arg_count(cmd, verbose_ARG)) {
+	if (arg_is_set(cmd, verbose_ARG)) {
 		vgdisplay_extents(vg);
 
-		process_each_lv_in_vg(cmd, vg, NULL, NULL, NULL, NULL,
+		process_each_lv_in_vg(cmd, vg, NULL, NULL, 0, NULL,
 				      (process_single_lv_fn_t)lvdisplay_full);
 
 		log_print("--- Physical volumes ---");
-		process_each_pv_in_vg(cmd, vg, NULL, NULL,
+		process_each_pv_in_vg(cmd, vg, NULL,
 				      (process_single_pv_fn_t)pvdisplay_short);
 	}
 
@@ -54,30 +52,30 @@ static int vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
 
 int vgdisplay(struct cmd_context *cmd, int argc, char **argv)
 {
-	if (arg_count(cmd, columns_ARG)) {
-		if (arg_count(cmd, colon_ARG) ||
-		    arg_count(cmd, activevolumegroups_ARG) ||
-		    arg_count(cmd, short_ARG)) {
+	if (arg_is_set(cmd, columns_ARG)) {
+		if (arg_is_set(cmd, colon_ARG) ||
+		    arg_is_set(cmd, activevolumegroups_ARG) ||
+		    arg_is_set(cmd, short_ARG)) {
 			log_error("Incompatible options selected");
 			return EINVALID_CMD_LINE;
 		}
 		return vgs(cmd, argc, argv);
-	} else if (arg_count(cmd, aligned_ARG) ||
-		   arg_count(cmd, noheadings_ARG) ||
-		   arg_count(cmd, options_ARG) ||
-		   arg_count(cmd, select_ARG) ||
-		   arg_count(cmd, separator_ARG) ||
-		   arg_count(cmd, sort_ARG) || arg_count(cmd, unbuffered_ARG)) {
+	} else if (arg_is_set(cmd, aligned_ARG) ||
+		   arg_is_set(cmd, binary_ARG) ||
+		   arg_is_set(cmd, noheadings_ARG) ||
+		   arg_is_set(cmd, options_ARG) ||
+		   arg_is_set(cmd, separator_ARG) ||
+		   arg_is_set(cmd, sort_ARG) || arg_is_set(cmd, unbuffered_ARG)) {
 		log_error("Incompatible options selected");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_count(cmd, colon_ARG) && arg_count(cmd, short_ARG)) {
+	if (arg_is_set(cmd, colon_ARG) && arg_is_set(cmd, short_ARG)) {
 		log_error("Option -c is not allowed with option -s");
 		return EINVALID_CMD_LINE;
 	}
 
-	if (argc && arg_count(cmd, activevolumegroups_ARG)) {
+	if (argc && arg_is_set(cmd, activevolumegroups_ARG)) {
 		log_error("Option -A is not allowed with volume group names");
 		return EINVALID_CMD_LINE;
 	}
@@ -91,15 +89,15 @@ int vgdisplay(struct cmd_context *cmd, int argc, char **argv)
 	}
 **********/
 
-	return process_each_vg(cmd, argc, argv, 0, NULL,
+	return process_each_vg(cmd, argc, argv, NULL, NULL, 0, 0, NULL,
 			       vgdisplay_single);
 
 /******** FIXME Need to count number processed
-	  Add this to process_each_vg if arg_count(cmd,activevolumegroups_ARG) ?
+	  Add this to process_each_vg if arg_is_set(cmd,activevolumegroups_ARG) ?
 
 	if (opt == argc) {
 		log_print("no ");
-		if (arg_count(cmd,activevolumegroups_ARG))
+		if (arg_is_set(cmd,activevolumegroups_ARG))
 			printf("active ");
 		printf("volume groups found\n\n");
 		return LVM_E_NO_VG;

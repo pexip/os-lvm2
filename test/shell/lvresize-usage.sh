@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (C) 2007-2014 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2007-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -15,6 +18,8 @@ aux prepare_vg 2 80
 
 lvcreate -L 10M -n lv -i2 $vg
 lvresize -l +4 $vg/lv
+not lvextend -L+0 $vg/lv
+not lvextend -l+0 $vg/lv
 lvremove -ff $vg
 
 lvcreate -L 64M -n $lv -i2 $vg
@@ -27,8 +32,8 @@ grep "Reducing stripe size" err
 
 lvremove -ff $vg
 
-lvcreate -L 10M -n lv $vg $dev1
-lvextend -L +10M $vg/lv $dev2
+lvcreate -L 10M -n lv $vg "$dev1"
+lvextend -L +10M $vg/lv "$dev2"
 
 # Attempt to reduce with lvextend and vice versa:
 not lvextend -L 16M $vg/lv

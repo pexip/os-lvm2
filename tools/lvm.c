@@ -10,10 +10,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "tools.h"
+
 #include "lvm2cmdline.h"
 
 int main(int argc, char **argv)
@@ -180,55 +181,119 @@ static void _write_history(void)
 		log_very_verbose("Couldn't write history to %s.", hist_file);
 }
 
+static int _log_shell_command_status(struct cmd_context *cmd, int ret_code)
+{
+	log_report_t log_state;
+
+	if (!cmd->cmd_report.log_rh)
+		return 1;
+
+	log_state = log_get_report_state();
+
+	return report_cmdlog(cmd->cmd_report.log_rh, REPORT_OBJECT_CMDLOG_NAME,
+			     log_get_report_context_name(log_state.context),
+			     log_get_report_object_type_name(log_state.object_type),
+			     log_state.object_name, log_state.object_id,
+			     log_state.object_group, log_state.object_group_id,
+			     ret_code == ECMD_PROCESSED ? REPORT_OBJECT_CMDLOG_SUCCESS
+							: REPORT_OBJECT_CMDLOG_FAILURE,
+			     stored_errno(), ret_code);
+}
+
+static void _discard_log_report_content(struct cmd_context *cmd)
+{
+	if (cmd->cmd_report.log_rh)
+		dm_report_destroy_rows(cmd->cmd_report.log_rh);
+}
+
 int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 {
-	int argc, ret;
+	log_report_t saved_log_report_state = log_get_report_state();
+	char *orig_command_log_selection = NULL;
+	int is_lastlog_cmd = 0, argc, ret;
 	char *input = NULL, *args[MAX_ARGS], **argv;
 
 	rl_readline_name = "lvm";
 	rl_attempted_completion_function = (rl_completion_func_t *) _completion;
 
 	_read_history(cmd);
-
 	_cmdline = cmdline;
 
-	_cmdline->interactive = 1;
+	cmd->is_interactive = 1;
+
+	if (!report_format_init(cmd))
+		return_ECMD_FAILED;
+
+	orig_command_log_selection = dm_pool_strdup(cmd->libmem, find_config_tree_str(cmd, log_command_log_selection_CFG, NULL));
+	log_set_report_context(LOG_REPORT_CONTEXT_SHELL);
+	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_CMD);
+
 	while (1) {
+		report_reset_cmdlog_seqnum();
+		if (cmd->cmd_report.log_rh) {
+			/*
+			 * If previous command was lastlog, reset log report selection to
+			 * its original value as set by log/command_log_selection config setting.
+			 */
+			if (is_lastlog_cmd &&
+			    !dm_report_set_selection(cmd->cmd_report.log_rh, orig_command_log_selection))
+				log_error("Failed to reset log report selection.");
+		}
+
+		log_set_report(cmd->cmd_report.log_rh);
+		log_set_report_object_name_and_id(NULL, NULL);
+
 		free(input);
 		input = readline("lvm> ");
 
 		/* EOF */
 		if (!input) {
+			_discard_log_report_content(cmd);
 			/* readline sends prompt to stdout */
 			printf("\n");
 			break;
 		}
 
 		/* empty line */
-		if (!*input)
+		if (!*input) {
+			_discard_log_report_content(cmd);
 			continue;
+		}
 
 		add_history(input);
 
 		argv = args;
 
 		if (lvm_split(input, &argc, argv, MAX_ARGS) == MAX_ARGS) {
+			_discard_log_report_content(cmd);
 			log_error("Too many arguments, sorry.");
 			continue;
 		}
 
-		if (!argc)
+		if (!argc) {
+			_discard_log_report_content(cmd);
 			continue;
+		}
 
 		if (!strcmp(argv[0], "lvm")) {
 			argv++;
 			argc--;
 		}
 
-		if (!argc)
+		if (!argc) {
+			_discard_log_report_content(cmd);
 			continue;
+		}
+
+		log_set_report_object_name_and_id(argv[0], NULL);
+
+		is_lastlog_cmd = !strcmp(argv[0], "lastlog");
+
+		if (!is_lastlog_cmd)
+			_discard_log_report_content(cmd);
 
 		if (!strcmp(argv[0], "quit") || !strcmp(argv[0], "exit")) {
+			_discard_log_report_content(cmd);
 			remove_history(history_length - 1);
 			log_error("Exiting.");
 			break;
@@ -244,9 +309,38 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 			log_error("Command failed with status code %d.", ret);
 		}
 		_write_history();
+
+		if (!is_lastlog_cmd)
+			_log_shell_command_status(cmd, ret);
+
+		log_set_report(NULL);
+		dm_report_group_output_and_pop_all(cmd->cmd_report.report_group);
+
+		if (cmd->cmd_report.log_rh &&
+		    !(dm_report_group_push(cmd->cmd_report.report_group,
+					   cmd->cmd_report.log_rh,
+					   (void *) cmd->cmd_report.log_name))) {
+			log_set_report(NULL);
+			log_error("Failed to add log report.");
+			break;
+		}
 	}
 
+	log_restore_report_state(saved_log_report_state);
+	cmd->is_interactive = 0;
+
 	free(input);
+
+	if (cmd->cmd_report.report_group) {
+		dm_report_group_destroy(cmd->cmd_report.report_group);
+		cmd->cmd_report.report_group = NULL;
+	}
+
+	if (cmd->cmd_report.log_rh) {
+		dm_report_free(cmd->cmd_report.log_rh);
+		cmd->cmd_report.report_group = NULL;
+	}
+
 	return 0;
 }
 

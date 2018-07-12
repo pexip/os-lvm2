@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef DISK_REP_FORMAT1_H
@@ -26,8 +26,6 @@
 #define LVM_BLK_MAJOR 58
 
 #define MAX_PV_SIZE	((uint32_t) -1)	/* 2TB in sectors - 1 */
-#define MIN_PE_SIZE	(8192L >> SECTOR_SHIFT)	/* 8 KB in sectors */
-#define MAX_PE_SIZE	(16L * 1024L * (1024L >> SECTOR_SHIFT) * 1024L)
 #define PE_SIZE_PV_SIZE_REL 5	/* PV size must be at least 5 times PE size */
 #define	MAX_LE_TOTAL	65534	/* 2^16 - 2 */
 #define	MAX_PE_TOTAL	((uint32_t) -2)
@@ -246,5 +244,7 @@ int get_free_vg_number(struct format_instance *fid, struct dev_filter *filter,
 		       const char *candidate_vg, int *result);
 int export_vg_number(struct format_instance *fid, struct dm_list *pvds,
 		     const char *vg_name, struct dev_filter *filter);
+
+int generate_lvm1_system_id(struct cmd_context *cmd, char *s, const char *prefix);
 
 #endif

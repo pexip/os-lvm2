@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "dmlib.h"
@@ -48,17 +48,18 @@ static size_t pagesize_mask = 0;
 
 char *dm_pool_strdup(struct dm_pool *p, const char *str)
 {
-	char *ret = dm_pool_alloc_aligned(p, strlen(str) + 1, 2);
+	size_t len = strlen(str) + 1;
+	char *ret = dm_pool_alloc(p, len);
 
 	if (ret)
-		strcpy(ret, str);
+		memcpy(ret, str, len);
 
 	return ret;
 }
 
 char *dm_pool_strndup(struct dm_pool *p, const char *str, size_t n)
 {
-	char *ret = dm_pool_alloc_aligned(p, n + 1, 2);
+	char *ret = dm_pool_alloc(p, n + 1);
 
 	if (ret) {
 		strncpy(ret, str, n);

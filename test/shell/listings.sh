@@ -7,11 +7,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 #
 # tests functionality of lvs, pvs, vgs, *display tools
 #
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -67,6 +70,11 @@ lvcreate -aey -l2 --type mirror -m2 -n $lv3 $vg
 test $(lvs --noheadings $vg | wc -l) -eq 2
 test $(lvs -a --noheadings $vg | wc -l) -eq 6
 dmsetup ls | grep "$PREFIX" | grep -v "LVMTEST.*pv."
+
+# Check we parse /dev/mapper/vg-lv
+lvdisplay "$DM_DEV_DIR/mapper/$vg-$lv3"
+# Check we parse /dev/vg/lv
+lvdisplay "$DM_DEV_DIR/$vg/$lv3"
 
 lvcreate -l2 -s $vg/$lv3
 lvcreate -l1 -s -n inval $vg/$lv3

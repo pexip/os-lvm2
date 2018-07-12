@@ -7,15 +7,17 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # 'Ensure that pvmove diagnoses PE-range values 2^32 and larger.'
+
+SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
 aux prepare_vg 2
 
-lvcreate -L4 -n"$lv" $vg
+lvcreate -L4 -n $lv $vg
 
 # Test for the bogus diagnostic reported in BZ 284771
 # http://bugzilla.redhat.com/284771.

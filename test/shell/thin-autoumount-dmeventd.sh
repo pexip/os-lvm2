@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (C) 2012 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2012-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -7,13 +7,29 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # no automatic extensions, just umount
 
-is_dir_mounted_()
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
+export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
+
+mntdir="${PREFIX}mnt with space"
+mntusedir="${PREFIX}mntuse"
+
+cleanup_mounted_and_teardown()
 {
-	cat /proc/mounts | sed 's:\\040: :g' | grep "$1"
+	umount "$mntdir" 2>/dev/null || true
+	umount "$mntusedir" 2>/dev/null || true
+	vgremove -ff $vg
+	aux teardown
+}
+
+is_lv_opened_()
+{
+	test $(get lv_field "$1" lv_device_open --binary) = "1"
 }
 
 . lib/inittest
@@ -21,50 +37,69 @@ is_dir_mounted_()
 #
 # Main
 #
-which mkfs.ext2 || skip
+which mkfs.ext4 || skip
+export MKE2FS_CONFIG="$TESTDIR/lib/mke2fs.conf"
 
 aux have_thin 1 0 0 || skip
 
 aux prepare_dmeventd
 
+# Use autoextend percent 0 - so extension fails and triggers umount...
 aux lvmconf "activation/thin_pool_autoextend_percent = 0" \
             "activation/thin_pool_autoextend_threshold = 70"
 
 aux prepare_vg 2
 
-mntdir="${PREFIX}mnt with space"
-mntusedir="${PREFIX}mntuse"
 
 lvcreate -L8M -V8M -n $lv1 -T $vg/pool
 lvcreate -V8M -n $lv2 -T $vg/pool
 
-mkfs.ext2 "$DM_DEV_DIR/$vg/$lv1"
-mkfs.ext2 "$DM_DEV_DIR/$vg/$lv2"
+mkfs.ext4 "$DM_DEV_DIR/$vg/$lv1"
+mkfs.ext4 "$DM_DEV_DIR/$vg/$lv2"
 
 lvchange --monitor y $vg/pool
 
 mkdir "$mntdir" "$mntusedir"
+trap 'cleanup_mounted_and_teardown' EXIT
 mount "$DM_DEV_DIR/mapper/$vg-$lv1" "$mntdir"
 mount "$DM_DEV_DIR/mapper/$vg-$lv2" "$mntusedir"
 
-is_dir_mounted_ "$mntdir"
+# Check both LVs are opened (~mounted)
+is_lv_opened_ "$vg/$lv1"
+is_lv_opened_ "$vg/$lv2"
 
-# fill above 70%
-dd if=/dev/zero of="$mntdir/file$$" bs=1M count=6
 touch "$mntusedir/file$$"
-tail -f "$mntusedir/file$$" &
-PID_TAIL=$!
+sync
+
+# Running 'keeper' process sleep holds the block device still in use
+sleep 60 < "$mntusedir/file$$" &
+PID_SLEEP=$!
+
+lvs -a $vg
+# Fill pool above 95%  (to cause 'forced lazy umount)
+dd if=/dev/zero of="$mntdir/file$$" bs=256K count=20 conv=fdatasync
 sync
 lvs -a $vg
-sleep 12 # dmeventd only checks every 10 seconds :(
+
+# Could loop here for a few secs so dmeventd can do some work
+# In the worst case check only happens every 10 seconds :(
+# With low water mark it should react way faster
+for i in $(seq 1 12) ; do
+	is_lv_opened_ "$vg/$lv1" || break
+	test $i -lt 12 || die "$mntdir should have been unmounted by dmeventd!"
+	sleep 1
+done
 
 lvs -a $vg
-# both dirs should be unmounted
-not is_dir_mounted "$mntdir"
-not is_dir_mounted "$mntusedir"
 
-# running tail keeps the block device still in use
-kill $PID_TAIL
-lvs -a $vg
+is_lv_opened_ "$vg/$lv2" || \
+	die "$mntusedir is not mounted here (sleep already expired??)"
 
-vgremove -f $vg
+# Kill device holding process
+kill $PID_SLEEP
+wait
+
+not is_lv_opened_ "$vg/$lv2" || {
+	mount
+	die "$mntusedir should have been unmounted by dmeventd!"
+}

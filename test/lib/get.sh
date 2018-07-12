@@ -7,7 +7,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # get.sh: get various values from volumes
 #
@@ -39,6 +39,16 @@ vg_field() {
 
 lv_field() {
 	local r=$(lvs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	trim_ "$r"
+}
+
+lvh_field() {
+	local r=$(lvs -H --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	trim_ "$r"
+}
+
+lva_field() {
+	local r=$(lvs -a --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
 	trim_ "$r"
 }
 
@@ -87,6 +97,11 @@ lv_tree_devices() {
 	lv_tree_devices_ "$@" | sort | uniq
 }
 
+first_extent_sector() {
+	pv_field "$@" pe_start --units s --nosuffix
+}
+
 #set -x
 unset LVM_VALGRIND
+unset LVM_LOG_FILE_EPOCH
 "$@"

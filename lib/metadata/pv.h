@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 #ifndef _LVM_PV_H
 #define _LVM_PV_H
@@ -68,12 +68,12 @@ struct physical_volume {
 };
 
 char *pv_fmt_dup(const struct physical_volume *pv);
-char *pv_name_dup(const struct physical_volume *pv);
+char *pv_name_dup(struct dm_pool *mem, const struct physical_volume *pv);
 struct device *pv_dev(const struct physical_volume *pv);
 const char *pv_vg_name(const struct physical_volume *pv);
 char *pv_attr_dup(struct dm_pool *mem, const struct physical_volume *pv);
 const char *pv_dev_name(const struct physical_volume *pv);
-char *pv_uuid_dup(const struct physical_volume *pv);
+char *pv_uuid_dup(struct dm_pool *mem, const struct physical_volume *pv);
 char *pv_tags_dup(const struct physical_volume *pv);
 uint64_t pv_size(const struct physical_volume *pv);
 uint64_t pv_size_field(const struct physical_volume *pv);
@@ -96,6 +96,7 @@ uint32_t pv_mda_used_count(const struct physical_volume *pv);
 unsigned pv_mda_set_ignored(const struct physical_volume *pv, unsigned ignored);
 int is_orphan(const struct physical_volume *pv);
 int is_missing_pv(const struct physical_volume *pv);
+int is_used_pv(const struct physical_volume *pv);
 int is_pv(const struct physical_volume *pv);
 struct label *pv_label(const struct physical_volume *pv);
 

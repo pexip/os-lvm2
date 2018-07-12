@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (C) 2013 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2013-2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -8,9 +8,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # Test creation of thin snapshots using external origin
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
+export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
 
@@ -25,6 +30,10 @@ aux have_thin 1 3 0 || skip
 aux prepare_pvs 2 64
 
 vgcreate $vg -s 64K $(cat DEVICES)
+
+# Newer thin-pool target (>= 1.13) supports unaligned external origin
+# But this test is written to test and expect older behavior
+aux lvmconf 'global/thin_disabled_features = [ "external_origin_extend" ]'
 
 # Test validation for external origin being multiple of thin pool chunk size
 lvcreate -L10M -T $vg/pool192 -c 192k
@@ -60,8 +69,11 @@ lvcreate -s $vg/$lv2 --thinpool $vg/pool
 # Fail with --thin and --snapshot
 not lvcreate -s $vg/$lv5 --name $vg/$lv7 -T $vg/newpool
 
-# Fail to create already existing pool
-not lvcreate -s $vg/$lv2 -L10 --thinpool $vg/pool
+# Cannot specify size and thin pool.
+# TODO: maybe with --poolsize
+invalid lvcreate -s $vg/$lv2 -L10 --thinpool $vg/pool
+invalid lvcreate -s -K $vg/$lv2 --name $vg/$lv3 -L20 --chunksize 128 --thinpool $vg/newpool
+
 not lvcreate -s $vg/$lv2 --chunksize 64 --thinpool $vg/pool
 not lvcreate -s $vg/$lv2 --zero y --thinpool $vg/pool
 not lvcreate -s $vg/$lv2 --poolmetadata $vg/$lv1 --thinpool $vg/pool
@@ -70,7 +82,7 @@ not lvcreate -s $vg/$lv2 --poolmetadata $vg/$lv1 --thinpool $vg/pool
 not lvcreate -s $vg/$lv2 --thinpool $vg/newpool
 
 # Create pool and snap
-lvcreate -s -K $vg/$lv2 --name $vg/$lv3 -L20 --chunksize 128 --thinpool $vg/newpool
+lvcreate -T --name $vg/$lv3 -V10 -L20 --chunksize 128 --thinpool $vg/newpool
 lvcreate -s -K $vg/$lv3 --name $vg/$lv4
 lvcreate -s -K $vg/$lv2 --name $vg/$lv5 --thinpool $vg/newpool
 # Make normal thin snapshot

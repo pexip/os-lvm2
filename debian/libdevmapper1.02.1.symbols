@@ -1,5 +1,24 @@
 libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  Base@Base 2:1.02.20
+ Local@Local 2:1.02.110
+ *@DM_1_02_97 2:1.02.97
+ *@DM_1_02_98 2:1.02.98
+ *@DM_1_02_99 2:1.02.99
+ *@DM_1_02_100 2:1.02.100
+ *@DM_1_02_101 2:1.02.101
+ *@DM_1_02_103 2:1.02.103
+ *@DM_1_02_104 2:1.02.104
+ *@DM_1_02_105 2:1.02.105
+ *@DM_1_02_106 2:1.02.106
+ *@DM_1_02_107 2:1.02.107
+ *@DM_1_02_110 2:1.02.110
+ *@DM_1_02_113 2:1.02.113
+ *@DM_1_02_124 2:1.02.124
+ *@DM_1_02_128 2:1.02.128
+ *@DM_1_02_129 2:1.02.129
+ *@DM_1_02_131 2:1.02.131
+ *@DM_1_02_133 2:1.02.133
+ *@DM_1_02_135 2:1.02.135
  dm_asprintf@Base 2:1.02.20
  dm_basename@Base 2:1.02.20
  dm_bit_and@Base 2:1.02.47
@@ -10,6 +29,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_bitset_destroy@Base 2:1.02.20
  dm_bitset_equal@Base 2:1.02.47
  dm_bounds_check_debug@Base 2:1.02.20
+ dm_bounds_check_wrapper@DM_1_02_103 2:1.02.103
  dm_build_dm_name@Base 2:1.02.74
  dm_build_dm_uuid@Base 2:1.02.74
  dm_config_clone_node@Base 2:1.02.74
@@ -25,6 +45,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_config_find_node@Base 2:1.02.74
  dm_config_find_str@Base 2:1.02.74
  dm_config_find_str_allow_empty@Base 2:1.02.74
+ dm_config_flatten@Base 2:1.02.99
  dm_config_from_string@Base 2:1.02.74
  dm_config_get_custom@Base 2:1.02.74
  dm_config_get_list@Base 2:1.02.74
@@ -39,6 +60,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_config_parent_name@Base 2:1.02.74
  dm_config_parse@Base 2:1.02.74
  dm_config_remove_cascaded_tree@Base 2:1.02.74
+ dm_config_remove_node@Base 2:1.02.99
  dm_config_set_custom@Base 2:1.02.74
  dm_config_tree_find_bool@Base 2:1.02.74
  dm_config_tree_find_float@Base 2:1.02.74
@@ -85,12 +107,16 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_hash_get_next@Base 2:1.02.20
  dm_hash_get_num_entries@Base 2:1.02.20
  dm_hash_insert@Base 2:1.02.20
+ dm_hash_insert_allow_multiple@Base 2:1.02.114
  dm_hash_insert_binary@Base 2:1.02.20
  dm_hash_iter@Base 2:1.02.20
  dm_hash_lookup@Base 2:1.02.20
  dm_hash_lookup_binary@Base 2:1.02.20
+ dm_hash_lookup_with_count@Base 2:1.02.114
+ dm_hash_lookup_with_val@Base 2:1.02.114
  dm_hash_remove@Base 2:1.02.20
  dm_hash_remove_binary@Base 2:1.02.20
+ dm_hash_remove_with_val@Base 2:1.02.114
  dm_hash_wipe@Base 2:1.02.20
  dm_is_dm_major@Base 2:1.02.20
  dm_is_empty_dir@Base 2:1.02.74
@@ -144,6 +170,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_regex_create@Base 2:1.02.20
  dm_regex_fingerprint@Base 2:1.02.63
  dm_regex_match@Base 2:1.02.20
+ dm_report_compact_fields@Base 2:1.02.99
  dm_report_field_int32@Base 2:1.02.27
  dm_report_field_int@Base 2:1.02.27
  dm_report_field_percent@Base 2:1.02.88
@@ -157,6 +184,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_report_init@Base 2:1.02.27
  dm_report_init_with_selection@Base 2:1.02.88
  dm_report_object@Base 2:1.02.27
+ dm_report_object_is_selected@Base 2:1.02.99
  dm_report_output@Base 2:1.02.27
  dm_report_set_output_field_name_prefix@Base 2:1.02.27
  dm_set_dev_dir@Base 2:1.02.20
@@ -229,7 +257,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_tree_free@Base 2:1.02.20
  dm_tree_get_cookie@Base 2:1.02.36
  dm_tree_next_child@Base 2:1.02.20
- dm_tree_node_add_cache_target@Base 2:1.02.85
+ dm_tree_node_add_cache_target@Base 2:1.02.99
  dm_tree_node_add_crypt_target@Base 2:1.02.36
  dm_tree_node_add_error_target@Base 2:1.02.20
  dm_tree_node_add_linear_target@Base 2:1.02.20
@@ -259,6 +287,7 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_tree_node_set_read_ahead@Base 2:1.02.24
  dm_tree_node_set_thin_external_origin@Base 2:1.02.77
  dm_tree_node_set_thin_pool_discard@Base 2:1.02.77
+ dm_tree_node_set_thin_pool_error_if_no_space@Base 2:1.02.99
  dm_tree_node_set_udev_flags@Base 2:1.02.74
  dm_tree_node_size_changed@Base 2:1.02.36
  dm_tree_preload_children@Base 2:1.02.20

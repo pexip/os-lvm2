@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_TEXT_EXPORT_H
@@ -20,7 +20,9 @@
 #define outhint(args...) do {if (!out_hint(args)) return_0;} while (0)
 #define outfc(args...) do {if (!out_text_with_comment(args)) return_0;} while (0)
 #define outf(args...) do {if (!out_text(args)) return_0;} while (0)
+#define outfgo(args...) do {if (!out_text(args)) goto_out;} while (0)
 #define outnl(f) do {if (!out_newline(f)) return_0;} while (0)
+#define outnlgo(f) do {if (!out_newline(f)) goto_out;} while (0)
 
 struct formatter;
 struct lv_segment;

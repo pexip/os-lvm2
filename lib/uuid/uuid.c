@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -19,7 +19,6 @@
 
 #include <assert.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include <ctype.h>
 
@@ -132,7 +131,7 @@ static void _build_inverse(void)
 		_inverse_c[(int) *ptr] = (char) 0x1;
 }
 
-int id_valid(struct id *id)
+static int _id_valid(struct id *id, int e)
 {
 	int i;
 
@@ -140,12 +139,19 @@ int id_valid(struct id *id)
 
 	for (i = 0; i < ID_LEN; i++)
 		if (!_inverse_c[id->uuid[i]]) {
-			log_error("UUID contains invalid character");
+			if (e)
+				log_error("UUID contains invalid character '%c'", id->uuid[i]);
 			return 0;
 		}
 
 	return 1;
 }
+
+int id_valid(struct id *id)
+{
+	return _id_valid(id, 1);
+}
+
 
 int id_equal(const struct id *lhs, const struct id *rhs)
 {
@@ -164,6 +170,8 @@ int id_write_format(const struct id *id, char *buffer, size_t size)
 
 	/* split into groups separated by dashes */
 	if (size < (32 + 6 + 1)) {
+		if (size > 0)
+			buffer[0] = '\0';
 		log_error("Couldn't write uuid, buffer too small.");
 		return 0;
 	}
@@ -179,7 +187,7 @@ int id_write_format(const struct id *id, char *buffer, size_t size)
 	return 1;
 }
 
-int id_read_format(struct id *id, const char *buffer)
+static int _id_read_format(struct id *id, const char *buffer, int e)
 {
 	int out = 0;
 
@@ -192,7 +200,8 @@ int id_read_format(struct id *id, const char *buffer)
 		}
 
 		if (out >= ID_LEN) {
-			log_error("Too many characters to be uuid.");
+			if (e)
+				log_error("Too many characters to be uuid.");
 			return 0;
 		}
 
@@ -200,12 +209,23 @@ int id_read_format(struct id *id, const char *buffer)
 	}
 
 	if (out != ID_LEN) {
-		log_error("Couldn't read uuid: incorrect number of "
-			  "characters.");
+		if (e)
+			log_error("Couldn't read uuid: incorrect number of "
+				  "characters.");
 		return 0;
 	}
 
-	return id_valid(id);
+	return _id_valid(id, e);
+}
+
+int id_read_format(struct id *id, const char *buffer)
+{
+	return _id_read_format(id, buffer, 1);
+}
+
+int id_read_format_try(struct id *id, const char *buffer)
+{
+	return _id_read_format(id, buffer, 0);
 }
 
 char *id_format_and_copy(struct dm_pool *mem, const struct id *id)

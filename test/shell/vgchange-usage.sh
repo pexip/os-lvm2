@@ -7,9 +7,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description='Exercise some vgchange diagnostics'
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -85,28 +87,40 @@ vgremove -ff $vg
 # set cluster bit
 vgcreate -cn $vg "$dev1" "$dev2" "$dev3"
 # check prompt to change cluster bit without giving explicit vg name
-fail vgchange -cy |& tee out
+fail vgchange -cy 2>&1 | tee out
 grep "y/n" out
 check vg_attr_bit cluster $vg "-"
+
+lvcreate -l1 -n $lv1 $vg
 
 # check on cluster
 # either skipped as clustered (non-cluster), or already clustered (on cluster)
 if test -e LOCAL_CLVMD ; then
+	# can switch with active LV
 	vgchange -cy $vg
 	fail vgchange -cy $vg
+	# check volume is active locally exclusively
+	check lv_field $vg/$lv1 lv_active "local exclusive"
 	check vg_attr_bit cluster $vg "c"
+	# check we do not support conversion of just locally active LVs
+	lvchange -an $vg
+	lvchange -ay $vg
+	not vgchange -cn $vg
+	lvchange -an $vg
+	lvchange -aey $vg
 	vgchange -cn $vg
 else
 	# no clvmd is running
 	fail vgchange -cy $vg
+	# can't switch with active LV
 	vgchange --yes -cy $vg
 	fail vgchange --yes -cy $vg
-	fail vgs $vg |& tee out
+	fail vgs $vg 2>&1 | tee out
 	grep "Skipping clustered volume group" out
-	vgs --ignoreskippedcluster $vg |& tee out
+	vgs --ignoreskippedcluster $vg 2>&1 | tee out
 	not grep "Skipping clustered volume group" out
 	# reset back to non-clustered VG with disabled locking
-	vgchange -cn --config 'global{locking_type=0}' $vg
+	vgchange -cn $vg --config 'global{locking_type=0}' $vg
 fi
 check vg_attr_bit cluster $vg "-"
 

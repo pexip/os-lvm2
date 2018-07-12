@@ -7,13 +7,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-. lib/inittest
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # FIXME RESYNC doesn't work in cluster with exclusive activation
 # seriously broken!
-test -e LOCAL_CLVMD && skip
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_CLVMD=1
+SKIP_WITH_LVMPOLLD=1
+
+. lib/inittest
 
 aux prepare_dmeventd
 aux prepare_vg 3

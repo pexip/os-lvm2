@@ -7,11 +7,13 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITHOUT_LVMETAD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
-
-test -e LOCAL_LVMETAD || skip
 
 aux prepare_pvs 2
 
@@ -24,11 +26,11 @@ dmsetup create -u TEST-${PREFIX}pv1 ${PREFIX}pv1 ${PREFIX}pv1.table
 aux finish_udev_transaction
 
 # re-scan them
-pvscan --cache "$dev1"
-pvscan --cache "$dev2"
+pvscan --cache "$dev1" || true
+pvscan --cache "$dev2" || true
 
 # expect both to be there
-pvs | tee pvs.txt
-grep "$dev1" pvs.txt
-grep "$dev2" pvs.txt
+pvs -a -o name | tee out
+grep "$dev1" out
+grep "$dev2" out
 

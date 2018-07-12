@@ -7,7 +7,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
+
+export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
 
@@ -15,5 +20,7 @@ aux have_thin 1 0 0 || skip
 
 aux prepare_vg 3
 lvcreate -i2 -l2 -T $vg/pool2
-lvextend -l+2 $vg/pool2 $dev2 $dev3
+lvextend -l+2 $vg/pool2 "$dev2" "$dev3"
 should lvextend -l+100%FREE $vg/pool2
+
+vgremove -ff $vg

@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -28,8 +31,11 @@ aux have_raid 1 3 0 || skip
 aux prepare_pvs 7  # 7 devices for 2 dev replacement of 5-dev RAID6
 vgcreate -s 256k $vg $(cat DEVICES)
 
+levels="5 6"
+aux have_raid4 && levels="4 5 6"
+
 # RAID 4/5/6 (can replace up to 'parity' devices)
-for i in 4 5 6; do
+for i in $levels; do
 	lvcreate --type raid$i -i 3 -l 3 -n $lv1 $vg
 
 	if [ $i -eq 6 ]; then

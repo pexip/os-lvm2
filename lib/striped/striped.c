@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -29,7 +29,7 @@
 
 static const char *_striped_name(const struct lv_segment *seg)
 {
-	return (seg->area_count == 1) ? "linear" : seg->segtype->name;
+	return (seg->area_count == 1) ? SEG_TYPE_NAME_LINEAR : seg->segtype->name;
 }
 
 static void _striped_display(const struct lv_segment *seg)
@@ -192,11 +192,14 @@ static int _striped_target_present(struct cmd_context *cmd,
 	static int _striped_checked = 0;
 	static int _striped_present = 0;
 
-	if (!_striped_checked)
-		_striped_present = target_present(cmd, "linear", 0) &&
-			  target_present(cmd, "striped", 0);
+	if (!activation())
+		return 0;
 
-	_striped_checked = 1;
+	if (!_striped_checked) {
+		_striped_checked = 1;
+		_striped_present = target_present(cmd, TARGET_NAME_LINEAR, 0) &&
+			target_present(cmd, TARGET_NAME_STRIPED, 0);
+	}
 
 	return _striped_present;
 }
@@ -228,11 +231,9 @@ struct segment_type *init_striped_segtype(struct cmd_context *cmd)
 	if (!segtype)
 		return_NULL;
 
-	segtype->cmd = cmd;
 	segtype->ops = &_striped_ops;
-	segtype->name = "striped";
-	segtype->private = NULL;
-	segtype->flags =
+	segtype->name = SEG_TYPE_NAME_STRIPED;
+	segtype->flags = SEG_STRIPED_TARGET |
 	    SEG_CAN_SPLIT | SEG_AREAS_STRIPED | SEG_FORMAT1_SUPPORT;
 
 	log_very_verbose("Initialised segtype: %s", segtype->name);

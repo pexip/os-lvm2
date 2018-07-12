@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_LV_ALLOC_H
@@ -24,16 +24,12 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 				    uint64_t status,
 				    uint32_t stripe_size,
 				    struct logical_volume *log_lv,
-				    struct logical_volume *thin_pool_lv,
 				    uint32_t area_count,
 				    uint32_t area_len,
 				    uint32_t chunk_size,
 				    uint32_t region_size,
 				    uint32_t extents_copied,
 				    struct lv_segment *pvmove_source_seg);
-
-struct lv_segment *alloc_snapshot_seg(struct logical_volume *lv,
-				      uint64_t status, uint32_t old_le_count);
 
 int set_lv_segment_area_pv(struct lv_segment *seg, uint32_t area_num,
 			   struct physical_volume *pv, uint32_t pe);
@@ -79,9 +75,7 @@ int lv_add_mirror_lvs(struct logical_volume *lv,
 int lv_add_log_segment(struct alloc_handle *ah, uint32_t first_area,
 		       struct logical_volume *log_lv, uint64_t status);
 int lv_add_virtual_segment(struct logical_volume *lv, uint64_t status,
-                           uint32_t extents,
-			   const struct segment_type *segtype,
-			   const char *thin_pool_name);
+			   uint32_t extents, const struct segment_type *segtype);
 
 void alloc_destroy(struct alloc_handle *ah);
 

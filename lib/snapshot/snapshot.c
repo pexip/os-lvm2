@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -25,18 +25,13 @@
 	log_error(t " segment %s of logical volume %s.", ## p, \
 		  dm_config_parent_name(sn), seg->lv->name), 0;
 
-static const char *_snap_name(const struct lv_segment *seg)
-{
-	return seg->segtype->name;
-}
-
 static const char *_snap_target_name(const struct lv_segment *seg,
 				     const struct lv_activate_opts *laopts)
 {
 	if (!laopts->no_merging && (seg->status & MERGING))
-		return "snapshot-merge";
+		return TARGET_NAME_SNAPSHOT_MERGE;
 
-	return _snap_name(seg);
+	return lvseg_name(seg);
 }
 
 static int _snap_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
@@ -92,6 +87,7 @@ static int _snap_text_export(const struct lv_segment *seg, struct formatter *f)
 {
 	outf(f, "chunk_size = %u", seg->chunk_size);
 	outf(f, "origin = \"%s\"", seg->origin->name);
+
 	if (!(seg->status & MERGING))
 		outf(f, "cow_store = \"%s\"", seg->cow->name);
 	else
@@ -103,7 +99,7 @@ static int _snap_text_export(const struct lv_segment *seg, struct formatter *f)
 #ifdef DEVMAPPER_SUPPORT
 static int _snap_target_status_compatible(const char *type)
 {
-	return (strcmp(type, "snapshot-merge") == 0);
+	return (strcmp(type, TARGET_NAME_SNAPSHOT_MERGE) == 0);
 }
 
 static int _snap_target_percent(void **target_state __attribute__((unused)),
@@ -149,13 +145,17 @@ static int _snap_target_present(struct cmd_context *cmd,
 	static unsigned _snap_attrs = 0;
 	uint32_t maj, min, patchlevel;
 
+	if (!activation())
+		return 0;
+
 	if (!_snap_checked) {
 		_snap_checked = 1;
-		_snap_present = target_present(cmd, "snapshot", 1) &&
-		    target_present(cmd, "snapshot-origin", 0);
 
-		if (_snap_present &&
-		    target_version("snapshot", &maj, &min, &patchlevel) &&
+		if (!(_snap_present = target_present(cmd, TARGET_NAME_SNAPSHOT, 1) &&
+		      target_present(cmd, TARGET_NAME_SNAPSHOT_ORIGIN, 0)))
+			return 0;
+
+		if (target_version(TARGET_NAME_SNAPSHOT, &maj, &min, &patchlevel) &&
 		    (maj > 1 ||
 		     (maj == 1 && (min >= 12 || (min == 10 && patchlevel >= 2)))))
 			_snap_attrs |= SNAPSHOT_FEATURE_FIXED_LEAK;
@@ -167,12 +167,12 @@ static int _snap_target_present(struct cmd_context *cmd,
 		*attributes = _snap_attrs;
 
 	/* TODO: test everything at once */
-	if (seg && (seg->status & MERGING)) {
+	if (_snap_present && seg && (seg->status & MERGING)) {
 		if (!_snap_merge_checked) {
-			_snap_merge_present = target_present(cmd, "snapshot-merge", 0);
+			_snap_merge_present = target_present(cmd, TARGET_NAME_SNAPSHOT_MERGE, 0);
 			_snap_merge_checked = 1;
 		}
-		return _snap_present && _snap_merge_present;
+		return _snap_merge_present;
 	}
 
 	return _snap_present;
@@ -218,7 +218,7 @@ static int _snap_modules_needed(struct dm_pool *mem,
 				const struct lv_segment *seg __attribute__((unused)),
 				struct dm_list *modules)
 {
-	if (!str_list_add(mem, modules, "snapshot")) {
+	if (!str_list_add(mem, modules, MODULE_NAME_SNAPSHOT)) {
 		log_error("snapshot string list allocation failed");
 		return 0;
 	}
@@ -233,7 +233,6 @@ static void _snap_destroy(struct segment_type *segtype)
 }
 
 static struct segtype_handler _snapshot_ops = {
-	.name = _snap_name,
 	.target_name = _snap_target_name,
 	.text_import = _snap_text_import,
 	.text_export = _snap_text_export,
@@ -263,11 +262,9 @@ struct segment_type *init_segtype(struct cmd_context *cmd)
 	if (!segtype)
 		return_NULL;
 
-	segtype->cmd = cmd;
 	segtype->ops = &_snapshot_ops;
-	segtype->name = "snapshot";
-	segtype->private = NULL;
-	segtype->flags = SEG_SNAPSHOT;
+	segtype->name = SEG_TYPE_NAME_SNAPSHOT;
+	segtype->flags = SEG_SNAPSHOT | SEG_CANNOT_BE_ZEROED | SEG_ONLY_EXCLUSIVE;
 
 #ifdef DEVMAPPER_SUPPORT
 #  ifdef DMEVENTD

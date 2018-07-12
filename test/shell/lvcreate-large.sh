@@ -7,9 +7,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # 'Exercise some lvcreate diagnostics'
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -18,7 +21,7 @@ aux can_use_16T || skip
 
 aux prepare_vg 4
 
-lvcreate -s -l 100%FREE -n $lv $vg --virtualsize 1024T
+lvcreate --type snapshot -s -l 100%FREE -n $lv $vg --virtualsize 1024T
 
 #FIXME this should be 1024T
 #check lv_field $vg/$lv size "128.00m"

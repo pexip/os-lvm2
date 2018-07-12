@@ -9,13 +9,12 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_DAEMON_CLIENT_H
 #define _LVM_DAEMON_CLIENT_H
 
-#include "libdevmapper.h"
 #include "config-util.h"
 
 typedef struct {
@@ -79,7 +78,7 @@ daemon_handle daemon_open(daemon_info i);
  * be ignored even if non-NULL). If the buffer is NULL, the cft is required to
  * be a valid pointer, and is used to build up the request.
  */
-daemon_reply daemon_send(daemon_handle h, daemon_request r);
+daemon_reply daemon_send(daemon_handle h, daemon_request rq);
 
 /*
  * A simple interface to daemon_send. This function just takes the command id
@@ -97,14 +96,15 @@ void daemon_request_destroy(daemon_request r);
 
 void daemon_reply_destroy(daemon_reply r);
 
-static inline int64_t daemon_reply_int(daemon_reply r, const char *path, int64_t def) {
+static inline int64_t daemon_reply_int(daemon_reply r, const char *path, int64_t def)
+{
 	return dm_config_find_int64(r.cft->root, path, def);
 }
 
-static inline const char *daemon_reply_str(daemon_reply r, const char *path, const char *def) {
+static inline const char *daemon_reply_str(daemon_reply r, const char *path, const char *def)
+{
 	return dm_config_find_str_allow_empty(r.cft->root, path, def);
 }
-
 
 /* Shut down the communication to the daemon. Compulsory. */
 void daemon_close(daemon_handle h);

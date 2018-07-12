@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -52,14 +55,17 @@ for mdacp in 0 1 2; do
     vgcreate $vg "$dev1" "$dev2"
 
     # pvremove -f fails when pv in a vg (---metadatacopies $mdacp)
-    not pvremove -f "$dev1"
+    not pvremove -f "$dev1" 2>&1 | tee out
+    grep "is used" out
     pvs "$dev1"
 
     # pvremove -ff fails without confirmation when pv in a vg (---metadatacopies $mdacp)
-    echo n | not pvremove -ff "$dev1"
+    not pvremove -ff "$dev1" 2>&1 | tee out
+    grep "is used" out
 
     # pvremove -ff succeds with confirmation when pv in a vg (---metadatacopies $mdacp)
-    pvremove -ffy "$dev1"
+    pvremove -ffy "$dev1" 2>&1 | tee out
+    grep "is used" out
     not pvs "$dev1"
 
     vgreduce --removemissing $vg

@@ -10,81 +10,114 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 top_builddir = @top_builddir@
 
-ifeq ("@FSADM@", "yes")
 FSADMMAN = fsadm.8
-else
-FSADMMAN =
-endif
-
-ifeq ("@BLKDEACTIVATE@", "yes")
 BLKDEACTIVATEMAN = blkdeactivate.8
-else
-BLKDEACTIVATEMAN =
-endif
-
-ifeq ("@DMEVENTD@", "yes")
 DMEVENTDMAN = dmeventd.8
-else
-DMEVENTDMAN =
-endif
-
-ifeq ("@BUILD_LVMETAD@", "yes")
-LVMETAD = lvmetad.8
-else
-LVMETAD =
-endif
+LVMETADMAN = lvmetad.8
+LVMPOLLDMAN = lvmpolld.8
+LVMLOCKDMAN = lvmlockd.8 lvmlockctl.8
+CLVMDMAN = clvmd.8
+CMIRRORDMAN = cmirrord.8
+LVMCACHEMAN = lvmcache.7
+LVMTHINMAN = lvmthin.7
+LVMDBUSDMAN = lvmdbusd.8
+LVMRAIDMAN = lvmraid.7
 
 MAN5=lvm.conf.5
-MAN7=
-MAN8=lvm-dumpconfig.8 \
-	lvchange.8 lvconvert.8 lvcreate.8 lvdisplay.8 lvextend.8 lvm.8 \
-	lvmchange.8 lvmconf.8 lvmdiskscan.8 lvmdump.8 lvmsadc.8 lvmsar.8 \
+MAN7=lvmsystemid.7 lvmreport.7 
+MAN8=lvm-config.8 lvm-dumpconfig.8 lvm-fullreport.8 lvm-lvpoll.8 \
+	lvchange.8 lvmconfig.8 lvconvert.8 lvcreate.8 lvdisplay.8 lvextend.8 \
+	lvm.8 lvmchange.8 lvmconf.8 lvmdiskscan.8 lvmdump.8 lvmsadc.8 lvmsar.8 \
 	lvreduce.8 lvremove.8 lvrename.8 lvresize.8 lvs.8 \
 	lvscan.8 pvchange.8 pvck.8 pvcreate.8 pvdisplay.8 pvmove.8 pvremove.8 \
 	pvresize.8 pvs.8 pvscan.8 vgcfgbackup.8 vgcfgrestore.8 vgchange.8 \
 	vgck.8 vgcreate.8 vgconvert.8 vgdisplay.8 vgexport.8 vgextend.8 \
 	vgimport.8 vgimportclone.8 vgmerge.8 vgmknodes.8 vgreduce.8 vgremove.8 \
-	vgrename.8 vgs.8 vgscan.8 vgsplit.8 $(FSADMMAN) $(BLKDEACTIVATEMAN) $(LVMETAD)
+	vgrename.8 vgs.8 vgscan.8 vgsplit.8
+MAN8DM=dmsetup.8 dmstats.8
+MAN8CLUSTER=
+MAN8SYSTEMD_GENERATORS=lvm2-activation-generator.8
 
-ifneq ("@CLVMD@", "none")
-  MAN8CLUSTER=clvmd.8
+ifeq ($(MAKECMDGOALS),all_man)
+  MAN_ALL="yes"
+endif
+
+ifeq ($(MAKECMDGOALS),install_all_man)
+  MAN_ALL="yes"
+endif
+
+ifeq ($(MAN_ALL),"yes")
+  MAN8+=$(FSADMMAN) $(LVMETADMAN) $(LVMPOLLDMAN) $(LVMLOCKDMAN) $(LVMDBUSDMAN)
+  MAN8DM+=$(BLKDEACTIVATEMAN) $(DMEVENTDMAN)
+  MAN8CLUSTER+=$(CLVMDMAN) $(CMIRRORDMAN)
+  MAN7+=$(LVMCACHEMAN) $(LVMTHINMAN) $(LVMRAIDMAN)
 else
-  MAN8CLUSTER=
+  ifeq ("@FSADM@", "yes")
+    MAN8+=$(FSADMMAN)
+  endif
+
+  ifeq ("@BUILD_LVMDBUSD@", "yes")
+    MAN8+=$(LVMDBUSDMAN)
+  endif
+
+  ifeq ("@BUILD_LVMETAD@", "yes")
+    MAN8+=$(LVMETADMAN)
+  endif
+
+  ifeq ("@BUILD_LVMPOLLD@", "yes")
+    MAN8+=$(LVMPOLLDMAN)
+  endif
+
+  ifeq ("@BUILD_LVMLOCKD@", "yes")
+    MAN8+=$(LVMLOCKDMAN)
+  endif
+
+  ifeq ("@BLKDEACTIVATE@", "yes")
+    MAN8DM+=$(BLKDEACTIVATEMAN)
+  endif
+
+  ifeq ("@DMEVENTD@", "yes")
+    MAN8DM+=$(DMEVENTDMAN)
+  endif
+
+  ifneq ("@CLVMD@", "none")
+    MAN8CLUSTER+=$(CLVMDMAN)
+  endif
+
+  ifeq ("@BUILD_CMIRRORD@", "yes")
+    MAN8CLUSTER+=$(CMIRRORDMAN)
+  endif
+
+  ifneq ("@CACHE@", "none")
+    MAN7+=$(LVMCACHEMAN)
+  endif
+
+  ifneq ("@THIN@", "none")
+    MAN7+=$(LVMTHINMAN)
+  endif
+
+  ifneq ("@RAID@", "none")
+    MAN7+=$(LVMRAIDMAN)
+  endif
 endif
 
-ifeq ("@BUILD_CMIRRORD@", "yes")
-  MAN8CLUSTER+=cmirrord.8
-endif
-
-ifneq ("@CACHE@", "none")
-  MAN7+=lvmcache.7
-endif
-
-ifneq ("@THIN@", "none")
-  MAN7+=lvmthin.7
-endif
-
-MAN8DM=dmsetup.8 $(DMEVENTDMAN)
 MAN5DIR=$(mandir)/man5
 MAN7DIR=$(mandir)/man7
 MAN8DIR=$(mandir)/man8
 
-MAN8SYSTEMD_GENERATORS=lvm2-activation-generator.8
-
-CLEAN_TARGETS=$(MAN5) $(MAN7) $(MAN8) $(MAN8CLUSTER) $(FSADMMAN) $(BLKDEACTIVATEMAN) $(DMEVENTDMAN) $(MAN8DM)
-DISTCLEAN_TARGETS=fsadm.8 clvmd.8 cmirrord.8 dmeventd.8 lvmcache.7 lvmthin.7 blkdeactivate.8
-
 include $(top_builddir)/make.tmpl
 
-ifneq ("@CLVMD@", "none")
-  install: install_cluster
-endif
+CLEAN_TARGETS+=$(MAN5) $(MAN7) $(MAN8) $(MAN8CLUSTER) \
+	$(MAN8SYSTEMD_GENERATORS) $(MAN8DM)
+DISTCLEAN_TARGETS+=$(FSADMMAN) $(BLKDEACTIVATEMAN) $(DMEVENTDMAN) \
+	$(LVMETADMAN) $(LVMPOLLDMAN) $(LVMLOCKDMAN) $(CLVMDMAN) $(CMIRRORDMAN) \
+	$(LVMCACHEMAN) $(LVMTHINMAN) $(LVMDBUSDMAN) $(LVMRAIDMAN)
 
 all: man device-mapper
 
@@ -92,9 +125,14 @@ all: man device-mapper
 
 device-mapper: $(MAN8DM)
 
-man: $(MAN5) $(MAN7) $(MAN8) $(MAN8CLUSTER)
+man: $(MAN5) $(MAN7) $(MAN8) $(MAN8CLUSTER) $(MAN8SYSTEMD_GENERATORS)
+
+all_man: man
 
 $(MAN5) $(MAN7) $(MAN8) $(MAN8DM) $(MAN8CLUSTER):	Makefile
+
+Makefile: Makefile.in
+	@:
 
 %: %.in
 	@case "$@" in \
@@ -107,10 +145,8 @@ install_man5: $(MAN5)
 	$(INSTALL_DATA) $(MAN5) $(MAN5DIR)/
 
 install_man7: $(MAN7)
-ifdef MAN7
 	$(INSTALL) -d $(MAN7DIR)
 	$(INSTALL_DATA) $(MAN7) $(MAN7DIR)/
-endif
 
 install_man8: $(MAN8)
 	$(INSTALL) -d $(MAN8DIR)
@@ -129,9 +165,9 @@ install_device-mapper: $(MAN8DM)
 	$(INSTALL_DATA) $(MAN8DM) $(MAN8DIR)/
 
 install_systemd_generators: $(MAN8SYSTEMD_GENERATORS)
-ifdef MAN8SYSTEMD_GENERATORS
 	$(INSTALL) -d $(MAN8DIR)
 	$(INSTALL_DATA) $(MAN8SYSTEMD_GENERATORS) $(MAN8DIR)/
-endif
 
-install: install_lvm2 install_device-mapper
+install: install_lvm2 install_device-mapper install_cluster
+
+install_all_man: install install_systemd_generators

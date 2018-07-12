@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_STRING_H
@@ -28,7 +28,7 @@ struct logical_volume;
 typedef enum name_error {
 	NAME_VALID = 0,
 	NAME_INVALID_EMPTY = -1,
-	NAME_INVALID_HYPEN = -2,
+	NAME_INVALID_HYPHEN = -2,
 	NAME_INVALID_DOTS = -3,
 	NAME_INVALID_CHARSET = -4,
 	NAME_INVALID_LENGTH = -5
@@ -44,7 +44,17 @@ int validate_name(const char *n);
 name_error_t validate_name_detailed(const char *n);
 int validate_tag(const char *n);
 
+void copy_systemid_chars(const char *src, char *dst);
+
 int apply_lvname_restrictions(const char *name);
 int is_reserved_lvname(const char *name);
+
+/*
+ * Provided with a NULL-terminated argument list of const char *
+ * substrings that might be contained within the string str, use
+ * strstr() to search str for each in turn and return a pointer to the
+ * first match or else NULL.
+ */
+char *first_substring(const char *str, ...);
 
 #endif

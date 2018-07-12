@@ -1,5 +1,5 @@
-#!/bin/sh
-# Copyright (C) 2012-2013 Red Hat, Inc. All rights reserved.
+#!/bin/bash
+# Copyright (C) 2012-2015 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -9,9 +9,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMETAD=1
+SKIP_WITH_CLVMD=1
 
 . lib/inittest
+
+aux prepare_dmeventd
 
 #
 # TODO:
@@ -21,20 +26,32 @@
 # thus it needs dmeventd
 #
 
+# Example of using 'gdb' with python:
+# gdb -ex r --args python FULL_PATH/lvm2/test/api/python_lvm_unit.py -v TestLvm.test_lv_active_inactive
+
 #Locate the python binding library to use.
-python_lib=$(find $abs_top_builddir -name lvm.so)
-# Unable to test python bindings if library not available
-test -n "$python_lib" || skip
+if [[ -n $abs_top_builddir ]]; then
+  python_lib=($(find $abs_top_builddir -name lvm.so))
+  if [[ ${#python_lib[*]} -ne 1 ]]; then
+    if [[ ${#python_lib[*]} -gt 1 ]]; then
+      # Unable to test python bindings if multiple libraries found:
+      echo "Found left over lvm.so: ${python_lib[*]}"
+      false
+    else
+      # Unable to test python bindings if library not available
+      skip "lvm2-python-libs not built"
+    fi
+  fi
 
-test -e LOCAL_CLVMD && skip
-test -e LOCAL_LVMETAD && skip
-
-aux prepare_dmeventd
+  export PYTHONPATH=$(dirname $python_lib):$PYTHONPATH
+elif rpm -q lvm2-python-libs &>/dev/null; then
+  true
+else
+  skip "lvm2-python-libs neither built nor installed"
+fi
 
 #If you change this change the unit test case too.
 aux prepare_pvs 6
-
-export PYTHONPATH=$(dirname $python_lib):$PYTHONPATH
 
 #Setup which devices the unit test can use.
 export PY_UNIT_PVS=$(cat DEVICES)
@@ -42,42 +59,48 @@ export PY_UNIT_PVS=$(cat DEVICES)
 #python_lvm_unit.py -v -f
 
 # Run individual tests for shorter error trace
-python_lvm_unit.py -v TestLvm.test_config_find_bool
-python_lvm_unit.py -v TestLvm.test_config_override
-python_lvm_unit.py -v TestLvm.test_config_reload
-python_lvm_unit.py -v TestLvm.test_dupe_lv_create
-python_lvm_unit.py -v TestLvm.test_get_set_extend_size
-python_lvm_unit.py -v TestLvm.test_lv_active_inactive
-python_lvm_unit.py -v TestLvm.test_lv_property
-python_lvm_unit.py -v TestLvm.test_lv_rename
-python_lvm_unit.py -v TestLvm.test_lv_resize
-python_lvm_unit.py -v TestLvm.test_lv_seg
-python_lvm_unit.py -v TestLvm.test_lv_size
-python_lvm_unit.py -v TestLvm.test_lv_snapshot
-python_lvm_unit.py -v TestLvm.test_lv_suspend
-python_lvm_unit.py -v TestLvm.test_lv_tags
-python_lvm_unit.py -v TestLvm.test_percent_to_float
-python_lvm_unit.py -v TestLvm.test_pv_create
-python_lvm_unit.py -v TestLvm.test_pv_empty_listing
-python_lvm_unit.py -v TestLvm.test_pv_getters
-python_lvm_unit.py -v TestLvm.test_pv_life_cycle
-python_lvm_unit.py -v TestLvm.test_pv_lookup_from_vg
-python_lvm_unit.py -v TestLvm.test_pv_property
-python_lvm_unit.py -v TestLvm.test_pv_resize
-python_lvm_unit.py -v TestLvm.test_pv_segs
-python_lvm_unit.py -v TestLvm.test_scan
-python_lvm_unit.py -v TestLvm.test_version
-python_lvm_unit.py -v TestLvm.test_vg_from_pv_lookups
-python_lvm_unit.py -v TestLvm.test_vg_getters
-python_lvm_unit.py -v TestLvm.test_vg_get_name
-python_lvm_unit.py -v TestLvm.test_vg_get_set_prop
-python_lvm_unit.py -v TestLvm.test_vg_get_uuid
-python_lvm_unit.py -v TestLvm.test_vg_lv_name_validate
-python_lvm_unit.py -v TestLvm.test_vg_names
-python_lvm_unit.py -v TestLvm.test_vg_reduce
-python_lvm_unit.py -v TestLvm.test_vg_remove_restore
-python_lvm_unit.py -v TestLvm.test_vg_tags
-python_lvm_unit.py -v TestLvm.test_vg_uuids
+for i in \
+ lv_persistence \
+ config_find_bool \
+ config_override \
+ config_reload  \
+ dupe_lv_create \
+ get_set_extend_size \
+ lv_active_inactive \
+ lv_property \
+ lv_rename \
+ lv_resize \
+ lv_seg \
+ lv_size \
+ lv_snapshot \
+ lv_suspend \
+ lv_tags \
+ percent_to_float \
+ pv_create \
+ pv_empty_listing \
+ pv_getters \
+ pv_life_cycle \
+ pv_lookup_from_vg \
+ pv_property \
+ pv_resize \
+ pv_segs \
+ scan \
+ version \
+ vg_from_pv_lookups \
+ vg_getters \
+ vg_get_name \
+ vg_get_set_prop \
+ vg_get_uuid \
+ vg_lv_name_validate \
+ vg_names \
+ vg_reduce \
+ vg_remove_restore \
+ vg_tags \
+ vg_uuids
+do
+	python_lvm_unit.py -v TestLvm.test_$i
+	rm -f debug.log_DEBUG*
+done
 
 # CHECKME: not for testing?
 #python_lvm_unit.py -v TestLvm.test_listing

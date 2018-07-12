@@ -7,13 +7,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
 aux prepare_vg 4
-aux lvmconf 'allocation/maximise_cling = 0'
-aux lvmconf 'allocation/mirror_logs_require_separate_pvs = 1'
+aux lvmconf 'allocation/maximise_cling = 0' \
+	    'allocation/mirror_logs_require_separate_pvs = 1'
 
 # Clean-up and create a 2-way mirror, where the the
 # leg devices are always on $dev[12] and the log

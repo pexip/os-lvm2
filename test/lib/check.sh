@@ -7,7 +7,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # check.sh: assert various things about volumes
 
@@ -189,40 +189,46 @@ in_sync() {
 	local lvm_name="$1/$2"
 	local dm_name=$(echo $lvm_name | sed s:-:--: | sed s:/:-:)
 
-	if ! a=(`dmsetup status $dm_name`); then
+	a=( $(dmsetup status $dm_name) )  || \
 		die "Unable to get sync status of $1"
-	elif [ ${a[2]} = "snapshot-origin" ]; then
-		if ! a=(`dmsetup status ${dm_name}-real`); then
+
+	if [ ${a[2]} = "snapshot-origin" ]; then
+		a=( $(dmsetup status ${dm_name}-real) ) || \
 			die "Unable to get sync status of $1"
-		fi
 		snap=": under snapshot"
 	fi
 
-	if [ ${a[2]} = "raid" ]; then
+	case ${a[2]} in
+	"raid")
 		# 6th argument is the sync ratio for RAID
 		idx=6
 		type=${a[3]}
-	elif [ ${a[2]} = "mirror" ]; then
+		if [ ${a[$(($idx + 1))]} != "idle" ]; then
+			echo "$lvm_name ($type$snap) is not in-sync"
+			return 1
+		fi
+		;;
+	"mirror")
 		# 4th Arg tells us how far to the sync ratio
 		idx=$((${a[3]} + 4))
 		type=${a[2]}
-	else
+		;;
+	*)
 		die "Unable to get sync ratio for target type '${a[2]}'"
-	fi
+		;;
+	esac
 
 	b=( $(echo ${a[$idx]} | sed s:/:' ':) )
 
-	if [ ${b[0]} != ${b[1]} ]; then
+	if [ ${b[0]} -eq 0 -o ${b[0]} != ${b[1]} ]; then
 		echo "$lvm_name ($type$snap) is not in-sync"
 		return 1
 	fi
 
-	if [[ ${a[$(($idx - 1))]} =~ a ]]; then
+	[[ ${a[$(($idx - 1))]} =~ a ]] && \
 		die "$lvm_name ($type$snap) in-sync, but 'a' characters in health status"
-	fi
 
-	echo "$lvm_name ($type$snap) is in-sync"
-	return 0
+	echo "$lvm_name ($type$snap) is in-sync \"${a[@]}\""
 }
 
 active() {
@@ -259,15 +265,16 @@ lv_exists() {
 lv_not_exists() {
 	local vg=$1
 	if test $# -le 1 ; then
-		lvl $vg &>/dev/null || return
-		die "$vg expected to not exist but it does!"
+		if lvl $vg &>/dev/null ; then
+			die "$vg expected to not exist but it does!"
+		fi
 	else
 		while [ $# -gt 1 ]; do
 			shift
-			lvl $vg/$1 &>/dev/null || continue
-			die "$vg/$1 expected to not exist but it does!"
+			not lvl $vg/$1 &>/dev/null || die "$vg/$1 expected to not exist but it does!"
 		done
 	fi
+	rm -f debug.log
 }
 
 pv_field() {
@@ -301,6 +308,18 @@ lv_field() {
 	local actual=$(get lv_field "$1" "$2" "${@:4}")
 	test "$actual" = "$3" || \
 		die "lv_field: lv=$1, field=\"$2\", actual=\"$actual\", expected=\"$3\""
+}
+
+lvh_field() {
+	local actual=$(get lvh_field "$1" "$2" "${@:4}")
+	test "$actual" = "$3" || \
+		die "lvh_field: lv=$1, field=\"$2\", actual=\"$actual\", expected=\"$3\""
+}
+
+lva_field() {
+	local actual=$(get lva_field "$1" "$2" "${@:4}")
+	test "$actual" = "$3" || \
+		die "lva_field: lv=$1, field=\"$2\", actual=\"$actual\", expected=\"$3\""
 }
 
 lv_attr_bit() {
@@ -361,6 +380,29 @@ dev_md5sum() {
 	md5sum -c "md5.$1-$2" || \
 		(get lv_field $1/$2 "name,size,seg_pe_ranges"
 		 die "LV $1/$2 has different MD5 check sum!")
+}
+
+sysfs() {
+	# read maj min and also convert hex to decimal
+	local maj=$(($(stat -L --printf=0x%t "$1")))
+	local min=$(($(stat -L --printf=0x%T "$1")))
+	local P="/sys/dev/block/$maj:$min/$2"
+	local val=$(< "$P") || return 0 # no sysfs ?
+	test "$val" -eq "$3" || \
+		die "$1: $P = $val differs from expected value $3!"
+}
+
+# check raid_leg_status $vg $lv "Aaaaa"
+raid_leg_status() {
+	local st=$(dmsetup status $1-$2)
+	local val=$(echo "$st" | cut -d ' ' -f 6)
+	test "$val" = "$3" || \
+		die "$1-$2 status $val != $3  ($st)"
+}
+
+grep_dmsetup() {
+	dmsetup $1 $2 | tee out
+	grep "${@:3}" out || die "Expected output from dmsetup $1 not found!"
 }
 
 #set -x

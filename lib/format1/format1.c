@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -180,6 +180,8 @@ out:
 static struct volume_group *_format1_vg_read(struct format_instance *fid,
 				     const char *vg_name,
 				     struct metadata_area *mda __attribute__((unused)),
+				     struct cached_vg_fmtdata **vg_fmtdata __attribute__((unused)),
+				     unsigned *use_previous_vg __attribute__((unused)),
 				     int single_device __attribute__((unused)))
 {
 	struct volume_group *vg;
@@ -343,10 +345,7 @@ static int _format1_pv_read(const struct format_type *fmt, const char *pv_name,
 }
 
 static int _format1_pv_initialise(const struct format_type * fmt,
-				  int64_t label_sector __attribute__((unused)),
-				  unsigned long data_alignment __attribute__((unused)),
-				  unsigned long data_alignment_offset __attribute__((unused)),
-				  struct pvcreate_restorable_params *rp,
+				  struct pv_create_args *pva,
 				  struct physical_volume * pv)
 {
 	if (pv->size > MAX_PV_SIZE)
@@ -358,18 +357,18 @@ static int _format1_pv_initialise(const struct format_type * fmt,
 	}
 
 	/* Nothing more to do if extent size isn't provided */
-	if (!rp->extent_size)
+	if (!pva->extent_size)
 		return 1;
 
 	/*
 	 * This works out pe_start and pe_count.
 	 */
-	if (!calculate_extent_count(pv, rp->extent_size, rp->extent_count, rp->pe_start))
+	if (!calculate_extent_count(pv, pva->extent_size, pva->extent_count, pva->pe_start))
 		return_0;
 
 	/* Retain existing extent locations exactly */
-	if (((rp->pe_start || rp->extent_count) && (rp->pe_start != pv->pe_start)) ||
-	    (rp->extent_count && (rp->extent_count != pv->pe_count))) {
+	if (((pva->pe_start || pva->extent_count) && (pva->pe_start != pv->pe_start)) ||
+	    (pva->extent_count && (pva->extent_count != pv->pe_count))) {
 		log_error("Metadata would overwrite physical extents");
 		return 0;
 	}
@@ -381,20 +380,15 @@ static int _format1_pv_setup(const struct format_type *fmt,
 			     struct physical_volume *pv,
 			     struct volume_group *vg)
 {
-	int r;
-	struct pvcreate_restorable_params rp = {.restorefile = NULL,
-						.id = {{0}},
-						.idp = NULL,
-						.ba_start = 0,
-						.ba_size = 0,
-						.pe_start = 0,
-						.extent_count = 0,
-						.extent_size = vg->extent_size};
+	struct pv_create_args pva = { .id = {{0}},
+				      .idp = NULL,
+				      .ba_start = 0,
+				      .ba_size = 0,
+				      .pe_start = 0,
+				      .extent_count = 0,
+				      .extent_size = vg->extent_size};
 
-	if ((r = _format1_pv_initialise(fmt, -1, 0, 0, &rp, pv)))
-		pv->status |= ALLOCATABLE_PV;
-
-	return r;
+	return _format1_pv_initialise(fmt, &pva, pv);
 }
 
 static int _format1_lv_setup(struct format_instance *fid, struct logical_volume *lv)
@@ -493,25 +487,13 @@ static int _format1_vg_setup(struct format_instance *fid, struct volume_group *v
 	if (!vg->max_pv || vg->max_pv >= MAX_PV)
 		vg->max_pv = MAX_PV - 1;
 
-	if (vg->extent_size > MAX_PE_SIZE || vg->extent_size < MIN_PE_SIZE) {
-		log_error("Extent size must be between %s and %s",
-			  display_size(fid->fmt->cmd, (uint64_t) MIN_PE_SIZE),
-			  display_size(fid->fmt->cmd, (uint64_t) MAX_PE_SIZE));
+	if (!vg_check_new_extent_size(vg->fid->fmt, vg->extent_size))
+		return_0;
 
-		return 0;
-	}
-
-	if (vg->extent_size % MIN_PE_SIZE) {
-		log_error("Extent size must be multiple of %s",
-			  display_size(fid->fmt->cmd, (uint64_t) MIN_PE_SIZE));
-		return 0;
-	}
-
-	/* Redundant? */
-	if (vg->extent_size & (vg->extent_size - 1)) {
-		log_error("Extent size must be power of 2");
-		return 0;
-	}
+        /* Generate lvm1_system_id if not yet set */
+        if (!*vg->lvm1_system_id &&
+            !generate_lvm1_system_id(vg->cmd, vg->lvm1_system_id, ""))
+		return_0;
 
 	return 1;
 }
@@ -607,7 +589,8 @@ struct format_type *init_format(struct cmd_context *cmd)
 	fmt->alias = NULL;
 	fmt->orphan_vg_name = FMT_LVM1_ORPHAN_VG_NAME;
 	fmt->features = FMT_RESTRICTED_LVIDS | FMT_ORPHAN_ALLOCATABLE |
-			FMT_RESTRICTED_READAHEAD | FMT_OBSOLETE;
+			FMT_RESTRICTED_READAHEAD | FMT_OBSOLETE |
+			FMT_SYSTEMID_ON_PVS;
 	fmt->private = NULL;
 
 	dm_list_init(&fmt->mda_ops);

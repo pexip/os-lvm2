@@ -1,5 +1,8 @@
 lib/systemd/lvm2-cluster*
 lib/systemd/system/lvm2-cluster*
 lib/systemd/system/lvm2-clvmd*
+lib/systemd/system/lvm2-cmirrord*
 usr/sbin/clvmd
+usr/sbin/cmirrord
 usr/share/man/man8/clvmd*
+usr/share/man/man8/cmirrord*

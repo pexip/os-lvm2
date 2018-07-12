@@ -9,17 +9,19 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
 #include "activate.h"
 #include "locking.h"
+#include "memlock.h"
 #include "metadata.h"
 #include "segtype.h"
 #include "defaults.h"
 #include "display.h"
 
+/* TODO: drop unused no_update */
 int attach_pool_message(struct lv_segment *pool_seg, dm_thin_message_t type,
 			struct logical_volume *lv, uint32_t delete_id,
 			int no_update)
@@ -169,7 +171,8 @@ int pool_is_active(const struct logical_volume *lv)
 	const struct seg_list *sl;
 
 	if (!lv_is_thin_pool(lv)) {
-		log_error(INTERNAL_ERROR "pool_is_active called with non-pool LV %s.", lv->name);
+		log_error(INTERNAL_ERROR "pool_is_active called with non-pool volume %s.",
+			  display_lvname(lv));
 		return 0;
 	}
 
@@ -180,7 +183,8 @@ int pool_is_active(const struct logical_volume *lv)
 
 		dm_list_iterate_items(sl, &lv->segs_using_this_lv)
 			if (lv_is_active(sl->seg->lv)) {
-				log_debug("Thin volume \"%s\" is active.", sl->seg->lv->name);
+				log_debug_activation("Pool's thin volume %s is active.",
+						     display_lvname(sl->seg->lv));
 				return 1;
 			}
 	} else if (lv_info(lv->vg->cmd, lv, 1, &info, 0, 0) && info.exists)
@@ -204,17 +208,37 @@ int thin_pool_feature_supported(const struct logical_volume *lv, int feature)
 	    seg->segtype->ops->target_present &&
 	    !seg->segtype->ops->target_present(lv->vg->cmd, NULL, &attr)) {
 		log_error("%s: Required device-mapper target(s) not "
-			  "detected in your kernel", seg->segtype->name);
+			  "detected in your kernel.", seg->segtype->name);
 		return 0;
 	}
 
 	return (attr & feature) ? 1 : 0;
 }
 
+int pool_metadata_min_threshold(const struct lv_segment *pool_seg)
+{
+	/*
+	 * Hardcoded minimal requirment for thin pool target.
+	 *
+	 * In the metadata LV there should be minimum from either 4MiB of free space
+	 * or at least 25% of free space, which applies when the size of thin pool's
+	 * metadata is less then 16MiB.
+	 */
+	const dm_percent_t meta_min = DM_PERCENT_1 * 25;
+	dm_percent_t meta_free = dm_make_percent(((4096 * 1024) >> SECTOR_SHIFT),
+						pool_seg->metadata_lv->size);
+
+	if (meta_min < meta_free)
+		meta_free = meta_min;
+
+	return DM_PERCENT_100 - meta_free;
+}
+
 int pool_below_threshold(const struct lv_segment *pool_seg)
 {
 	dm_percent_t percent;
-	int threshold = DM_PERCENT_1 *
+	dm_percent_t min_threshold = pool_metadata_min_threshold(pool_seg);
+	dm_percent_t threshold = DM_PERCENT_1 *
 		find_config_tree_int(pool_seg->lv->vg->cmd, activation_thin_pool_autoextend_threshold_CFG,
 				     lv_config_profile(pool_seg->lv));
 
@@ -222,15 +246,129 @@ int pool_below_threshold(const struct lv_segment *pool_seg)
 	if (!lv_thin_pool_percent(pool_seg->lv, 0, &percent))
 		return_0;
 
-	if (percent >= threshold)
+	if (percent > threshold || percent >= DM_PERCENT_100) {
+		log_debug("Threshold configured for free data space in "
+			  "thin pool %s has been reached (%.2f%% >= %.2f%%).",
+			  display_lvname(pool_seg->lv),
+			  dm_percent_to_float(percent),
+			  dm_percent_to_float(threshold));
 		return 0;
+	}
 
 	/* Metadata */
 	if (!lv_thin_pool_percent(pool_seg->lv, 1, &percent))
 		return_0;
 
-	if (percent >= threshold)
+
+	if (percent >= min_threshold) {
+		log_warn("WARNING: Remaining free space in metadata of thin pool %s "
+			 "is too low (%.2f%% >= %.2f%%). "
+			 "Resize is recommended.",
+			 display_lvname(pool_seg->lv),
+			 dm_percent_to_float(percent),
+			 dm_percent_to_float(min_threshold));
 		return 0;
+	}
+
+
+	if (percent > threshold) {
+		log_debug("Threshold configured for free metadata space in "
+			  "thin pool %s has been reached (%.2f%% > %.2f%%).",
+			  display_lvname(pool_seg->lv),
+			  dm_percent_to_float(percent),
+			  dm_percent_to_float(threshold));
+		return 0;
+	}
+
+	return 1;
+}
+
+/*
+ * Detect overprovisioning and check lvm2 is configured for auto resize.
+ *
+ * If passed LV is thin volume/pool, check first only this one for overprovisiong.
+ * Lots of test combined together.
+ * Test is not detecting status of dmeventd, too complex for now...
+ */
+int pool_check_overprovisioning(const struct logical_volume *lv)
+{
+	const struct lv_list *lvl;
+	const struct seg_list *sl;
+	const struct logical_volume *pool_lv = NULL;
+	struct cmd_context *cmd = lv->vg->cmd;
+	const char *txt = "";
+	uint64_t thinsum = 0, poolsum = 0, sz = ~0;
+	int threshold, max_threshold = 0;
+	int percent, min_percent = 100;
+	int more_pools = 0;
+
+	/* When passed thin volume, check related pool first */
+	if (lv_is_thin_volume(lv))
+		pool_lv = first_seg(lv)->pool_lv;
+	else if (lv_is_thin_pool(lv))
+		pool_lv = lv;
+
+	if (pool_lv) {
+		poolsum += pool_lv->size;
+		dm_list_iterate_items(sl, &pool_lv->segs_using_this_lv)
+			thinsum += sl->seg->lv->size;
+
+		if (thinsum <= poolsum)
+			return 1; /* All thins fit into this thin pool */
+	}
+
+	/* Sum all thins and all thin pools in VG */
+	dm_list_iterate_items(lvl, &lv->vg->lvs) {
+		if (!lv_is_thin_pool(lvl->lv))
+			continue;
+
+		threshold = find_config_tree_int(cmd, activation_thin_pool_autoextend_threshold_CFG,
+						 lv_config_profile(lvl->lv));
+		percent = find_config_tree_int(cmd, activation_thin_pool_autoextend_percent_CFG,
+					       lv_config_profile(lvl->lv));
+		if (threshold > max_threshold)
+			max_threshold = threshold;
+		if (percent < min_percent)
+			min_percent = percent;
+
+		if (lvl->lv == pool_lv)
+			continue; /* Skip iteration for already checked thin pool */
+
+		more_pools++;
+		poolsum += lvl->lv->size;
+		dm_list_iterate_items(sl, &lvl->lv->segs_using_this_lv)
+			thinsum += sl->seg->lv->size;
+	}
+
+	if (thinsum <= poolsum)
+		return 1; /* All fits for all pools */
+
+	if ((sz = vg_size(lv->vg)) < thinsum)
+		/* Thin sum size is above VG size */
+		txt = " and the size of whole volume group";
+	else if ((sz = vg_free(lv->vg)) < thinsum)
+		/* Thin sum size is more then free space in a VG */
+		txt = !sz ? "" : " and the amount of free space in volume group";
+	else if ((max_threshold > 99) || !min_percent)
+		/* There is some free space in VG, but it is not configured
+		 * for growing - threshold is 100% or percent is 0% */
+		sz = poolsum;
+	else
+		sz = UINT64_C(~0); /* No warning */
+
+	if (sz != UINT64_C(~0)) {
+		log_warn("WARNING: Sum of all thin volume sizes (%s) exceeds the "
+			 "size of thin pool%s%s%s (%s)!",
+			 display_size(cmd, thinsum),
+			 more_pools ? "" : " ",
+			 more_pools ? "s" : display_lvname(pool_lv),
+			 txt,
+			 (sz > 0) ? display_size(cmd, sz) : "no free space in volume group");
+		if (max_threshold > 99)
+			log_print_unless_silent("For thin pool auto extension activation/thin_pool_autoextend_threshold should be below 100.");
+		if (!min_percent)
+			log_print_unless_silent("For thin pool auto extension activation/thin_pool_autoextend_percent should be above 0.");
+	}
 
 	return 1;
 }
@@ -242,12 +380,11 @@ int pool_supports_external_origin(const struct lv_segment *pool_seg, const struc
 {
 	uint32_t csize = pool_seg->chunk_size;
 
-	if ((external_lv->size < csize) || (external_lv->size % csize)) {
-		/* TODO: Validate with thin feature flag once, it will be supported */
-		log_error("Can't use \"%s/%s\" as external origin with \"%s/%s\" pool. "
+	if (((external_lv->size < csize) || (external_lv->size % csize)) &&
+	    !thin_pool_feature_supported(pool_seg->lv, THIN_FEATURE_EXTERNAL_ORIGIN_EXTEND)) {
+		log_error("Can't use \"%s\" as external origin with \"%s\" pool. "
 			  "Size %s is not a multiple of pool's chunk size %s.",
-			  external_lv->vg->name, external_lv->name,
-			  pool_seg->lv->vg->name, pool_seg->lv->name,
+			  display_lvname(external_lv), display_lvname(pool_seg->lv),
 			  display_size(external_lv->vg->cmd, external_lv->size),
 			  display_size(external_lv->vg->cmd, csize));
 		return 0;
@@ -348,9 +485,15 @@ int update_pool_lv(struct logical_volume *lv, int activate)
 
 	if (activate) {
 		/* If the pool is not active, do activate deactivate */
+		monitored = dmeventd_monitor_mode();
+		init_dmeventd_monitor(DMEVENTD_MONITOR_IGNORE);
 		if (!lv_is_active(lv)) {
-			monitored = dmeventd_monitor_mode();
-			init_dmeventd_monitor(DMEVENTD_MONITOR_IGNORE);
+			/*
+			 * FIXME:
+			 *   Rewrite activation code to handle whole tree of thinLVs
+			 *   as this version has major problem when it does not know
+			 *   which Node has pool active.
+			 */
 			if (!activate_lv_excl(lv->vg->cmd, lv)) {
 				init_dmeventd_monitor(monitored);
 				return_0;
@@ -361,25 +504,35 @@ int update_pool_lv(struct logical_volume *lv, int activate)
 					  display_lvname(lv));
 				return 0;
 			}
+		} else
+			activate = 0; /* Was already active */
 
-			if (!(ret = _check_pool_create(lv)))
-				stack;
+		if (!(ret = _check_pool_create(lv)))
+			stack; /* Safety guard, needs local presence of thin-pool target */
+		else {
+			if (!(ret = suspend_lv_origin(lv->vg->cmd, lv)))
+				/* Send messages */
+				log_error("Failed to suspend %s with queued messages.", display_lvname(lv));
 
-			if (!deactivate_lv(lv->vg->cmd, lv)) {
-				init_dmeventd_monitor(monitored);
-				return_0;
+			/* Even failing suspend needs resume */
+			if (!resume_lv_origin(lv->vg->cmd, lv)) {
+				log_error("Failed to resume %s.", display_lvname(lv));
+				ret = 0;
 			}
-			init_dmeventd_monitor(monitored);
 		}
-		/*
-		 * Resume active pool to send thin messages.
-		 * origin_only is used to skip check for resumed state
-		 */
-		else if (!resume_lv_origin(lv->vg->cmd, lv)) {
-			log_error("Failed to resume %s.", lv->name);
-			return 0;
-		} else if (!(ret = _check_pool_create(lv)))
-			stack;
+
+		if (activate &&
+		    !deactivate_lv(lv->vg->cmd, lv)) {
+			log_error("Failed to deactivate %s.", display_lvname(lv));
+			ret = 0;
+		}
+		init_dmeventd_monitor(monitored);
+
+		/* Unlock memory if possible */
+		memlock_unlock(lv->vg->cmd);
+
+		if (!ret)
+			return_0;
 	}
 
 	dm_list_init(&(first_seg(lv)->thin_messages));
@@ -390,15 +543,45 @@ int update_pool_lv(struct logical_volume *lv, int activate)
 	return ret;
 }
 
-int update_thin_pool_params(struct volume_group *vg,
-			    unsigned attr, int passed_args, uint32_t data_extents,
-			    uint64_t *pool_metadata_size,
+/* Estimate thin pool chunk size from data and metadata size (in sector units) */
+static size_t _estimate_chunk_size(uint64_t data_size, uint64_t metadata_size, int attr)
+{
+	/*
+	 * nr_pool_blocks = data_size / metadata_size
+	 * chunk_size = nr_pool_blocks * 64b / sector_size
+	 */
+	size_t chunk_size = data_size / (metadata_size * (SECTOR_SIZE / 64));
+
+	if (attr & THIN_FEATURE_BLOCK_SIZE) {
+		/* Round up to 64KB */
+		chunk_size += DM_THIN_MIN_DATA_BLOCK_SIZE - 1;
+		chunk_size &= ~(size_t)(DM_THIN_MIN_DATA_BLOCK_SIZE - 1);
+	} else {
+		/* Round up to nearest power of 2 */
+		chunk_size--;
+		chunk_size |= chunk_size >> 1;
+		chunk_size |= chunk_size >> 2;
+		chunk_size |= chunk_size >> 4;
+		chunk_size |= chunk_size >> 8;
+		chunk_size |= chunk_size >> 16;
+		chunk_size++;
+	}
+
+	return chunk_size;
+}
+
+int update_thin_pool_params(const struct segment_type *segtype,
+			    struct volume_group *vg,
+			    unsigned attr, int passed_args,
+			    uint32_t pool_data_extents,
+			    uint32_t *pool_metadata_extents,
 			    int *chunk_size_calc_method, uint32_t *chunk_size,
 			    thin_discards_t *discards, int *zero)
 {
 	struct cmd_context *cmd = vg->cmd;
 	struct profile *profile = vg->profile;
 	uint32_t extent_size = vg->extent_size;
+	uint64_t pool_metadata_size = (uint64_t) *pool_metadata_extents * extent_size;
 	size_t estimate_chunk_size;
 	const char *str;
 
@@ -421,20 +604,15 @@ int update_thin_pool_params(struct volume_group *vg,
 		}
 	}
 
-	if ((*chunk_size < DM_THIN_MIN_DATA_BLOCK_SIZE) ||
-	    (*chunk_size > DM_THIN_MAX_DATA_BLOCK_SIZE)) {
-		log_error("Chunk size must be in the range %s to %s.",
-			  display_size(cmd, DM_THIN_MIN_DATA_BLOCK_SIZE),
-			  display_size(cmd, DM_THIN_MAX_DATA_BLOCK_SIZE));
-		return 0;
-	}
+	if (!validate_pool_chunk_size(cmd, segtype, *chunk_size))
+		return_0;
 
 	if (!(passed_args & PASS_ARG_DISCARDS)) {
 		if (!(str = find_config_tree_str(cmd, allocation_thin_pool_discards_CFG, profile))) {
 			log_error(INTERNAL_ERROR "Could not find configuration.");
 			return 0;
 		}
-		if (!get_pool_discards(str, discards))
+		if (!set_pool_discards(discards, str))
 			return_0;
 	}
 
@@ -442,43 +620,41 @@ int update_thin_pool_params(struct volume_group *vg,
 		*zero = find_config_tree_bool(cmd, allocation_thin_pool_zero_CFG, profile);
 
 	if (!(attr & THIN_FEATURE_BLOCK_SIZE) &&
-	    (*chunk_size & (*chunk_size - 1))) {
+	    !is_power_of_2(*chunk_size)) {
 		log_error("Chunk size must be a power of 2 for this thin target version.");
-		return 0;
-	} else if (*chunk_size & (DM_THIN_MIN_DATA_BLOCK_SIZE - 1)) {
-		log_error("Chunk size must be multiple of %s.",
-			  display_size(cmd, DM_THIN_MIN_DATA_BLOCK_SIZE));
 		return 0;
 	}
 
-	if (!*pool_metadata_size) {
+	if (!pool_metadata_size) {
 		/* Defaults to nr_pool_blocks * 64b converted to size in sectors */
-		*pool_metadata_size = (uint64_t) data_extents * extent_size /
+		pool_metadata_size = (uint64_t) pool_data_extents * extent_size /
 			(*chunk_size * (SECTOR_SIZE / UINT64_C(64)));
 		/* Check if we could eventually use bigger chunk size */
 		if (!(passed_args & PASS_ARG_CHUNK_SIZE)) {
-			while ((*pool_metadata_size >
+			while ((pool_metadata_size >
 				(DEFAULT_THIN_POOL_OPTIMAL_SIZE / SECTOR_SIZE)) &&
 			       (*chunk_size < DM_THIN_MAX_DATA_BLOCK_SIZE)) {
 				*chunk_size <<= 1;
-				*pool_metadata_size >>= 1;
+				pool_metadata_size >>= 1;
 			}
 			log_verbose("Setting chunk size to %s.",
 				    display_size(cmd, *chunk_size));
-		} else if (*pool_metadata_size > (DEFAULT_THIN_POOL_MAX_METADATA_SIZE * 2)) {
+		} else if (pool_metadata_size > (DEFAULT_THIN_POOL_MAX_METADATA_SIZE * 2)) {
 			/* Suggest bigger chunk size */
-			estimate_chunk_size = (uint64_t) data_extents * extent_size /
-				(DEFAULT_THIN_POOL_MAX_METADATA_SIZE * 2 * (SECTOR_SIZE / UINT64_C(64)));
+			estimate_chunk_size =
+				_estimate_chunk_size((uint64_t) pool_data_extents * extent_size,
+						     (DEFAULT_THIN_POOL_MAX_METADATA_SIZE * 2), attr);
 			log_warn("WARNING: Chunk size is too small for pool, suggested minimum is %s.",
-				 display_size(cmd, UINT64_C(1) << (ffs(estimate_chunk_size) + 1)));
+				 display_size(cmd, estimate_chunk_size));
 		}
 
-		/* Round up to extent size */
-		if (*pool_metadata_size % extent_size)
-			*pool_metadata_size += extent_size - *pool_metadata_size % extent_size;
+		/* Round up to extent size silently */
+		if (pool_metadata_size % extent_size)
+			pool_metadata_size += extent_size - pool_metadata_size % extent_size;
 	} else {
-		estimate_chunk_size = (uint64_t) data_extents * extent_size /
-			(*pool_metadata_size * (SECTOR_SIZE / UINT64_C(64)));
+		estimate_chunk_size =
+			_estimate_chunk_size((uint64_t) pool_data_extents * extent_size,
+					     pool_metadata_size, attr);
 		if (estimate_chunk_size < DM_THIN_MIN_DATA_BLOCK_SIZE)
 			estimate_chunk_size = DM_THIN_MIN_DATA_BLOCK_SIZE;
 		else if (estimate_chunk_size > DM_THIN_MAX_DATA_BLOCK_SIZE)
@@ -495,22 +671,26 @@ int update_thin_pool_params(struct volume_group *vg,
 		}
 	}
 
-	if (*pool_metadata_size > (2 * DEFAULT_THIN_POOL_MAX_METADATA_SIZE)) {
-		*pool_metadata_size = 2 * DEFAULT_THIN_POOL_MAX_METADATA_SIZE;
+	if (pool_metadata_size > (2 * DEFAULT_THIN_POOL_MAX_METADATA_SIZE)) {
+		pool_metadata_size = 2 * DEFAULT_THIN_POOL_MAX_METADATA_SIZE;
 		if (passed_args & PASS_ARG_POOL_METADATA_SIZE)
 			log_warn("WARNING: Maximum supported pool metadata size is %s.",
-				 display_size(cmd, *pool_metadata_size));
-	} else if (*pool_metadata_size < (2 * DEFAULT_THIN_POOL_MIN_METADATA_SIZE)) {
-		*pool_metadata_size = 2 * DEFAULT_THIN_POOL_MIN_METADATA_SIZE;
+				 display_size(cmd, pool_metadata_size));
+	} else if (pool_metadata_size < (2 * DEFAULT_THIN_POOL_MIN_METADATA_SIZE)) {
+		pool_metadata_size = 2 * DEFAULT_THIN_POOL_MIN_METADATA_SIZE;
 		if (passed_args & PASS_ARG_POOL_METADATA_SIZE)
 			log_warn("WARNING: Minimum supported pool metadata size is %s.",
-				 display_size(cmd, *pool_metadata_size));
+				 display_size(cmd, pool_metadata_size));
 	}
+
+	if (!(*pool_metadata_extents =
+	      extents_from_size(vg->cmd, pool_metadata_size, extent_size)))
+		return_0;
 
 	return 1;
 }
 
-int get_pool_discards(const char *str, thin_discards_t *discards)
+int set_pool_discards(thin_discards_t *discards, const char *str)
 {
 	if (!strcasecmp(str, "passdown"))
 		*discards = THIN_DISCARDS_PASSDOWN;
@@ -566,4 +746,56 @@ int lv_is_thin_origin(const struct logical_volume *lv, unsigned int *snap_count)
 	}
 
 	return r;
+}
+
+/*
+ * Explict check of new thin pool for usability
+ *
+ * Allow use of thin pools by external apps. When lvm2 metadata has
+ * transaction_id == 0 for a new thin pool, it will explicitely validate
+ * the pool is still unused.
+ *
+ * To prevent lvm2 to create thin volumes in externally used thin pools
+ * simply increment its transaction_id.
+ */
+int check_new_thin_pool(const struct logical_volume *pool_lv)
+{
+	struct cmd_context *cmd = pool_lv->vg->cmd;
+	uint64_t transaction_id;
+
+	/* For transaction_id check LOCAL activation is required */
+	if (!activate_lv_excl_local(cmd, pool_lv)) {
+		log_error("Aborting. Failed to locally activate thin pool %s.",
+			  display_lvname(pool_lv));
+		return 0;
+	}
+
+	/* With volume lists, check pool really is locally active */
+	if (!lv_thin_pool_transaction_id(pool_lv, &transaction_id)) {
+		log_error("Cannot read thin pool %s transaction id locally, perhaps skipped in lvm.conf volume_list?",
+			  display_lvname(pool_lv));
+		return 0;
+	}
+
+	/* Require pool to have same transaction_id as new  */
+	if (first_seg(pool_lv)->transaction_id != transaction_id) {
+		log_error("Cannot use thin pool %s with transaction id "
+			  FMTu64 " for thin volumes. "
+			  "Expected transaction id %" PRIu64 ".",
+			  display_lvname(pool_lv), transaction_id,
+			  first_seg(pool_lv)->transaction_id);
+		return 0;
+	}
+
+	log_verbose("Deactivating public thin pool %s.",
+		    display_lvname(pool_lv));
+
+	/* Prevent any 'race' with in-use thin pool and always deactivate */
+	if (!deactivate_lv(pool_lv->vg->cmd, pool_lv)) {
+		log_error("Aborting. Could not deactivate thin pool %s.",
+			  display_lvname(pool_lv));
+		return 0;
+	}
+
+	return 1;
 }

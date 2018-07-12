@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -80,7 +80,10 @@ static int _lvm1_read(struct labeller *l, struct device *dev, void *buf,
 	*label = lvmcache_get_label(info);
 
 	lvmcache_set_device_size(info, ((uint64_t)xlate32(pvd->pv_size)) << SECTOR_SHIFT);
+	lvmcache_set_ext_version(info, 0);
+	lvmcache_set_ext_flags(info, 0);
 	lvmcache_del_mdas(info);
+	lvmcache_del_bas(info);
 	lvmcache_make_valid(info);
 
 	return 1;

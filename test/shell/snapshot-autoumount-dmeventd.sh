@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (C) 2010-2012 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2010-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -7,9 +7,12 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 # no automatic extensions please
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -29,15 +32,23 @@ lvcreate -s -L4 -n snap $vg/base
 lvchange --monitor y $vg/snap
 
 mkdir "$mntdir"
-mount "$DM_DEV_DIR/mapper/$vg-snap" "$mntdir"
-mount
+# Use remount-ro  to avoid logging kernel WARNING
+mount -o errors=remount-ro "$DM_DEV_DIR/mapper/$vg-snap" "$mntdir"
+
+test $(dmsetup info -c --noheadings -o open $vg-snap) -eq 1
+
 cat /proc/mounts | grep "$mntdir"
-dd if=/dev/zero of="$mntdir/file$1" bs=1M count=5
-sync
-#dmeventd only checks every 10 seconds :(
-for i in {1..10}; do
-	cat /proc/mounts | grep "$mntdir" || break
-	sleep 1
+
+# overfill 4M snapshot (with metadata)
+not dd if=/dev/zero of="$mntdir/file$1" bs=1M count=4 conv=fdatasync
+
+# Should be nearly instant check of dmeventd for invalid snapshot.
+# Wait here for umount and open_count drops to 0 as it may
+# take a while to finalize umount operation (it might be already
+# removed from /proc/mounts, but still opened).
+for i in {1..100}; do
+	sleep .1
+	test $(dmsetup info -c --noheadings -o open $vg-snap) -eq 0 && break
 done
 
 cat /proc/mounts | not grep "$mntdir"

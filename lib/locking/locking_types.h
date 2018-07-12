@@ -10,21 +10,22 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "metadata.h"
 #include "config.h"
 
 typedef int (*lock_resource_fn) (struct cmd_context * cmd, const char *resource,
-				 uint32_t flags, struct logical_volume *lv);
-typedef int (*query_resource_fn) (const char *resource, int *mode);
+				 uint32_t flags, const struct logical_volume *lv);
+typedef int (*query_resource_fn) (const char *resource, const char *node, int *mode);
 
 typedef void (*fin_lock_fn) (void);
 typedef void (*reset_lock_fn) (void);
 
-#define LCK_PRE_MEMLOCK	0x00000001	/* Is memlock() needed before calls? */
-#define LCK_CLUSTERED	0x00000002
+#define LCK_PRE_MEMLOCK			0x00000001	/* Is memlock() needed before calls? */
+#define LCK_CLUSTERED			0x00000002
+#define LCK_SUPPORTS_REMOTE_QUERIES	0x00000004
 
 struct locking_type {
 	uint32_t flags;

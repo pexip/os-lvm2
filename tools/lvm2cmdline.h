@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_CMDLINE_H
@@ -23,7 +23,6 @@ struct cmdline_context {
         struct command *commands;
         int num_commands;
         int commands_size;
-        int interactive;
 };
 
 int lvm2_main(int argc, char **argv);
@@ -31,7 +30,7 @@ int lvm2_main(int argc, char **argv);
 void *cmdlib_lvm2_init(unsigned static_compile);
 void lvm_fin(struct cmd_context *cmd);
 
-struct cmd_context *init_lvm(void);
+struct cmd_context *init_lvm(unsigned set_connections, unsigned set_filters);
 void lvm_register_commands(void);
 int lvm_split(char *str, int *argc, char **argv, int max);
 int lvm_run_command(struct cmd_context *cmd, int argc, char **argv);

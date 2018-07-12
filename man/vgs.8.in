@@ -8,21 +8,27 @@ vgs \(em report information about volume groups
 .RB [ \-\-binary ]
 .RB [ \-\-commandprofile
 .IR ProfileName ]
+.RB [[ \-\-configreport
+.IR ReportName ]
+.RB [ \-o | \-\-options
+.RI [ + | \- | # ] Field1 [, Field2 ...]
+.RB [ \-O | \-\-sort
+.RI [ + | \- ] Key1 [, Key2 ...]]
+.RB [ \-S | \-\-select
+.IR Selection ]
+.RB ...]
 .RB [ \-d | \-\-debug ]
 .RB [ \-h | \-? | \-\-help ]
 .RB [ \-\-ignorelockingfailure ]
 .RB [ \-\-ignoreskippedcluster ]
+.RB [ \-\-logonly ]
 .RB [ \-\-nameprefixes ]
 .RB [ \-\-noheadings ]
 .RB [ \-\-nosuffix ]
-.RB [ \-o | \-\-options
-.RI [ + ] Field1 [ ,Field2 ...]]
-.RB [ \-O | \-\-sort
-.RI [ + | \- ] Key1 [ , [ + | \- ] Key2 ...]]
 .RB [ \-P | \-\-partial ]
+.RB [ \-\-reportformat
+.RB { basic | json }]
 .RB [ \-\-rows ]
-.RB [ \-S | \-\-select
-.IR Selection ]
 .RB [ \-\-separator
 .IR Separator ]
 .RB [ \-\-unbuffered ]
@@ -49,6 +55,18 @@ Use binary values "0" or "1" instead of descriptive literal values
 for columns that have exactly two valid values to report (not counting
 the "unknown" value which denotes that the value could not be determined).
 .TP
+.B \-\-configreport  \fI ReportName
+Make any subsequent \fB\-o, \-\-options\fP, \fB\-O, \-\-sort\fP or
+\fB\-S, \-\-select\fP to apply for \fIReportName\fP where \fIReportName\fP
+is either 'vg' for command's main report or 'log' for log report.
+If \fB\-\-configreport\fP option is not used to identify a report, then
+command's main report is assumed. The log report is available only if
+enabled by \fBlog/report_command_log\fP \fBlvm.conf\fP(5) setting or
+if \fB\-\-logonly\fP option is used.
+.TP
+.B \-\-logonly
+Suppress the vgs report itself and display only log report on output.
+.TP
 .B \-\-nameprefixes
 Add an "LVM2_" prefix plus the field name to the output.  Useful
 with \fB\-\-noheadings\fP to produce a list of field=value pairs that can
@@ -63,8 +81,13 @@ Suppress the suffix on output sizes.  Use with \fB\-\-units\fP
 (except h and H) if processing the output.
 .TP
 .BR \-o ", " \-\-options
-Comma-separated ordered list of columns.  Precede the list with '+' to append
-to the default selection of columns.
+Comma-separated ordered list of columns.
+.IP
+Precede the list with '\fI+\fP' to append to the current list
+of columns, '\fI-\fP' to remove from the current list of columns
+or '\fI#\fP' to compact given columns. The \fI\-o\fP option can
+be repeated, providing several lists. These lists are evaluated
+from left to right.
 .IP
 Use \fB\-o vg_all\fP to select all volume group columns.
 .IP
@@ -93,7 +116,7 @@ are missing from the system
 .IP 5 3
 Allocation policy: (c)ontiguous, c(l)ing, (n)ormal, (a)nywhere
 .IP 6 3
-(c)lustered
+(c)lustered, (s)hared
 .RE
 .TP
 .BR \-O ", " \-\-sort

@@ -8,22 +8,28 @@ pvs \(em report information about physical volumes
 .RB [ \-\-binary ]
 .RB [ \-\-commandprofile
 .IR ProfileName ]
+.RB [[ \-\-configreport
+.IR ReportName ]
+.RB [ \-o | \-\-options
+.RI [ + | \- | # ] Field1 [, Field2 ...]
+.RB [ \-O | \-\-sort
+.RI [ + | \- ] Key1 [, Key2 ...]]
+.RB [ \-S | \-\-select
+.IR Selection ]
+.RB ...]
 .RB [ \-d | \-\-debug ]
 .RB [ \-h | \-? | \-\-help ]
 .RB [ \-\-ignorelockingfailure ]
 .RB [ \-\-ignoreskippedcluster ]
+.RB [ \-\-logonly ]
 .RB [ \-\-nameprefixes ]
 .RB [ \-\-noheadings ]
 .RB [ \-\-nosuffix ]
-.RB [ \-o | \-\-options
-.RI [ + ] Field [ ,Field ...]]
-.RB [ \-O | \-\-sort
-.RI [ + | \- ] Key1 [ , [ + | \- ] Key2 ...]]
 .RB [ \-P | \-\-partial ]
+.RB [ \-\-reportformat
+.RB { basic | json }]
 .RB [ \-\-rows ]
 .RB [ \-\-segments ]
-.RB [ \-S | \-\-select
-.IR Selection ]
 .RB [ \-\-separator
 .IR Separator ]
 .RB [ \-\-unbuffered ]
@@ -51,6 +57,18 @@ Use binary values "0" or "1" instead of descriptive literal values
 for columns that have exactly two valid values to report (not counting
 the "unknown" value which denotes that the value could not be determined).
 .TP
+.B \-\-configreport  \fI ReportName
+Make any subsequent \fB\-o, \-\-options\fP, \fB\-O, \-\-sort\fP or
+\fB\-S, \-\-select\fP to apply for \fIReportName\fP where \fIReportName\fP
+is either 'pv' for command's main report or 'log' for log report.
+If \fB\-\-configreport\fP option is not used to identify a report, then
+command's main report is assumed. The log report is available only if
+enabled by \fBlog/report_command_log\fP \fBlvm.conf\fP(5) setting or
+if \fB\-\-logonly\fP option is used.
+.TP
+.B \-\-logonly
+Suppress the pvs report itself and display only log report on output.
+.TP
 .B \-\-nameprefixes
 Add an "LVM2_" prefix plus the field name to the output.  Useful
 with \fB\-\-noheadings\fP to produce a list of field=value pairs that can
@@ -65,8 +83,13 @@ Suppress the suffix on output sizes.  Use with \fB\-\-units\fP
 (except h and H) if processing the output.
 .TP
 .BR \-o ", " \-\-options
-Comma-separated ordered list of columns.  Precede the list with '\fI+\fP'
-to append to the default selection of columns.
+Comma-separated ordered list of columns.
+.IP
+Precede the list with '\fI+\fP' to append to the current list
+of columns, '\fI-\fP' to remove from the current list of columns
+or '\fI#\fP' to compact given columns. The \fI\-o\fP option can
+be repeated, providing several lists. These lists are evaluated
+from left to right.
 .IP
 Use \fB-o pv_all\fP to select all physical volume columns,
 and \fB-o pvseg_all\fP to select all Physical Volume segment columns.
@@ -80,7 +103,8 @@ pv_mda_used_count, pvseg_start, and pvseg_size
 .IP
 With \fB\-\-segments\fP, any "pvseg_" prefixes are optional; otherwise any
 "pv_" prefixes are optional.  Columns mentioned in \fBvgs\fP(8) can also
-be chosen. The pv_attr bits are: (a)llocatable, e(x)ported and (m)issing.
+be chosen. The pv_attr bits are: (a)llocatable, e(x)ported, (m)issing,
+(u)sed (but not allocatable), (d)uplicate.
 .TP
 .B \-\-segments
 Produces one line of output for each contiguous allocation of space on each

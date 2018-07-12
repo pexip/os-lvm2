@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -21,6 +21,8 @@
 #include "segtype.h"
 #include "text_export.h"
 #include "lvm-version.h"
+#include "toolcontext.h"
+#include "config-util.h"
 
 #include <stdarg.h>
 #include <time.h>
@@ -190,9 +192,12 @@ static int _out_with_comment_raw(struct formatter *f,
 				 const char *fmt, va_list ap)
 {
 	int n;
+	va_list apc;
 
+	va_copy(apc, ap);
 	n = vsnprintf(f->data.buf.start + f->data.buf.used,
-		      f->data.buf.size - f->data.buf.used, fmt, ap);
+		      f->data.buf.size - f->data.buf.used, fmt, apc);
+	va_end(apc);
 
 	/* If metadata doesn't fit, extend buffer */
 	if (n < 0 || (n + f->data.buf.used + 2 > f->data.buf.size)) {
@@ -324,7 +329,7 @@ int out_config_node(struct formatter *f, const struct dm_config_node *cn)
 	return dm_config_write_node(cn, _out_line, f);
 }
 
-static int _print_header(struct formatter *f,
+static int _print_header(struct cmd_context *cmd, struct formatter *f,
 			 const char *desc)
 {
 	char *buf;
@@ -337,16 +342,14 @@ static int _print_header(struct formatter *f,
 	outf(f, FORMAT_VERSION_FIELD " = %d", FORMAT_VERSION_VALUE);
 	outnl(f);
 
-	if (!(buf = alloca(dm_escaped_len(desc)))) {
-		log_error("temporary stack allocation for description"
-			  "string failed");
-		return 0;
-	}
+	buf = alloca(dm_escaped_len(desc));
 	outf(f, "description = \"%s\"", dm_escape_double_quotes(buf, desc));
 	outnl(f);
 	outf(f, "creation_host = \"%s\"\t# %s %s %s %s %s", _utsname.nodename,
 	     _utsname.sysname, _utsname.nodename, _utsname.release,
 	     _utsname.version, _utsname.machine);
+	if (cmd->system_id && *cmd->system_id)
+		outf(f, "creation_host_system_id = \"%s\"", cmd->system_id);
 	outf(f, "creation_time = %lu\t# %s", t, ctime(&t));
 
 	return 1;
@@ -366,19 +369,61 @@ static int _print_flag_config(struct formatter *f, uint64_t status, int type)
 	return 1;
 }
 
-
-static int _out_tags(struct formatter *f, struct dm_list *tagsl)
+static char *_alloc_printed_str_list(struct dm_list *list)
 {
-	char *tag_buffer;
+	struct dm_str_list *sl;
+	int first = 1;
+	size_t size = 0;
+	char *buffer, *buf;
 
-	if (!dm_list_empty(tagsl)) {
-		if (!(tag_buffer = alloc_printed_tags(tagsl)))
+	dm_list_iterate_items(sl, list)
+		/* '"' + item + '"' + ',' + ' ' */
+		size += strlen(sl->str) + 4;
+	/* '[' + ']' + '\0' */
+	size += 3;
+
+	if (!(buffer = buf = dm_malloc(size))) {
+		log_error("Could not allocate memory for string list buffer.");
+		return NULL;
+	}
+
+	if (!emit_to_buffer(&buf, &size, "["))
+		goto_bad;
+
+	dm_list_iterate_items(sl, list) {
+		if (!first) {
+			if (!emit_to_buffer(&buf, &size, ", "))
+				goto_bad;
+		} else
+			first = 0;
+
+		if (!emit_to_buffer(&buf, &size, "\"%s\"", sl->str))
+			goto_bad;
+	}
+
+	if (!emit_to_buffer(&buf, &size, "]"))
+		goto_bad;
+
+	return buffer;
+
+bad:
+	dm_free(buffer);
+	return_NULL;
+}
+
+static int _out_list(struct formatter *f, struct dm_list *list,
+		     const char *list_name)
+{
+	char *buffer;
+
+	if (!dm_list_empty(list)) {
+		if (!(buffer = _alloc_printed_str_list(list)))
 			return_0;
-		if (!out_text(f, "tags = %s", tag_buffer)) {
-			dm_free(tag_buffer);
+		if (!out_text(f, "%s = %s", list_name, buffer)) {
+			dm_free(buffer);
 			return_0;
 		}
-		dm_free(tag_buffer);
+		dm_free(buffer);
 	}
 
 	return 1;
@@ -387,6 +432,8 @@ static int _out_tags(struct formatter *f, struct dm_list *tagsl)
 static int _print_vg(struct formatter *f, struct volume_group *vg)
 {
 	char buffer[4096];
+	const struct format_type *fmt = NULL;
+	uint64_t status = vg->status;
 
 	if (!id_write_format(&vg->id, buffer, sizeof(buffer)))
 		return_0;
@@ -395,17 +442,38 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 
 	outf(f, "seqno = %u", vg->seqno);
 
-	if (vg->fid && vg->fid->fmt)
-		outfc(f, "# informational", "format = \"%s\"", vg->fid->fmt->name);
+	if (vg->original_fmt)
+		fmt = vg->original_fmt;
+	else if (vg->fid)
+		fmt = vg->fid->fmt;
+	if (fmt)
+		outfc(f, "# informational", "format = \"%s\"", fmt->name);
 
-	if (!_print_flag_config(f, vg->status, VG_FLAGS))
+	/*
+	 * Removing WRITE and adding LVM_WRITE_LOCKED makes it read-only
+	 * to old versions of lvm that only look for LVM_WRITE.
+	 */
+	if ((status & LVM_WRITE) && vg_flag_write_locked(vg)) {
+		status &= ~LVM_WRITE;
+		status |= LVM_WRITE_LOCKED;
+	}
+
+	if (!_print_flag_config(f, status, VG_FLAGS))
 		return_0;
 
-	if (!_out_tags(f, &vg->tags))
+	if (!_out_list(f, &vg->tags, "tags"))
 		return_0;
-
+ 
 	if (vg->system_id && *vg->system_id)
 		outf(f, "system_id = \"%s\"", vg->system_id);
+	else if (vg->lvm1_system_id && *vg->lvm1_system_id)
+		outf(f, "system_id = \"%s\"", vg->lvm1_system_id);
+
+	if (vg->lock_type) {
+		outf(f, "lock_type = \"%s\"", vg->lock_type);
+		if (vg->lock_args)
+			outf(f, "lock_args = \"%s\"", vg->lock_args);
+	}
 
 	outsize(f, (uint64_t) vg->extent_size, "extent_size = %u",
 		vg->extent_size);
@@ -483,7 +551,7 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 		if (!_print_flag_config(f, pv->status, PV_FLAGS))
 			return_0;
 
-		if (!_out_tags(f, &pv->tags))
+		if (!_out_list(f, &pv->tags, "tags"))
 			return_0;
 
 		outsize(f, pv->size, "dev_size = %" PRIu64, pv->size);
@@ -519,7 +587,7 @@ static int _print_segment(struct formatter *f, struct volume_group *vg,
 	outnl(f);
 	outf(f, "type = \"%s\"", seg->segtype->name);
 
-	if (!_out_tags(f, &seg->tags))
+	if (!_out_list(f, &seg->tags, "tags"))
 		return_0;
 
 	if (seg->segtype->ops->text_export &&
@@ -554,6 +622,7 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 			     (s == seg->area_count - 1) ? "" : ",");
 			break;
 		case AREA_LV:
+			/* FIXME This helper code should be target-independent! Check for metadata LV property. */
 			if (!(seg->status & RAID)) {
 				outf(f, "\"%s\", %u%s",
 				     seg_lv(seg, s)->name,
@@ -563,15 +632,19 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 			}
 
 			/* RAID devices are laid-out in metadata/data pairs */
-			if (!(seg_lv(seg, s)->status & RAID_IMAGE) ||
-			    !(seg_metalv(seg, s)->status & RAID_META)) {
+			/* FIXME Validation should be elsewhere, not here! */
+			if (!lv_is_raid_image(seg_lv(seg, s)) ||
+			    (seg->meta_areas && seg_metalv(seg, s) && !lv_is_raid_metadata(seg_metalv(seg, s)))) {
 				log_error("RAID segment has non-RAID areas");
 				return 0;
 			}
 
-			outf(f, "\"%s\", \"%s\"%s",
-			     seg_metalv(seg, s)->name, seg_lv(seg, s)->name,
-			     (s == seg->area_count - 1) ? "" : ",");
+			if (seg->meta_areas && seg_metalv(seg,s))
+				outf(f, "\"%s\", \"%s\"%s",
+				     (seg->meta_areas && seg_metalv(seg, s)) ? seg_metalv(seg, s)->name : "",
+				     seg_lv(seg, s)->name, (s == seg->area_count - 1) ? "" : ",");
+			else
+				outf(f, "\"%s\"%s", seg_lv(seg, s)->name, (s == seg->area_count - 1) ? "" : ",");
 
 			break;
 		case AREA_UNASSIGNED:
@@ -584,13 +657,31 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 	return 1;
 }
 
+static int _print_timestamp(struct formatter *f,
+			     const char *name, time_t ts,
+			     char *buf, size_t buf_size)
+{
+	struct tm *local_tm;
+
+	if (ts) {
+		strncpy(buf, "# ", buf_size);
+		if (!(local_tm = localtime(&ts)) ||
+		    !strftime(buf + 2, buf_size - 2,
+			      "%Y-%m-%d %T %z", local_tm))
+			buf[0] = 0;
+
+		outfc(f, buf, "%s = %" PRIu64, name, (uint64_t) ts);
+	}
+
+	return 1;
+}
+
 static int _print_lv(struct formatter *f, struct logical_volume *lv)
 {
 	struct lv_segment *seg;
 	char buffer[4096];
 	int seg_count;
-	struct tm *local_tm;
-	time_t ts;
+	uint64_t status = lv->status;
 
 	outnl(f);
 	outf(f, "%s {", lv->name);
@@ -602,24 +693,30 @@ static int _print_lv(struct formatter *f, struct logical_volume *lv)
 
 	outf(f, "id = \"%s\"", buffer);
 
-	if (!_print_flag_config(f, lv->status, LV_FLAGS))
+	/*
+	 * Removing WRITE and adding LVM_WRITE_LOCKED makes it read-only
+	 * to old versions of lvm that only look for LVM_WRITE.
+	 */
+	if ((status & LVM_WRITE) && vg_flag_write_locked(lv->vg)) {
+		status &= ~LVM_WRITE;
+		status |= LVM_WRITE_LOCKED;
+	}
+
+	if (!_print_flag_config(f, status, LV_FLAGS))
 		return_0;
 
-	if (!_out_tags(f, &lv->tags))
+	if (!_out_list(f, &lv->tags, "tags"))
 		return_0;
 
 	if (lv->timestamp) {
-		ts = (time_t)lv->timestamp;
-		strncpy(buffer, "# ", sizeof(buffer));
-		if (!(local_tm = localtime(&ts)) ||
-		    !strftime(buffer + 2, sizeof(buffer) - 2,
-			      "%Y-%m-%d %T %z", local_tm))
-			buffer[0] = 0;
-
+		if (!_print_timestamp(f, "creation_time", lv->timestamp,
+				      buffer, sizeof(buffer)))
+			return_0;
 		outf(f, "creation_host = \"%s\"", lv->hostname);
-		outfc(f, buffer, "creation_time = %" PRIu64,
-		      lv->timestamp);
 	}
+
+	if (lv->lock_args)
+		outf(f, "lock_args = \"%s\"", lv->lock_args);
 
 	if (lv->alloc != ALLOC_INHERIT)
 		outf(f, "allocation_policy = \"%s\"",
@@ -694,6 +791,127 @@ static int _print_lvs(struct formatter *f, struct volume_group *vg)
 	return 1;
 }
 
+static int _alloc_printed_indirect_descendants(struct dm_list *indirect_glvs, char **buffer)
+{
+	struct glv_list *user_glvl;
+	size_t buf_size = 0;
+	int first = 1;
+	char *buf;
+
+	*buffer = NULL;
+
+	dm_list_iterate_items(user_glvl, indirect_glvs) {
+		if (user_glvl->glv->is_historical)
+			continue;
+		/* '"' + name + '"' + ',' + ' ' */
+		buf_size += strlen(user_glvl->glv->live->name) + 4;
+	}
+
+	if (!buf_size)
+		return 1;
+
+	/* '[' + ']' + '\0' */
+	buf_size += 3;
+
+	if (!(*buffer = dm_malloc(buf_size))) {
+		log_error("Could not allocate memory for ancestor list buffer.");
+		return 0;
+	}
+	buf = *buffer;
+
+	if (!emit_to_buffer(&buf, &buf_size, "["))
+		goto_bad;
+
+	dm_list_iterate_items(user_glvl, indirect_glvs) {
+		if (user_glvl->glv->is_historical)
+			continue;
+		if (!first) {
+			if (!emit_to_buffer(&buf, &buf_size, ", "))
+				goto_bad;
+		} else
+			first = 0;
+
+		if (!emit_to_buffer(&buf, &buf_size, "\"%s\"", user_glvl->glv->live->name))
+			goto_bad;
+	}
+
+	if (!emit_to_buffer(&buf, &buf_size, "]"))
+		goto_bad;
+
+	return 1;
+bad:
+	if (*buffer) {
+		dm_free(*buffer);
+		*buffer = NULL;
+	}
+	return 0;
+}
+
+static int _print_historical_lv(struct formatter *f, struct historical_logical_volume *hlv)
+{
+	char buffer[40];
+	char *descendants_buffer = NULL;
+	int r = 0;
+
+	if (!id_write_format(&hlv->lvid.id[1], buffer, sizeof(buffer)))
+		goto_out;
+
+	if (!_alloc_printed_indirect_descendants(&hlv->indirect_glvs, &descendants_buffer))
+		goto_out;
+
+	outnlgo(f);
+	outfgo(f, "%s {", hlv->name);
+	_inc_indent(f);
+
+	outfgo(f, "id = \"%s\"", buffer);
+
+	if (!_print_timestamp(f, "creation_time", hlv->timestamp, buffer, sizeof(buffer)))
+		goto_out;
+
+	if (!_print_timestamp(f, "removal_time", hlv->timestamp_removed, buffer, sizeof(buffer)))
+		goto_out;
+
+	if (hlv->indirect_origin) {
+		if (hlv->indirect_origin->is_historical)
+			outfgo(f, "origin = \"%s%s\"", HISTORICAL_LV_PREFIX, hlv->indirect_origin->historical->name);
+		else
+			outfgo(f, "origin = \"%s\"", hlv->indirect_origin->live->name);
+	}
+
+	if (descendants_buffer)
+		outfgo(f, "descendants = %s", descendants_buffer);
+
+	_dec_indent(f);
+	outfgo(f, "}");
+
+	r = 1;
+out:
+	if (descendants_buffer)
+		dm_free(descendants_buffer);
+	return r;
+}
+
+static int _print_historical_lvs(struct formatter *f, struct volume_group *vg)
+{
+	struct glv_list *glvl;
+
+	if (dm_list_empty(&vg->historical_lvs))
+		return 1;
+
+	outf(f, "historical_logical_volumes {");
+	_inc_indent(f);
+
+	dm_list_iterate_items(glvl, &vg->historical_lvs) {
+		if (!_print_historical_lv(f, glvl->glv->historical))
+			return_0;
+	}
+
+	_dec_indent(f);
+	outf(f, "}");
+
+	return 1;
+}
+
 /*
  * In the text format we refer to pv's as 'pv1',
  * 'pv2' etc.  This function builds a hash table
@@ -741,7 +959,7 @@ static int _text_vg_export(struct formatter *f,
 	if (!_build_pv_names(f, vg))
 		goto_out;
 
-	if (f->header && !_print_header(f, desc))
+	if (f->header && !_print_header(vg->cmd, f, desc))
 		goto_out;
 
 	if (!out_text(f, "%s {", vg->name))
@@ -760,11 +978,15 @@ static int _text_vg_export(struct formatter *f,
 	if (!_print_lvs(f, vg))
 		goto_out;
 
+	outnl(f);
+	if (!_print_historical_lvs(f, vg))
+		goto_out;
+
 	_dec_indent(f);
 	if (!out_text(f, "}"))
 		goto_out;
 
-	if (!f->header && !_print_header(f, desc))
+	if (!f->header && !_print_header(vg->cmd, f, desc))
 		goto_out;
 
 	r = 1;
@@ -856,7 +1078,7 @@ struct dm_config_tree *export_vg_to_config_tree(struct volume_group *vg)
 		return_NULL;
 	}
 
-	if (!(vg_cft = dm_config_from_string(buf))) {
+	if (!(vg_cft = config_tree_from_string_without_dup_node_check(buf))) {
 		log_error("Error parsing metadata for VG %s.", vg->name);
 		dm_free(buf);
 		return_NULL;

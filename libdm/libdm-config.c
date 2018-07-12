@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "dmlib.h"
@@ -30,6 +30,7 @@ enum {
 	TOK_FLOAT,
 	TOK_STRING,		/* Single quotes */
 	TOK_STRING_ESCAPED,	/* Double quotes */
+	TOK_STRING_BARE,	/* No quotes */
 	TOK_EQ,
 	TOK_SECTION_B,
 	TOK_SECTION_E,
@@ -49,6 +50,7 @@ struct parser {
 	int line;		/* line number we are on */
 
 	struct dm_pool *mem;
+	int no_dup_node_check;	/* whether to disable dup node checking */
 };
 
 struct config_output {
@@ -61,13 +63,14 @@ struct config_output {
 static void _get_token(struct parser *p, int tok_prev);
 static void _eat_space(struct parser *p);
 static struct dm_config_node *_file(struct parser *p);
-static struct dm_config_node *_section(struct parser *p);
+static struct dm_config_node *_section(struct parser *p, struct dm_config_node *parent);
 static struct dm_config_value *_value(struct parser *p);
 static struct dm_config_value *_type(struct parser *p);
 static int _match_aux(struct parser *p, int t);
 static struct dm_config_value *_create_value(struct dm_pool *mem);
 static struct dm_config_node *_create_node(struct dm_pool *mem);
 static char *_dup_tok(struct parser *p);
+static char *_dup_token(struct dm_pool *mem, const char *b, const char *e);
 
 static const int sep = '/';
 
@@ -153,7 +156,22 @@ struct dm_config_tree *dm_config_insert_cascaded_tree(struct dm_config_tree *fir
 	return first_cft;
 }
 
-int dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end)
+static struct dm_config_node *_config_reverse(struct dm_config_node *head)
+{
+	struct dm_config_node *left = head, *middle = NULL, *right = NULL;
+
+	while (left) {
+		right = middle;
+		middle = left;
+		left = left->sib;
+		middle->sib = right;
+		middle->child = _config_reverse(middle->child);
+	}
+
+	return middle;
+}
+
+static int _do_dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end, int no_dup_node_check)
 {
 	/* TODO? if (start == end) return 1; */
 
@@ -166,12 +184,25 @@ int dm_config_parse(struct dm_config_tree *cft, const char *start, const char *e
 	p->fe = end;
 	p->tb = p->te = p->fb;
 	p->line = 1;
+	p->no_dup_node_check = no_dup_node_check;
 
 	_get_token(p, TOK_SECTION_E);
 	if (!(cft->root = _file(p)))
 		return_0;
 
+	cft->root = _config_reverse(cft->root);
+
 	return 1;
+}
+
+int dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end)
+{
+	return _do_dm_config_parse(cft, start, end, 0);
+}
+
+int dm_config_parse_without_dup_node_check(struct dm_config_tree *cft, const char *start, const char *end)
+{
+	return _do_dm_config_parse(cft, start, end, 1);
 }
 
 struct dm_config_tree *dm_config_from_string(const char *config_settings)
@@ -203,22 +234,46 @@ __attribute__ ((format(printf, 2, 3)))
 static int _line_append(struct config_output *out, const char *fmt, ...)
 {
 	char buf[4096];
+	char *dyn_buf = NULL;
 	va_list ap;
 	int n;
+
+	/*
+	 * We should be fine with the 4096 char buffer 99% of the time,
+	 * but if we need to go beyond that, allocate the buffer dynamically.
+	 */
 
 	va_start(ap, fmt);
 	n = vsnprintf(&buf[0], sizeof buf - 1, fmt, ap);
 	va_end(ap);
 
-	if (n < 0 || n > (int) sizeof buf - 1) {
+	if (n < 0) {
 		log_error("vsnprintf failed for config line");
 		return 0;
 	}
 
-	if (!dm_pool_grow_object(out->mem, &buf[0], strlen(buf))) {
+	if (n > (int) sizeof buf - 1) {
+		/*
+		 * Fixed size buffer with sizeof buf is not enough,
+		 * so try dynamically allocated buffer now...
+		 */
+		va_start(ap, fmt);
+		n = dm_vasprintf(&dyn_buf, fmt, ap);
+		va_end(ap);
+
+		if (n < 0) {
+			log_error("dm_vasprintf failed for config line");
+			return 0;
+		}
+	}
+
+	if (!dm_pool_grow_object(out->mem, dyn_buf ? : buf, 0)) {
 		log_error("dm_pool_grow_object failed for config line");
+		dm_free(dyn_buf);
 		return 0;
 	}
+
+	dm_free(dyn_buf);
 
 	return 1;
 }
@@ -251,11 +306,13 @@ static int _line_end(const struct dm_config_node *cn, struct config_output *out)
 static int _write_value(struct config_output *out, const struct dm_config_value *v)
 {
 	char *buf;
+	const char *s;
 
 	switch (v->type) {
 	case DM_CFG_STRING:
 		buf = alloca(dm_escaped_len(v->v.str));
-		line_append("\"%s\"", dm_escape_double_quotes(buf, v->v.str));
+		s = (v->format_flags & DM_CONFIG_VALUE_FMT_STRING_NO_QUOTES) ? "" : "\"";
+		line_append("%s%s%s", s, dm_escape_double_quotes(buf, v->v.str), s);
 		break;
 
 	case DM_CFG_FLOAT:
@@ -263,11 +320,15 @@ static int _write_value(struct config_output *out, const struct dm_config_value 
 		break;
 
 	case DM_CFG_INT:
-		line_append("%" PRId64, v->v.i);
+		if (v->format_flags & DM_CONFIG_VALUE_FMT_INT_OCTAL)
+			line_append("0%" PRIo64, v->v.i);
+		else
+			line_append(FMTd64, v->v.i);
 		break;
 
 	case DM_CFG_EMPTY_ARRAY:
-		line_append("[]");
+		s = (v->format_flags & DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES) ? " " : "";
+		line_append("[%s]", s);
 		break;
 
 	default:
@@ -281,6 +342,8 @@ static int _write_value(struct config_output *out, const struct dm_config_value 
 static int _write_config(const struct dm_config_node *n, int only_one,
 			 struct config_output *out, int level)
 {
+	const char *extra_space;
+	int format_array;
 	char space[MAX_INDENT + 1];
 	int l = (level < MAX_INDENT) ? level : MAX_INDENT;
 	int i;
@@ -294,6 +357,9 @@ static int _write_config(const struct dm_config_node *n, int only_one,
 	space[i] = '\0';
 
 	do {
+		extra_space = (n->v && (n->v->format_flags & DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES)) ? " " : "";
+		format_array = (n->v && (n->v->format_flags & DM_CONFIG_VALUE_FMT_COMMON_ARRAY));
+
 		if (out->spec && out->spec->prefix_fn)
 			out->spec->prefix_fn(n, space, out->baton);
 
@@ -312,27 +378,33 @@ static int _write_config(const struct dm_config_node *n, int only_one,
 			line_append(" {");
 			if (!_line_end(n, out))
 				return_0;
-			_write_config(n->child, 0, out, level + 1);
+			if (!_write_config(n->child, 0, out, level + 1))
+				return_0;
 			if (!_line_start(out))
 				return_0;
 			line_append("%s}", space);
 		} else {
 			/* it's a value */
 			const struct dm_config_value *v = n->v;
-			line_append("=");
+			line_append("%s=%s", extra_space, extra_space);
 			if (v->next) {
-				line_append("[");
+				line_append("[%s", extra_space);
 				while (v && v->type != DM_CFG_EMPTY_ARRAY) {
 					if (!_write_value(out, v))
 						return_0;
 					v = v->next;
 					if (v && v->type != DM_CFG_EMPTY_ARRAY)
-						line_append(", ");
+						line_append(",%s", extra_space);
 				}
-				line_append("]");
-			} else
+				line_append("%s]", extra_space);
+			} else {
+				if (format_array && (v->type != DM_CFG_EMPTY_ARRAY))
+					line_append("[%s", extra_space);
 				if (!_write_value(out, v))
 					return_0;
+				if (format_array && (v->type != DM_CFG_EMPTY_ARRAY))
+					line_append("%s]", extra_space);
+			}
 		}
 		if (!_line_end(n, out))
 			return_0;
@@ -419,77 +491,136 @@ static char *_dup_string_tok(struct parser *p)
 
 static struct dm_config_node *_file(struct parser *p)
 {
-	struct dm_config_node *root = NULL, *n, *l = NULL;
-	while (p->t != TOK_EOF) {
-		if (!(n = _section(p)))
-			return_NULL;
+	struct dm_config_node root = { 0 };
+	root.key = "<root>";
 
-		if (!root)
-			root = n;
-		else
-			l->sib = n;
-		n->parent = root;
-		l = n;
-	}
-	return root;
+	while (p->t != TOK_EOF)
+		if (!_section(p, &root))
+			return_NULL;
+	return root.child;
 }
 
-static struct dm_config_node *_section(struct parser *p)
+static struct dm_config_node *_make_node(struct dm_pool *mem,
+					 const char *key_b, const char *key_e,
+					 struct dm_config_node *parent)
+{
+	struct dm_config_node *n;
+
+	if (!(n = _create_node(mem)))
+		return_NULL;
+
+	n->key = _dup_token(mem, key_b, key_e);
+	if (parent) {
+		n->parent = parent;
+		n->sib = parent->child;
+		parent->child = n;
+	}
+	return n;
+}
+
+/* when mem is not NULL, we create the path if it doesn't exist yet */
+static struct dm_config_node *_find_or_make_node(struct dm_pool *mem,
+						 struct dm_config_node *parent,
+						 const char *path,
+						 int no_dup_node_check)
+{
+	const char *e;
+	struct dm_config_node *cn = parent ? parent->child : NULL;
+	struct dm_config_node *cn_found = NULL;
+
+	while (cn || mem) {
+		/* trim any leading slashes */
+		while (*path && (*path == sep))
+			path++;
+
+		/* find the end of this segment */
+		for (e = path; *e && (*e != sep); e++) ;
+
+		/* hunt for the node */
+		cn_found = NULL;
+
+		if (!no_dup_node_check) {
+			while (cn) {
+				if (_tok_match(cn->key, path, e)) {
+					/* Inefficient */
+					if (!cn_found)
+						cn_found = cn;
+					else
+						log_warn("WARNING: Ignoring duplicate"
+							 " config node: %s ("
+							 "seeking %s)", cn->key, path);
+				}
+
+				cn = cn->sib;
+			}
+		}
+
+		if (!cn_found && mem) {
+			if (!(cn_found = _make_node(mem, path, e, parent)))
+				return_NULL;
+		}
+
+		if (cn_found && *e) {
+			parent = cn_found;
+			cn = cn_found->child;
+		} else
+			return cn_found;
+		path = e;
+	}
+
+	return NULL;
+}
+
+static struct dm_config_node *_section(struct parser *p, struct dm_config_node *parent)
 {
 	/* IDENTIFIER SECTION_B_CHAR VALUE* SECTION_E_CHAR */
 
-	struct dm_config_node *root, *n, *l = NULL;
+	struct dm_config_node *root;
+	struct dm_config_value *value;
 	char *str;
-
-	if (!(root = _create_node(p->mem))) {
-		log_error("Failed to allocate section node");
-		return NULL;
-	}
 
 	if (p->t == TOK_STRING_ESCAPED) {
 		if (!(str = _dup_string_tok(p)))
 			return_NULL;
 		dm_unescape_double_quotes(str);
-		root->key = str;
 
 		match(TOK_STRING_ESCAPED);
 	} else if (p->t == TOK_STRING) {
 		if (!(str = _dup_string_tok(p)))
 			return_NULL;
-		root->key = str;
 
 		match(TOK_STRING);
 	} else {
-		if (!(root->key = _dup_tok(p)))
+		if (!(str = _dup_tok(p)))
 			return_NULL;
 
 		match(TOK_IDENTIFIER);
 	}
 
-	if (!strlen(root->key)) {
+	if (!strlen(str)) {
 		log_error("Parse error at byte %" PRIptrdiff_t " (line %d): empty section identifier",
 			  p->tb - p->fb + 1, p->line);
 		return NULL;
 	}
 
+	if (!(root = _find_or_make_node(p->mem, parent, str, p->no_dup_node_check)))
+		return_NULL;
+
 	if (p->t == TOK_SECTION_B) {
 		match(TOK_SECTION_B);
 		while (p->t != TOK_SECTION_E) {
-			if (!(n = _section(p)))
+			if (!(_section(p, root)))
 				return_NULL;
-
-			if (!l)
-				root->child = n;
-			else
-				l->sib = n;
-			n->parent = root;
-			l = n;
 		}
 		match(TOK_SECTION_E);
 	} else {
 		match(TOK_EQ);
-		if (!(root->v = _value(p)))
+		if (!(value = _value(p)))
 			return_NULL;
+		if (root->v)
+			log_warn("WARNING: Ignoring duplicate"
+				 " config value: %s", str);
+		root->v = value;
 	}
 
 	return root;
@@ -565,6 +696,15 @@ static struct dm_config_value *_type(struct parser *p)
 			return_NULL;
 
 		match(TOK_STRING);
+		break;
+
+	case TOK_STRING_BARE:
+		v->type = DM_CFG_STRING;
+
+		if (!(v->v.str = _dup_tok(p)))
+			return_NULL;
+
+		match(TOK_STRING_BARE);
 		break;
 
 	case TOK_STRING_ESCAPED:
@@ -712,6 +852,8 @@ static void _get_token(struct parser *p, int tok_prev)
 		       (*te != SECTION_B_CHAR) &&
 		       (*te != SECTION_E_CHAR))
 			te++;
+		if (values_allowed)
+			p->t = TOK_STRING_BARE;
 		break;
 	}
 
@@ -751,17 +893,22 @@ static struct dm_config_node *_create_node(struct dm_pool *mem)
 	return dm_pool_zalloc(mem, sizeof(struct dm_config_node));
 }
 
-static char *_dup_tok(struct parser *p)
+static char *_dup_token(struct dm_pool *mem, const char *b, const char *e)
 {
-	size_t len = p->te - p->tb;
-	char *str = dm_pool_alloc(p->mem, len + 1);
+	size_t len = e - b;
+	char *str = dm_pool_alloc(mem, len + 1);
 	if (!str) {
 		log_error("Failed to duplicate token.");
 		return 0;
 	}
-	memcpy(str, p->tb, len);
+	memcpy(str, b, len);
 	str[len] = '\0';
 	return str;
+}
+
+static char *_dup_tok(struct parser *p)
+{
+	return _dup_token(p->mem, p->tb, p->te);
 }
 
 /*
@@ -778,46 +925,9 @@ static char *_dup_tok(struct parser *p)
  */
 typedef const struct dm_config_node *node_lookup_fn(const void *start, const char *path);
 
-static const struct dm_config_node *_find_config_node(const void *start,
-						      const char *path)
-{
-	const char *e;
-	const struct dm_config_node *cn = start;
-	const struct dm_config_node *cn_found = NULL;
-
-	while (cn) {
-		/* trim any leading slashes */
-		while (*path && (*path == sep))
-			path++;
-
-		/* find the end of this segment */
-		for (e = path; *e && (*e != sep); e++) ;
-
-		/* hunt for the node */
-		cn_found = NULL;
-		while (cn) {
-			if (_tok_match(cn->key, path, e)) {
-				/* Inefficient */
-				if (!cn_found)
-					cn_found = cn;
-				else
-					log_warn("WARNING: Ignoring duplicate"
-						 " config node: %s ("
-						 "seeking %s)", cn->key, path);
-			}
-
-			cn = cn->sib;
-		}
-
-		if (cn_found && *e)
-			cn = cn_found->child;
-		else
-			return cn_found;
-
-		path = e;
-	}
-
-	return NULL;
+static const struct dm_config_node *_find_config_node(const void *start, const char *path) {
+	struct dm_config_node dummy = { .child = (void *) start };
+	return _find_or_make_node(NULL, &dummy, path, 0);
 }
 
 static const struct dm_config_node *_find_first_config_node(const void *start, const char *path)
@@ -1236,6 +1346,8 @@ struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const 
 		return NULL;
 	}
 
+	new_cn->id = cn->id;
+
 	if ((cn->v && !(new_cn->v = _clone_config_value(mem, cn->v))) ||
 	    (cn->child && !(new_cn->child = dm_config_clone_node_with_mem(mem, cn->child, 1))) ||
 	    (siblings && cn->sib && !(new_cn->sib = dm_config_clone_node_with_mem(mem, cn->sib, siblings))))
@@ -1272,7 +1384,93 @@ struct dm_config_value *dm_config_create_value(struct dm_config_tree *cft)
 	return _create_value(cft->mem);
 }
 
+void dm_config_value_set_format_flags(struct dm_config_value *cv, uint32_t format_flags)
+{
+	if (!cv)
+		return;
+
+	cv->format_flags = format_flags;
+}
+
+uint32_t dm_config_value_get_format_flags(struct dm_config_value *cv)
+{
+	if (!cv)
+		return 0;
+
+	return cv->format_flags;
+}
+
 struct dm_pool *dm_config_memory(struct dm_config_tree *cft)
 {
 	return cft->mem;
+}
+
+static int _override_path(const char *path, struct dm_config_node *node, void *baton)
+{
+	struct dm_config_tree *cft = baton;
+	struct dm_config_node dummy, *target;
+	dummy.child = cft->root;
+	if (!(target = _find_or_make_node(cft->mem, &dummy, path, 0)))
+		return_0;
+	if (!(target->v = _clone_config_value(cft->mem, node->v)))
+		return_0;
+	cft->root = dummy.child;
+	return 1;
+}
+
+static int _enumerate(const char *path, struct dm_config_node *cn, int (*cb)(const char *, struct dm_config_node *, void *), void *baton)
+{
+	char *sub = NULL;
+
+	while (cn) {
+		if (dm_asprintf(&sub, "%s/%s", path, cn->key) < 0)
+			return_0;
+		if (cn->child) {
+			if (!_enumerate(sub, cn->child, cb, baton))
+				goto_bad;
+		} else
+			if (!cb(sub, cn, baton))
+				goto_bad;
+		dm_free(sub);
+		cn = cn->sib;
+	}
+	return 1;
+bad:
+	dm_free(sub);
+	return 0;
+}
+
+struct dm_config_tree *dm_config_flatten(struct dm_config_tree *cft)
+{
+	struct dm_config_tree *res = dm_config_create(), *done = NULL, *current = NULL;
+
+	if (!res)
+		return_NULL;
+
+	while (done != cft) {
+		current = cft;
+		while (current->cascade != done)
+			current = current->cascade;
+		_enumerate("", current->root, _override_path, res);
+		done = current;
+	}
+
+	return res;
+}
+
+int dm_config_remove_node(struct dm_config_node *parent, struct dm_config_node *rem_node)
+{
+	struct dm_config_node *cn = parent->child, *last = NULL;
+	while (cn) {
+		if (cn == rem_node) {
+			if (last)
+				last->sib = cn->sib;
+			else
+				parent->child = cn->sib;
+			return 1;
+		}
+		last = cn;
+		cn = cn->sib;
+	}
+	return 0;
 }

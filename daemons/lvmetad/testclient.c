@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2011-2014 Red Hat, Inc.
+ *
+ * This file is part of LVM2.
+ *
+ * This copyrighted material is made available to anyone wishing to use,
+ * modify, copy, or redistribute it subject to the terms and conditions
+ * of the GNU General Public License v.2.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
+#include "tool.h"
+
 #include "lvmetad-client.h"
 #include "label.h"
 #include "lvmcache.h"
@@ -60,7 +75,10 @@ int scan(daemon_handle h, char *fn) {
 	}
 
 	char uuid[64];
-	id_write_format(dev->pvid, uuid, 64);
+	if (!id_write_format(dev->pvid, uuid, 64)) {
+		fprintf(stderr, "[C] Failed to format PV UUID for %s", dev_name(dev));
+		return;
+	}
 	fprintf(stderr, "[C] found PV: %s\n", uuid);
 	struct lvmcache_info *info = (struct lvmcache_info *) label->info;
 	struct physical_volume pv = { 0, };
@@ -105,15 +123,17 @@ void _dump_vg(daemon_handle h, const char *uuid)
 
 int main(int argc, char **argv) {
 	daemon_handle h = lvmetad_open();
+	/* FIXME Missing error path */
 
 	if (argc > 1) {
 		int i;
-		struct cmd_context *cmd = create_toolcontext(0, NULL, 0, 0);
+		struct cmd_context *cmd = create_toolcontext(0, NULL, 0, 0, 1, 1);
 		for (i = 1; i < argc; ++i) {
 			const char *uuid = NULL;
 			scan(h, argv[i]);
 		}
 		destroy_toolcontext(cmd);
+		/* FIXME Missing lvmetad_close() */
 		return 0;
 	}
 
@@ -122,6 +142,6 @@ int main(int argc, char **argv) {
 	_dump_vg(h, vgid);
 	_pv_add(h, uuid3, NULL);
 
-	daemon_close(h);
+	daemon_close(h);	/* FIXME lvmetad_close? */
 	return 0;
 }

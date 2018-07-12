@@ -9,7 +9,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #ifndef _LVM_DAEMON_SERVER_H
@@ -34,6 +34,21 @@ typedef struct {
 	struct dm_config_tree *cft;
 	struct buffer buffer;
 } response;
+
+struct timeval;
+
+/*
+ * is_idle:	 daemon implementation sets it to true when no background task
+ *		 is running
+ * max_timeouts: how many seconds do daemon allow to be idle before it shutdowns
+ * ptimeout:	 internal variable passed to select(). has to be reset to 1 second
+ *		 before each select
+ */
+typedef struct {
+	volatile unsigned is_idle;
+	unsigned max_timeouts;
+	struct timeval *ptimeout;
+} daemon_idle;
 
 struct daemon_state;
 
@@ -92,12 +107,17 @@ typedef struct daemon_state {
 	handle_request handler;
 	int (*daemon_init)(struct daemon_state *st);
 	int (*daemon_fini)(struct daemon_state *st);
+	int (*daemon_main)(struct daemon_state *st);
 
 	/* Global runtime info maintained by the framework. */
 	int socket_fd;
 
 	log_state *log;
 	struct thread_state *threads;
+
+	/* suport for shutdown on idle */
+	daemon_idle *idle;
+
 	void *private; /* the global daemon state */
 } daemon_state;
 

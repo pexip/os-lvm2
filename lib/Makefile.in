@@ -10,7 +10,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 srcdir = @srcdir@
 top_srcdir = @top_srcdir@
@@ -56,11 +56,13 @@ SOURCES =\
 	datastruct/btree.c \
 	datastruct/str_list.c \
 	device/dev-cache.c \
+	device/dev-ext.c \
 	device/dev-io.c \
 	device/dev-md.c \
 	device/dev-swap.c \
 	device/dev-type.c \
 	device/dev-luks.c \
+	device/dev-dasd.c \
 	display/display.c \
 	error/errseg.c \
 	unknown/unknown.c \
@@ -69,9 +71,12 @@ SOURCES =\
 	filters/filter-regex.c \
 	filters/filter-sysfs.c \
 	filters/filter-md.c \
+	filters/filter-fwraid.c \
 	filters/filter-mpath.c \
 	filters/filter-partitioned.c \
 	filters/filter-type.c \
+	filters/filter-usable.c \
+	filters/filter-internal.c \
 	format_text/archive.c \
 	format_text/archiver.c \
 	format_text/export.c \
@@ -79,7 +84,6 @@ SOURCES =\
 	format_text/format-text.c \
 	format_text/import.c \
 	format_text/import_vsn1.c \
-	format_text/tags.c \
 	format_text/text_label.c \
 	freeseg/freeseg.c \
 	label/label.c \
@@ -108,22 +112,19 @@ SOURCES =\
 	misc/lvm-file.c \
 	misc/lvm-flock.c \
 	misc/lvm-globals.c \
+	misc/lvm-maths.c \
 	misc/lvm-signal.c \
 	misc/lvm-string.c \
 	misc/lvm-wrappers.c \
 	misc/lvm-percent.c \
 	mm/memlock.c \
+	notify/lvmnotify.c \
 	properties/prop_common.c \
 	report/properties.c \
 	report/report.c \
 	striped/striped.c \
 	uuid/uuid.c \
 	zero/zero.c
-
-ifeq ("@HAVE_REALTIME@", "yes")
-  SOURCES +=\
-	misc/timestamp.c
-endif
 
 ifeq ("@LVM1@", "internal")
   SOURCES +=\
@@ -193,6 +194,16 @@ ifeq ("@BUILD_LVMETAD@", "yes")
 	cache/lvmetad.c
 endif
 
+ifeq ("@BUILD_LVMPOLLD@", "yes")
+  SOURCES +=\
+	lvmpolld/lvmpolld-client.c
+endif
+
+ifeq ("@BUILD_LVMLOCKD@", "yes")
+  SOURCES +=\
+	locking/lvmlockd.c
+endif
+
 ifeq ("@DMEVENTD@", "yes")
   CLDFLAGS += -L$(top_builddir)/daemons/dmeventd
   LIBS += -ldevmapper-event
@@ -207,6 +218,7 @@ ifeq ($(MAKECMDGOALS),distclean)
 	format_pool \
 	snapshot \
 	mirror \
+	notify \
 	raid \
 	replicator \
 	thin \
@@ -219,8 +231,8 @@ CFLOW_LIST_TARGET = $(LIB_NAME).cflow
 
 include $(top_builddir)/make.tmpl
 
-CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS)
+CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
 
 $(SUBDIRS): $(LIB_STATIC)
 
-DISTCLEAN_TARGETS += misc/configure.h misc/lvm-version.h
+CLEAN_TARGETS += misc/configure.h misc/lvm-version.h

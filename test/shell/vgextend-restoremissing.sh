@@ -7,7 +7,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software Foundation,
-# Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+SKIP_WITH_LVMLOCKD=1
+SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
@@ -19,7 +22,7 @@ lvcreate -l 1 -n lv1 $vg "$dev1"
 # vgextend require vgname
 invalid vgextend
 # --metadatacopies => use --pvmetadatacopies
-invalid vgextend --metadatacopies 3 $vg "$dev1" |& tee out
+invalid vgextend --metadatacopies 3 $vg "$dev1" 2>&1 | tee out
 grep -- "use --pvmetadatacopies" out
 
 # VG name should exist

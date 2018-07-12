@@ -10,7 +10,7 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "lib.h"
@@ -25,6 +25,11 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <malloc.h>
+
+#ifdef HAVE_VALGRIND
+#include <valgrind.h>
+#endif
 
 #ifndef DEVMAPPER_SUPPORT
 
@@ -67,6 +72,11 @@ void memlock_reset(void)
 	return;
 }
 
+int memlock_count_daemon(void)
+{
+	return 0;
+}
+
 #else				/* DEVMAPPER_SUPPORT */
 
 static size_t _size_stack;
@@ -92,17 +102,25 @@ static const char * const _blacklist_maps[] = {
 	"locale/locale-archive",
 	"/LC_MESSAGES/",
 	"gconv/gconv-modules.cache",
+	"/ld-2.",		/* not using dlopen,dlsym during mlock */
+	"/libattr.so.",		/* not using during mlock (udev) */
 	"/libblkid.so.",	/* not using lzma during mlock (selinux) */
+	"/libbz2.so.",		/* not using during mlock (udev) */
+	"/libcap.so.",		/* not using during mlock (udev) */
+	"/libdw-",		/* not using during mlock (udev) */
+	"/libelf-",		/* not using during mlock (udev) */
 	"/liblzma.so.",	/* not using lzma during mlock (selinux) */
 	"/libncurses.so.",	/* not using ncurses during mlock */
 	"/libpcre.so.",	/* not using pcre during mlock (selinux) */
 	"/libreadline.so.",	/* not using readline during mlock */
+	"/libresolv-",	/* not using during mlock (udev) */
 	"/libselinux.so.",	/* not using selinux during mlock */
 	"/libsepol.so.",	/* not using sepol during mlock */
 	"/libtinfo.so.",	/* not using tinfo during mlock */
 	"/libudev.so.",		/* not using udev during mlock */
 	"/libuuid.so.",		/* not using uuid during mlock (blkid) */
 	"/libdl-",		/* not using dlopen,dlsym during mlock */
+	"/libz.so.",		/* not using during mlock (udev) */
 	"/etc/selinux",		/* not using selinux during mlock */
 	/* "/libdevmapper-event.so" */
 };
@@ -132,8 +150,11 @@ static void _touch_memory(void *mem, size_t size)
 
 static void _allocate_memory(void)
 {
-	void *stack_mem, *temp_malloc_mem;
+#ifndef VALGRIND_POOL
+	void *stack_mem;
 	struct rlimit limit;
+	int i, area = 0, missing = _size_malloc_tmp, max_areas = 32, hblks;
+	char *areas[max_areas];
 
 	/* Check if we could preallocate requested stack */
 	if ((getrlimit (RLIMIT_STACK, &limit) == 0) &&
@@ -142,13 +163,51 @@ static void _allocate_memory(void)
 		_touch_memory(stack_mem, _size_stack);
 	/* FIXME else warn user setting got ignored */
 
-	if ((temp_malloc_mem = malloc(_size_malloc_tmp)))
-		_touch_memory(temp_malloc_mem, _size_malloc_tmp);
+        /*
+         *  When a brk() fails due to fragmented address space (which sometimes
+         *  happens when we try to grab 8M or so), glibc will make a new
+         *  arena. In this arena, the rules for using “direct” mmap are relaxed,
+         *  circumventing the MAX_MMAPs and MMAP_THRESHOLD settings. We can,
+         *  however, detect when this happens with mallinfo() and try to co-opt
+         *  malloc into using MMAP as a MORECORE substitute instead of returning
+         *  MMAP'd memory directly. Since MMAP-as-MORECORE does not munmap the
+         *  memory on free(), this is good enough for our purposes.
+         */
+	while (missing > 0) {
+		struct mallinfo inf = mallinfo();
+		hblks = inf.hblks;
+
+		if ((areas[area] = malloc(_size_malloc_tmp)))
+			_touch_memory(areas[area], _size_malloc_tmp);
+
+		inf = mallinfo();
+
+		if (hblks < inf.hblks) {
+			/* malloc cheated and used mmap, even though we told it
+			   not to; we try with twice as many areas, each half
+			   the size, to circumvent the faulty logic in glibc */
+			free(areas[area]);
+			_size_malloc_tmp /= 2;
+		} else {
+			++ area;
+			missing -= _size_malloc_tmp;
+		}
+
+		if (area == max_areas && missing > 0) {
+			/* Too bad. Warn the user and proceed, as things are
+			 * most likely going to work out anyway. */
+			log_warn("WARNING: Failed to reserve memory, %d bytes missing.", missing);
+			break;
+		}
+	}
 
 	if ((_malloc_mem = malloc(_size_malloc)))
 		_touch_memory(_malloc_mem, _size_malloc);
 
-	free(temp_malloc_mem);
+	/* free up the reserves so subsequent malloc's can use that memory */
+	for (i = 0; i < area; ++i)
+		free(areas[i]);
+#endif
 }
 
 static void _release_memory(void)
@@ -212,12 +271,15 @@ static int _maps_line(const struct dm_config_node *cn, lvmlock_t lock,
 		}
 	}
 
-#ifdef VALGRIND_POOL
+#ifdef HAVE_VALGRIND
 	/*
 	 * Valgrind is continually eating memory while executing code
 	 * so we need to deactivate check of locked memory size
-         */
-	sz -= sz; /* = 0, but avoids getting warning about dead assigment */
+	 */
+#ifndef VALGRIND_POOL
+	if (RUNNING_ON_VALGRIND)
+#endif
+		sz -= sz; /* = 0, but avoids getting warning about dead assigment */
 
 #endif
 	*mstats += sz;
@@ -266,9 +328,6 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 #endif
 	}
 
-	/* Force libc.mo load */
-	if (lock == LVM_MLOCK)
-		(void)strerror(0);
 	/* Reset statistic counters */
 	*mstats = 0;
 
@@ -301,7 +360,7 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 	}
 
 	line = _maps_buffer;
-	cn = find_config_tree_node(cmd, activation_mlock_filter_CFG, NULL);
+	cn = find_config_tree_array(cmd, activation_mlock_filter_CFG, NULL);
 
 	while ((line_end = strchr(line, '\n'))) {
 		*line_end = '\0'; /* remove \n */
@@ -316,10 +375,104 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 	return ret;
 }
 
+#ifdef DEBUG_MEMLOCK
+/*
+ * LVM is not supposed to use mmap while devices are suspended.
+ * This code causes a core dump if gets called."
+ */
+#  ifdef __i386__
+#    define ARCH_X86
+#  endif /* __i386__ */
+#  ifdef __x86_64__
+#    ifndef ARCH_X86
+#      define ARCH_X86
+#    endif /* ARCH_X86 */
+#  endif /* __x86_64__ */
+
+#endif /* DEBUG_MEMLOCK */
+
+#ifdef ARCH_X86
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <dlfcn.h>
+static const unsigned char INSTRUCTION_HLT = 0x94;
+static char _mmap_orig;
+static unsigned char *_mmap_addr;
+#ifdef __i386__
+static char _mmap64_orig;
+static unsigned char *_mmap64_addr;
+#endif /* __i386__ */
+#endif /* ARCH_X86 */
+
+static int _disable_mmap(void)
+{
+#ifdef ARCH_X86
+	volatile unsigned char *abs_addr;
+
+	if (!_mmap_addr) {
+		_mmap_addr = (unsigned char *) dlsym(RTLD_NEXT, "mmap");
+		if (_mmap_addr[0] == 0xff && _mmap_addr[1] == 0x25) { /* plt */
+#ifdef __x86_64__
+			abs_addr = _mmap_addr + 6 + *(int32_t *)(_mmap_addr + 2);
+#endif /* __x86_64__ */
+#ifdef __i386__
+			abs_addr = *(void **)(_mmap_addr + 2);
+#endif /* __i386__ */
+			_mmap_addr = *(void **)abs_addr;
+		} else
+			log_debug_mem("Can't find PLT jump entry assuming -fPIE linkage.");
+		if (mprotect((void *)((unsigned long)_mmap_addr & ~4095UL), 4096, PROT_READ|PROT_WRITE|PROT_EXEC)) {
+			log_sys_error("mprotect", "");
+			_mmap_addr = NULL;
+			return 0;
+		}
+		_mmap_orig = *_mmap_addr;
+	}
+	log_debug_mem("Remapping mmap entry %02x to %02x.", _mmap_orig, INSTRUCTION_HLT);
+	*_mmap_addr = INSTRUCTION_HLT;
+
+#ifdef __i386__
+	if (!_mmap64_addr) {
+		_mmap64_addr = (unsigned char *) dlsym(RTLD_NEXT, "mmap64");
+		if (_mmap64_addr[0] == 0xff && _mmap64_addr[1] == 0x25) {
+			abs_addr = *(void **)(_mmap64_addr + 2);
+			_mmap64_addr = *(void **)abs_addr;
+		} /* Can't find PLT jump entry assuming -fPIE linkage */
+		if (mprotect((void *)((unsigned long)_mmap64_addr & ~4095UL), 4096, PROT_READ|PROT_WRITE|PROT_EXEC)) {
+			log_sys_error("mprotect", "");
+			_mmap64_addr = NULL;
+			return 0;
+		}
+		_mmap64_orig = *_mmap64_addr;
+	}
+	*_mmap64_addr = INSTRUCTION_HLT;
+#endif /* __i386__ */
+#endif /* ARCH_X86 */
+	return 1;
+}
+
+static int _restore_mmap(void)
+{
+#ifdef ARCH_X86
+	if (_mmap_addr)
+		*_mmap_addr = _mmap_orig;
+#ifdef __i386__
+	if (_mmap64_addr)
+		*_mmap64_addr = _mmap64_orig;
+#endif /* __i386__ */
+	log_debug_mem("Restored mmap entry.");
+#endif /* ARCH_X86 */
+	return 1;
+}
+
 /* Stop memory getting swapped out */
 static void _lock_mem(struct cmd_context *cmd)
 {
 	_allocate_memory();
+	(void)strerror(0);		/* Force libc.mo load */
+	(void)dm_udev_get_sync_support(); /* udev is initialized */
+	log_very_verbose("Locking memory");
 
 	/*
 	 * For daemon we need to use mlockall()
@@ -342,9 +495,11 @@ static void _lock_mem(struct cmd_context *cmd)
 			log_sys_error("open", _procselfmaps);
 			return;
 		}
+
+		if (!_disable_mmap())
+			stack;
 	}
 
-	log_very_verbose("Locking memory");
 	if (!_memlock_maps(cmd, LVM_MLOCK, &_mstats))
 		stack;
 
@@ -367,6 +522,7 @@ static void _unlock_mem(struct cmd_context *cmd)
 		stack;
 
 	if (!_use_mlockall) {
+		_restore_mmap();
 		if (close(_maps_fd))
 			log_sys_error("close", _procselfmaps);
 		dm_free(_maps_buffer);
@@ -492,6 +648,11 @@ void memlock_reset(void)
 void memlock_unlock(struct cmd_context *cmd)
 {
 	_unlock_mem_if_possible(cmd);
+}
+
+int memlock_count_daemon(void)
+{
+	return _memlock_count_daemon;
 }
 
 #endif
