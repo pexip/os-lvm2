@@ -145,7 +145,7 @@ $(STAMPS_DIR)/install_%: $(STAMPS_DIR)/build_%
 	dh_testroot
 	rm -rf $(INSTALL_DIR)
 	+$(MAKE_REAL) -C $(DIR) install DESTDIR=$(CURDIR)/$(INSTALL_DIR) LIB_VERSION_DM=$(DEVMAPPER_ABINAME)
-	+$(MAKE_REAL) -C $(DIR)/scripts install_tmpfiles_configuration DESTDIR=$(CURDIR)/$(INSTALL_DIR)
+	+$(MAKE_REAL) -C $(DIR)/scripts install_systemd_units install_tmpfiles_configuration DESTDIR=$(CURDIR)/$(INSTALL_DIR)
 	touch $@
 
 install-base-prep:
@@ -180,9 +180,9 @@ install_dmeventd: export DH_OPTIONS = -pdmeventd
 install_dmeventd: DIR = $(BUILD_DIR)/install_deb
 install_dmeventd: $(STAMPS_DIR)/install_deb install_liblvm2
 	+$(MAKE_SELF) install-base-prep INSTALL_DIR='$(DIR)'
-#	dh_systemd_enable --no-enable dm-event.service
-#	dh_systemd_enable dm-event.socket
-#	dh_systemd_start --restart-after-upgrade dm-event.socket
+	dh_systemd_enable --no-enable dm-event.service
+	dh_systemd_enable dm-event.socket
+	dh_systemd_start --restart-after-upgrade dm-event.socket
 	+$(MAKE_SELF) install-base CHANGELOG=WHATS_NEW_DM GENCONTROL_ARGS="-v$(DEVMAPPER_VERSION_DEBIAN)"
 
 install_dmsetup: export DH_OPTIONS = -pdmsetup
@@ -247,9 +247,9 @@ install_lvm2: export DH_OPTIONS = -plvm2
 install_lvm2: DIR = $(BUILD_DIR)/install_deb
 install_lvm2: $(STAMPS_DIR)/install_deb
 	+$(MAKE_SELF) install-base-prep INSTALL_DIR='$(DIR)'
-#	dh_systemd_enable --no-enable lvm2-lvmetad.service
-#	dh_systemd_enable lvm2-activation.service lvm2-activation-early.service lvm2-lvmetad.socket lvm2-monitor.service
-#	dh_systemd_start --restart-after-upgrade lvm2-lvmetad.socket
+	dh_systemd_enable --no-enable lvm2-lvmetad.service
+	dh_systemd_enable lvm2-activation.service lvm2-activation-early.service lvm2-lvmetad.socket lvm2-monitor.service
+	dh_systemd_start --restart-after-upgrade lvm2-lvmetad.socket
 	dh_installinit --no-start -- start 26 S .
 	+$(MAKE_SELF) install-base
 

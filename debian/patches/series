@@ -6,5 +6,5 @@ force-paths.patch
 implicit-pointer.patch
 dm-event-api.patch
 udev.patch
-#systemd.patch
+systemd.patch
 clvmd-openais-format.patch
