@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # Exercise changing of caching mode on both cache pool and cached LV.
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -37,8 +38,6 @@ dd if="$DM_DEV_DIR/$vg/$lv1" of=/dev/null bs=64K count=20 || true
 done
 
 lvs -o+cache_dirty_blocks,cache_read_hits,cache_read_misses,cache_write_hits,cache_write_misses $vg/$lv1
-
-vgcfgbackup -f /tmp/ooo $vg
 
 
 #

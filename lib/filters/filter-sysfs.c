@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "filter.h"
+#include "lib/misc/lib.h"
+#include "lib/filters/filter.h"
 
 #ifdef __linux__
 
@@ -260,7 +260,7 @@ static int _init_devs(struct dev_set *ds)
 }
 
 
-static int _accept_p(struct dev_filter *f, struct device *dev)
+static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
 {
 	struct dev_set *ds = (struct dev_set *) f->private;
 
@@ -274,8 +274,9 @@ static int _accept_p(struct dev_filter *f, struct device *dev)
 	if (!_set_lookup(ds, dev->dev)) {
 		log_debug_devs("%s: Skipping (sysfs)", dev_name(dev));
 		return 0;
-	} else
-		return 1;
+	}
+
+	return 1;
 }
 
 static void _destroy(struct dev_filter *f)

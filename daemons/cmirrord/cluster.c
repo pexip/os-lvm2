@@ -16,7 +16,10 @@
 #include "functions.h"
 #include "link_mon.h"
 #include "local.h"
-#include "xlate.h"
+#include "lib/mm/xlate.h"
+
+/* FIXME: remove this and the code */
+#define CMIRROR_HAS_CHECKPOINT 0
 
 #include <corosync/cpg.h>
 #include <errno.h>
@@ -166,6 +169,9 @@ int cluster_send(struct clog_request *rq)
 {
 	int r;
 	int found = 0;
+#if CMIRROR_HAS_CHECKPOINT
+	int count = 0;
+#endif
 	struct iovec iov;
 	struct clog_cpg *entry;
 
@@ -182,7 +188,7 @@ int cluster_send(struct clog_request *rq)
 	}
 
 	/*
-	 * Once the request heads for the cluster, the luid looses
+	 * Once the request heads for the cluster, the luid loses
 	 * all its meaning.
 	 */
 	rq->u_rq.luid = 0;
@@ -203,8 +209,6 @@ int cluster_send(struct clog_request *rq)
 
 #if CMIRROR_HAS_CHECKPOINT
 	do {
-		int count = 0;
-
 		r = cpg_mcast_joined(entry->handle, CPG_TYPE_AGREED, &iov, 1);
 		if (r != SA_AIS_ERR_TRY_AGAIN)
 			break;
@@ -1630,7 +1634,7 @@ int create_cluster_cpg(char *uuid, uint64_t luid)
 
 	size = ((strlen(uuid) + 1) > CPG_MAX_NAME_LENGTH) ?
 		CPG_MAX_NAME_LENGTH : (strlen(uuid) + 1);
-	strncpy(new->name.value, uuid, size);
+	(void) dm_strncpy(new->name.value, uuid, size);
 	new->name.length = (uint32_t)size;
 	new->luid = luid;
 

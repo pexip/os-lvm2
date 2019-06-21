@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,22 +12,46 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _UNITS_H
-#define _UNITS_H
+#ifndef TEST_UNIT_UNITS_H
+#define TEST_UNIT_UNITS_H
 
-#include "libdevmapper.h"
-#include <CUnit/CUnit.h>
+#include "framework.h"
 
-#define DECL(n) \
-	extern CU_TestInfo n ## _list[];\
-	int n ## _init(void); \
-	int n ## _fini(void);
+//-----------------------------------------------------------------
 
-DECL(bitset);
-DECL(config);
-DECL(dmlist);
-DECL(dmstatus);
-DECL(regex);
-DECL(string);
+// Declare the function that adds tests suites here ...
+void activation_generator_tests(struct dm_list *suites);
+void bcache_tests(struct dm_list *suites);
+void bcache_utils_tests(struct dm_list *suites);
+void bitset_tests(struct dm_list *suites);
+void config_tests(struct dm_list *suites);
+void dm_list_tests(struct dm_list *suites);
+void dm_status_tests(struct dm_list *suites);
+void io_engine_tests(struct dm_list *suites);
+void percent_tests(struct dm_list *suites);
+void radix_tree_tests(struct dm_list *suites);
+void regex_tests(struct dm_list *suites);
+void string_tests(struct dm_list *suites);
+void vdo_tests(struct dm_list *suites);
+
+// ... and call it in here.
+static inline void register_all_tests(struct dm_list *suites)
+{
+        activation_generator_tests(suites);
+	bcache_tests(suites);
+	bcache_utils_tests(suites);
+	bitset_tests(suites);
+	config_tests(suites);
+	dm_list_tests(suites);
+	dm_status_tests(suites);
+	io_engine_tests(suites);
+	percent_tests(suites);
+	radix_tree_tests(suites);
+	regex_tests(suites);
+	string_tests(suites);
+	vdo_tests(suites);
+}
+
+//-----------------------------------------------------------------
 
 #endif

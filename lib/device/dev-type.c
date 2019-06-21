@@ -12,14 +12,15 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "dev-type.h"
-#include "xlate.h"
-#include "config.h"
-#include "metadata.h"
-
-#include <libgen.h>
-#include <ctype.h>
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/device/dev-type.h"
+#include "lib/device/device-types.h"
+#include "lib/mm/xlate.h"
+#include "lib/config/config.h"
+#include "lib/metadata/metadata.h"
+#include "lib/device/bcache.h"
+#include "lib/label/label.h"
 
 #ifdef BLKID_WIPING_SUPPORT
 #include <blkid.h>
@@ -27,10 +28,11 @@
 
 #ifdef UDEV_SYNC_SUPPORT
 #include <libudev.h>
-#include "dev-ext-udev-constants.h"
+#include "lib/device/dev-ext-udev-constants.h"
 #endif
 
-#include "device-types.h"
+#include <libgen.h>
+#include <ctype.h>
 
 struct dev_types *create_dev_types(const char *proc_dir,
 				   const struct dm_config_node *cn)
@@ -47,7 +49,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 	const char *name;
 	char *nl;
 
-	if (!(dt = dm_zalloc(sizeof(struct dev_types)))) {
+	if (!(dt = zalloc(sizeof(struct dev_types)))) {
 		log_error("Failed to allocate device type register.");
 		return NULL;
 	}
@@ -76,7 +78,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 			i++;
 
 		/* If it's not a number it may be name of section */
-		line_maj = atoi(((char *) (line + i)));
+		line_maj = atoi(line + i);
 
 		if (line_maj < 0 || line_maj >= NUMBER_OF_MAJORS) {
 			/*
@@ -124,6 +126,10 @@ struct dev_types *create_dev_types(const char *proc_dir,
 		/* Look for EMC powerpath */
 		if (!strncmp("emcpower", line + i, 8) && isspace(*(line + i + 8)))
 			dt->emcpower_major = line_maj;
+
+		/* Look for Veritas Dynamic Multipathing */
+		if (!strncmp("VxDMP", line + i, 5) && isspace(*(line + i + 5)))
+			dt->vxdmp_major = line_maj;
 
 		if (!strncmp("loop", line + i, 4) && isspace(*(line + i + 4)))
 			dt->loop_major = line_maj;
@@ -198,7 +204,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 
 	return dt;
 bad:
-	dm_free(dt);
+	free(dt);
 	return NULL;
 }
 
@@ -209,6 +215,9 @@ int dev_subsystem_part_major(struct dev_types *dt, struct device *dev)
 	if (MAJOR(dev->dev) == dt->device_mapper_major)
 		return 1;
 
+	if (MAJOR(dev->dev) == dt->md_major)
+		return 1;
+
 	if (MAJOR(dev->dev) == dt->drbd_major)
 		return 1;
 
@@ -216,6 +225,9 @@ int dev_subsystem_part_major(struct dev_types *dt, struct device *dev)
 		return 1;
 
 	if (MAJOR(dev->dev) == dt->power2_major)
+		return 1;
+
+	if (MAJOR(dev->dev) == dt->vxdmp_major)
 		return 1;
 
 	if ((MAJOR(dev->dev) == dt->blkext_major) &&
@@ -245,6 +257,9 @@ const char *dev_subsystem_name(struct dev_types *dt, struct device *dev)
 
 	if (MAJOR(dev->dev) == dt->power2_major)
 		return "POWER2";
+
+	if (MAJOR(dev->dev) == dt->vxdmp_major)
+		return "VXDMP";
 
 	if (MAJOR(dev->dev) == dt->blkext_major)
 		return "BLKEXT";
@@ -353,7 +368,7 @@ static int _has_partition_table(struct device *dev)
 		uint16_t magic;
 	} __attribute__((packed)) buf; /* sizeof() == SECTOR_SIZE */
 
-	if (!dev_read(dev, UINT64_C(0), sizeof(buf), &buf))
+	if (!dev_read_bytes(dev, UINT64_C(0), sizeof(buf), &buf))
 		return_0;
 
 	/* FIXME Check for other types of partition table too */
@@ -422,6 +437,9 @@ static int _native_dev_is_partitioned(struct dev_types *dt, struct device *dev)
 {
 	int r;
 
+	if (!scan_bcache)
+		return -EAGAIN;
+
 	if (!_is_partitionable(dt, dev))
 		return 0;
 
@@ -429,16 +447,7 @@ static int _native_dev_is_partitioned(struct dev_types *dt, struct device *dev)
 	if ((MAJOR(dev->dev) == dt->dasd_major) && dasd_is_cdl_formatted(dev))
 		return 1;
 
-	if (!dev_open_readonly_quiet(dev)) {
-		log_debug_devs("%s: failed to open device, considering device "
-			       "is partitioned", dev_name(dev));
-		return 1;
-	}
-
 	r = _has_partition_table(dev);
-
-	if (!dev_close(dev))
-		stack;
 
 	return r;
 }
@@ -496,7 +505,7 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 	 */
 	if ((parts = dt->dev_type_array[major].max_partitions) > 1) {
 		if ((residue = minor % parts)) {
-			*result = MKDEV((dev_t)major, (dev_t)(minor - residue));
+			*result = MKDEV(major, (minor - residue));
 			ret = 2;
 		} else {
 			*result = dev->dev;
@@ -566,7 +575,7 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 			  path, buffer);
 		goto out;
 	}
-	*result = MKDEV((dev_t)major, (dev_t)minor);
+	*result = MKDEV(major, minor);
 	ret = 2;
 out:
 	if (fp && fclose(fp))
@@ -605,38 +614,38 @@ static int _blkid_wipe(blkid_probe probe, struct device *dev, const char *name,
 			if (force < DONT_PROMPT) {
 				log_error(MSG_FAILED_SIG_OFFSET, type, name);
 				return 0;
-			} else {
-				log_error("WARNING: " MSG_FAILED_SIG_OFFSET MSG_WIPING_SKIPPED, type, name);
-				return 2;
 			}
+
+			log_error("WARNING: " MSG_FAILED_SIG_OFFSET MSG_WIPING_SKIPPED, type, name);
+			return 2;
 		}
 		if (blkid_probe_lookup_value(probe, "SBMAGIC", &magic, &len)) {
 			if (force < DONT_PROMPT) {
 				log_error(MSG_FAILED_SIG_LENGTH, type, name);
 				return 0;
-			} else {
-				log_warn("WARNING: " MSG_FAILED_SIG_LENGTH MSG_WIPING_SKIPPED, type, name);
-				return 2;
 			}
+
+			log_warn("WARNING: " MSG_FAILED_SIG_LENGTH MSG_WIPING_SKIPPED, type, name);
+			return 2;
 		}
 	} else if (!blkid_probe_lookup_value(probe, "PTTYPE", &type, NULL)) {
 		if (blkid_probe_lookup_value(probe, "PTMAGIC_OFFSET", &offset, NULL)) {
 			if (force < DONT_PROMPT) {
 				log_error(MSG_FAILED_SIG_OFFSET, type, name);
 				return 0;
-			} else {
-				log_warn("WARNING: " MSG_FAILED_SIG_OFFSET MSG_WIPING_SKIPPED, type, name);
-				return 2;
 			}
+
+			log_warn("WARNING: " MSG_FAILED_SIG_OFFSET MSG_WIPING_SKIPPED, type, name);
+			return 2;
 		}
 		if (blkid_probe_lookup_value(probe, "PTMAGIC", &magic, &len)) {
 			if (force < DONT_PROMPT) {
 				log_error(MSG_FAILED_SIG_LENGTH, type, name);
 				return 0;
-			} else {
-				log_warn("WARNING: " MSG_FAILED_SIG_LENGTH MSG_WIPING_SKIPPED, type, name);
-				return 2;
 			}
+
+			log_warn("WARNING: " MSG_FAILED_SIG_LENGTH MSG_WIPING_SKIPPED, type, name);
+			return 2;
 		}
 		usage = "partition table";
 	} else
@@ -665,7 +674,7 @@ static int _blkid_wipe(blkid_probe probe, struct device *dev, const char *name,
 	} else
 		log_verbose(_msg_wiping, type, name);
 
-	if (!dev_set(dev, offset_value, len, 0)) {
+	if (!dev_write_zeros(dev, offset_value, len)) {
 		log_error("Failed to wipe %s signature on %s.", type, name);
 		return 0;
 	}
@@ -738,12 +747,12 @@ out:
 
 static int _wipe_signature(struct device *dev, const char *type, const char *name,
 			   int wipe_len, int yes, force_t force, int *wiped,
-			   int (*signature_detection_fn)(struct device *dev, uint64_t *offset_found))
+			   int (*signature_detection_fn)(struct device *dev, uint64_t *offset_found, int full))
 {
 	int wipe;
 	uint64_t offset_found;
 
-	wipe = signature_detection_fn(dev, &offset_found);
+	wipe = signature_detection_fn(dev, &offset_found, 1);
 	if (wipe == -1) {
 		log_error("Fatal error while trying to detect %s on %s.",
 			  type, name);
@@ -762,7 +771,7 @@ static int _wipe_signature(struct device *dev, const char *type, const char *nam
 	}
 
 	log_print_unless_silent("Wiping %s on %s.", type, name);
-	if (!dev_set(dev, offset_found, wipe_len, 0)) {
+	if (!dev_write_zeros(dev, offset_found, wipe_len)) {
 		log_error("Failed to wipe %s on %s.", type, name);
 		return 0;
 	}
@@ -995,25 +1004,23 @@ int dev_is_rotational(struct dev_types *dt, struct device *dev)
  *        failed already due to timeout in udev - in both cases the
  *        udev_device_get_is_initialized returns 0.
  */
-#define UDEV_DEV_IS_MPATH_COMPONENT_ITERATION_COUNT 100
-#define UDEV_DEV_IS_MPATH_COMPONENT_USLEEP 100000
+#define UDEV_DEV_IS_COMPONENT_ITERATION_COUNT 100
+#define UDEV_DEV_IS_COMPONENT_USLEEP 100000
 
-int udev_dev_is_mpath_component(struct device *dev)
+static struct udev_device *_udev_get_dev(struct device *dev)
 {
 	struct udev *udev_context = udev_get_library_context();
 	struct udev_device *udev_device = NULL;
-	const char *value;
 	int initialized = 0;
 	unsigned i = 0;
-	int ret = 0;
 
 	if (!udev_context) {
 		log_warn("WARNING: No udev context available to check if device %s is multipath component.", dev_name(dev));
-		return 0;
+		return NULL;
 	}
 
 	while (1) {
-		if (i >= UDEV_DEV_IS_MPATH_COMPONENT_ITERATION_COUNT)
+		if (i >= UDEV_DEV_IS_COMPONENT_ITERATION_COUNT)
 			break;
 
 		if (udev_device)
@@ -1021,7 +1028,7 @@ int udev_dev_is_mpath_component(struct device *dev)
 
 		if (!(udev_device = udev_device_new_from_devnum(udev_context, 'b', dev->dev))) {
 			log_warn("WARNING: Failed to get udev device handler for device %s.", dev_name(dev));
-			return 0;
+			return NULL;
 		}
 
 #ifdef HAVE_LIBUDEV_UDEV_DEVICE_GET_IS_INITIALIZED
@@ -1033,18 +1040,31 @@ int udev_dev_is_mpath_component(struct device *dev)
 #endif
 
 		log_debug("Device %s not initialized in udev database (%u/%u, %u microseconds).", dev_name(dev),
-			   i + 1, UDEV_DEV_IS_MPATH_COMPONENT_ITERATION_COUNT,
-			   i * UDEV_DEV_IS_MPATH_COMPONENT_USLEEP);
+			   i + 1, UDEV_DEV_IS_COMPONENT_ITERATION_COUNT,
+			   i * UDEV_DEV_IS_COMPONENT_USLEEP);
 
-		usleep(UDEV_DEV_IS_MPATH_COMPONENT_USLEEP);
+		usleep(UDEV_DEV_IS_COMPONENT_USLEEP);
 		i++;
 	}
 
 	if (!initialized) {
 		log_warn("WARNING: Device %s not initialized in udev database even after waiting %u microseconds.",
-			  dev_name(dev), i * UDEV_DEV_IS_MPATH_COMPONENT_USLEEP);
+			  dev_name(dev), i * UDEV_DEV_IS_COMPONENT_USLEEP);
 		goto out;
 	}
+
+out:
+	return udev_device;
+}
+
+int udev_dev_is_mpath_component(struct device *dev)
+{
+	struct udev_device *udev_device;
+	const char *value;
+	int ret = 0;
+
+	if (!(udev_device = _udev_get_dev(dev)))
+		return 0;
 
 	value = udev_device_get_property_value(udev_device, DEV_EXT_UDEV_BLKID_TYPE);
 	if (value && !strcmp(value, DEV_EXT_UDEV_BLKID_TYPE_MPATH)) {
@@ -1065,9 +1085,36 @@ out:
 	udev_device_unref(udev_device);
 	return ret;
 }
+
+int udev_dev_is_md_component(struct device *dev)
+{
+	struct udev_device *udev_device;
+	const char *value;
+	int ret = 0;
+
+	if (!(udev_device = _udev_get_dev(dev)))
+		return 0;
+
+	value = udev_device_get_property_value(udev_device, DEV_EXT_UDEV_BLKID_TYPE);
+	if (value && !strcmp(value, DEV_EXT_UDEV_BLKID_TYPE_SW_RAID)) {
+		log_debug("Device %s is md raid component based on blkid variable in udev db (%s=\"%s\").",
+			   dev_name(dev), DEV_EXT_UDEV_BLKID_TYPE, value);
+		ret = 1;
+		goto out;
+	}
+out:
+	udev_device_unref(udev_device);
+	return ret;
+}
+
 #else
 
 int udev_dev_is_mpath_component(struct device *dev)
+{
+	return 0;
+}
+
+int udev_dev_is_md_component(struct device *dev)
 {
 	return 0;
 }

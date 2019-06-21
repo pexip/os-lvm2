@@ -12,9 +12,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#define _REENTRANT
-
-#include "tool.h"
+#include "tools/tool.h"
 
 #include "daemon-io.h"
 

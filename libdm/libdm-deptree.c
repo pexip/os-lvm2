@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2005-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
  *
@@ -12,19 +12,17 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 #include "libdm-targets.h"
 #include "libdm-common.h"
-#include "kdev_t.h"
-#include "dm-ioctl.h"
+#include "libdm/misc/kdev_t.h"
+#include "libdm/misc/dm-ioctl.h"
 
 #include <stdarg.h>
 #include <sys/param.h>
 #include <sys/utsname.h>
 
 #define MAX_TARGET_PARAMSIZE 500000
-
-#define REPLICATOR_LOCAL_SITE 0
 
 /* Supported segment types */
 enum {
@@ -33,8 +31,6 @@ enum {
 	SEG_ERROR,
 	SEG_LINEAR,
 	SEG_MIRRORED,
-	SEG_REPLICATOR,
-	SEG_REPLICATOR_DEV,
 	SEG_SNAPSHOT,
 	SEG_SNAPSHOT_ORIGIN,
 	SEG_SNAPSHOT_MERGE,
@@ -47,13 +43,19 @@ enum {
 	SEG_RAID1,
 	SEG_RAID10,
 	SEG_RAID4,
+	SEG_RAID5_N,
 	SEG_RAID5_LA,
 	SEG_RAID5_RA,
 	SEG_RAID5_LS,
 	SEG_RAID5_RS,
+	SEG_RAID6_N_6,
 	SEG_RAID6_ZR,
 	SEG_RAID6_NR,
 	SEG_RAID6_NC,
+	SEG_RAID6_LS_6,
+	SEG_RAID6_RS_6,
+	SEG_RAID6_LA_6,
+	SEG_RAID6_RA_6,
 };
 
 /* FIXME Add crypt and multipath support */
@@ -67,8 +69,6 @@ static const struct {
 	{ SEG_ERROR, "error" },
 	{ SEG_LINEAR, "linear" },
 	{ SEG_MIRRORED, "mirror" },
-	{ SEG_REPLICATOR, "replicator" },
-	{ SEG_REPLICATOR_DEV, "replicator-dev" },
 	{ SEG_SNAPSHOT, "snapshot" },
 	{ SEG_SNAPSHOT_ORIGIN, "snapshot-origin" },
 	{ SEG_SNAPSHOT_MERGE, "snapshot-merge" },
@@ -81,13 +81,20 @@ static const struct {
 	{ SEG_RAID1, "raid1"},
 	{ SEG_RAID10, "raid10"},
 	{ SEG_RAID4, "raid4"},
+	{ SEG_RAID5_N,  "raid5_n"},
 	{ SEG_RAID5_LA, "raid5_la"},
 	{ SEG_RAID5_RA, "raid5_ra"},
 	{ SEG_RAID5_LS, "raid5_ls"},
 	{ SEG_RAID5_RS, "raid5_rs"},
+	{ SEG_RAID6_N_6,"raid6_n_6"},
 	{ SEG_RAID6_ZR, "raid6_zr"},
 	{ SEG_RAID6_NR, "raid6_nr"},
 	{ SEG_RAID6_NC, "raid6_nc"},
+	{ SEG_RAID6_LS_6, "raid6_ls_6"},
+	{ SEG_RAID6_RS_6, "raid6_rs_6"},
+	{ SEG_RAID6_LA_6, "raid6_la_6"},
+	{ SEG_RAID6_RA_6, "raid6_ra_6"},
+
 
 	/*
 	 * WARNING: Since 'raid' target overloads this 1:1 mapping table
@@ -95,6 +102,7 @@ static const struct {
 	 */
 	{ SEG_RAID5_LS, "raid5"}, /* same as "raid5_ls" (default for MD also) */
 	{ SEG_RAID6_ZR, "raid6"}, /* same as "raid6_zr" */
+	{ SEG_RAID10, "raid10_near"}, /* same as "raid10" */
 };
 
 /* Some segment types have a list of areas of other devices attached */
@@ -104,11 +112,6 @@ struct seg_area {
 	struct dm_tree_node *dev_node;
 
 	uint64_t offset;
-
-	unsigned rsite_index;		/* Replicator site index */
-	struct dm_tree_node *slog;	/* Replicator sync log node */
-	uint64_t region_size;		/* Replicator sync log size */
-	uint32_t flags;			/* Replicator sync log flags */
 };
 
 struct dm_thin_message {
@@ -137,18 +140,6 @@ struct thin_message {
 	int expected_errno;
 };
 
-/* Replicator-log has a list of sites */
-/* FIXME: maybe move to seg_area too? */
-struct replicator_site {
-	struct dm_list list;
-
-	unsigned rsite_index;
-	dm_replicator_mode_t mode;
-	uint32_t async_timeout;
-	uint32_t fall_behind_ios;
-	uint64_t fall_behind_data;
-};
-
 /* Per-segment properties */
 struct load_segment {
 	struct dm_list list;
@@ -157,8 +148,8 @@ struct load_segment {
 
 	uint64_t size;
 
-	unsigned area_count;		/* Linear + Striped + Mirrored + Crypt + Replicator */
-	struct dm_list areas;		/* Linear + Striped + Mirrored + Crypt + Replicator */
+	unsigned area_count;		/* Linear + Striped + Mirrored + Crypt */
+	struct dm_list areas;		/* Linear + Striped + Mirrored + Crypt */
 
 	uint32_t stripe_size;		/* Striped + raid */
 
@@ -168,7 +159,7 @@ struct load_segment {
 	struct dm_tree_node *origin;	/* Snapshot + Snapshot origin + Cache */
 	struct dm_tree_node *merge;	/* Snapshot */
 
-	struct dm_tree_node *log;	/* Mirror + Replicator */
+	struct dm_tree_node *log;	/* Mirror */
 	uint32_t region_size;		/* Mirror + raid */
 	unsigned clustered;		/* Mirror */
 	unsigned mirror_area_count;	/* Mirror */
@@ -185,18 +176,14 @@ struct load_segment {
 	uint64_t iv_offset;		/* Crypt */
 	const char *key;		/* Crypt */
 
-	const char *rlog_type;		/* Replicator */
-	struct dm_list rsites;		/* Replicator */
-	unsigned rsite_count;		/* Replicator */
-	unsigned rdevice_count;		/* Replicator */
-	struct dm_tree_node *replicator;/* Replicator-dev */
-	uint64_t rdevice_index;		/* Replicator-dev */
-
-	uint64_t rebuilds;		/* raid */
-	uint64_t writemostly;		/* raid */
+	int delta_disks;		/* raid reshape number of disks */
+	int data_offset;		/* raid reshape data offset on disk to set */
+	uint64_t rebuilds[RAID_BITMAP_SIZE];	/* raid */
+	uint64_t writemostly[RAID_BITMAP_SIZE];	/* raid */
 	uint32_t writebehind;		/* raid */
 	uint32_t max_recovery_rate;	/* raid kB/sec/disk */
 	uint32_t min_recovery_rate;	/* raid kB/sec/disk */
+	uint32_t data_copies;		/* raid10 data_copies */
 
 	struct dm_tree_node *metadata;	/* Thin_pool + Cache */
 	struct dm_tree_node *pool;	/* Thin_pool, Thin */
@@ -244,6 +231,19 @@ struct load_properties {
 	 * avoid starting the mirror resync operation too early.
 	 */
 	unsigned delay_resume_if_new;
+
+	/*
+	 * Preload tree normally only loads and not resume, but there is
+	 * automatic resume when target is extended, as it's believed
+	 * there can be no i/o flying to this 'new' extedend space
+	 * from any device above. Reason is that preloaded target above
+	 * may actually need to see its bigger subdevice before it
+	 * gets suspended. As long as devices are simple linears
+	 * there is no problem to resume bigger device in preload (before commit).
+	 * However complex targets like thin-pool (raid,cache...)
+	 * they shall not be resumed before their commit.
+	 */
+	unsigned delay_resume_if_extended;
 
 	/*
 	 * Call node_send_messages(), set to 2 if there are messages
@@ -506,15 +506,14 @@ static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
 	struct dm_tree_node *node;
 	dev_t dev;
 
-	if (!(node = dm_pool_zalloc(dtree->mem, sizeof(*node)))) {
-		log_error("_create_dm_tree_node alloc failed");
+	if (!(node = dm_pool_zalloc(dtree->mem, sizeof(*node))) ||
+	    !(node->name = dm_pool_strdup(dtree->mem, name)) ||
+	    !(node->uuid = dm_pool_strdup(dtree->mem, uuid))) {
+		log_error("_create_dm_tree_node alloc failed.");
 		return NULL;
 	}
 
 	node->dtree = dtree;
-
-	node->name = name;
-	node->uuid = uuid;
 	node->info = *info;
 	node->context = context;
 	node->udev_flags = udev_flags;
@@ -524,17 +523,16 @@ static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
 	dm_list_init(&node->activated);
 	dm_list_init(&node->props.segs);
 
-	dev = MKDEV((dev_t)info->major, (dev_t)info->minor);
+	dev = MKDEV(info->major, info->minor);
 
 	if (!dm_hash_insert_binary(dtree->devs, (const char *) &dev,
-				sizeof(dev), node)) {
+				   sizeof(dev), node)) {
 		log_error("dtree node hash insertion failed");
 		dm_pool_free(dtree->mem, node);
 		return NULL;
 	}
 
-	if (uuid && *uuid &&
-	    !dm_hash_insert(dtree->uuids, uuid, node)) {
+	if (*uuid && !dm_hash_insert(dtree->uuids, uuid, node)) {
 		log_error("dtree uuid hash insertion failed");
 		dm_hash_remove_binary(dtree->devs, (const char *) &dev,
 				      sizeof(dev));
@@ -548,7 +546,7 @@ static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
 static struct dm_tree_node *_find_dm_tree_node(struct dm_tree *dtree,
 					       uint32_t major, uint32_t minor)
 {
-	dev_t dev = MKDEV((dev_t)major, (dev_t)minor);
+	dev_t dev = MKDEV(major, minor);
 
 	return dm_hash_lookup_binary(dtree->devs, (const char *) &dev,
 				     sizeof(dev));
@@ -611,8 +609,9 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 static const char *_node_name(struct dm_tree_node *dnode)
 {
 	if (dm_snprintf(dnode->dtree->buf, sizeof(dnode->dtree->buf),
-			"%s (%" PRIu32 ":%" PRIu32 ")",
-			dnode->name, dnode->info.major, dnode->info.minor) < 0) {
+			"%s (" FMTu32 ":" FMTu32 ")",
+			dnode->name ? dnode->name : "",
+			dnode->info.major, dnode->info.minor) < 0) {
 		stack;
 		return dnode->name;
 	}
@@ -623,12 +622,9 @@ static const char *_node_name(struct dm_tree_node *dnode)
 void dm_tree_node_set_udev_flags(struct dm_tree_node *dnode, uint16_t udev_flags)
 
 {
-	struct dm_info *dinfo = &dnode->info;
-
 	if (udev_flags != dnode->udev_flags)
-		log_debug_activation("Resetting %s (%" PRIu32 ":%" PRIu32
-				     ") udev_flags from 0x%x to 0x%x",
-				     dnode->name, dinfo->major, dinfo->minor,
+		log_debug_activation("Resetting %s udev_flags from 0x%x to 0x%x.",
+				     _node_name(dnode),
 				     dnode->udev_flags, udev_flags);
 	dnode->udev_flags = udev_flags;
 }
@@ -817,31 +813,21 @@ static int _deps(struct dm_task **dmt, struct dm_pool *mem, uint32_t major, uint
 		 struct dm_info *info, struct dm_deps **deps)
 {
 	memset(info, 0, sizeof(*info));
+	*name = "";
+	*uuid = "";
+	*deps = NULL;
 
 	if (!dm_is_dm_major(major)) {
-		if (name)
-			*name = "";
-		if (uuid)
-			*uuid = "";
-		*deps = NULL;
 		info->major = major;
 		info->minor = minor;
 		return 1;
 	}
 
-	if (!(*dmt = dm_task_create(DM_DEVICE_DEPS))) {
-		log_error("deps dm_task creation failed");
-		return 0;
-	}
+	if (!(*dmt = dm_task_create(DM_DEVICE_DEPS)))
+		return_0;
 
-	if (!dm_task_set_major(*dmt, major)) {
-		log_error("_deps: failed to set major for (%" PRIu32 ":%" PRIu32 ")",
-			  major, minor);
-		goto failed;
-	}
-
-	if (!dm_task_set_minor(*dmt, minor)) {
-		log_error("_deps: failed to set minor for (%" PRIu32 ":%" PRIu32 ")",
+	if (!dm_task_set_major(*dmt, major) || !dm_task_set_minor(*dmt, minor)) {
+		log_error("_deps: failed to set major:minor for (" FMTu32 ":" FMTu32 ").",
 			  major, minor);
 		goto failed;
 	}
@@ -864,13 +850,7 @@ static int _deps(struct dm_task **dmt, struct dm_pool *mem, uint32_t major, uint
 		goto failed;
 	}
 
-	if (!info->exists) {
-		if (name)
-			*name = "";
-		if (uuid)
-			*uuid = "";
-		*deps = NULL;
-	} else {
+	if (info->exists) {
 		if (info->major != major) {
 			log_error("Inconsistent dtree major number: %u != %u",
 				  major, info->major);
@@ -881,14 +861,8 @@ static int _deps(struct dm_task **dmt, struct dm_pool *mem, uint32_t major, uint
 				  minor, info->minor);
 			goto failed;
 		}
-		if (name && !(*name = dm_pool_strdup(mem, dm_task_get_name(*dmt)))) {
-			log_error("name pool_strdup failed");
-			goto failed;
-		}
-		if (uuid && !(*uuid = dm_pool_strdup(mem, dm_task_get_uuid(*dmt)))) {
-			log_error("uuid pool_strdup failed");
-			goto failed;
-		}
+		*name = dm_task_get_name(*dmt);
+		*uuid = dm_task_get_uuid(*dmt);
 		*deps = dm_task_get_deps(*dmt);
 	}
 
@@ -896,6 +870,8 @@ static int _deps(struct dm_task **dmt, struct dm_pool *mem, uint32_t major, uint
 
 failed:
 	dm_task_destroy(*dmt);
+	*dmt = NULL;
+
 	return 0;
 }
 
@@ -907,40 +883,36 @@ static int _info_by_dev(uint32_t major, uint32_t minor, int with_open_count,
 			const char **name, const char **uuid)
 {
 	struct dm_task *dmt;
-	int r;
+	int r = 0;
 
-	if (!(dmt = dm_task_create(DM_DEVICE_INFO))) {
-		log_error("_info_by_dev: dm_task creation failed");
-		return 0;
-	}
+	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
+		return_0;
 
 	if (!dm_task_set_major(dmt, major) || !dm_task_set_minor(dmt, minor)) {
-		log_error("_info_by_dev: Failed to set device number");
-		dm_task_destroy(dmt);
-		return 0;
+		log_error("_info_by_dev: Failed to set device number.");
+		goto out;
 	}
 
 	if (!with_open_count && !dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
-	if (!(r = dm_task_run(dmt)))
+	if (!dm_task_run(dmt))
 		goto_out;
 
-	if (!(r = dm_task_get_info(dmt, info)))
+	if (!dm_task_get_info(dmt, info))
 		goto_out;
 
 	if (name && !(*name = dm_pool_strdup(mem, dm_task_get_name(dmt)))) {
 		log_error("name pool_strdup failed");
-		r = 0;
 		goto out;
 	}
 
 	if (uuid && !(*uuid = dm_pool_strdup(mem, dm_task_get_uuid(dmt)))) {
 		log_error("uuid pool_strdup failed");
-		r = 0;
 		goto out;
 	}
 
+	r = 1;
 out:
 	dm_task_destroy(dmt);
 
@@ -949,33 +921,26 @@ out:
 
 static int _check_device_not_in_use(const char *name, struct dm_info *info)
 {
+	const char *reason;
+
 	if (!info->exists)
 		return 1;
 
 	/* If sysfs is not used, use open_count information only. */
 	if (!*dm_sysfs_dir()) {
-		if (info->open_count) {
-			log_error("Device %s (%" PRIu32 ":%" PRIu32 ") in use",
-				  name, info->major, info->minor);
-			return 0;
-		}
-
+		if (!info->open_count)
+			return 1;
+		reason = "in use";
+	} else if (dm_device_has_holders(info->major, info->minor))
+		reason = "is used by another device";
+	else if (dm_device_has_mounted_fs(info->major, info->minor))
+		reason = "constains a filesystem in use";
+	else
 		return 1;
-	}
 
-	if (dm_device_has_holders(info->major, info->minor)) {
-		log_error("Device %s (%" PRIu32 ":%" PRIu32 ") is used "
-			  "by another device.", name, info->major, info->minor);
-		return 0;
-	}
-
-	if (dm_device_has_mounted_fs(info->major, info->minor)) {
-		log_error("Device %s (%" PRIu32 ":%" PRIu32 ") contains "
-			  "a filesystem in use.", name, info->major, info->minor);
-		return 0;
-	}
-
-	return 1;
+	log_error("Device %s (" FMTu32 ":" FMTu32 ") %s.",
+		  name, info->major, info->minor, reason);
+	return 0;
 }
 
 /* Check if all parent nodes of given node have open_count == 0 */
@@ -1003,8 +968,10 @@ static int _node_has_closed_parents(struct dm_tree_node *node,
 			return_0;	/* FIXME Is this normal? */
 
 		/* Refresh open_count */
-		if (!_info_by_dev(dinfo->major, dinfo->minor, 1, &info, NULL, NULL, NULL) ||
-		    !info.exists)
+		if (!_info_by_dev(dinfo->major, dinfo->minor, 1, &info, NULL, NULL, NULL))
+			return_0;
+
+		if (!info.exists)
 			continue;
 
 		if (info.open_count) {
@@ -1036,7 +1003,7 @@ static int _deactivate_node(const char *name, uint32_t major, uint32_t minor,
 	}
 
 	if (!dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
 	if (cookie)
 		if (!dm_task_set_cookie(dmt, cookie, udev_flags))
@@ -1062,18 +1029,13 @@ out:
 static int _node_clear_table(struct dm_tree_node *dnode, uint16_t udev_flags)
 {
 	struct dm_task *dmt = NULL, *deps_dmt = NULL;
-	struct dm_info *info, deps_info;
+	struct dm_info *info = &dnode->info, deps_info;
 	struct dm_deps *deps = NULL;
-	const char *name, *uuid;
+	const char *name, *uuid, *depname, *depuuid;
 	const char *default_uuid_prefix;
 	size_t default_uuid_prefix_len;
 	uint32_t i;
 	int r = 0;
-
-	if (!(info = &dnode->info)) {
-		log_error("_node_clear_table failed: missing info");
-		return 0;
-	}
 
 	if (!(name = dm_tree_node_get_name(dnode))) {
 		log_error("_node_clear_table failed: missing name");
@@ -1085,7 +1047,7 @@ static int _node_clear_table(struct dm_tree_node *dnode, uint16_t udev_flags)
 		return 1;
 
 	/* Get devices used by inactive table that's about to be deleted. */
-	if (!_deps(&deps_dmt, dnode->dtree->mem, info->major, info->minor, NULL, NULL, 1, info, &deps)) {
+	if (!_deps(&deps_dmt, dnode->dtree->mem, info->major, info->minor, &depname, &depuuid, 1, info, &deps)) {
 		log_error("Failed to obtain dependencies for %s before clearing table.", name);
 		return 0;
 	}
@@ -1129,7 +1091,7 @@ static int _node_clear_table(struct dm_tree_node *dnode, uint16_t udev_flags)
 
 		if (!_info_by_dev(MAJOR(deps->device[i]), MINOR(deps->device[i]), 1,
 				  &deps_info, dnode->dtree->mem, &name, &uuid))
-			continue;
+			goto_out;
 
 		/* Proceed if device is an 'orphan' - unreferenced and without a live table. */
 		if (!deps_info.exists || deps_info.live_table || deps_info.open_count)
@@ -1168,8 +1130,6 @@ struct dm_tree_node *dm_tree_add_new_dev_with_udev_flags(struct dm_tree *dtree,
 {
 	struct dm_tree_node *dnode;
 	struct dm_info info = { 0 };
-	const char *name2;
-	const char *uuid2;
 
 	if (!name || !uuid) {
 		log_error("Cannot add device without name and uuid.");
@@ -1178,16 +1138,7 @@ struct dm_tree_node *dm_tree_add_new_dev_with_udev_flags(struct dm_tree *dtree,
 
 	/* Do we need to add node to tree? */
 	if (!(dnode = dm_tree_find_node_by_uuid(dtree, uuid))) {
-		if (!(name2 = dm_pool_strdup(dtree->mem, name))) {
-			log_error("name pool_strdup failed");
-			return NULL;
-		}
-		if (!(uuid2 = dm_pool_strdup(dtree->mem, uuid))) {
-			log_error("uuid pool_strdup failed");
-			return NULL;
-		}
-
-		if (!(dnode = _create_dm_tree_node(dtree, name2, uuid2, &info,
+		if (!(dnode = _create_dm_tree_node(dtree, name, uuid, &info,
 						   context, 0)))
 			return_NULL;
 
@@ -1326,7 +1277,7 @@ static int _rename_node(const char *old_name, const char *new_name, uint32_t maj
 		goto_out;
 
 	if (!dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
 	if (!dm_task_set_cookie(dmt, cookie, udev_flags))
 		goto out;
@@ -1348,7 +1299,7 @@ static int _resume_node(const char *name, uint32_t major, uint32_t minor,
 	struct dm_task *dmt;
 	int r = 0;
 
-	log_verbose("Resuming %s (%" PRIu32 ":%" PRIu32 ")", name, major, minor);
+	log_verbose("Resuming %s (" FMTu32 ":" FMTu32 ").", name, major, minor);
 
 	if (!(dmt = dm_task_create(DM_DEVICE_RESUME))) {
 		log_debug_activation("Suspend dm_task creation failed for %s.", name);
@@ -1367,10 +1318,10 @@ static int _resume_node(const char *name, uint32_t major, uint32_t minor,
 	}
 
 	if (!dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
 	if (!dm_task_set_read_ahead(dmt, read_ahead, read_ahead_flags))
-		log_error("Failed to set read ahead");
+		log_warn("WARNING: Failed to set read ahead.");
 
 	if (!dm_task_set_cookie(dmt, cookie, udev_flags))
 		goto_out;
@@ -1394,7 +1345,7 @@ static int _suspend_node(const char *name, uint32_t major, uint32_t minor,
 			 int skip_lockfs, int no_flush, struct dm_info *newinfo)
 {
 	struct dm_task *dmt;
-	int r;
+	int r = 0;
 
 	log_verbose("Suspending %s (%" PRIu32 ":%" PRIu32 ")%s%s",
 		    name, major, minor,
@@ -1408,24 +1359,23 @@ static int _suspend_node(const char *name, uint32_t major, uint32_t minor,
 
 	if (!dm_task_set_major(dmt, major) || !dm_task_set_minor(dmt, minor)) {
 		log_error("Failed to set device number for %s suspension.", name);
-		dm_task_destroy(dmt);
-		return 0;
+		goto out;
 	}
 
 	if (!dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
 	if (skip_lockfs && !dm_task_skip_lockfs(dmt))
-		log_error("Failed to set skip_lockfs flag.");
+		log_warn("WARNING: Failed to set skip_lockfs flag.");
 
 	if (no_flush && !dm_task_no_flush(dmt))
-		log_error("Failed to set no_flush flag.");
+		log_warn("WARNING: Failed to set no_flush flag.");
 
 	if ((r = dm_task_run(dmt))) {
 		inc_suspended();
 		r = dm_task_get_info(dmt, newinfo);
 	}
-
+out:
 	dm_task_destroy(dmt);
 
 	return r;
@@ -1450,16 +1400,16 @@ static int _thin_pool_get_status(struct dm_tree_node *dnode,
 	}
 
 	if (!dm_task_no_flush(dmt))
-		log_warn("Can't set no_flush flag."); /* Non fatal */
+		log_warn("WARNING: Can't set no_flush flag."); /* Non fatal */
 
 	if (!dm_task_run(dmt))
 		goto_out;
 
 	dm_get_next_target(dmt, NULL, &start, &length, &type, &params);
 
-	if (type && (strcmp(type, "thin-pool") != 0)) {
-		log_error("Expected thin-pool target for %d:%d and got %s.",
-			  dnode->info.major, dnode->info.minor, type);
+	if (!type || (strcmp(type, "thin-pool") != 0)) {
+		log_error("Expected thin-pool target for %s and got %s.",
+			  _node_name(dnode), type ? : "no target");
 		goto out;
 	}
 
@@ -1548,6 +1498,16 @@ out:
 	return r;
 }
 
+static struct load_segment *_get_last_load_segment(struct dm_tree_node *node)
+{
+	if (dm_list_empty(&node->props.segs)) {
+		log_error("Node %s is missing a segment.", _node_name(node));
+		return NULL;
+	}
+
+	return dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
+}
+
 /* For preload pass only validate pool's transaction_id */
 static int _node_send_messages(struct dm_tree_node *dnode,
 			       const char *uuid_prefix,
@@ -1556,14 +1516,16 @@ static int _node_send_messages(struct dm_tree_node *dnode,
 {
 	struct load_segment *seg;
 	struct thin_message *tmsg;
-	struct dm_status_thin_pool stp = { 0 };
+	struct dm_status_thin_pool stp;
 	const char *uuid;
 	int have_messages;
 
-	if (!dnode->info.exists || (dm_list_size(&dnode->props.segs) != 1))
+	if (!dnode->info.exists)
 		return 1;
 
-	seg = dm_list_item(dm_list_last(&dnode->props.segs), struct load_segment);
+	if (!(seg = _get_last_load_segment(dnode)))
+		return_0;
+
 	if (seg->type != SEG_THIN_POOL)
 		return 1;
 
@@ -1656,8 +1618,10 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 			continue;
 
 		/* Refresh open_count */
-		if (!_info_by_dev(dinfo->major, dinfo->minor, 1, &info, NULL, NULL, NULL) ||
-		    !info.exists)
+		if (!_info_by_dev(dinfo->major, dinfo->minor, 1, &info, NULL, NULL, NULL))
+			return_0;
+
+		if (!info.exists)
 			continue;
 
 		if (info.open_count) {
@@ -1667,8 +1631,8 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 
 			/* When retry is not allowed, error */
 			if (!child->dtree->retry_remove) {
-				log_error("Unable to deactivate open %s (%" PRIu32
-					  ":%" PRIu32 ")", name, info.major, info.minor);
+				log_error("Unable to deactivate open %s (" FMTu32 ":"
+					  FMTu32 ").", name, info.major, info.minor);
 				r = 0;
 				continue;
 			}
@@ -1688,9 +1652,8 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 					       uuid_prefix, uuid_prefix_len))) {
 			/* Only report error from (likely non-internal) dependency at top level */
 			if (!level) {
-				log_error("Unable to deactivate open %s (%" PRIu32
-					  ":%" PRIu32 ")", name, info.major,
-				  	info.minor);
+				log_error("Unable to deactivate open %s (" FMTu32 ":"
+					  FMTu32 ").", name, info.major, info.minor);
 				r = 0;
 			}
 			continue;
@@ -1704,9 +1667,8 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 		if (!_deactivate_node(name, info.major, info.minor,
 				      &child->dtree->cookie, child->udev_flags,
 				      (level == 0) ? child->dtree->retry_remove : 0)) {
-			log_error("Unable to deactivate %s (%" PRIu32
-				  ":%" PRIu32 ")", name, info.major,
-				  info.minor);
+			log_error("Unable to deactivate %s (" FMTu32 ":"
+				  FMTu32 ").", name, info.major, info.minor);
 			r = 0;
 			continue;
 		}
@@ -1718,9 +1680,11 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 		    !child->callback(child, DM_NODE_CALLBACK_DEACTIVATED,
 				     child->callback_data))
 			stack;
-			// FIXME: We need to let lvremove pass,
-			// so for now deactivation ignores check result
-			//r = 0; // FIXME: _node_clear_table() without callback ?
+			/* FIXME Deactivation must currently ignore failure
+			 * here so that lvremove can continue: we need an
+			 * alternative way to handle this state without 
+			 * setting r=0.  Or better, skip calling thin_check
+			 * entirely if the device is about to be removed. */
 
 		if (dm_tree_node_num_children(child, 0) &&
 		    !_dm_tree_deactivate_children(child, uuid_prefix, uuid_prefix_len, level + 1))
@@ -1774,8 +1738,10 @@ int dm_tree_suspend_children(struct dm_tree_node *dnode,
 		if (!_children_suspended(child, 1, uuid_prefix, uuid_prefix_len))
 			continue;
 
-		if (!_info_by_dev(dinfo->major, dinfo->minor, 0, &info, NULL, NULL, NULL) ||
-		    !info.exists || info.suspended)
+		if (!_info_by_dev(dinfo->major, dinfo->minor, 0, &info, NULL, NULL, NULL))
+			return_0;
+
+		if (!info.exists || info.suspended)
 			continue;
 
 		/* If child has some real messages send them */
@@ -1794,9 +1760,8 @@ int dm_tree_suspend_children(struct dm_tree_node *dnode,
 		if (!_suspend_node(name, info.major, info.minor,
 				   child->dtree->skip_lockfs,
 				   child->dtree->no_flush, &newinfo)) {
-			log_error("Unable to suspend %s (%" PRIu32
-				  ":%" PRIu32 ")", name, info.major,
-				  info.minor);
+			log_error("Unable to suspend %s (" FMTu32 ":"
+				  FMTu32 ")", name, info.major, info.minor);
 			r = 0;
 			continue;
 		}
@@ -1883,7 +1848,6 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 	int resolvable_name_conflict, awaiting_peer_rename = 0;
 	void *handle = NULL;
 	struct dm_tree_node *child = dnode;
-	struct dm_info newinfo;
 	const char *name;
 	const char *uuid;
 	int priority;
@@ -1948,16 +1912,11 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 
 			if (!_resume_node(child->name, child->info.major, child->info.minor,
 					  child->props.read_ahead, child->props.read_ahead_flags,
-					  &newinfo, &child->dtree->cookie, child->udev_flags, child->info.suspended)) {
-				log_error("Unable to resume %s (%" PRIu32
-					  ":%" PRIu32 ")", child->name, child->info.major,
-					  child->info.minor);
+					  &child->info, &child->dtree->cookie, child->udev_flags, child->info.suspended)) {
+				log_error("Unable to resume %s.", _node_name(child));
 				r = 0;
 				continue;
 			}
-
-			/* Update cached info */
-			child->info = newinfo;
 		}
 		if (awaiting_peer_rename)
 			priority--; /* redo priority level */
@@ -1970,7 +1929,7 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 	 * resume should continue further, just whole command
 	 * has to report failure.
 	 */
-	if (r && dnode->props.send_messages &&
+	if (r && (dnode->props.send_messages > 1) &&
 	    !(r = _node_send_messages(dnode, uuid_prefix, uuid_prefix_len, 1)))
 		stack;
 
@@ -2012,7 +1971,7 @@ static int _create_node(struct dm_tree_node *dnode)
 	}
 
 	if (!dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
 	if ((r = dm_task_run(dmt))) {
 		if (!(r = dm_task_get_info(dmt, &dnode->info)))
@@ -2051,9 +2010,8 @@ static int _remove_node(struct dm_tree_node *dnode)
 
 	if (!_deactivate_node(dnode->name, dnode->info.major, dnode->info.minor,
 			      &dnode->dtree->cookie, dnode->udev_flags, 0)) {
-		log_error("Failed to clean-up device with no table: %s %u:%u",
-			  dnode->name ? dnode->name : "",
-			  dnode->info.major, dnode->info.minor);
+		log_error("Failed to clean-up device with no table: %s.",
+			  _node_name(dnode));
 		return 0;
 	}
 	return 1;
@@ -2094,59 +2052,27 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 	struct seg_area *area;
 	char devbuf[DM_FORMAT_DEV_BUFSIZE];
 	unsigned first_time = 1;
-	const char *logtype, *synctype;
-	unsigned log_parm_count;
 
 	dm_list_iterate_items(area, &seg->areas) {
 		switch (seg->type) {
-		case SEG_REPLICATOR_DEV:
-			if (!_build_dev_string(devbuf, sizeof(devbuf), area->dev_node))
-				return_0;
-
-			EMIT_PARAMS(*pos, " %d 1 %s", area->rsite_index, devbuf);
-			if (first_time)
-				EMIT_PARAMS(*pos, " nolog 0");
-			else {
-				/* Remote devices */
-				log_parm_count = (area->flags &
-						  (DM_NOSYNC | DM_FORCESYNC)) ? 2 : 1;
-
-				if (!area->slog) {
-					devbuf[0] = 0;		/* Only core log parameters */
-					logtype = "core";
-				} else {
-					devbuf[0] = ' ';	/* Extra space before device name */
-					if (!_build_dev_string(devbuf + 1,
-							       sizeof(devbuf) - 1,
-							       area->slog))
-						return_0;
-					logtype = "disk";
-					log_parm_count++;	/* Extra sync log device name parameter */
-				}
-
-				EMIT_PARAMS(*pos, " %s %u%s %" PRIu64, logtype,
-					    log_parm_count, devbuf, area->region_size);
-
-				synctype = (area->flags & DM_NOSYNC) ?
-						" nosync" : (area->flags & DM_FORCESYNC) ?
-								" sync" : NULL;
-
-				if (synctype)
-					EMIT_PARAMS(*pos, "%s", synctype);
-			}
-			break;
 		case SEG_RAID0:
 		case SEG_RAID0_META:
 		case SEG_RAID1:
 		case SEG_RAID10:
 		case SEG_RAID4:
+		case SEG_RAID5_N:
 		case SEG_RAID5_LA:
 		case SEG_RAID5_RA:
 		case SEG_RAID5_LS:
 		case SEG_RAID5_RS:
+		case SEG_RAID6_N_6:
 		case SEG_RAID6_ZR:
 		case SEG_RAID6_NR:
 		case SEG_RAID6_NC:
+		case SEG_RAID6_LS_6:
+		case SEG_RAID6_RS_6:
+		case SEG_RAID6_LA_6:
+		case SEG_RAID6_RA_6:
 			if (!area->dev_node) {
 				EMIT_PARAMS(*pos, " -");
 				break;
@@ -2170,42 +2096,6 @@ static int _emit_areas_line(struct dm_task *dmt __attribute__((unused)),
 	return 1;
 }
 
-static int _replicator_emit_segment_line(const struct load_segment *seg, char *params,
-					 size_t paramsize, int *pos)
-{
-	const struct load_segment *rlog_seg;
-	struct replicator_site *rsite;
-	char rlogbuf[DM_FORMAT_DEV_BUFSIZE];
-	unsigned parm_count;
-
-	if (!seg->log || !_build_dev_string(rlogbuf, sizeof(rlogbuf), seg->log))
-		return_0;
-
-	rlog_seg = dm_list_item(dm_list_last(&seg->log->props.segs),
-				struct load_segment);
-
-	EMIT_PARAMS(*pos, "%s 4 %s 0 auto %" PRIu64,
-		    seg->rlog_type, rlogbuf, rlog_seg->size);
-
-	dm_list_iterate_items(rsite, &seg->rsites) {
-		parm_count = (rsite->fall_behind_data
-			      || rsite->fall_behind_ios
-			      || rsite->async_timeout) ? 4 : 2;
-
-		EMIT_PARAMS(*pos, " blockdev %u %u %s", parm_count, rsite->rsite_index,
-			    (rsite->mode == DM_REPLICATOR_SYNC) ? "synchronous" : "asynchronous");
-
-		if (rsite->fall_behind_data)
-			EMIT_PARAMS(*pos, " data %" PRIu64, rsite->fall_behind_data);
-		else if (rsite->fall_behind_ios)
-			EMIT_PARAMS(*pos, " ios %" PRIu32, rsite->fall_behind_ios);
-		else if (rsite->async_timeout)
-			EMIT_PARAMS(*pos, " timeout %" PRIu32, rsite->async_timeout);
-	}
-
-	return 1;
-}
-
 /*
  * Returns: 1 on success, 0 on failure
  */
@@ -2215,24 +2105,14 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 	int block_on_error = 0;
 	int handle_errors = 0;
 	int dm_log_userspace = 0;
-	struct utsname uts;
 	unsigned log_parm_count;
-	int pos = 0, parts;
+	int pos = 0;
 	char logbuf[DM_FORMAT_DEV_BUFSIZE];
 	const char *logtype;
 	unsigned kmaj = 0, kmin = 0, krel = 0;
 
-	if (uname(&uts) == -1) {
-		log_error("Cannot read kernel release version.");
-		return 0;
-	}
-
-	/* Kernels with a major number of 2 always had 3 parts. */
-	parts = sscanf(uts.release, "%u.%u.%u", &kmaj, &kmin, &krel);
-	if (parts < 1 || (kmaj < 3 && parts < 3)) {
-		log_error("Wrong kernel release version %s.", uts.release);
-		return 0;
-	}
+	if (!get_uname_version(&kmaj, &kmin, &krel))
+		return_0;
 
 	if ((seg->flags & DM_BLOCK_ON_ERROR)) {
 		/*
@@ -2334,16 +2214,65 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 	return 1;
 }
 
-/* Is parameter non-zero? */
-#define PARAM_IS_SET(p) ((p) ? 1 : 0)
+static int _2_if_value(unsigned p)
+{
+	return p ? 2 : 0;
+}
 
-/* Return number of bits assuming 4 * 64 bit size */
-static int _get_params_count(uint64_t bits)
+/* Return number of bits passed in @bits assuming 2 * 64 bit size */
+static int _get_params_count(const uint64_t *bits)
 {
 	int r = 0;
+	int i = RAID_BITMAP_SIZE;
 
-	r += 2 * hweight32(bits & 0xFFFFFFFF);
-	r += 2 * hweight32(bits >> 32);
+	while (i--) {
+		r += 2 * hweight32(bits[i] & 0xFFFFFFFF);
+		r += 2 * hweight32(bits[i] >> 32);
+	}
+
+	return r;
+}
+
+/*
+ * Get target version (major, minor and patchlevel) for @target_name
+ *
+ * FIXME: this function is derived from liblvm.
+ *        Integrate with move of liblvm functions
+ *        to libdm in future library layer purge
+ *        (e.g. expose as API dm_target_version()?)
+ */
+static int _target_version(const char *target_name, uint32_t *maj,
+			   uint32_t *min, uint32_t *patchlevel)
+{
+	int r = 0;
+	struct dm_task *dmt;
+	struct dm_versions *target, *last_target = NULL;
+
+	log_very_verbose("Getting target version for %s", target_name);
+	if (!(dmt = dm_task_create(DM_DEVICE_LIST_VERSIONS)))
+		return_0;
+
+	if (!dm_task_run(dmt)) {
+		log_debug_activation("Failed to get %s target versions", target_name);
+		/* Assume this was because LIST_VERSIONS isn't supported */
+		*maj = *min = *patchlevel = 0;
+		r = 1;
+	} else
+		for (target = dm_task_get_versions(dmt);
+		     target != last_target;
+		     last_target = target, target = (struct dm_versions *)((char *) target + target->next))
+			if (!strcmp(target_name, target->name)) {
+				*maj = target->version[0];
+				*min = target->version[1];
+				*patchlevel = target->version[2];
+				log_very_verbose("Found %s target "
+						 "v%" PRIu32 ".%" PRIu32 ".%" PRIu32 ".",
+						 target_name, *maj, *min, *patchlevel);
+				r = 1;
+				break;
+			}
+
+	dm_task_destroy(dmt);
 
 	return r;
 }
@@ -2354,61 +2283,129 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 				   size_t paramsize)
 {
 	uint32_t i;
+	uint32_t area_count = seg->area_count / 2;
+	uint32_t maj, min, patchlevel;
 	int param_count = 1; /* mandatory 'chunk size'/'stripe size' arg */
 	int pos = 0;
-	unsigned type = seg->type;
+	unsigned type;
+
+	if (seg->area_count % 2)
+		return 0;
 
 	if ((seg->flags & DM_NOSYNC) || (seg->flags & DM_FORCESYNC))
 		param_count++;
 
-	param_count += 2 * (PARAM_IS_SET(seg->region_size) +
-			    PARAM_IS_SET(seg->writebehind) +
-			    PARAM_IS_SET(seg->min_recovery_rate) +
-			    PARAM_IS_SET(seg->max_recovery_rate));
+	param_count += _2_if_value(seg->data_offset) +
+		       _2_if_value(seg->delta_disks) +
+		       _2_if_value(seg->region_size) +
+		       _2_if_value(seg->writebehind) +
+		       _2_if_value(seg->min_recovery_rate) +
+		       _2_if_value(seg->max_recovery_rate) +
+		       _2_if_value(seg->data_copies > 1);
 
-	/* rebuilds and writemostly are 64 bits */
+	/* rebuilds and writemostly are BITMAP_SIZE * 64 bits */
 	param_count += _get_params_count(seg->rebuilds);
 	param_count += _get_params_count(seg->writemostly);
 
-	if ((type == SEG_RAID1) && seg->stripe_size)
-		log_error("WARNING: Ignoring RAID1 stripe size");
+	if ((seg->type == SEG_RAID1) && seg->stripe_size)
+		log_info("WARNING: Ignoring RAID1 stripe size");
 
 	/* Kernel only expects "raid0", not "raid0_meta" */
+	type = seg->type;
 	if (type == SEG_RAID0_META)
 		type = SEG_RAID0;
 
-	EMIT_PARAMS(pos, "%s %d %u", _dm_segtypes[type].target,
+	EMIT_PARAMS(pos, "%s %d %u",
+		    type == SEG_RAID10 ? "raid10" : _dm_segtypes[type].target,
 		    param_count, seg->stripe_size);
 
-	if (seg->flags & DM_NOSYNC)
-		EMIT_PARAMS(pos, " nosync");
-	else if (seg->flags & DM_FORCESYNC)
-		EMIT_PARAMS(pos, " sync");
+	if (!_target_version("raid", &maj, &min, &patchlevel))
+		return_0;
 
-	if (seg->region_size)
-		EMIT_PARAMS(pos, " region_size %u", seg->region_size);
+	/*
+	 * Target version prior to 1.9.0 and >= 1.11.0 emit
+	 * order of parameters as of kernel target documentation
+	 */
+	if (maj > 1 || (maj == 1 && (min < 9 || min >= 11))) {
+		if (seg->flags & DM_NOSYNC)
+			EMIT_PARAMS(pos, " nosync");
+		else if (seg->flags & DM_FORCESYNC)
+			EMIT_PARAMS(pos, " sync");
 
-	for (i = 0; i < (seg->area_count / 2); i++)
-		if (seg->rebuilds & (1ULL << i))
-			EMIT_PARAMS(pos, " rebuild %u", i);
+		for (i = 0; i < area_count; i++)
+			if (seg->rebuilds[i/64] & (1ULL << (i%64)))
+				EMIT_PARAMS(pos, " rebuild %u", i);
 
-	if (seg->min_recovery_rate)
-		EMIT_PARAMS(pos, " min_recovery_rate %u",
-			    seg->min_recovery_rate);
+		if (seg->min_recovery_rate)
+			EMIT_PARAMS(pos, " min_recovery_rate %u",
+				    seg->min_recovery_rate);
 
-	if (seg->max_recovery_rate)
-		EMIT_PARAMS(pos, " max_recovery_rate %u",
-			    seg->max_recovery_rate);
+		if (seg->max_recovery_rate)
+			EMIT_PARAMS(pos, " max_recovery_rate %u",
+				    seg->max_recovery_rate);
 
-	for (i = 0; i < (seg->area_count / 2); i++)
-		if (seg->writemostly & (1ULL << i))
-			EMIT_PARAMS(pos, " write_mostly %u", i);
+		for (i = 0; i < area_count; i++)
+			if (seg->writemostly[i/64] & (1ULL << (i%64)))
+				EMIT_PARAMS(pos, " write_mostly %u", i);
 
-	if (seg->writebehind)
-		EMIT_PARAMS(pos, " max_write_behind %u", seg->writebehind);
+		if (seg->writebehind)
+			EMIT_PARAMS(pos, " max_write_behind %u", seg->writebehind);
+
+		if (seg->region_size)
+			EMIT_PARAMS(pos, " region_size %u", seg->region_size);
+
+		if (seg->data_copies > 1 && type == SEG_RAID10)
+			EMIT_PARAMS(pos, " raid10_copies %u", seg->data_copies);
+
+		if (seg->delta_disks)
+			EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
+
+		/* If seg-data_offset == 1, kernel needs a zero offset to adjust to it */
+		if (seg->data_offset)
+			EMIT_PARAMS(pos, " data_offset %d", seg->data_offset == 1 ? 0 : seg->data_offset);
+
+	/* Target version >= 1.9.0 && < 1.11.0 had a table line parameter ordering flaw */
+	} else {
+		if (seg->data_copies > 1 && type == SEG_RAID10)
+			EMIT_PARAMS(pos, " raid10_copies %u", seg->data_copies);
+
+		if (seg->flags & DM_NOSYNC)
+			EMIT_PARAMS(pos, " nosync");
+		else if (seg->flags & DM_FORCESYNC)
+			EMIT_PARAMS(pos, " sync");
+
+		if (seg->region_size)
+			EMIT_PARAMS(pos, " region_size %u", seg->region_size);
+
+		/* If seg-data_offset == 1, kernel needs a zero offset to adjust to it */
+		if (seg->data_offset)
+			EMIT_PARAMS(pos, " data_offset %d", seg->data_offset == 1 ? 0 : seg->data_offset);
+
+		if (seg->delta_disks)
+			EMIT_PARAMS(pos, " delta_disks %d", seg->delta_disks);
+
+		for (i = 0; i < area_count; i++)
+			if (seg->rebuilds[i/64] & (1ULL << (i%64)))
+				EMIT_PARAMS(pos, " rebuild %u", i);
+
+		for (i = 0; i < area_count; i++)
+			if (seg->writemostly[i/64] & (1ULL << (i%64)))
+				EMIT_PARAMS(pos, " write_mostly %u", i);
+
+		if (seg->writebehind)
+			EMIT_PARAMS(pos, " max_write_behind %u", seg->writebehind);
+
+		if (seg->max_recovery_rate)
+			EMIT_PARAMS(pos, " max_recovery_rate %u",
+				    seg->max_recovery_rate);
+
+		if (seg->min_recovery_rate)
+			EMIT_PARAMS(pos, " min_recovery_rate %u",
+				    seg->min_recovery_rate);
+	}
 
 	/* Print number of metadata/data device pairs */
-	EMIT_PARAMS(pos, " %u", seg->area_count/2);
+	EMIT_PARAMS(pos, " %u", area_count);
 
 	if (_emit_areas_line(dmt, seg, params, paramsize, &pos) <= 0)
 		return_0;
@@ -2448,12 +2445,17 @@ static int _cache_emit_segment_line(struct dm_task *dmt,
 	/* Features */
 	/* feature_count = hweight32(seg->flags); */
 	/* EMIT_PARAMS(pos, " %u", feature_count); */
+	if (seg->flags & DM_CACHE_FEATURE_METADATA2)
+		EMIT_PARAMS(pos, " 2 metadata2 ");
+	else
+		EMIT_PARAMS(pos, " 1 ");
+
 	if (seg->flags & DM_CACHE_FEATURE_PASSTHROUGH)
-		EMIT_PARAMS(pos, " 1 passthrough");
-	else if (seg->flags & DM_CACHE_FEATURE_WRITETHROUGH)
-		EMIT_PARAMS(pos, " 1 writethrough");
-	else if (seg->flags & DM_CACHE_FEATURE_WRITEBACK)
-		EMIT_PARAMS(pos, " 1 writeback");
+		EMIT_PARAMS(pos, "passthrough");
+        else if (seg->flags & DM_CACHE_FEATURE_WRITEBACK)
+		EMIT_PARAMS(pos, "writeback");
+	else
+		EMIT_PARAMS(pos, "writethrough");
 
 	/* Cache Policy */
 	name = seg->policy_name ? : "default";
@@ -2544,21 +2546,6 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 		if (!r)
 			return_0;
 		break;
-	case SEG_REPLICATOR:
-		if ((r = _replicator_emit_segment_line(seg, params, paramsize,
-						       &pos)) <= 0) {
-			stack;
-			return r;
-		}
-		break;
-	case SEG_REPLICATOR_DEV:
-		if (!seg->replicator || !_build_dev_string(originbuf,
-							   sizeof(originbuf),
-							   seg->replicator))
-			return_0;
-
-		EMIT_PARAMS(pos, "%s %" PRIu64, originbuf, seg->rdevice_index);
-		break;
 	case SEG_SNAPSHOT:
 	case SEG_SNAPSHOT_MERGE:
 		if (!_build_dev_string(originbuf, sizeof(originbuf), seg->origin))
@@ -2588,13 +2575,19 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID1:
 	case SEG_RAID10:
 	case SEG_RAID4:
+	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
 	case SEG_RAID5_RA:
 	case SEG_RAID5_LS:
 	case SEG_RAID5_RS:
+	case SEG_RAID6_N_6:
 	case SEG_RAID6_ZR:
 	case SEG_RAID6_NR:
 	case SEG_RAID6_NC:
+	case SEG_RAID6_LS_6:
+	case SEG_RAID6_RS_6:
+	case SEG_RAID6_LA_6:
+	case SEG_RAID6_RA_6:
 		target_type_is_raid = 1;
 		r = _raid_emit_segment_line(dmt, major, minor, seg, seg_start,
 					    params, paramsize);
@@ -2618,7 +2611,6 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 
 	switch(seg->type) {
 	case SEG_ERROR:
-	case SEG_REPLICATOR:
 	case SEG_SNAPSHOT:
 	case SEG_SNAPSHOT_ORIGIN:
 	case SEG_SNAPSHOT_MERGE:
@@ -2629,7 +2621,6 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 		break;
 	case SEG_CRYPT:
 	case SEG_LINEAR:
-	case SEG_REPLICATOR_DEV:
 	case SEG_STRIPED:
 		if ((r = _emit_areas_line(dmt, seg, params, paramsize, &pos)) <= 0) {
 			stack;
@@ -2665,7 +2656,7 @@ static int _emit_segment(struct dm_task *dmt, uint32_t major, uint32_t minor,
 			 struct load_segment *seg, uint64_t *seg_start)
 {
 	char *params;
-	size_t paramsize = 4096;
+	size_t paramsize = 4096; /* FIXME: too small for long RAID lines when > 64 devices supported */
 	int ret;
 
 	do {
@@ -2702,27 +2693,26 @@ static int _load_node(struct dm_tree_node *dnode)
 	struct load_segment *seg;
 	uint64_t seg_start = 0, existing_table_size;
 
-	log_verbose("Loading %s table (%" PRIu32 ":%" PRIu32 ")", dnode->name,
-		    dnode->info.major, dnode->info.minor);
+	log_verbose("Loading table for %s.", _node_name(dnode));
 
 	if (!(dmt = dm_task_create(DM_DEVICE_RELOAD))) {
-		log_error("Reload dm_task creation failed for %s", dnode->name);
+		log_error("Reload dm_task creation failed for %s.", _node_name(dnode));
 		return 0;
 	}
 
 	if (!dm_task_set_major(dmt, dnode->info.major) ||
 	    !dm_task_set_minor(dmt, dnode->info.minor)) {
-		log_error("Failed to set device number for %s reload.", dnode->name);
+		log_error("Failed to set device number for %s reload.", _node_name(dnode));
 		goto out;
 	}
 
 	if (dnode->props.read_only && !dm_task_set_ro(dmt)) {
-		log_error("Failed to set read only flag for %s", dnode->name);
+		log_error("Failed to set read only flag for %s.", _node_name(dnode));
 		goto out;
 	}
 
 	if (!dm_task_no_open_count(dmt))
-		log_error("Failed to disable open_count");
+		log_warn("WARNING: Failed to disable open_count.");
 
 	dm_list_iterate_items(seg, &dnode->props.segs)
 		if (!_emit_segment(dmt, dnode->info.major, dnode->info.minor,
@@ -2730,15 +2720,13 @@ static int _load_node(struct dm_tree_node *dnode)
 			goto_out;
 
 	if (!dm_task_suppress_identical_reload(dmt))
-		log_error("Failed to suppress reload of identical tables.");
+		log_warn("WARNING: Failed to suppress reload of identical tables.");
 
 	if ((r = dm_task_run(dmt))) {
 		r = dm_task_get_info(dmt, &dnode->info);
 		if (r && !dnode->info.inactive_table)
-			log_verbose("Suppressed %s (%" PRIu32 ":%" PRIu32
-				    ") identical table reload.",
-				    dnode->name,
-				    dnode->info.major, dnode->info.minor);
+			log_verbose("Suppressed %s identical table reload.",
+				    _node_name(dnode));
 
 		existing_table_size = dm_task_get_existing_table_size(dmt);
 		if ((dnode->props.size_changed =
@@ -2753,10 +2741,21 @@ static int _load_node(struct dm_tree_node *dnode)
 				dnode->props.size_changed = 0;
 
 			log_debug_activation("Table size changed from %" PRIu64 " to %"
-					     PRIu64 " for %s (%" PRIu32 ":%" PRIu32 ").%s",
-					     existing_table_size, seg_start, dnode->name,
-					     dnode->info.major, dnode->info.minor,
+					     PRIu64 " for %s.%s", existing_table_size,
+					     seg_start, _node_name(dnode),
 					     dnode->props.size_changed ? "" : " (Ignoring.)");
+
+			/*
+			 * FIXME: code here has known design problem.
+			 *  LVM2 does NOT resize thin-pool on top of other LV in 2 steps -
+			 *  where raid would be resized with 1st. transaction
+			 *  followed by 2nd. thin-pool resize - RHBZ #1285063
+			 */
+			if (existing_table_size && dnode->props.delay_resume_if_extended) {
+				log_debug_activation("Resume of table of extended device %s delayed.",
+						     _node_name(dnode));
+				dnode->props.size_changed = 0;
+			}
 		}
 	}
 
@@ -2777,12 +2776,14 @@ static int _dm_tree_revert_activated(struct dm_tree_node *parent)
 	struct dm_tree_node *child;
 
 	dm_list_iterate_items_gen(child, &parent->activated, activated_list) {
-		log_debug_activation("Reverting %s.", child->name);
+		log_debug_activation("Reverting %s.", _node_name(child));
+		if (child->callback) {
+			log_debug_activation("Dropping callback for %s.", _node_name(child));
+			child->callback = NULL;
+		}
 		if (!_deactivate_node(child->name, child->info.major, child->info.minor,
 				      &child->dtree->cookie, child->udev_flags, 0)) {
-			log_error("Unable to deactivate %s (%" PRIu32
-				  ":%" PRIu32 ")", child->name, child->info.major,
-				  child->info.minor);
+			log_error("Unable to deactivate %s.", _node_name(child));
 			return 0;
 		}
 		if (!_dm_tree_revert_activated(child))
@@ -2799,12 +2800,14 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 	int r = 1, node_created = 0;
 	void *handle = NULL;
 	struct dm_tree_node *child;
-	struct dm_info newinfo;
 	int update_devs_flag = 0;
-	struct load_segment *seg;
 
 	/* Preload children first */
 	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
+		/* Propagate delay of resume from parent node */
+		if (dnode->props.delay_resume_if_new > 1)
+			child->props.delay_resume_if_new = dnode->props.delay_resume_if_new;
+
 		/* Skip existing non-device-mapper devices */
 		if (!child->info.exists && child->info.major)
 			continue;
@@ -2821,6 +2824,10 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 		/* FIXME Cope if name exists with no uuid? */
 		if (!child->info.exists && !(node_created = _create_node(child)))
 			return_0;
+
+		/* Propagate delayed resume from exteded child node */
+		if (child->props.delay_resume_if_extended)
+			dnode->props.delay_resume_if_extended = 1;
 
 		if (!child->info.inactive_table &&
 		    child->props.segment_count &&
@@ -2839,55 +2846,29 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 			return_0;
 		}
 
-		/* Propagate device size change change */
-		if (child->props.size_changed > 0 && !dnode->props.size_changed)
-			dnode->props.size_changed = 1;
-		else if (child->props.size_changed < 0)
-			dnode->props.size_changed = -1;
-
-		/* Resume device immediately if it has parents and its size changed */
-		if (!dm_tree_node_num_children(child, 1) || !child->props.size_changed)
+		/* No resume for a device without parents or with unchanged or smaller size */
+		if (!dm_tree_node_num_children(child, 1) || (child->props.size_changed <= 0))
 			continue;
-
-		if (!node_created && (dm_list_size(&child->props.segs) == 1)) {
-			/* If thin-pool child nodes were preloaded WITH changed size
-			 * skip device resume, as this is likely resize of data or
-			 * metadata device and so thin pool needs suspend before
-			 * resume operation.
-			 * Note: child->props.segment_count is already 0 here
-			 */
-			seg = dm_list_item(dm_list_last(&child->props.segs),
-					   struct load_segment);
-			if (seg->type == SEG_THIN_POOL) {
-				log_debug_activation("Skipping resume of thin-pool %s.",
-						     child->name);
-				continue;
-			}
-		}
 
 		if (!child->info.inactive_table && !child->info.suspended)
 			continue;
 
 		if (!_resume_node(child->name, child->info.major, child->info.minor,
 				  child->props.read_ahead, child->props.read_ahead_flags,
-				  &newinfo, &child->dtree->cookie, child->udev_flags,
+				  &child->info, &child->dtree->cookie, child->udev_flags,
 				  child->info.suspended)) {
-			log_error("Unable to resume %s (%" PRIu32
-				  ":%" PRIu32 ")", child->name, child->info.major,
-				  child->info.minor);
+			log_error("Unable to resume %s.", _node_name(child));
 			/* If the device was not previously active, we might as well remove this node. */
 			if (!child->info.live_table &&
 			    !_deactivate_node(child->name, child->info.major, child->info.minor,
 					      &child->dtree->cookie, child->udev_flags, 0))
-				log_error("Unable to deactivate %s (%" PRIu32
-					  ":%" PRIu32 ")", child->name, child->info.major,
-					  child->info.minor);
+				log_error("Unable to deactivate %s.", _node_name(child));
 			r = 0;
 			/* Each child is handled independently */
 			continue;
 		}
 
-		if (!child->info.live_table) {
+		if (node_created) {
 			/* Collect newly introduced devices for revert */
 			dm_list_add_h(&dnode->activated, &child->activated_list);
 
@@ -2904,8 +2885,6 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 			}
 		}
 
-		/* Update cached info */
-		child->info = newinfo;
 		/*
 		 * Prepare for immediate synchronization with udev and flush all stacked
 		 * dev node operations if requested by immediate_dev_node property. But
@@ -2947,7 +2926,8 @@ int dm_tree_children_use_uuid(struct dm_tree_node *dnode,
 
 	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
 		if (!(uuid = dm_tree_node_get_uuid(child))) {
-			log_error("Failed to get uuid for dtree node.");
+			log_warn("WARNING: Failed to get uuid for dtree node %s.",
+				 _node_name(child));
 			return 1;
 		}
 
@@ -3167,12 +3147,8 @@ int dm_tree_node_add_mirror_target_log(struct dm_tree_node *node,
 	struct dm_tree_node *log_node = NULL;
 	struct load_segment *seg;
 
-	if (!node->props.segment_count) {
-		log_error(INTERNAL_ERROR "Attempt to add target area to missing segment.");
-		return 0;
-	}
-
-	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
+	if (!(seg = _get_last_load_segment(node)))
+		return_0;
 
 	if (log_uuid) {
 		if (!(seg->uuid = dm_pool_strdup(node->dtree->mem, log_uuid))) {
@@ -3181,7 +3157,8 @@ int dm_tree_node_add_mirror_target_log(struct dm_tree_node *node,
 		}
 		if ((flags & DM_CORELOG))
 			/* For pvmove: immediate resume (for size validation) isn't needed. */
-			node->props.delay_resume_if_new = 1;
+			/* pvmove flag passed via unused UUID and its suffix */
+			node->props.delay_resume_if_new = strstr(log_uuid, "pvmove") ? 2 : 1;
 		else {
 			if (!(log_node = dm_tree_find_node_by_uuid(node->dtree, log_uuid))) {
 				log_error("Couldn't find mirror log uuid %s.", log_uuid);
@@ -3238,8 +3215,10 @@ int dm_tree_node_add_raid_target_with_params(struct dm_tree_node *node,
 	seg->region_size = p->region_size;
 	seg->stripe_size = p->stripe_size;
 	seg->area_count = 0;
-	seg->rebuilds = p->rebuilds;
-	seg->writemostly = p->writemostly;
+	memset(seg->rebuilds, 0, sizeof(seg->rebuilds));
+	seg->rebuilds[0] = p->rebuilds;
+	memset(seg->writemostly, 0, sizeof(seg->writemostly));
+	seg->writemostly[0] = p->writemostly;
 	seg->writebehind = p->writebehind;
 	seg->min_recovery_rate = p->min_recovery_rate;
 	seg->max_recovery_rate = p->max_recovery_rate;
@@ -3267,6 +3246,47 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
 	return dm_tree_node_add_raid_target_with_params(node, size, &params);
 }
 
+/*
+ * Version 2 of dm_tree_node_add_raid_target() allowing for:
+ *
+ * - maximum 253 legs in a raid set (MD kernel limitation)
+ * - delta_disks for disk add/remove reshaping
+ * - data_offset for out-of-place reshaping
+ * - data_copies to cope witth odd numbers of raid10 disks
+ */
+int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
+					        uint64_t size,
+						const struct dm_tree_node_raid_params_v2 *p)
+{
+	unsigned i;
+	struct load_segment *seg = NULL;
+
+	for (i = 0; i < DM_ARRAY_SIZE(_dm_segtypes) && !seg; ++i)
+		if (!strcmp(p->raid_type, _dm_segtypes[i].target))
+			if (!(seg = _add_segment(node,
+						 _dm_segtypes[i].type, size)))
+				return_0;
+	if (!seg) {
+		log_error("Unsupported raid type %s.", p->raid_type);
+		return 0;
+	}
+
+	seg->region_size = p->region_size;
+	seg->stripe_size = p->stripe_size;
+	seg->area_count = 0;
+	seg->delta_disks = p->delta_disks;
+	seg->data_offset = p->data_offset;
+	memcpy(seg->rebuilds, p->rebuilds, sizeof(seg->rebuilds));
+	memcpy(seg->writemostly, p->writemostly, sizeof(seg->writemostly));
+	seg->writebehind = p->writebehind;
+	seg->data_copies = p->data_copies;
+	seg->min_recovery_rate = p->min_recovery_rate;
+	seg->max_recovery_rate = p->max_recovery_rate;
+	seg->flags = p->flags;
+
+	return 1;
+}
+
 int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				  uint64_t size,
 				  uint64_t feature_flags, /* DM_CACHE_FEATURE_* */
@@ -3279,19 +3299,33 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 {
 	struct dm_config_node *cn;
 	struct load_segment *seg;
+	static const uint64_t _modemask =
+		DM_CACHE_FEATURE_PASSTHROUGH |
+		DM_CACHE_FEATURE_WRITETHROUGH |
+		DM_CACHE_FEATURE_WRITEBACK;
 
-	switch (feature_flags &
-		(DM_CACHE_FEATURE_PASSTHROUGH |
-		 DM_CACHE_FEATURE_WRITETHROUGH |
-		 DM_CACHE_FEATURE_WRITEBACK)) {
-		 case DM_CACHE_FEATURE_PASSTHROUGH:
-		 case DM_CACHE_FEATURE_WRITETHROUGH:
-		 case DM_CACHE_FEATURE_WRITEBACK:
-			 break;
-		 default:
-			 log_error("Invalid cache's feature flag " FMTu64 ".",
-				   feature_flags);
-			 return 0;
+	/* Detect unknown (bigger) feature bit */
+	if (feature_flags >= (DM_CACHE_FEATURE_METADATA2 * 2)) {
+		log_error("Unsupported cache's feature flags set " FMTu64 ".",
+			  feature_flags);
+		return 0;
+	}
+
+	switch (feature_flags & _modemask) {
+	case DM_CACHE_FEATURE_PASSTHROUGH:
+	case DM_CACHE_FEATURE_WRITEBACK:
+		if (strcmp(policy_name, "cleaner") == 0) {
+			/* Enforce writethrough mode for cleaner policy */
+			feature_flags = ~_modemask;
+			feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
+		}
+                /* Fall through */
+	case DM_CACHE_FEATURE_WRITETHROUGH:
+		break;
+	default:
+		log_error("Invalid cache's feature flag " FMTu64 ".",
+			  feature_flags);
+		return 0;
 	}
 
 	if (data_block_size < DM_CACHE_MIN_DATA_BLOCK_SIZE) {
@@ -3337,8 +3371,7 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 		return_0;
 
 	seg->data_block_size = data_block_size;
-	/* Enforce WriteThough mode for cleaner policy */
-	seg->flags = (strcmp(policy_name, "cleaner") == 0) ? DM_CACHE_FEATURE_WRITETHROUGH : feature_flags;
+	seg->flags = feature_flags;
 	seg->policy_name = policy_name;
 
 	/* FIXME: better validation missing */
@@ -3369,74 +3402,8 @@ int dm_tree_node_add_replicator_target(struct dm_tree_node *node,
 				       uint64_t fall_behind_data,
 				       uint32_t fall_behind_ios)
 {
-	struct load_segment *rseg;
-	struct replicator_site *rsite;
-
-	/* Local site0 - adds replicator segment and links rlog device */
-	if (rsite_index == REPLICATOR_LOCAL_SITE) {
-		if (node->props.segment_count) {
-			log_error(INTERNAL_ERROR "Attempt to add replicator segment to already used node.");
-			return 0;
-		}
-
-		if (!(rseg = _add_segment(node, SEG_REPLICATOR, size)))
-			return_0;
-
-		if (!(rseg->log = dm_tree_find_node_by_uuid(node->dtree, rlog_uuid))) {
-			log_error("Missing replicator log uuid %s.", rlog_uuid);
-			return 0;
-		}
-
-		if (!_link_tree_nodes(node, rseg->log))
-			return_0;
-
-		if (strcmp(rlog_type, "ringbuffer") != 0) {
-			log_error("Unsupported replicator log type %s.", rlog_type);
-			return 0;
-		}
-
-		if (!(rseg->rlog_type = dm_pool_strdup(node->dtree->mem, rlog_type)))
-			return_0;
-
-		dm_list_init(&rseg->rsites);
-		rseg->rdevice_count = 0;
-		node->activation_priority = 1;
-	}
-
-	/* Add site to segment */
-	if (mode == DM_REPLICATOR_SYNC
-	    && (async_timeout || fall_behind_ios || fall_behind_data)) {
-		log_error("Async parameters passed for synchronnous replicator.");
-		return 0;
-	}
-
-	if (node->props.segment_count != 1) {
-		log_error(INTERNAL_ERROR "Attempt to add remote site area before setting replicator log.");
-		return 0;
-	}
-
-	rseg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
-	if (rseg->type != SEG_REPLICATOR) {
-		log_error(INTERNAL_ERROR "Attempt to use non replicator segment %s.",
-			  _dm_segtypes[rseg->type].target);
-		return 0;
-	}
-
-	if (!(rsite = dm_pool_zalloc(node->dtree->mem, sizeof(*rsite)))) {
-		log_error("Failed to allocate remote site segment.");
-		return 0;
-	}
-
-	dm_list_add(&rseg->rsites, &rsite->list);
-	rseg->rsite_count++;
-
-	rsite->mode = mode;
-	rsite->async_timeout = async_timeout;
-	rsite->fall_behind_data = fall_behind_data;
-	rsite->fall_behind_ios = fall_behind_ios;
-	rsite->rsite_index = rsite_index;
-
-	return 1;
+	log_error("Replicator segment is unsupported.");
+	return 0;
 }
 
 /* Appends device node to Replicator */
@@ -3450,78 +3417,8 @@ int dm_tree_node_add_replicator_dev_target(struct dm_tree_node *node,
 					   uint32_t slog_flags,
 					   uint32_t slog_region_size)
 {
-	struct seg_area *area;
-	struct load_segment *rseg;
-	struct load_segment *rep_seg;
-
-	if (rsite_index == REPLICATOR_LOCAL_SITE) {
-		/* Site index for local target */
-		if (!(rseg = _add_segment(node, SEG_REPLICATOR_DEV, size)))
-			return_0;
-
-		if (!(rseg->replicator = dm_tree_find_node_by_uuid(node->dtree, replicator_uuid))) {
-			log_error("Missing replicator uuid %s.", replicator_uuid);
-			return 0;
-		}
-
-		/* Local slink0 for replicator must be always initialized first */
-		if (rseg->replicator->props.segment_count != 1) {
-			log_error(INTERNAL_ERROR "Attempt to use non replicator segment.");
-			return 0;
-		}
-
-		rep_seg = dm_list_item(dm_list_last(&rseg->replicator->props.segs), struct load_segment);
-		if (rep_seg->type != SEG_REPLICATOR) {
-			log_error(INTERNAL_ERROR "Attempt to use non replicator segment %s.",
-				  _dm_segtypes[rep_seg->type].target);
-			return 0;
-		}
-		rep_seg->rdevice_count++;
-
-		if (!_link_tree_nodes(node, rseg->replicator))
-			return_0;
-
-		rseg->rdevice_index = rdevice_index;
-	} else {
-		/* Local slink0 for replicator must be always initialized first */
-		if (node->props.segment_count != 1) {
-			log_error(INTERNAL_ERROR "Attempt to use non replicator-dev segment.");
-			return 0;
-		}
-
-		rseg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
-		if (rseg->type != SEG_REPLICATOR_DEV) {
-			log_error(INTERNAL_ERROR "Attempt to use non replicator-dev segment %s.",
-				  _dm_segtypes[rseg->type].target);
-			return 0;
-		}
-	}
-
-	if (!(slog_flags & DM_CORELOG) && !slog_uuid) {
-		log_error("Unspecified sync log uuid.");
-		return 0;
-	}
-
-	if (!dm_tree_node_add_target_area(node, NULL, rdev_uuid, 0))
-		return_0;
-
-	area = dm_list_item(dm_list_last(&rseg->areas), struct seg_area);
-
-	if (!(slog_flags & DM_CORELOG)) {
-		if (!(area->slog = dm_tree_find_node_by_uuid(node->dtree, slog_uuid))) {
-			log_error("Couldn't find sync log uuid %s.", slog_uuid);
-			return 0;
-		}
-
-		if (!_link_tree_nodes(node, area->slog))
-			return_0;
-	}
-
-	area->flags = slog_flags;
-	area->region_size = slog_region_size;
-	area->rsite_index = rsite_index;
-
-	return 1;
+	log_error("Replicator targer is unsupported.");
+	return 0;
 }
 
 static struct load_segment *_get_single_load_segment(struct dm_tree_node *node,
@@ -3529,13 +3426,16 @@ static struct load_segment *_get_single_load_segment(struct dm_tree_node *node,
 {
 	struct load_segment *seg;
 
+	if (!(seg = _get_last_load_segment(node)))
+		return_NULL;
+
+	/* Never used past _load_node(), so can test segment_count */
 	if (node->props.segment_count != 1) {
 		log_error("Node %s must have only one segment.",
 			  _dm_segtypes[type].target);
 		return NULL;
 	}
 
-	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
 	if (seg->type != type) {
 		log_error("Node %s has segment type %s.",
 			  _dm_segtypes[type].target,
@@ -3615,6 +3515,9 @@ int dm_tree_node_add_thin_pool_target(struct dm_tree_node *node,
 	/* Clean flag delay_resume_if_new - so corelog gets resumed */
 	seg->metadata->props.delay_resume_if_new = 0;
 	seg->pool->props.delay_resume_if_new = 0;
+
+	/* Preload must not resume extended running thin-pool before it's committed */
+	node->props.delay_resume_if_extended = 1;
 
 	/* Validate only transaction_id > 0 when activating thin-pool */
 	node->props.send_messages = transaction_id ? 1 : 0;
@@ -3841,12 +3744,8 @@ int dm_tree_node_add_target_area(struct dm_tree_node *node,
 			return_0;
 	}
 
-	if (!node->props.segment_count) {
-		log_error(INTERNAL_ERROR "Attempt to add target area to missing segment.");
-		return 0;
-	}
-
-	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
+	if (!(seg = _get_last_load_segment(node)))
+		return_0;
 
 	if (!_add_area(node, seg, dev_node, offset))
 		return_0;
@@ -3858,20 +3757,27 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 {
 	struct load_segment *seg;
 
-	seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
+	if (!(seg = _get_last_load_segment(node)))
+		return_0;
 
 	switch (seg->type) {
 	case SEG_RAID0:
 	case SEG_RAID0_META:
 	case SEG_RAID1:
 	case SEG_RAID4:
+	case SEG_RAID5_N:
 	case SEG_RAID5_LA:
 	case SEG_RAID5_RA:
 	case SEG_RAID5_LS:
 	case SEG_RAID5_RS:
+	case SEG_RAID6_N_6:
 	case SEG_RAID6_ZR:
 	case SEG_RAID6_NR:
 	case SEG_RAID6_NC:
+	case SEG_RAID6_LS_6:
+	case SEG_RAID6_RS_6:
+	case SEG_RAID6_LA_6:
+	case SEG_RAID6_RA_6:
 		break;
 	default:
 		log_error("dm_tree_node_add_null_area() called on an unsupported segment type");
@@ -3891,18 +3797,59 @@ void dm_tree_node_set_callback(struct dm_tree_node *dnode,
 	dnode->callback_data = data;
 }
 
-/*
- * Backward compatible dm_tree_node_size_changed() implementations.
- *
- * Keep these at the end of the file to avoid adding clutter around the
- * current dm_tree_node_size_changed() version.
- */
 #if defined(__GNUC__)
+/*
+ * Backward compatible implementations.
+ *
+ * Keep these at the end of the file to make sure that
+ * no code in this file accidentally calls it.
+ */
+
+/* Backward compatible dm_tree_node_size_changed() implementations. */
 int dm_tree_node_size_changed_base(const struct dm_tree_node *dnode);
 DM_EXPORT_SYMBOL_BASE(dm_tree_node_size_changed);
 int dm_tree_node_size_changed_base(const struct dm_tree_node *dnode)
 {
 	/* Base does not make difference between smaller and bigger */
 	return dm_tree_node_size_changed(dnode) ? 1 : 0;
+}
+
+/*
+ * Retain ABI compatibility after adding the DM_CACHE_FEATURE_METADATA2
+ * in version 1.02.138.
+ *
+ * Binaries compiled against version 1.02.138 onwards will use
+ * the new function dm_tree_node_add_cache_target which detects unknown
+ * feature flags and returns error for them.
+ */
+int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
+				       uint64_t size,
+				       uint64_t feature_flags, /* DM_CACHE_FEATURE_* */
+				       const char *metadata_uuid,
+				       const char *data_uuid,
+				       const char *origin_uuid,
+				       const char *policy_name,
+				       const struct dm_config_node *policy_settings,
+				       uint32_t data_block_size);
+DM_EXPORT_SYMBOL_BASE(dm_tree_node_add_cache_target);
+int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
+				       uint64_t size,
+				       uint64_t feature_flags,
+				       const char *metadata_uuid,
+				       const char *data_uuid,
+				       const char *origin_uuid,
+				       const char *policy_name,
+				       const struct dm_config_node *policy_settings,
+				       uint32_t data_block_size)
+{
+	/* Old version supported only these FEATURE bits, others were ignored so masked them */
+	static const uint64_t _mask =
+		DM_CACHE_FEATURE_WRITEBACK |
+		DM_CACHE_FEATURE_WRITETHROUGH |
+		DM_CACHE_FEATURE_PASSTHROUGH;
+
+	return dm_tree_node_add_cache_target(node, size, feature_flags & _mask,
+					     metadata_uuid, data_uuid, origin_uuid,
+					     policy_name, policy_settings, data_block_size);
 }
 #endif

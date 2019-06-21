@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # Exercise snapshot merge also when stacked
 
-SKIP_WITH_LVMLOCKD=1
+
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
@@ -25,28 +26,30 @@ aux prepare_vg 2 100
 snap_and_merge() {
 	lvcreate -s -n $lv2 -L20 $vg/$lv1 "$dev2"
 	#dd if=/dev/zero of="$DM_DEV_DIR/$vg/$lv1" bs=1M count=10 conv=fdatasync
+	aux udev_wait
 	mkfs.ext3 "$DM_DEV_DIR/$vg/$lv2"
 	sync
 	lvs -a $vg
 
-	# keep device open to prevent instant merge
-	sleep 20 < "$DM_DEV_DIR/$vg/$lv1" &
-	SLEEP_PID=$!
+	SLEEP_PID=$(aux hold_device_open $vg $lv1 20)
 
 	# initiate background merge
 	lvconvert -b --merge $vg/$lv2
 
 	lvs -a -o+lv_merging,lv_merge_failed $vg
+	get lv_field $vg/$lv1 lv_attr | grep "Owi-ao"
+	get lv_field $vg/$lv2 lv_attr | grep "Swi-a-s---"
 	kill $SLEEP_PID
 
-	aux delay_dev "$dev1"  0 200 $(get first_extent_sector "$dev1"):
+	aux delay_dev "$dev1"  0 200 "$(get first_extent_sector "$dev1"):"
 	lvchange --poll n --refresh $vg/$lv1
 	dmsetup table
-	lvs -a -o+lv_merging,lv_merge_failed $vg
+	lvs -av -o+lv_merging,lv_merge_failed $vg
+	# Origin is closed and snapshot merge could run
+	get lv_field $vg/$lv1 lv_attr | grep "Owi-a-"
 	sleep 1
-	check lv_attr_bit state $vg/$lv1 "a"
 	check lv_attr_bit state $vg/$lv2 "a"
-	aux error_dev "$dev2" $(get first_extent_sector "$dev2"):
+	aux error_dev "$dev2" "$(get first_extent_sector "$dev2"):"
 	aux enable_dev "$dev1"
 	# delay to let snapshot merge 'discover' failing COW device
 	sleep 1

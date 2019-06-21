@@ -16,7 +16,7 @@
 #ifndef _LVM_DEV_MANAGER_H
 #define _LVM_DEV_MANAGER_H
 
-#include "metadata-exported.h"
+#include "lib/metadata/metadata-exported.h"
 
 struct logical_volume;
 struct lv_activate_opts;
@@ -27,7 +27,7 @@ struct dm_info;
 struct device;
 struct lv_seg_status;
 
-int read_only_lv(const struct logical_volume *lv, const struct lv_activate_opts *laopts);
+int read_only_lv(const struct logical_volume *lv, const struct lv_activate_opts *laopts, const char *layer);
 
 /*
  * Constructor and destructor.
@@ -79,6 +79,11 @@ int dev_manager_thin_percent(struct dev_manager *dm,
 int dev_manager_thin_device_id(struct dev_manager *dm,
 			       const struct logical_volume *lv,
 			       uint32_t *device_id);
+int dev_manager_vdo_pool_status(struct dev_manager *dm,
+				const struct logical_volume *lv,
+				int flush,
+				char **vdo_params,
+				struct lv_status_vdo **vdo_status);
 int dev_manager_suspend(struct dev_manager *dm, const struct logical_volume *lv,
 			struct lv_activate_opts *laopts, int lockfs, int flush_required);
 int dev_manager_activate(struct dev_manager *dm, const struct logical_volume *lv,

@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "metadata.h"
-#include "config.h"
+#include "lib/metadata/metadata.h"
+#include "lib/config/config.h"
 
 typedef int (*lock_resource_fn) (struct cmd_context * cmd, const char *resource,
 				 uint32_t flags, const struct logical_volume *lv);
@@ -23,12 +23,10 @@ typedef int (*query_resource_fn) (const char *resource, const char *node, int *m
 typedef void (*fin_lock_fn) (void);
 typedef void (*reset_lock_fn) (void);
 
-#define LCK_PRE_MEMLOCK			0x00000001	/* Is memlock() needed before calls? */
-#define LCK_CLUSTERED			0x00000002
-#define LCK_SUPPORTS_REMOTE_QUERIES	0x00000004
+#define LCK_FLOCK			0x00000001
 
 struct locking_type {
-	uint32_t flags;
+	uint32_t flags;   /* 0 means file locking is disabled */
 	lock_resource_fn lock_resource;
 	query_resource_fn query_resource;
 
@@ -36,23 +34,5 @@ struct locking_type {
 	fin_lock_fn fin_locking;
 };
 
-/*
- * Locking types
- */
-void init_no_locking(struct locking_type *locking, struct cmd_context *cmd,
-		     int suppress_messages);
-
-void init_dummy_locking(struct locking_type *locking, struct cmd_context *cmd,
-			int suppress_messages);
-
-int init_readonly_locking(struct locking_type *locking, struct cmd_context *cmd,
-			  int suppress_messages);
-
 int init_file_locking(struct locking_type *locking, struct cmd_context *cmd,
 		      int suppress_messages);
-
-int init_external_locking(struct locking_type *locking, struct cmd_context *cmd,
-			  int suppress_messages);
-
-int init_cluster_locking(struct locking_type *locking, struct cmd_context *cmd,
-			 int suppress_messages);

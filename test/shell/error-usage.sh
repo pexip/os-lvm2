@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,14 +12,12 @@
 
 # Basic usage of zero target
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-aux prepare_pvs 1
-
-vgcreate -s 256k $vg $(cat DEVICES)
+aux prepare_vg 1
 
 lvcreate --type error -L1 -n $lv1 $vg
 lvextend -L+1 $vg/$lv1
@@ -28,7 +27,9 @@ lvextend -L+1 $vg/$lv1
 check lv_field $vg/$lv1 lv_modules "error"
 check lv_field $vg/$lv1 segtype "error"
 check lv_field $vg/$lv1 seg_count "1"
-check lv_field $vg/$lv1 seg_size_pe "8"   # 8 * 256
+check lv_field $vg/$lv1 seg_size_pe "4"   # 4 * 512 => 2M
 
 # FIXME should we print info we are ignoring stripping?
 lvextend -L+1 -I64 -i2 $vg/$lv1
+
+vgremove -ff $vg

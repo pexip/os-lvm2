@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,20 +10,21 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux prepare_pvs 3
+get_devs
+
 aux lvmconf 'allocation/maximise_cling = 0' \
 	    'allocation/mirror_logs_require_separate_pvs = 1'
 
 # not required, just testing
 aux pvcreate --metadatacopies 0 "$dev1"
 
-vgcreate $vg $(cat DEVICES)
-pvchange --addtag fast $(cat DEVICES)
+vgcreate $SHARED "$vg" "${DEVICES[@]}"
+pvchange --addtag fast "${DEVICES[@]}"
 
 # 3 stripes with 3 PVs (selected by tag, @fast) is fine
 lvcreate -l3 -i3 $vg @fast

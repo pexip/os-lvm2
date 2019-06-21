@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
@@ -12,14 +12,16 @@
 
 SKIP_WITH_LVMPOLLD=1
 
+
 . lib/inittest
 
 aux have_thin 1 0 0 || skip
 aux prepare_pvs 1 16
+get_devs
 
 aux lvmconf "metadata/record_lvs_history=1"
 
-vgcreate $vg -s 64K $(cat DEVICES)
+vgcreate $SHARED -s 64K "$vg" "${DEVICES[@]}"
 
 lvcreate -l100%FREE -T ${vg}/pool
 

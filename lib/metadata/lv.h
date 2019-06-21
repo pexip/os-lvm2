@@ -15,11 +15,10 @@
 #ifndef _LVM_LV_H
 #define _LVM_LV_H
 
-#include "vg.h"
+#include "lib/metadata/vg.h"
 
 union lvid;
 struct lv_segment;
-struct replicator_device;
 enum activation_change;
 
 struct logical_volume {
@@ -42,9 +41,6 @@ struct logical_volume {
 	uint32_t external_count;
 	struct dm_list snapshot_segs;
 	struct lv_segment *snapshot;
-
-	struct replicator_device *rdevice;/* For replicator-devs, rimages, slogs - reference to rdevice */
-	struct dm_list rsites;	/* For replicators - all sites */
 
 	struct dm_list segments;
 	struct dm_list tags;
@@ -157,7 +153,7 @@ char *lvseg_kernel_discards_dup(struct dm_pool *mem, const struct lv_segment *se
 int lv_set_creation(struct logical_volume *lv,
 		    const char *hostname, uint64_t timestamp);
 int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
-		     enum activation_change activate, int needs_exlusive);
+		     enum activation_change activate);
 
 /* LV dup functions */
 char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_with_info_and_seg_status *lvdm);

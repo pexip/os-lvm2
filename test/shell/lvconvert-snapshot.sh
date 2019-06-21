@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright (C) 2014 Red Hat, Inc. All rights reserved.
 #
@@ -17,9 +17,10 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-aux prepare_pvs 1
+aux prepare_pvs 2
+get_devs
 
-vgcreate -s 1k $vg $(cat DEVICES)
+vgcreate -s 4k "$vg" "${DEVICES[@]}"
 
 lvcreate --type snapshot -V50 -L1 -n $lv1 -s $vg
 
@@ -58,5 +59,15 @@ grep "smaller" err
 # This should pass
 lvconvert --yes -s $vg/$lv2 $vg/$lv5
 lvconvert --yes --type snapshot $vg/$lv2 $vg/$lv6
+
+vgremove -f $vg
+
+# FIXME: older stripe target can't handle 1K chunks
+vgcreate -s 4k "$vg" "${DEVICES[@]}"
+lvcreate -aey -L1 -n $lv2 $vg
+lvcreate -L1 -i2 -n $lv7 $vg
+
+# Striped LV is also supported
+lvconvert --yes --snapshot $vg/$lv2 $vg/$lv7
 
 vgremove -f $vg

@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euE
+set -o pipefail
+
+PACKAGE=lvm2
+
+error() {
+  echo "$@" >&2
+  exit 1
+}
+
+if [[ $(git rev-parse --abbrev-ref HEAD) != master ]]; then
+  error "Current branch is not master!"
+fi
+
+version=$1
+tar=../${PACKAGE}_${version}.orig.tar.gz
+
+if [ -e ${tar} ]; then
+  error "${tar} already exists!"
+fi
+
+curl -o ${tar} ftp://sources.redhat.com/pub/lvm2/LVM2.${version}.tgz
+curl -o ${tar}.asc ftp://sources.redhat.com/pub/lvm2/LVM2.${version}.tgz.asc
+gpg --verify ${tar}.asc
+
+git-dpm import-new-upstream ${tar}
+pristine-tar commit ${tar} upstream
+
+dch -v ${version}-1 "New upstream release."
+git add debian/changelog
+git commit --amend --message "Import ${version}"
+
+git-dpm rebase-patched

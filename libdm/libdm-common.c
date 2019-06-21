@@ -13,11 +13,11 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 #include "libdm-targets.h"
 #include "libdm-common.h"
-#include "kdev_t.h"
-#include "dm-ioctl.h"
+#include "libdm/misc/kdev_t.h"
+#include "libdm/misc/dm-ioctl.h"
 
 #include <stdarg.h>
 #include <sys/param.h>
@@ -108,12 +108,12 @@ void dm_lib_init(void)
  */
 
 __attribute__((format(printf, 5, 0)))
-static void _default_log_line(int level,
-	    const char *file __attribute__((unused)),
-	    int line __attribute__((unused)), int dm_errno_or_class,
-	    const char *f, va_list ap)
+static void _default_log_line(int level, const char *file,
+			      int line, int dm_errno_or_class,
+			      const char *f, va_list ap)
 {
 	static int _abort_on_internal_errors = -1;
+	static int _debug_with_line_numbers = -1;
 	FILE *out = log_stderr(level) ? stderr : stdout;
 
 	level = log_level(level);
@@ -121,6 +121,15 @@ static void _default_log_line(int level,
 	if (level <= _LOG_WARN || _verbose) {
 		if (level < _LOG_WARN)
 			out = stderr;
+
+		if (_debug_with_line_numbers < 0)
+			/* Set when env DM_DEBUG_WITH_LINE_NUMBERS is not "0" */
+			_debug_with_line_numbers =
+				strcmp(getenv("DM_DEBUG_WITH_LINE_NUMBERS") ? : "0", "0");
+
+		if (_debug_with_line_numbers)
+			fprintf(out, "%s:%d     ", file, line);
+
 		vfprintf(out, f, ap);
 		fputc('\n', out);
 	}
@@ -173,14 +182,16 @@ static void _log_to_default_log(int level,
 	    const char *file, int line, int dm_errno_or_class,
 	    const char *f, ...)
 {
+	int n;
 	va_list ap;
 	char buf[2 * PATH_MAX + 256]; /* big enough for most messages */
 
 	va_start(ap, f);
-	vsnprintf(buf, sizeof(buf), f, ap);
+	n = vsnprintf(buf, sizeof(buf), f, ap);
 	va_end(ap);
 
-	dm_log(level, file, line, "%s", buf);
+	if (n > 0) /* Could be truncated */
+		dm_log(level, file, line, "%s", buf);
 }
 
 /*
@@ -195,14 +206,16 @@ __attribute__((format(printf, 4, 5)))
 static void _log_to_default_log_with_errno(int level,
 	    const char *file, int line, const char *f, ...)
 {
+	int n;
 	va_list ap;
 	char buf[2 * PATH_MAX + 256]; /* big enough for most messages */
 
 	va_start(ap, f);
-	vsnprintf(buf, sizeof(buf), f, ap);
+	n = vsnprintf(buf, sizeof(buf), f, ap);
 	va_end(ap);
 
-	dm_log_with_errno(level, file, line, 0, "%s", buf);
+	if (n > 0) /* Could be truncated */
+		dm_log_with_errno(level, file, line, 0, "%s", buf);
 }
 
 void dm_log_init(dm_log_fn fn)
@@ -1027,7 +1040,7 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 {
 	char path[PATH_MAX];
 	struct stat info;
-	dev_t dev = MKDEV((dev_t)major, (dev_t)minor);
+	dev_t dev = MKDEV(major, minor);
 	mode_t old_mask;
 
 	if (!_build_dev_path(path, sizeof(path), dev_name))
@@ -1133,13 +1146,12 @@ static int _rename_dev_node(const char *old_name, const char *new_name,
 				 errno == ENOENT)
 				/* assume udev already deleted this */
 				return 1;
-			else {
-				log_warn("The node %s should have been renamed to %s "
-					 "by udev but old node is still present. "
-					 "Falling back to direct old node removal.",
-					 oldpath, newpath);
-				return _rm_dev_node(old_name, 0);
-			}
+
+			log_warn("The node %s should have been renamed to %s "
+				 "by udev but old node is still present. "
+				 "Falling back to direct old node removal.",
+				 oldpath, newpath);
+			return _rm_dev_node(old_name, 0);
 		}
 
 		if (unlink(newpath) < 0) {
@@ -1730,6 +1742,10 @@ static int _mountinfo_parse_line(const char *line, unsigned *maj, unsigned *min,
 {
 	char root[PATH_MAX + 1]; /* sscanf needs extra '\0' */
 	char target[PATH_MAX + 1];
+	char *devmapper;
+	struct dm_task *dmt;
+	struct dm_info info;
+	unsigned i;
 
 	/* TODO: maybe detect availability of  %ms  glib support ? */
 	if (sscanf(line, "%*u %*u %u:%u %" DM_TO_STRING(PATH_MAX)
@@ -1737,6 +1753,32 @@ static int _mountinfo_parse_line(const char *line, unsigned *maj, unsigned *min,
 		   maj, min, root, target) < 4) {
 		log_error("Failed to parse mountinfo line.");
 		return 0;
+	}
+
+	/* btrfs fakes device numbers, but there is still /dev/mapper name
+	 * placed in mountinfo, so try to detect proper major:minor via this */
+	if (*maj == 0 && (devmapper = strstr(line, "/dev/mapper/"))) {
+		if (!(dmt = dm_task_create(DM_DEVICE_INFO))) {
+			log_error("Mount info task creation failed.");
+			return 0;
+		}
+		devmapper += 12; /* skip fixed prefix */
+		for (i = 0; devmapper[i] && devmapper[i] != ' ' && i < sizeof(root)-1; ++i)
+			root[i] = devmapper[i];
+		root[i] = 0;
+		_unmangle_mountinfo_string(root, buf);
+		buf[DM_NAME_LEN] = 0; /* cut away */
+
+		if (dm_task_set_name(dmt, buf) &&
+		    dm_task_no_open_count(dmt) &&
+		    dm_task_run(dmt) &&
+		    dm_task_get_info(dmt, &info)) {
+			log_debug("Replacing mountinfo device (%u:%u) with matching DM device %s (%u:%u).",
+				  *maj, *min, buf, info.major, info.minor);
+			*maj = info.major;
+			*min = info.minor;
+		}
+		dm_task_destroy(dmt);
 	}
 
 	_unmangle_mountinfo_string(target, buf);
@@ -1914,13 +1956,13 @@ int dm_device_has_holders(uint32_t major, uint32_t minor)
 
 	if (dm_snprintf(sysfs_path, PATH_MAX, "%sdev/block/%" PRIu32
 			":%" PRIu32 "/holders", _sysfs_dir, major, minor) < 0) {
-		log_error("sysfs_path dm_snprintf failed");
+		log_warn("WARNING: sysfs_path dm_snprintf failed.");
 		return 0;
 	}
 
 	if (stat(sysfs_path, &st)) {
 		if (errno != ENOENT)
-			log_sys_error("stat", sysfs_path);
+			log_sys_debug("stat", sysfs_path);
 		return 0;
 	}
 
@@ -1936,13 +1978,13 @@ static int _mounted_fs_on_device(const char *kernel_dev_name)
 	int r = 0;
 
 	if (dm_snprintf(sysfs_path, PATH_MAX, "%sfs", _sysfs_dir) < 0) {
-		log_error("sysfs_path dm_snprintf failed");
+		log_warn("WARNING: sysfs_path dm_snprintf failed.");
 		return 0;
 	}
 
 	if (!(d = opendir(sysfs_path))) {
 		if (errno != ENOENT)
-			log_sys_error("opendir", sysfs_path);
+			log_sys_debug("opendir", sysfs_path);
 		return 0;
 	}
 
@@ -1952,7 +1994,7 @@ static int _mounted_fs_on_device(const char *kernel_dev_name)
 
 		if (dm_snprintf(sysfs_path, PATH_MAX, "%sfs/%s/%s",
 				_sysfs_dir, dirent->d_name, kernel_dev_name) < 0) {
-			log_error("sysfs_path dm_snprintf failed");
+			log_warn("WARNING: sysfs_path dm_snprintf failed.");
 			break;
 		}
 
@@ -1962,13 +2004,13 @@ static int _mounted_fs_on_device(const char *kernel_dev_name)
 			break;
 		}
 		else if (errno != ENOENT) {
-			log_sys_error("stat", sysfs_path);
+			log_sys_debug("stat", sysfs_path);
 			break;
 		}
 	}
 
 	if (closedir(d))
-		log_error("_fs_present_on_device: %s: closedir failed", kernel_dev_name);
+		log_sys_debug("closedir", kernel_dev_name);
 
 	return r;
 }
@@ -2030,7 +2072,7 @@ int dm_mknodes(const char *name)
 	int r = 0;
 
 	if (!(dmt = dm_task_create(DM_DEVICE_MKNODES)))
-		return 0;
+		return_0;
 
 	if (name && !dm_task_set_name(dmt, name))
 		goto out;
@@ -2051,7 +2093,7 @@ int dm_driver_version(char *version, size_t size)
 	int r = 0;
 
 	if (!(dmt = dm_task_create(DM_DEVICE_VERSION)))
-		return 0;
+		return_0;
 
 	if (!dm_task_run(dmt))
 		log_error("Failed to get driver version");

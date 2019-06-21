@@ -13,9 +13,8 @@
  */
 
 #include "tools.h"
-#include "lvmcache.h"
-#include "lvmetad-client.h"
-#include "filter.h"
+#include "lib/cache/lvmcache.h"
+#include "lib/filters/filter.h"
 
 struct vgimportclone_params {
 	unsigned done;
@@ -153,6 +152,11 @@ static int _vgimportclone_vg_single(struct cmd_context *cmd, const char *vg_name
 	if (!(vg->name = dm_pool_strdup(vg->vgmem, vp->new_vgname)))
 		goto_bad;
 
+	/* A duplicate of a shared VG is imported as a new local VG. */
+	vg->lock_type = NULL;
+	vg->lock_args = NULL;
+	vg->system_id = cmd->system_id ? dm_pool_strdup(vg->vgmem, cmd->system_id) : NULL;
+
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		if (!(new_pvl = dm_pool_zalloc(vg->vgmem, sizeof(*new_pvl))))
 			goto_bad;
@@ -174,8 +178,10 @@ static int _vgimportclone_vg_single(struct cmd_context *cmd, const char *vg_name
 		dm_list_add(&vg->pv_write_list, &new_pvl->list);
 	}
 
-	dm_list_iterate_items(lvl, &vg->lvs)
+	dm_list_iterate_items(lvl, &vg->lvs) {
 		memcpy(&lvl->lv->lvid, &vg->id, sizeof(vg->id));
+		lvl->lv->lock_args = NULL;
+	}
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
@@ -197,7 +203,6 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 	char base_vgname[NAME_LEN] = { 0 };
 	char tmp_vgname[NAME_LEN] = { 0 };
 	unsigned int vgname_count;
-	int lvmetad_rescan = 0;
 	int ret = ECMD_FAILED;
 
 	if (!argc) {
@@ -211,12 +216,6 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 	set_pv_notify(cmd);
 
 	vp.import_vg = arg_is_set(cmd, import_ARG);
-
-	if (lvmetad_used()) {
-		lvmetad_set_disabled(cmd, LVMETAD_DISABLE_REASON_DUPLICATES);
-		lvmetad_disconnect();
-		lvmetad_rescan = 1;
-	}
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
@@ -240,7 +239,7 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 	 */
 
 	log_debug("Finding devices to import.");
-	cmd->command->flags |= ENABLE_DUPLICATE_DEVS;
+	cmd->cname->flags |= ENABLE_DUPLICATE_DEVS;
 	process_each_pv(cmd, argc, argv, NULL, 0, READ_ALLOW_EXPORTED, handle, _vgimportclone_pv_single);
 
 	if (vp.found_args != argc) {
@@ -283,12 +282,22 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 	 */
 
 	if (arg_is_set(cmd, basevgname_ARG)) {
-		snprintf(base_vgname, sizeof(base_vgname) - 1, "%s", arg_str_value(cmd, basevgname_ARG, ""));
-		memcpy(tmp_vgname, base_vgname, NAME_LEN);
+		vgname = arg_str_value(cmd, basevgname_ARG, "");
+		if (dm_snprintf(base_vgname, sizeof(base_vgname), "%s", vgname) < 0) {
+			log_error("Base vg name %s is too long.", vgname);
+			goto out;
+		}
+		(void) dm_strncpy(tmp_vgname, base_vgname, NAME_LEN);
 		vgname_count = 0;
 	} else {
-		snprintf(base_vgname, sizeof(base_vgname) - 1, "%s", vp.old_vgname);
-		snprintf(tmp_vgname, sizeof(tmp_vgname) - 1, "%s1", vp.old_vgname);
+		if (dm_snprintf(base_vgname, sizeof(base_vgname), "%s", vp.old_vgname) < 0) {
+			log_error(INTERNAL_ERROR "Old vg name %s is too long.", vp.old_vgname);
+			goto out;
+		}
+		if (dm_snprintf(tmp_vgname, sizeof(tmp_vgname), "%s1", vp.old_vgname) < 0) {
+			log_error("Temporary vg name %s1 is too long.", vp.old_vgname);
+			goto out;
+		}
 		vgname_count = 1;
 	}
 
@@ -299,7 +308,10 @@ retry_name:
 	dm_list_iterate_items(vgnl, &vgnameids_on_system) {
 		if (!strcmp(vgnl->vg_name, tmp_vgname)) {
 			vgname_count++;
-			snprintf(tmp_vgname, sizeof(tmp_vgname) - 1, "%s%u", base_vgname, vgname_count);
+			if (dm_snprintf(tmp_vgname, sizeof(tmp_vgname), "%s%u", base_vgname, vgname_count) < 0) {
+				log_error("Failed to generated temporary vg name, %s%u is too long.", base_vgname, vgname_count);
+				goto out;
+			}
 			goto retry_name;
 		}
 	}
@@ -319,17 +331,19 @@ retry_name:
 	dm_list_iterate_items(vd, &vp.arg_import)
 		internal_filter_allow(cmd->mem, vd->dev);
 	lvmcache_destroy(cmd, 1, 0);
-	dev_cache_full_scan(cmd->full_filter);
 
 	log_debug("Changing VG %s to %s.", vp.old_vgname, vp.new_vgname);
-
-	/* We don't care if the new name comes before the old in lock order. */
-	lvmcache_lock_ordering(0);
 
 	if (!lock_vol(cmd, vp.new_vgname, LCK_VG_WRITE, NULL)) {
 		log_error("Can't get lock for new VG name %s", vp.new_vgname);
 		goto out;
 	}
+
+	/*
+	 * Trying to lock the duplicated VG would conflict with the original,
+	 * and it's not needed because the new VG will be imported as a local VG.
+	 */
+	cmd->lockd_vg_disable = 1;
 
 	ret = process_each_vg(cmd, 0, NULL, vp.old_vgname, NULL, READ_FOR_UPDATE | READ_ALLOW_EXPORTED, 0, handle, _vgimportclone_vg_single);
 
@@ -338,25 +352,7 @@ out:
 	unlock_vg(cmd, NULL, VG_GLOBAL);
 	internal_filter_clear();
 	init_internal_filtering(0);
-	lvmcache_lock_ordering(1);
 	destroy_processing_handle(cmd, handle);
-
-	/* Enable lvmetad again if no duplicates are left. */
-	if (lvmetad_rescan) {
-		if (!lvmetad_connect(cmd)) {
-			log_warn("WARNING: Failed to connect to lvmetad.");
-			log_warn("WARNING: Update lvmetad with pvscan --cache.");
-			return ret;
-		}
-
-		if (!refresh_filters(cmd))
-			stack;
-
-		if (!lvmetad_pvscan_all_devs(cmd, 1)) {
-			log_warn("WARNING: Failed to scan devices.");
-			log_warn("WARNING: Update lvmetad with pvscan --cache.");
-		}
-	}
 
 	return ret;
 }

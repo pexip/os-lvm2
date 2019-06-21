@@ -15,7 +15,7 @@
 
 #include "tools.h"
 
-#include "report.h"
+#include "lib/report/report.h"
 
 typedef enum {
 	REPORT_IDX_NULL = -1,
@@ -87,61 +87,65 @@ static int _vgs_single(struct cmd_context *cmd __attribute__((unused)),
 	return ECMD_PROCESSED;
 }
 
-static void _choose_lv_segment_for_status_report(const struct logical_volume *lv, const struct lv_segment **lv_seg)
-{
-	if (lv_is_used_cache_pool(lv)) {
-		/* For a used cache pool, choose cache volume segment */
-		*lv_seg = get_only_segment_using_this_lv(lv);
-		return;
-	}
-
-	/*
-	 * By default, take the first LV segment to report status for.
-	 * If there's any other specific segment that needs to be
-	 * reported instead for the LV, choose it here and assign it
-	 * to lvdm->seg_status->seg. This is the segment whose
-	 * status line will be used for report exactly.
-	 */
-	*lv_seg = first_seg(lv);
-}
-
 static int _do_info_and_status(struct cmd_context *cmd,
-				const struct logical_volume *lv,
 				const struct lv_segment *lv_seg,
 				struct lv_with_info_and_seg_status *status,
 				int do_info, int do_status)
 {
-	unsigned use_layer = lv_is_thin_pool(lv) ? 1 : 0;
+	status->lv = lv_seg->lv;
 
-	status->lv = lv;
-
-	if (lv_is_historical(lv))
+	if (lv_is_historical(lv_seg->lv))
 		return 1;
 
 	if (do_status) {
 		if (!(status->seg_status.mem = dm_pool_create("reporter_pool", 1024)))
 			return_0;
-		if (!lv_seg || seg_is_used_cache_pool(lv_seg))
-			_choose_lv_segment_for_status_report(lv, &lv_seg);
 
-		if (do_info) {
+		if (do_info)
 			/* both info and status */
-			status->info_ok = lv_info_with_seg_status(cmd, lv, lv_seg, use_layer, status, 1, 1);
-			/* for inactive thin-pools reset lv info struct */
-			if (use_layer && status->info_ok &&
-			    !lv_info(cmd, lv, 0, NULL, 0, 0))
-				memset(&status->info,  0, sizeof(status->info));
-			/* for inactive cache reset lvinfo for its struct for cache-pool */
-			if (lv_is_used_cache_pool(lv) && !status->info_ok) {
-				memset(&status->info,  0, sizeof(status->info));
-				status->info_ok = 1;
-			}
-		} else
-			/* status only */
-			status->info_ok = lv_status(cmd, lv_seg, use_layer, &status->seg_status);
+			status->info_ok = lv_info_with_seg_status(cmd, lv_seg, status, 1, 1);
+		else
+			status->info_ok = lv_info_with_seg_status(cmd, lv_seg, status, 0, 0);
 	} else if (do_info)
 		/* info only */
-		status->info_ok = lv_info(cmd, lv, use_layer, &status->info, 1, 1);
+		status->info_ok = lv_info(cmd, status->lv, 0, &status->info, 1, 1);
+
+	return 1;
+}
+
+/* Check if this is really merging origin.
+ * In such case, origin is gone, and user should see
+ * only data from merged snapshot. Important for thin. */
+static int _check_merging_origin(const struct logical_volume *lv,
+				 struct lv_with_info_and_seg_status *status,
+				 int *merged)
+{
+	uint32_t device_id;
+
+	*merged = 0;
+
+	switch (status->seg_status.type) {
+	case SEG_STATUS_THIN:
+		/* Get 'device_id' from active dm-table */
+		if (!lv_thin_device_id(lv, &device_id))
+			return_0;
+
+		if (lv->snapshot->device_id != device_id)
+			return 1;
+		break;
+	case SEG_STATUS_SNAPSHOT:
+		break;
+	default:
+		/* When inactive, it's technically merging */
+		if (status->info_ok && !status->info.exists)
+			break;
+		return 1;
+	}
+
+	/* Origin is gone */
+	log_debug_activation("Merge is in progress, reporting merged LV %s.",
+			     display_lvname(lv->snapshot->lv));
+	*merged = 1;
 
 	return 1;
 }
@@ -156,9 +160,21 @@ static int _do_lvs_with_info_and_status_single(struct cmd_context *cmd,
 		.seg_status.type = SEG_STATUS_NONE
 	};
 	int r = ECMD_FAILED;
+	int merged;
 
-	if (!_do_info_and_status(cmd, lv, NULL, &status, do_info, do_status))
+	if (lv_is_merging_origin(lv))
+		/* Status is need to know which LV should be shown */
+		do_status = 1;
+
+	if (!_do_info_and_status(cmd, first_seg(lv), &status, do_info, do_status))
 		goto_out;
+
+	if (lv_is_merging_origin(lv)) {
+		if (!_check_merging_origin(lv, &status, &merged))
+		      goto_out;
+		if (merged && lv_is_thin_volume(lv->snapshot->lv))
+			lv = lv->snapshot->lv;
+	}
 
 	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
 			   lv->vg, lv, NULL, NULL, NULL, &status, NULL))
@@ -206,13 +222,25 @@ static int _do_segs_with_info_and_status_single(struct cmd_context *cmd,
 		.seg_status.type = SEG_STATUS_NONE
 	};
 	int r = ECMD_FAILED;
+	int merged;
 
-	if (!_do_info_and_status(cmd, seg->lv, seg, &status, do_info, do_status))
+	if (lv_is_merging_origin(seg->lv))
+		/* Status is need to know which LV should be shown */
+		do_status = 1;
+
+	if (!_do_info_and_status(cmd, seg, &status, do_info, do_status))
 		goto_out;
+
+	if (lv_is_merging_origin(seg->lv)) {
+		if (!_check_merging_origin(seg->lv, &status, &merged))
+			goto_out;
+		if (merged && lv_is_thin_volume(seg->lv->snapshot->lv))
+			seg = seg->lv->snapshot;
+	}
 
 	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
 			   seg->lv->vg, seg->lv, NULL, seg, NULL, &status, NULL))
-	goto_out;
+		goto_out;
 
 	r = ECMD_PROCESSED;
 out:
@@ -333,7 +361,7 @@ static int _do_pvsegs_sub_single(struct cmd_context *cmd,
 		.lv = &_free_logical_volume
 	};
 
-	if (seg && !_do_info_and_status(cmd, seg->lv, seg, &status, do_info, do_status))
+	if (seg && !_do_info_and_status(cmd, seg, &status, do_info, do_status))
 		goto_out;
 
 	if (!report_object(sh ? : handle->custom_handle, sh != NULL,
@@ -517,14 +545,14 @@ static int _report_all_in_vg(struct cmd_context *cmd, struct processing_handle *
 			r = _vgs_single(cmd, vg->name, vg, handle);
 			break;
 		case LVS:
-			r = process_each_lv_in_vg(cmd, vg, NULL, NULL, 0, handle,
+			r = process_each_lv_in_vg(cmd, vg, NULL, NULL, 0, handle, NULL,
 						  do_lv_info && !do_lv_seg_status ? &_lvs_with_info_single :
 						  !do_lv_info && do_lv_seg_status ? &_lvs_with_status_single :
 						  do_lv_info && do_lv_seg_status ? &_lvs_with_info_and_status_single :
 										   &_lvs_single);
 			break;
 		case SEGS:
-			r = process_each_lv_in_vg(cmd, vg, NULL, NULL, 0, handle,
+			r = process_each_lv_in_vg(cmd, vg, NULL, NULL, 0, handle, NULL,
 						  do_lv_info && !do_lv_seg_status ? &_lvsegs_with_info_single :
 						  !do_lv_info && do_lv_seg_status ? &_lvsegs_with_status_single :
 						  do_lv_info && do_lv_seg_status ? &_lvsegs_with_info_and_status_single :
@@ -679,7 +707,7 @@ int report_for_selection(struct cmd_context *cmd,
 
 static void _check_pv_list(struct cmd_context *cmd, struct report_args *args, struct single_report_args *single_args)
 {
-	unsigned i;
+	int i;
 	int rescan_done = 0;
 
 	if (!args->argv)
@@ -691,7 +719,7 @@ static void _check_pv_list(struct cmd_context *cmd, struct report_args *args, st
 
 	if (single_args->args_are_pvs && args->argc) {
 		for (i = 0; i < args->argc; i++) {
-			if (!rescan_done && !dev_cache_get(args->argv[i], cmd->full_filter)) {
+			if (!rescan_done && !dev_cache_get(cmd, args->argv[i], cmd->filter)) {
 				cmd->filter->wipe(cmd->filter);
 				/* FIXME scan only one device */
 				lvmcache_label_scan(cmd);
@@ -752,7 +780,7 @@ static void _del_option_from_list(struct dm_list *sll, const char *prefix,
 }
 
 #define _get_report_idx(report_type,single_report_type) \
-	(((report_type != FULL) && (report_type == single_report_type)) ? REPORT_IDX_SINGLE : REPORT_IDX_FULL_ ## single_report_type)
+	((((report_type) != FULL) && ((report_type) == single_report_type)) ? REPORT_IDX_SINGLE : REPORT_IDX_FULL_ ## single_report_type)
 
 static report_idx_t _get_report_idx_from_name(report_type_t report_type, const char *name)
 {
@@ -1076,8 +1104,7 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 	 * We lock VG_GLOBAL to enable use of metadata cache.
 	 * This can pause alongide pvscan or vgscan process for a while.
 	 */
-	if (single_args->args_are_pvs && (report_type == PVS || report_type == PVSEGS) &&
-	    !lvmetad_used()) {
+	if (single_args->args_are_pvs && (report_type == PVS || report_type == PVSEGS)) {
 		lock_global = 1;
 		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
 			log_error("Unable to obtain global lock.");
@@ -1099,7 +1126,7 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 			if (args->full_report_vg)
 				r = _report_all_in_vg(cmd, handle, args->full_report_vg, LVS, lv_info_needed, lv_segment_status_needed);
 			else
-				r = process_each_lv(cmd, args->argc, args->argv, NULL, NULL, 0, handle,
+				r = process_each_lv(cmd, args->argc, args->argv, NULL, NULL, 0, handle, NULL,
 						    lv_info_needed && !lv_segment_status_needed ? &_lvs_with_info_single :
 						    !lv_info_needed && lv_segment_status_needed ? &_lvs_with_status_single :
 						    lv_info_needed && lv_segment_status_needed ? &_lvs_with_info_and_status_single :
@@ -1133,7 +1160,7 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 			if (args->full_report_vg)
 				r = _report_all_in_vg(cmd, handle, args->full_report_vg, SEGS, lv_info_needed, lv_segment_status_needed);
 			else
-				r = process_each_lv(cmd, args->argc, args->argv, NULL, NULL, 0, handle,
+				r = process_each_lv(cmd, args->argc, args->argv, NULL, NULL, 0, handle, NULL,
 						    lv_info_needed && !lv_segment_status_needed ? &_lvsegs_with_info_single :
 						    !lv_info_needed && lv_segment_status_needed ? &_lvsegs_with_status_single :
 						    lv_info_needed && lv_segment_status_needed ? &_lvsegs_with_info_and_status_single :
@@ -1234,10 +1261,10 @@ out:
 
 #define _set_full_report_single(cmd,args,type,name) \
 	do { \
-		args->single_args[REPORT_IDX_FULL_ ## type].report_type = type; \
-		args->single_args[REPORT_IDX_FULL_ ## type].keys = find_config_tree_str(cmd, report_ ## name ## _sort_full_CFG, NULL); \
-		args->single_args[REPORT_IDX_FULL_ ## type].options = find_config_tree_str(cmd, report_ ## name ## _cols_full_CFG, NULL); \
-		if (!_set_report_prefix_and_name(args, &args->single_args[REPORT_IDX_FULL_ ## type])) \
+		(args)->single_args[REPORT_IDX_FULL_ ## type].report_type = type; \
+		(args)->single_args[REPORT_IDX_FULL_ ## type].keys = find_config_tree_str(cmd, report_ ## name ## _sort_full_CFG, NULL); \
+		(args)->single_args[REPORT_IDX_FULL_ ## type].options = find_config_tree_str(cmd, report_ ## name ## _cols_full_CFG, NULL); \
+		if (!_set_report_prefix_and_name((args), &(args)->single_args[REPORT_IDX_FULL_ ## type])) \
 			return_0; \
 	} while (0)
 
@@ -1359,7 +1386,7 @@ static int _report(struct cmd_context *cmd, int argc, char **argv, report_type_t
 	struct single_report_args *single_args = &args.single_args[REPORT_IDX_SINGLE];
 	static char report_name[] = "report";
 	struct processing_handle *handle;
-	int r = ECMD_FAILED;
+	int r;
 
 	/*
 	 * Include foreign VGs that contain active LVs.

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,6 +12,7 @@
 
 SKIP_WITH_LVMPOLLD=1
 
+
 . lib/inittest
 
 # We need "dm" directory for dm devices in sysfs.
@@ -18,7 +20,7 @@ aux driver_at_least 4 15 || skip
 
 aux prepare_devs 3 8
 
-vgcreate $vg $dev1 $dev2
+vgcreate $SHARED "$vg" "$dev1" "$dev2"
 lvcreate -l100%FREE -n $lv $vg
 dd if="$dev1" of="$dev3" bs=1M
 pvs --config "devices/global_filter = [ \"a|$dev2|\", \"a|$dev3|\", \"r|.*|\" ]" 2>err

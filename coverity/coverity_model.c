@@ -41,6 +41,19 @@ struct lv_segment *last_seg(const struct logical_volume *lv)
 	return ((struct lv_segment **)lv)[0];
 }
 
+const char *find_config_tree_str(struct cmd_context *cmd, int id, struct profile *profile)
+{
+	return "STRING";
+}
+
+struct logical_volume *origin_from_cow(const struct logical_volume *lv)
+{
+	if (lv)
+		return lv;
+
+	__coverity_panic__();
+}
+
 /* simple_memccpy() from glibc */
 void *memccpy(void *dest, const void *src, int c, size_t n)
 {
@@ -70,6 +83,17 @@ void model_FD_ZERO(void *fdset)
 	for (i = 0; i < 1024 / 8 / sizeof(long); ++i)
 		((long*)fdset)[i] = 0;
 }
+
+
+/* Resent Coverity reports quite weird errors... */
+int *__errno_location(void)
+{
+}
+const unsigned short **__ctype_b_loc (void)
+{
+}
+
+
 
 /*
  * Added extra pointer check to not need these models,

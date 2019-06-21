@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2013 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2010-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,10 +12,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "properties.h"
-#include "activate.h"
-#include "metadata.h"
+#include "lib/misc/lib.h"
+#include "lib/report/properties.h"
+#include "lib/activate/activate.h"
+#include "lib/metadata/metadata.h"
 
 
 #define GET_VG_NUM_PROPERTY_FN(NAME, VALUE) \
@@ -213,6 +213,8 @@ GET_PV_NUM_PROPERTY_FN(pv_ba_size, SECTOR_SIZE * pv->ba_size)
 #define _vg_allocation_policy_get prop_not_implemented_get
 #define _vg_clustered_set prop_not_implemented_set
 #define _vg_clustered_get prop_not_implemented_get
+#define _vg_shared_set prop_not_implemented_set
+#define _vg_shared_get prop_not_implemented_get
 
 #define _lv_layout_set prop_not_implemented_set
 #define _lv_layout_get prop_not_implemented_get
@@ -446,8 +448,22 @@ GET_VG_NUM_PROPERTY_FN(vg_missing_pv_count, vg_missing_pv_count(vg))
 /* LVSEG */
 GET_LVSEG_STR_PROPERTY_FN(segtype, lvseg_segtype_dup(lvseg->lv->vg->vgmem, lvseg))
 #define _segtype_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(data_copies, lvseg->data_copies)
+#define _data_copies_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(reshape_len, lvseg->reshape_len)
+#define _reshape_len_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(reshape_len_le, lvseg->reshape_len)
+#define _reshape_len_le_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(data_offset, lvseg->data_offset)
+#define _data_offset_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(new_data_offset, lvseg->data_offset)
+#define _new_data_offset_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(parity_chunks, lvseg->data_offset)
+#define _parity_chunks_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripes, lvseg->area_count)
 #define _stripes_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(data_stripes, lvseg->area_count)
+#define _data_stripes_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripe_size, (SECTOR_SIZE * lvseg->stripe_size))
 #define _stripe_size_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(region_size, (SECTOR_SIZE * lvseg->region_size))
@@ -456,7 +472,7 @@ GET_LVSEG_NUM_PROPERTY_FN(chunk_size, (SECTOR_SIZE * lvseg_chunksize(lvseg)))
 #define _chunk_size_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(thin_count, dm_list_size(&lvseg->lv->segs_using_this_lv))
 #define _thin_count_set prop_not_implemented_set
-GET_LVSEG_NUM_PROPERTY_FN(zero, lvseg->zero_new_blocks)
+GET_LVSEG_NUM_PROPERTY_FN(zero, (lvseg->zero_new_blocks == THIN_ZERO_YES))
 #define _zero_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(transaction_id, lvseg->transaction_id)
 #define _transaction_id_set prop_not_implemented_set
@@ -468,6 +484,8 @@ GET_LVSEG_STR_PROPERTY_FN(kernel_discards, lvseg_kernel_discards_dup(lvseg->lv->
 #define _kernel_discards_set prop_not_implemented_set
 GET_LVSEG_STR_PROPERTY_FN(cache_mode, lvseg_cachemode_dup(lvseg->lv->vg->vgmem, lvseg))
 #define _cache_mode_set prop_not_implemented_set
+GET_LVSEG_NUM_PROPERTY_FN(cache_metadata_format, lvseg->cache_metadata_format)
+#define _cache_metadata_format_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(seg_start, (SECTOR_SIZE * lvseg_start(lvseg)))
 #define _seg_start_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(seg_start_pe, lvseg->le)
@@ -499,6 +517,8 @@ GET_LVSEG_STR_PROPERTY_FN(seg_monitor, lvseg_monitor_dup(lvseg->lv->vg->vgmem, l
 #define _kernel_cache_settings_set prop_not_implemented_set
 #define _kernel_cache_policy_get prop_not_implemented_get
 #define _kernel_cache_policy_set prop_not_implemented_set
+#define _kernel_metadata_format_get prop_not_implemented_get
+#define _kernel_metadata_format_set prop_not_implemented_set
 
 /* PVSEG */
 GET_PVSEG_NUM_PROPERTY_FN(pvseg_start, pvseg->pe)

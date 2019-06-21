@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2010 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -15,7 +16,7 @@
 #
 
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 LVM_TEST_CONFIG_DEVICES="types = [\"device-mapper\", 142]"
@@ -31,5 +32,4 @@ pvs "$dev1"
 # create small partition table
 echo "1 2" | sfdisk --force "$dev1"
 
-aux notify_lvmetad "$dev1"
 not pvs "$dev1"

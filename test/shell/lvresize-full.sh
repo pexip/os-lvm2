@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -12,7 +13,7 @@
 # Excersize resize of filesystem when size of LV already matches
 # https://bugzilla.redhat.com/1354396
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -20,6 +21,8 @@ SKIP_WITH_LVMPOLLD=1
 FSCK=${FSCK-fsck}
 MKFS=${MKFS-mkfs.ext3}
 RESIZEFS=${RESIZEFS-resize2fs}
+LVM_BINARY=$(which lvm)
+export LVM_BINARY
 
 which $FSCK || skip
 which $MKFS || skip

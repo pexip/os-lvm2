@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2010-2012 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,6 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -43,7 +43,7 @@ lvcreate -aey -L16M -n base $vg
 lvcreate -s -L4M -n snap $vg/base
 
 write_ 0 1000
-test 24 -eq $(percent_)
+test 24 -eq "$(percent_)"
 
 lvchange --monitor y $vg/snap
 
@@ -52,9 +52,9 @@ pre=$(percent_)
 # Normally the usage should be ~66% here, however on slower systems
 # dmeventd could be actually 'fast' enough to have COW already resized now
 # so mark test skipped if we are below 50% by now
-test $pre -gt 50 || skip
+test "$pre" -gt 50 || skip
 wait_for_change_ $pre
-test $pre -gt $(percent_)
+test "$pre" -gt "$(percent_)"
 
 # check that a second extension happens; we used to fail to extend when the
 # utilisation ended up between THRESH and (THRESH + 10)... see RHBZ 754198
@@ -63,8 +63,8 @@ test $pre -gt $(percent_)
 write_ 2700 2000
 pre=$(percent_)
 # Mark test as skipped if already resized...
-test $pre -gt 70 || skip
+test "$pre" -gt 70 || skip
 wait_for_change_ $pre
-test $pre -gt $(percent_)
+test "$pre" -gt "$(percent_)"
 
 vgremove -f $vg

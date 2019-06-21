@@ -13,15 +13,14 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "archiver.h"
-#include "format-text.h"
-#include "lvm-string.h"
-#include "lvmcache.h"
-#include "lvmetad.h"
-#include "memlock.h"
-#include "toolcontext.h"
-#include "locking.h"
+#include "lib/misc/lib.h"
+#include "lib/format_text/archiver.h"
+#include "lib/format_text/format-text.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/cache/lvmcache.h"
+#include "lib/mm/memlock.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/locking/locking.h"
 
 #include <unistd.h>
 
@@ -35,6 +34,7 @@ struct archive_params {
 struct backup_params {
 	int enabled;
 	char *dir;
+	int suppress;
 };
 
 int archive_init(struct cmd_context *cmd, const char *dir,
@@ -54,7 +54,7 @@ int archive_init(struct cmd_context *cmd, const char *dir,
 	if (!*dir)
 		return 1;
 
-	if (!(cmd->archive_params->dir = dm_strdup(dir))) {
+	if (!(cmd->archive_params->dir = strdup(dir))) {
 		log_error("Couldn't copy archive directory name.");
 		return 0;
 	}
@@ -70,7 +70,7 @@ void archive_exit(struct cmd_context *cmd)
 {
 	if (!cmd->archive_params)
 		return;
-	dm_free(cmd->archive_params->dir);
+	free(cmd->archive_params->dir);
 	memset(cmd->archive_params, 0, sizeof(*cmd->archive_params));
 }
 
@@ -192,7 +192,7 @@ int backup_init(struct cmd_context *cmd, const char *dir,
 	if (!*dir)
 		return 1;
 
-	if (!(cmd->backup_params->dir = dm_strdup(dir))) {
+	if (!(cmd->backup_params->dir = strdup(dir))) {
 		log_error("Couldn't copy backup directory name.");
 		return 0;
 	}
@@ -205,7 +205,7 @@ void backup_exit(struct cmd_context *cmd)
 {
 	if (!cmd->backup_params)
 		return;
-	dm_free(cmd->backup_params->dir);
+	free(cmd->backup_params->dir);
 	memset(cmd->backup_params, 0, sizeof(*cmd->backup_params));
 }
 
@@ -235,7 +235,8 @@ static int _backup(struct volume_group *vg)
 int backup_locally(struct volume_group *vg)
 {
 	if (!vg->cmd->backup_params->enabled || !vg->cmd->backup_params->dir) {
-		log_warn("WARNING: This metadata update is NOT backed up");
+		log_warn_suppress(vg->cmd->backup_params->suppress++,
+				  "WARNING: This metadata update is NOT backed up.");
 		return 1;
 	}
 
@@ -272,10 +273,6 @@ int backup(struct volume_group *vg)
 	/* Don't back up orphan VGs. */
 	if (is_orphan_vg(vg->name))
 		return 1;
-
-	if (vg_is_clustered(vg))
-		if (!remote_backup_metadata(vg))
-			stack;
 
 	return backup_locally(vg);
 }
@@ -318,7 +315,7 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 	}
 
 	dm_list_iterate_items(mda, &tf->metadata_areas_in_use) {
-		if (!(vg = mda->ops->vg_read(tf, vg_name, mda, NULL, NULL, 0)))
+		if (!(vg = mda->ops->vg_read(tf, vg_name, mda, NULL, NULL)))
 			stack;
 		break;
 	}
@@ -411,7 +408,7 @@ int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg,
 			new_pvl->pv = pv;
 			dm_list_add(&new_pvs, &new_pvl->list);
 
-			log_verbose("Set up physical volume for \"%s\" with %" PRIu64
+			log_verbose("Set up physical volume for \"%s\" with " FMTu64
 				    " available sectors.", pv_dev_name(pv), pv_size(pv));
 		}
 
@@ -486,19 +483,11 @@ int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg,
 			}
 
 			log_verbose("Zeroing start of device %s", pv_name);
-			if (!dev_open_quiet(dev)) {
-				log_error("%s not opened: device not zeroed", pv_name);
-				return 0;
-			}
 
-			if (!dev_set(dev, UINT64_C(0), (size_t) 2048, 0)) {
+			if (!dev_write_zeros(dev, 0, 2048)) {
 				log_error("%s not wiped: aborting", pv_name);
-				if (!dev_close(dev))
-					stack;
 				return 0;
 			}
-			if (!dev_close(dev))
-				stack;
 		}
 	}
 

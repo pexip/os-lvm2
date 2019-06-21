@@ -22,8 +22,8 @@
  * Output arguments:
  * pp: structure allocated by caller, fields written / validated here
  */
-static int pvcreate_restore_params_from_args(struct cmd_context *cmd, int argc,
-					     struct pvcreate_params *pp)
+static int _pvcreate_restore_params_from_args(struct cmd_context *cmd, int argc,
+					      struct pvcreate_params *pp)
 {
 	pp->restorefile = arg_str_value(cmd, restorefile_ARG, NULL);
 
@@ -52,18 +52,18 @@ static int pvcreate_restore_params_from_args(struct cmd_context *cmd, int argc,
 		pp->pva.idp = &pp->pva.id;
 	}
 
-	if (arg_sign_value(cmd, physicalvolumesize_ARG, SIGN_NONE) == SIGN_MINUS) {
+	if (arg_sign_value(cmd, setphysicalvolumesize_ARG, SIGN_NONE) == SIGN_MINUS) {
 		log_error("Physical volume size may not be negative");
 		return 0;
 	}
-	pp->pva.size = arg_uint64_value(cmd, physicalvolumesize_ARG, UINT64_C(0));
+	pp->pva.size = arg_uint64_value(cmd, setphysicalvolumesize_ARG, UINT64_C(0));
 
 	if (arg_is_set(cmd, restorefile_ARG) || arg_is_set(cmd, uuidstr_ARG))
 		pp->zero = 0;
 	return 1;
 }
 
-static int pvcreate_restore_params_from_backup(struct cmd_context *cmd,
+static int _pvcreate_restore_params_from_backup(struct cmd_context *cmd,
 					       struct pvcreate_params *pp)
 {
 	struct volume_group *vg;
@@ -103,17 +103,6 @@ int pvcreate(struct cmd_context *cmd, int argc, char **argv)
 	struct pvcreate_params pp;
 	int ret;
 
-	if (!argc) {
-		log_error("Please enter a physical volume path.");
-		return 0;
-	}
-
-	/*
-	 * Device info needs to be available for reading the VG backup file in
-	 * pvcreate_restore_params_from_backup.
-	 */
-	lvmcache_seed_infos_from_lvmetad(cmd);
-
 	/*
 	 * Five kinds of pvcreate param values:
 	 * 1. defaults
@@ -126,17 +115,29 @@ int pvcreate(struct cmd_context *cmd, int argc, char **argv)
 
 	pvcreate_params_set_defaults(&pp);
 
-	if (!pvcreate_restore_params_from_args(cmd, argc, &pp))
+	if (!_pvcreate_restore_params_from_args(cmd, argc, &pp))
 		return EINVALID_CMD_LINE;
 
-	if (!pvcreate_restore_params_from_backup(cmd, &pp))
+	if (!_pvcreate_restore_params_from_backup(cmd, &pp))
 		return EINVALID_CMD_LINE;
 
 	if (!pvcreate_params_from_args(cmd, &pp))
 		return EINVALID_CMD_LINE;
 
+	/*
+	 * If --metadatasize was not given with --restorefile, set it to pe_start.
+	 * Later code treats this as a maximum size and reduces it to fit.
+	 */
+	if (!arg_is_set(cmd, metadatasize_ARG) && arg_is_set(cmd, restorefile_ARG))
+		pp.pva.pvmetadatasize = pp.pva.pe_start;
+
+	/* FIXME Also needs to check any 2nd metadata area isn't inside the data area! */
+
 	pp.pv_count = argc;
 	pp.pv_names = argv;
+
+	/* Check for old md signatures at the end of devices. */
+	cmd->use_full_md_check = 1;
 
 	/*
 	 * Needed to change the set of orphan PVs.

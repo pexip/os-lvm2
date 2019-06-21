@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2010 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # FIXME RESYNC doesn't work in cluster with exclusive activation
 # seriously broken!
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_CLVMD=1
 SKIP_WITH_LVMPOLLD=1
 

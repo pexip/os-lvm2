@@ -52,7 +52,6 @@ static int _detach_pvmove_mirror(struct cmd_context *cmd,
 {
 	uint32_t mimage_to_remove = 0;
 	struct dm_list lvs_completed;
-	struct lv_list *lvl;
 
 	/* Update metadata to remove mirror segments and break dependencies */
 	dm_list_init(&lvs_completed);
@@ -64,12 +63,8 @@ static int _detach_pvmove_mirror(struct cmd_context *cmd,
 	if (!lv_remove_mirrors(cmd, lv_mirr, 1, 0, _is_pvmove_image_removable, &mimage_to_remove, PVMOVE) ||
 	    !remove_layers_for_segments_all(cmd, lv_mirr, PVMOVE,
 					    &lvs_completed)) {
-		return 0;
+		return_0;
 	}
-
-	dm_list_iterate_items(lvl, &lvs_completed)
-		/* FIXME Assumes only one pvmove at a time! */
-		lvl->lv->status &= ~LOCKED;
 
 	return 1;
 }
@@ -83,38 +78,8 @@ int pvmove_update_metadata(struct cmd_context *cmd, struct volume_group *vg,
 			   struct dm_list *lvs_changed __attribute__((unused)),
 			   unsigned flags __attribute__((unused)))
 {
-	log_verbose("Updating volume group metadata.");
-	if (!vg_write(vg)) {
-		log_error("ABORTING: Volume group metadata update failed.");
-		return 0;
-	}
-
-	if (!suspend_lv(cmd, lv_mirr)) {
-		vg_revert(vg);
-		log_error("ABORTING: Temporary pvmove mirror reload failed.");
-		if (!revert_lv(cmd, lv_mirr))
-			stack;
-		return 0;
-	}
-
-	/* Commit on-disk metadata */
-	if (!vg_commit(vg)) {
-		log_error("ABORTING: Volume group metadata update failed.");
-		if (!resume_lv(cmd, lv_mirr))
-			log_error("Unable to reactivate logical volume \"%s\".",
-				  lv_mirr->name);
-		if (!revert_lv(cmd, lv_mirr))
-			stack;
-		return 0;
-	}
-
-	if (!resume_lv(cmd, lv_mirr)) {
-		log_error("Unable to reactivate logical volume \"%s\".",
-			  lv_mirr->name);
-		return 0;
-	}
-
-	backup(vg);
+	if (!lv_update_and_reload(lv_mirr))
+		return_0;
 
 	return 1;
 }
@@ -122,8 +87,6 @@ int pvmove_update_metadata(struct cmd_context *cmd, struct volume_group *vg,
 int pvmove_finish(struct cmd_context *cmd, struct volume_group *vg,
 		  struct logical_volume *lv_mirr, struct dm_list *lvs_changed)
 {
-	int r = 1;
-
 	if (!dm_list_empty(lvs_changed) &&
 	    (!_detach_pvmove_mirror(cmd, lv_mirr) ||
 	    !replace_lv_with_error_segment(lv_mirr))) {
@@ -131,48 +94,14 @@ int pvmove_finish(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
-	/* Store metadata without dependencies on mirror segments */
-	if (!vg_write(vg)) {
-		log_error("ABORTING: Failed to write new data locations "
-			  "to disk.");
-		return 0;
-	}
-
-	/* Suspend LVs changed (implicitly suspends lv_mirr) */
-	if (!suspend_lvs(cmd, lvs_changed, vg)) {
-		log_error("ABORTING: Locking LVs to remove temporary mirror failed");
-		if (!revert_lv(cmd, lv_mirr))
-			stack;
-		return 0;
-	}
-
-	/* Store metadata without dependencies on mirror segments */
-	if (!vg_commit(vg)) {
-		log_error("ABORTING: Failed to write new data locations "
-			  "to disk.");
-		if (!revert_lv(cmd, lv_mirr))
-			stack;
-		if (!revert_lvs(cmd, lvs_changed))
-			stack;
-		return 0;
-	}
-
-	/* Release mirror LV.  (No pending I/O because it's been suspended.) */
-	if (!resume_lv(cmd, lv_mirr)) {
-		log_error("Unable to reactivate logical volume \"%s\"",
-			  lv_mirr->name);
-		r = 0;
-	}
-
-	/* Unsuspend LVs */
-	if (!resume_lvs(cmd, lvs_changed))
-		stack;
+	if (!lv_update_and_reload(lv_mirr))
+		return_0;
 
 	/* Deactivate mirror LV */
 	if (!deactivate_lv(cmd, lv_mirr)) {
 		log_error("ABORTING: Unable to deactivate temporary logical "
-			  "volume \"%s\"", lv_mirr->name);
-		r = 0;
+			  "volume %s.", display_lvname(lv_mirr));
+		return 0;
 	}
 
 	log_verbose("Removing temporary pvmove LV");
@@ -192,5 +121,5 @@ int pvmove_finish(struct cmd_context *cmd, struct volume_group *vg,
 	/* FIXME backup positioning */
 	backup(vg);
 
-	return r;
+	return 1;
 }

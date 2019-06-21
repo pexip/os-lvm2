@@ -12,18 +12,19 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "toolcontext.h"
-#include "segtype.h"
-#include "display.h"
-#include "text_export.h"
-#include "config.h"
-#include "str_list.h"
-#include "lvm-string.h"
-#include "activate.h"
-#include "metadata.h"
-#include "lv_alloc.h"
-#include "defaults.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/metadata/segtype.h"
+#include "lib/display/display.h"
+#include "lib/format_text/text_export.h"
+#include "lib/config/config.h"
+#include "lib/datastruct/str_list.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/activate/activate.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/lv_alloc.h"
+#include "lib/config/defaults.h"
 
 static const char _cache_module[] = "cache";
 #define CACHE_POLICY_WHEN_MISSING   "mq"
@@ -35,6 +36,38 @@ static unsigned _feature_mask;
 #define SEG_LOG_ERROR(t, p...) \
         log_error(t " segment %s of logical volume %s.", ## p,	\
                   dm_config_parent_name(sn), seg->lv->name), 0;
+
+static int _cache_out_line(const char *line, void *_f)
+{
+	log_print("    Setting\t\t%s", line);
+
+	return 1;
+}
+
+static void _cache_display(const struct lv_segment *seg)
+{
+	const struct dm_config_node *n;
+	const struct lv_segment *pool_seg =
+		seg_is_cache_pool(seg) ? seg : first_seg(seg->pool_lv);
+
+	log_print("  Chunk size\t\t%s",
+		  display_size(seg->lv->vg->cmd, pool_seg->chunk_size));
+
+	if (pool_seg->cache_metadata_format != CACHE_METADATA_FORMAT_UNSELECTED)
+		log_print("  Metadata format\t%u", pool_seg->cache_metadata_format);
+
+	if (pool_seg->cache_mode != CACHE_MODE_UNSELECTED)
+		log_print("  Mode\t\t%s", get_cache_mode_name(pool_seg));
+
+	if (pool_seg->policy_name)
+		log_print("  Policy\t\t%s", pool_seg->policy_name);
+
+	if (pool_seg->policy_settings &&
+	    (n = pool_seg->policy_settings->child))
+		dm_config_write_node(n, _cache_out_line, NULL);
+
+	log_print(" ");
+}
 
 /*
  * When older metadata are loaded without newer settings,
@@ -52,7 +85,13 @@ static void _fix_missing_defaults(struct lv_segment *cpool_seg)
 			    cpool_seg->policy_name);
 	}
 
-	if (cpool_seg->cache_mode == CACHE_MODE_UNDEFINED) {
+	if (cpool_seg->cache_metadata_format == CACHE_METADATA_FORMAT_UNSELECTED) {
+		cpool_seg->cache_metadata_format = CACHE_METADATA_FORMAT_1;
+		log_verbose("Cache pool %s uses implicit metadata format %u.",
+			    display_lvname(cpool_seg->lv), cpool_seg->cache_metadata_format);
+	}
+
+	if (cpool_seg->cache_mode == CACHE_MODE_UNSELECTED) {
 		cpool_seg->cache_mode = CACHE_MODE_WHEN_MISSING;
 		log_verbose("Cache pool %s is missing cache mode, using %s.",
 			    display_lvname(cpool_seg->lv),
@@ -105,6 +144,16 @@ static int _cache_pool_text_import(struct lv_segment *seg,
 			return SEG_LOG_ERROR("policy must be a string in");
 		if (!(seg->policy_name = dm_pool_strdup(mem, str)))
 			return SEG_LOG_ERROR("Failed to duplicate policy in");
+	}
+
+	if (dm_config_has_node(sn, "metadata_format")) {
+		if (!dm_config_get_uint32(sn, "metadata_format", &seg->cache_metadata_format) ||
+		    ((seg->cache_metadata_format != CACHE_METADATA_FORMAT_1) &&
+		     (seg->cache_metadata_format != CACHE_METADATA_FORMAT_2)))
+			return SEG_LOG_ERROR("Unknown cache metadata format %u number in",
+					     seg->cache_metadata_format);
+		if (seg->cache_metadata_format == CACHE_METADATA_FORMAT_2)
+			seg->lv->status |= LV_METADATA_FORMAT;
 	}
 
 	/*
@@ -164,12 +213,31 @@ static int _cache_pool_text_export(const struct lv_segment *seg,
 	outf(f, "metadata = \"%s\"", seg->metadata_lv->name);
 	outf(f, "chunk_size = %" PRIu32, seg->chunk_size);
 
+	switch (seg->cache_metadata_format) {
+	case CACHE_METADATA_FORMAT_UNSELECTED:
+		/* Unselected format is not printed */
+		break;
+	case CACHE_METADATA_FORMAT_1:
+		/* If format 1 was already specified with cache pool, store it,
+		 * otherwise format gets stored when LV is cached.
+		 * NB: format 1 could be lost anytime, it's a default format.
+		 * Older lvm2 tool can easily drop it.
+		 */
+	case CACHE_METADATA_FORMAT_2: /* more in future ? */
+		outf(f, "metadata_format = " FMTu32, seg->cache_metadata_format);
+		break;
+	default:
+		log_error(INTERNAL_ERROR "LV %s is using unknown cache metadada format %u.",
+			  display_lvname(seg->lv), seg->cache_metadata_format);
+		return 0;
+	}
+
 	/*
 	 * Cache pool used by a cache LV holds data. Not ideal,
 	 * but not worth to break backward compatibility, by shifting
 	 * content to cache segment
 	 */
-	if (seg->cache_mode != CACHE_MODE_UNDEFINED) {
+	if (seg->cache_mode != CACHE_MODE_UNSELECTED) {
 		if (!(cache_mode = get_cache_mode_name(seg)))
 			return_0;
 		outf(f, "cache_mode = \"%s\"", cache_mode);
@@ -194,10 +262,43 @@ static int _cache_pool_text_export(const struct lv_segment *seg,
 
 static void _destroy(struct segment_type *segtype)
 {
-	dm_free((void *) segtype);
+	free((void *) segtype);
 }
 
 #ifdef DEVMAPPER_SUPPORT
+/*
+ * Parse and look for kernel symbol in /proc/kallsyms
+ * this could be our only change to figure out there is
+ * cache policy symbol already in the monolithic kernel
+ * where 'modprobe dm-cache-smq' will simply not work
+ */
+static int _lookup_kallsyms(const char *symbol)
+{
+	static const char _syms[] = "/proc/kallsyms";
+	int ret = 0;
+	char *line = NULL;
+	size_t len;
+	FILE *s;
+
+	if (!(s = fopen(_syms, "r")))
+		log_sys_debug("fopen", _syms);
+	else {
+		while (getline(&line, &len, s) != -1)
+			if (strstr(line, symbol)) {
+				ret = 1; /* Found symbol */
+				log_debug("Found kernel symbol%s.", symbol); /* space is in symbol */
+				break;
+			}
+
+		free(line);
+		if (fclose(s))
+			log_sys_debug("fclose", _syms);
+	}
+
+	return ret;
+}
+
+
 static int _target_present(struct cmd_context *cmd,
 			   const struct lv_segment *seg __attribute__((unused)),
 			   unsigned *attributes __attribute__((unused)))
@@ -210,13 +311,15 @@ static int _target_present(struct cmd_context *cmd,
 		unsigned cache_alias;
 		const char feature[12];
 		const char module[12]; /* check dm-%s */
+		const char ksymbol[12]; /* check for kernel symbol */
 		const char *aliasing;
 	} _features[] = {
+		{ 1, 10, CACHE_FEATURE_METADATA2, 0, "metadata2" },
 		/* Assumption: cache >=1.9 always aliases MQ policy */
 		{ 1, 9, CACHE_FEATURE_POLICY_SMQ, CACHE_FEATURE_POLICY_MQ, "policy_smq", "cache-smq",
-		" and aliases cache-mq" },
-		{ 1, 8, CACHE_FEATURE_POLICY_SMQ, 0, "policy_smq", "cache-smq" },
-		{ 1, 3, CACHE_FEATURE_POLICY_MQ, 0, "policy_mq", "cache-mq" },
+		 " smq_exit", " and aliases cache-mq" },
+		{ 1, 8, CACHE_FEATURE_POLICY_SMQ, 0, "policy_smq", "cache-smq", " smq_exit" },
+		{ 1, 3, CACHE_FEATURE_POLICY_MQ, 0, "policy_mq", "cache-mq", " mq_init" },
 	};
 	static const char _lvmconf[] = "global/cache_disabled_features";
 	static unsigned _attrs = 0;
@@ -250,9 +353,20 @@ static int _target_present(struct cmd_context *cmd,
 		for (i = 0; i < DM_ARRAY_SIZE(_features); ++i) {
 			if (_attrs & _features[i].cache_feature)
 				continue; /* already present */
+
+			if (!_features[i].module[0]) {
+				if ((maj > _features[i].maj) ||
+				    (maj == _features[i].maj && min >= _features[i].min)) {
+					log_debug_activation("Cache supports %s.",
+							     _features[i].feature);
+					_attrs |= _features[i].cache_feature;
+				}
+				continue;
+			}
 			if (((maj > _features[i].maj) ||
 			     (maj == _features[i].maj && min >= _features[i].min)) &&
-			    module_present(cmd, _features[i].module)) {
+			    ((_features[i].ksymbol[0] && _lookup_kallsyms(_features[i].ksymbol)) ||
+			     module_present(cmd, _features[i].module))) {
 				log_debug_activation("Cache policy %s is available%s.",
 						     _features[i].module,
 						     _features[i].aliasing ? : "");
@@ -310,6 +424,7 @@ static int _modules_needed(struct dm_pool *mem,
 #endif /* DEVMAPPER_SUPPORT */
 
 static struct segtype_handler _cache_pool_ops = {
+	.display = _cache_display,
 	.text_import = _cache_pool_text_import,
 	.text_import_area_count = _cache_pool_text_import_area_count,
 	.text_export = _cache_pool_text_export,
@@ -399,6 +514,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 	struct lv_segment *cache_pool_seg;
 	char *metadata_uuid, *data_uuid, *origin_uuid;
 	uint64_t feature_flags = 0;
+	unsigned attr;
 
 	if (!seg->pool_lv || !seg_is_cache(seg)) {
 		log_error(INTERNAL_ERROR "Passed segment is not cache.");
@@ -426,6 +542,26 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			break;
 		}
 
+	switch (cache_pool_seg->cache_metadata_format) {
+	case CACHE_METADATA_FORMAT_1: break;
+	case CACHE_METADATA_FORMAT_2:
+		if (!_target_present(cmd, NULL, &attr))
+			return_0;
+
+		if (!(attr & CACHE_FEATURE_METADATA2)) {
+			log_error("LV %s has metadata format %u unsuported by kernel.",
+				  display_lvname(seg->lv), cache_pool_seg->cache_metadata_format);
+			return 0;
+		}
+		feature_flags |= DM_CACHE_FEATURE_METADATA2;
+		log_debug_activation("Using metadata2 format for %s.", display_lvname(seg->lv));
+		break;
+	default:
+		log_error(INTERNAL_ERROR "LV %s has unknown metadata format %u.",
+			  display_lvname(seg->lv), cache_pool_seg->cache_metadata_format);
+		return 0;
+	}
+
 	if (!(metadata_uuid = build_dm_uuid(mem, cache_pool_seg->metadata_lv, NULL)))
 		return_0;
 
@@ -452,6 +588,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 #endif /* DEVMAPPER_SUPPORT */
 
 static struct segtype_handler _cache_ops = {
+	.display = _cache_display,
 	.text_import = _cache_text_import,
 	.text_import_area_count = _cache_text_import_area_count,
 	.text_export = _cache_text_export,
@@ -475,7 +612,7 @@ int init_cache_segtypes(struct cmd_context *cmd,
 			struct segtype_library *seglib)
 #endif
 {
-	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
+	struct segment_type *segtype = zalloc(sizeof(*segtype));
 
 	if (!segtype) {
 		log_error("Failed to allocate memory for cache_pool segtype");
@@ -490,7 +627,7 @@ int init_cache_segtypes(struct cmd_context *cmd,
 		return_0;
 	log_very_verbose("Initialised segtype: %s", segtype->name);
 
-	segtype = dm_zalloc(sizeof(*segtype));
+	segtype = zalloc(sizeof(*segtype));
 	if (!segtype) {
 		log_error("Failed to allocate memory for cache segtype");
 		return 0;

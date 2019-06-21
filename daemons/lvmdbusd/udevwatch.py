@@ -10,9 +10,40 @@
 import pyudev
 import threading
 from . import cfg
+from .request import RequestEntry
+from . import utils
 
 observer = None
 observer_lock = threading.RLock()
+
+_udev_lock = threading.RLock()
+_udev_count = 0
+
+
+def udev_add():
+	global _udev_count
+	with _udev_lock:
+		if _udev_count == 0:
+			_udev_count += 1
+
+			# Place this on the queue so any other operations will sequence
+			# behind it
+			r = RequestEntry(
+				-1, _udev_event, (), None, None, False)
+			cfg.worker_q.put(r)
+
+
+def udev_complete():
+	global _udev_count
+	with _udev_lock:
+		if _udev_count > 0:
+			_udev_count -= 1
+
+
+def _udev_event():
+	utils.log_debug("Processing udev event")
+	udev_complete()
+	cfg.load()
 
 
 # noinspection PyUnusedLocal
@@ -37,7 +68,7 @@ def filter_event(action, device):
 		refresh = True
 
 	if refresh:
-		cfg.event()
+		udev_add()
 
 
 def add():

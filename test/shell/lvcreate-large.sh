@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2011 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -32,15 +33,15 @@ pvcreate "$DM_DEV_DIR/$vg/$lv"
 vgcreate $vg1 "$DM_DEV_DIR/$vg/$lv"
 
 lvcreate -l 100%FREE -n $lv1 $vg1
-check lv_field $vg1/$lv1 size "1024.00t"
+check lv_field $vg1/$lv1 size "1024.00t" --units t
 lvresize -f -l 72%VG $vg1/$lv1
-check lv_field $vg1/$lv1 size "737.28t"
+check lv_field $vg1/$lv1 size "737.28t" --units t
 lvremove -ff $vg1/$lv1
 
 lvcreate -l 100%VG -n $lv1 $vg1
-check lv_field $vg1/$lv1 size "1024.00t"
+check lv_field $vg1/$lv1 size "1024.00t" --units t
 lvresize -f -l 72%VG $vg1/$lv1
-check lv_field $vg1/$lv1 size "737.28t"
+check lv_field $vg1/$lv1 size "737.28t" --units t
 lvremove -ff $vg1/$lv1
 
 lvremove -ff $vg/$lv

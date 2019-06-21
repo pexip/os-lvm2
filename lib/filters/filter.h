@@ -17,20 +17,19 @@
 #ifndef _LVM_FILTER_H
 #define _LVM_FILTER_H
 
-#include "dev-cache.h"
-#include "dev-type.h"
+#include "lib/device/dev-cache.h"
+#include "lib/device/dev-type.h"
 
 struct dev_filter *composite_filter_create(int n, int use_dev_ext_info, struct dev_filter **filters);
 
 struct dev_filter *lvm_type_filter_create(struct dev_types *dt);
-struct dev_filter *md_filter_create(struct dev_types *dt);
+struct dev_filter *md_filter_create(struct cmd_context *cmd, struct dev_types *dt);
 struct dev_filter *fwraid_filter_create(struct dev_types *dt);
 struct dev_filter *mpath_filter_create(struct dev_types *dt);
 struct dev_filter *partitioned_filter_create(struct dev_types *dt);
-struct dev_filter *persistent_filter_create(struct dev_types *dt,
-					    struct dev_filter *f,
-					    const char *file);
+struct dev_filter *persistent_filter_create(struct dev_types *dt, struct dev_filter *f);
 struct dev_filter *sysfs_filter_create(void);
+struct dev_filter *signature_filter_create(struct dev_types *dt);
 
 struct dev_filter *internal_filter_create(void);
 int internal_filter_allow(struct dm_pool *mem, struct device *dev);
@@ -51,8 +50,6 @@ typedef enum {
 	FILTER_MODE_PRE_LVMETAD,
 	FILTER_MODE_POST_LVMETAD
 } filter_mode_t;
-struct dev_filter *usable_filter_create(struct dev_types *dt, filter_mode_t mode);
-
-int persistent_filter_load(struct dev_filter *f, struct dm_config_tree **cft_out);
+struct dev_filter *usable_filter_create(struct cmd_context *cmd, struct dev_types *dt, filter_mode_t mode);
 
 #endif 	/* _LVM_FILTER_H */

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
  * Copyright (C) 2006 Rackable Systems All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
@@ -119,7 +119,9 @@ enum {
 	
 	DM_DEVICE_TARGET_MSG,
 
-	DM_DEVICE_SET_GEOMETRY
+	DM_DEVICE_SET_GEOMETRY,
+
+	DM_DEVICE_ARM_POLL
 };
 
 /*
@@ -331,6 +333,7 @@ struct dm_status_raid {
 	char *dev_health;
 	/* idle, frozen, resync, recover, check, repair */
 	char *sync_action;
+	uint64_t data_offset; /* RAID out-of-place reshaping */
 };
 
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
@@ -358,7 +361,7 @@ struct dm_status_cache {
 	uint64_t demotions;
 	uint64_t promotions;
 
-	uint64_t feature_flags;
+	uint64_t feature_flags;		/* DM_CACHE_FEATURE_? */
 
 	int core_argc;
 	char **core_argv;
@@ -517,6 +520,16 @@ int dm_stats_bind_name(struct dm_stats *dms, const char *name);
  */
 int dm_stats_bind_uuid(struct dm_stats *dms, const char *uuid);
 
+/*
+ * Bind a dm_stats handle to the device backing the file referenced
+ * by the specified file descriptor.
+ *
+ * File descriptor fd must reference a regular file, open for reading,
+ * in a local file system, backed by a device-mapper device, that
+ * supports the FIEMAP ioctl, and that returns data describing the
+ * physical location of extents.
+ */
+int dm_stats_bind_from_fd(struct dm_stats *dms, int fd);
 /*
  * Test whether the running kernel supports the precise_timestamps
  * feature. Presence of this feature also implies histogram support.
@@ -1138,9 +1151,9 @@ for (dm_stats_walk_init((dms), DM_STATS_WALK_AREA),		\
  */
 #define dm_stats_foreach_group(dms)				\
 for (dm_stats_walk_init((dms), DM_STATS_WALK_GROUP),		\
-     dm_stats_group_walk_start(dms);				\
-     !dm_stats_group_walk_end(dms);				\
-     dm_stats_group_walk_next(dms))
+     dm_stats_walk_start(dms);					\
+     !dm_stats_walk_end(dms);					\
+     dm_stats_walk_next(dms))
 
 /*
  * Start a walk iterating over the regions contained in dm_stats handle
@@ -1297,29 +1310,133 @@ int dm_stats_get_group_descriptor(const struct dm_stats *dms,
  * filesystem and optionally place them into a group.
  *
  * File descriptor fd must reference a regular file, open for reading,
- * in a local file system that supports the FIEMAP ioctl and that
+ * in a local file system that supports the FIEMAP ioctl, and that
  * returns data describing the physical location of extents.
  *
  * The file descriptor can be closed by the caller following the call
  * to dm_stats_create_regions_from_fd().
  *
- * The function returns a pointer to an array of uint64_t containing
- * the IDs of the newly created regions. The array is terminated by the
- * value DM_STATS_REGIONS_ALL and should be freed using dm_free() when
- * no longer required.
- *
  * Unless nogroup is non-zero the regions will be placed into a group
- * and the group alias is set to the value supplied.
+ * and the group alias set to the value supplied (if alias is NULL no
+ * group alias will be assigned).
+ *
+ * On success the function returns a pointer to an array of uint64_t
+ * containing the IDs of the newly created regions. The region_id
+ * array is terminated by the value DM_STATS_REGION_NOT_PRESENT and
+ * should be freed using dm_free() when no longer required.
+ *
+ * On error NULL is returned.
+ *
+ * Following a call to dm_stats_create_regions_from_fd() the handle
+ * is guaranteed to be in a listed state, and to contain any region
+ * and group identifiers created by the operation.
  *
  * The group_id for the new group is equal to the region_id value in
  * the first array element.
- *
- * File mapped histograms will be supported in a future version.
  */
 uint64_t *dm_stats_create_regions_from_fd(struct dm_stats *dms, int fd,
 					  int group, int precise,
 					  struct dm_histogram *bounds,
 					  const char *alias);
+/*
+ * Update a group of regions that correspond to the extents of a file
+ * in the filesystem, adding and removing regions to account for
+ * allocation changes in the underlying file.
+ *
+ * File descriptor fd must reference a regular file, open for reading,
+ * in a local file system that supports the FIEMAP ioctl, and that
+ * returns data describing the physical location of extents.
+ *
+ * The file descriptor can be closed by the caller following the call
+ * to dm_stats_update_regions_from_fd().
+ *
+ * On success the function returns a pointer to an array of uint64_t
+ * containing the IDs of the updated regions (including any existing
+ * regions that were not modified by the call).
+ *
+ * The region_id array is terminated by the special value
+ * DM_STATS_REGION_NOT_PRESENT and should be freed using dm_free()
+ * when no longer required.
+ *
+ * On error NULL is returned.
+ *
+ * Following a call to dm_stats_update_regions_from_fd() the handle
+ * is guaranteed to be in a listed state, and to contain any region
+ * and group identifiers created by the operation.
+ *
+ * This function cannot be used with file mapped regions that are
+ * not members of a group: either group the regions, or remove them
+ * and re-map them with dm_stats_create_regions_from_fd().
+ */
+uint64_t *dm_stats_update_regions_from_fd(struct dm_stats *dms, int fd,
+					  uint64_t group_id);
+
+
+/*
+ * The file map monitoring daemon can monitor files in two distinct
+ * ways: the mode affects the behaviour of the daemon when a file
+ * under monitoring is renamed or unlinked, and the conditions which
+ * cause the daemon to terminate.
+ *
+ * In both modes, the daemon will always shut down when the group
+ * being monitored is deleted.
+ *
+ * Follow inode:
+ * The daemon follows the inode of the file, as it was at the time the
+ * daemon started. The file descriptor referencing the file is kept
+ * open at all times, and the daemon will exit when it detects that
+ * the file has been unlinked and it is the last holder of a reference
+ * to the file.
+ *
+ * This mode is useful if the file is expected to be renamed, or moved
+ * within the file system, while it is being monitored.
+ *
+ * Follow path:
+ * The daemon follows the path that was given on the daemon command
+ * line. The file descriptor referencing the file is re-opened on each
+ * iteration of the daemon, and the daemon will exit if no file exists
+ * at this location (a tolerance is allowed so that a brief delay
+ * between unlink() and creat() is permitted).
+ *
+ * This mode is useful if the file is updated by unlinking the original
+ * and placing a new file at the same path.
+ */
+
+typedef enum {
+	DM_FILEMAPD_FOLLOW_INODE,
+	DM_FILEMAPD_FOLLOW_PATH,
+	DM_FILEMAPD_FOLLOW_NONE
+} dm_filemapd_mode_t;
+
+/*
+ * Parse a string representation of a dmfilemapd mode.
+ *
+ * Returns a valid dm_filemapd_mode_t value on success, or
+ * DM_FILEMAPD_FOLLOW_NONE on error.
+ */
+dm_filemapd_mode_t dm_filemapd_mode_from_string(const char *mode_str);
+
+/*
+ * Start the dmfilemapd filemap monitoring daemon for the specified
+ * file descriptor, group, and file system path. The daemon will
+ * monitor the file for allocation changes, and when a change is
+ * detected, call dm_stats_update_regions_from_fd() to update the
+ * mapped regions for the file.
+ *
+ * The path provided to dm_stats_start_filemapd() must be an absolute
+ * path, and should reflect the path of 'fd' at the time that it was
+ * opened.
+ *
+ * The mode parameter controls the behaviour of the daemon when the
+ * file being monitored is unlinked or moved: see the comments for
+ * dm_filemapd_mode_t for a full description and possible values.
+ *
+ * The daemon can be stopped at any time by sending SIGTERM to the
+ * daemon pid.
+ */
+int dm_stats_start_filemapd(int fd, uint64_t group_id, const char *path,
+			    dm_filemapd_mode_t mode, unsigned foreground,
+			    unsigned verbose);
 
 /*
  * Call this to actually run the ioctl.
@@ -1691,6 +1808,11 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
  */
 #define DM_CACHE_METADATA_MAX_SECTORS DM_THIN_METADATA_MAX_SECTORS
 
+/*
+ * Define number of elements in rebuild and writemostly arrays
+ * 'of struct dm_tree_node_raid_params'.
+ */
+
 struct dm_tree_node_raid_params {
 	const char *raid_type;
 
@@ -1702,29 +1824,75 @@ struct dm_tree_node_raid_params {
 	/*
 	 * 'rebuilds' and 'writemostly' are bitfields that signify
 	 * which devices in the array are to be rebuilt or marked
-	 * writemostly.  By choosing a 'uint64_t', we limit ourself
-	 * to RAID arrays with 64 devices.
+	 * writemostly.  The kernel supports up to 253 legs.
+	 * We limit ourselves by choosing a lower value
+	 * for DEFAULT_RAID{1}_MAX_IMAGES in defaults.h.
 	 */
 	uint64_t rebuilds;
 	uint64_t writemostly;
-	uint32_t writebehind;       /* I/Os (kernel default COUNTER_MAX / 2) */
+	uint32_t writebehind;	    /* I/Os (kernel default COUNTER_MAX / 2) */
 	uint32_t sync_daemon_sleep; /* ms (kernel default = 5sec) */
 	uint32_t max_recovery_rate; /* kB/sec/disk */
 	uint32_t min_recovery_rate; /* kB/sec/disk */
 	uint32_t stripe_cache;      /* sectors */
 
 	uint64_t flags;             /* [no]sync */
-	uint64_t reserved2;
+	uint32_t reserved2;
+};
+
+/*
+ * Version 2 of above node raid params struct to keeep API compatibility.
+ *
+ * Extended for more than 64 legs (max 253 in the MD kernel runtime!),
+ * delta_disks for disk add/remove reshaping,
+ * data_offset for out-of-place reshaping
+ * and data_copies for odd number of raid10 legs.
+ */
+#define	RAID_BITMAP_SIZE 4 /* 4 * 64 bit elements in rebuilds/writemostly arrays */
+struct dm_tree_node_raid_params_v2 {
+	const char *raid_type;
+
+	uint32_t stripes;
+	uint32_t mirrors;
+	uint32_t region_size;
+	uint32_t stripe_size;
+
+	int delta_disks; /* +/- number of disks to add/remove (reshaping) */
+	int data_offset; /* data offset to set (out-of-place reshaping) */
+
+	/*
+	 * 'rebuilds' and 'writemostly' are bitfields that signify
+	 * which devices in the array are to be rebuilt or marked
+	 * writemostly.  The kernel supports up to 253 legs.
+	 * We limit ourselvs by choosing a lower value
+	 * for DEFAULT_RAID_MAX_IMAGES.
+	 */
+	uint64_t rebuilds[RAID_BITMAP_SIZE];
+	uint64_t writemostly[RAID_BITMAP_SIZE];
+	uint32_t writebehind;	    /* I/Os (kernel default COUNTER_MAX / 2) */
+	uint32_t data_copies;	    /* RAID # of data copies */
+	uint32_t sync_daemon_sleep; /* ms (kernel default = 5sec) */
+	uint32_t max_recovery_rate; /* kB/sec/disk */
+	uint32_t min_recovery_rate; /* kB/sec/disk */
+	uint32_t stripe_cache;      /* sectors */
+
+	uint64_t flags;             /* [no]sync */
 };
 
 int dm_tree_node_add_raid_target_with_params(struct dm_tree_node *node,
 					     uint64_t size,
 					     const struct dm_tree_node_raid_params *p);
 
+/* Version 2 API function taking dm_tree_node_raid_params_v2 for aforementioned extensions. */
+int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
+						uint64_t size,
+						const struct dm_tree_node_raid_params_v2 *p);
+
 /* Cache feature_flags */
 #define DM_CACHE_FEATURE_WRITEBACK    0x00000001
 #define DM_CACHE_FEATURE_WRITETHROUGH 0x00000002
 #define DM_CACHE_FEATURE_PASSTHROUGH  0x00000004
+#define DM_CACHE_FEATURE_METADATA2    0x00000008 /* cache v1.10 */
 
 struct dm_config_node;
 /*
@@ -1909,6 +2077,8 @@ uint32_t dm_tree_get_cookie(struct dm_tree_node *node);
  */
 void *dm_malloc_wrapper(size_t s, const char *file, int line)
 	__attribute__((__malloc__)) __attribute__((__warn_unused_result__));
+void *dm_malloc_aligned_wrapper(size_t s, size_t a, const char *file, int line)
+	__attribute__((__malloc__)) __attribute__((__warn_unused_result__));
 void *dm_zalloc_wrapper(size_t s, const char *file, int line)
 	__attribute__((__malloc__)) __attribute__((__warn_unused_result__));
 void *dm_realloc_wrapper(void *p, unsigned int s, const char *file, int line)
@@ -1920,6 +2090,7 @@ int dm_dump_memory_wrapper(void);
 void dm_bounds_check_wrapper(void);
 
 #define dm_malloc(s) dm_malloc_wrapper((s), __FILE__, __LINE__)
+#define dm_malloc_aligned(s, a) dm_malloc_aligned_wrapper((s), (a),  __FILE__, __LINE__)
 #define dm_zalloc(s) dm_zalloc_wrapper((s), __FILE__, __LINE__)
 #define dm_strdup(s) dm_strdup_wrapper((s), __FILE__, __LINE__)
 #define dm_free(p) dm_free_wrapper(p)
@@ -2064,6 +2235,8 @@ void dm_bit_and(dm_bitset_t out, dm_bitset_t in1, dm_bitset_t in2);
 void dm_bit_union(dm_bitset_t out, dm_bitset_t in1, dm_bitset_t in2);
 int dm_bit_get_first(dm_bitset_t bs);
 int dm_bit_get_next(dm_bitset_t bs, int last_bit);
+int dm_bit_get_last(dm_bitset_t bs);
+int dm_bit_get_prev(dm_bitset_t bs, int last_bit);
 
 #define DM_BITS_PER_INT (sizeof(int) * CHAR_BIT)
 
@@ -2083,7 +2256,7 @@ int dm_bit_get_next(dm_bitset_t bs, int last_bit);
    memset((bs) + 1, 0, ((*(bs) / DM_BITS_PER_INT) + 1) * sizeof(int))
 
 #define dm_bit_copy(bs1, bs2) \
-   memcpy((bs1) + 1, (bs2) + 1, ((*(bs1) / DM_BITS_PER_INT) + 1) * sizeof(int))
+   memcpy((bs1) + 1, (bs2) + 1, ((*(bs2) / DM_BITS_PER_INT) + 1) * sizeof(int))
 
 /*
  * Parse a string representation of a bitset into a dm_bitset_t. The
@@ -2093,7 +2266,8 @@ int dm_bit_get_next(dm_bitset_t bs, int last_bit);
  * dm_malloc(). Otherwise the bitset will be allocated using the supplied
  * dm_pool.
  */
-dm_bitset_t dm_bitset_parse_list(const char *str, struct dm_pool *mem);
+dm_bitset_t dm_bitset_parse_list(const char *str, struct dm_pool *mem,
+				 size_t min_num_bits);
 
 /* Returns number of set bits */
 static inline unsigned hweight32(uint32_t i)
@@ -2667,6 +2841,16 @@ typedef enum {
 typedef int32_t dm_percent_t;
 
 float dm_percent_to_float(dm_percent_t percent);
+/*
+ * Return adjusted/rounded float for better percent value printing.
+ * Function ensures for given precision of digits:
+ * 100.0% returns only when the value is DM_PERCENT_100
+ *        for close smaller values rounds to nearest smaller value
+ * 0.0% returns only for value DM_PERCENT_0
+ *        for close bigger values rounds to nearest bigger value
+ * In all other cases returns same value as dm_percent_to_float()
+ */
+float dm_percent_to_round_float(dm_percent_t percent, unsigned digits);
 dm_percent_t dm_make_percent(uint64_t numerator, uint64_t denominator);
 
 /********************

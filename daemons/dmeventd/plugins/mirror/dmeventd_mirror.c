@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005-2015 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2005-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,10 +12,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "libdevmapper-event.h"
-#include "dmeventd_lvm.h"
-#include "activate.h"	/* For TARGET_NAME* */
+#include "lib/misc/lib.h"
+#include "daemons/dmeventd/plugins/lvm2/dmeventd_lvm.h"
+#include "daemons/dmeventd/libdevmapper-event.h"
+#include "lib/activate/activate.h"
 
 /* FIXME Reformat to 80 char lines. */
 
@@ -25,7 +25,6 @@
 
 struct dso_state {
 	struct dm_pool *mem;
-	char cmd_lvscan[512];
 	char cmd_lvconvert[512];
 };
 
@@ -99,12 +98,8 @@ static int _get_mirror_event(struct dso_state *state, char *params)
 	return r;
 }
 
-static int _remove_failed_devices(const char *cmd_lvscan, const char *cmd_lvconvert,
-				  const char *device)
+static int _remove_failed_devices(const char *cmd_lvconvert, const char *device)
 {
-	if (!dmeventd_lvm2_run_with_lock(cmd_lvscan))
-		log_warn("WARNING: Re-scan of mirrored device %s failed.", device);
-
 	/* if repair goes OK, report success even if lvscan has failed */
 	if (!dmeventd_lvm2_run_with_lock(cmd_lvconvert)) {
 		log_error("Repair of mirrored device %s failed.", device);
@@ -151,9 +146,7 @@ void process_event(struct dm_task *dmt,
 			break;
 		case ME_FAILURE:
 			log_error("Device failure in %s.", device);
-			if (!_remove_failed_devices(state->cmd_lvscan,
-						    state->cmd_lvconvert,
-						    device))
+			if (!_remove_failed_devices(state->cmd_lvconvert, device))
 				/* FIXME Why are all the error return codes unused? Get rid of them? */
 				log_error("Failed to remove faulty devices in %s.",
 					  device);
@@ -183,17 +176,10 @@ int register_device(const char *device,
 	if (!dmeventd_lvm2_init_with_pool("mirror_state", state))
 		goto_bad;
 
-	if (!dmeventd_lvm2_command(state->mem, state->cmd_lvscan, sizeof(state->cmd_lvscan),
-				   "lvscan --cache", device)) {
-		dmeventd_lvm2_exit_with_pool(state);
-		goto_bad;
-	}
-
+        /* CANNOT use --config as this disables cached content */
 	if (!dmeventd_lvm2_command(state->mem, state->cmd_lvconvert, sizeof(state->cmd_lvconvert),
-				   "lvconvert --repair --use-policies", device)) {
-		dmeventd_lvm2_exit_with_pool(state);
+				   "lvconvert --repair --use-policies", device))
 		goto_bad;
-	}
 
 	*user = state;
 
@@ -202,6 +188,9 @@ int register_device(const char *device,
 	return 1;
 bad:
 	log_error("Failed to monitor mirror %s.", device);
+
+	if (state)
+		dmeventd_lvm2_exit_with_pool(state);
 
 	return 0;
 }

@@ -11,16 +11,14 @@
 
 # Basic usage of zero target
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 which md5sum || skip
 
-aux prepare_pvs 1
-
-vgcreate -s 256k $vg $(cat DEVICES)
+aux prepare_vg 1
 
 lvcreate --type zero -L1 -n $lv1 $vg
 lvextend -L+1 $vg/$lv1
@@ -34,4 +32,6 @@ test "$sum1" = "$sum2"
 check lv_field $vg/$lv1 lv_modules "zero"
 check lv_field $vg/$lv1 segtype "zero"
 check lv_field $vg/$lv1 seg_count "1"
-check lv_field $vg/$lv1 seg_size_pe "8"   # 8 * 256
+check lv_field $vg/$lv1 seg_size_pe "4"   # 4 * 512
+
+vgremove -ff $vg

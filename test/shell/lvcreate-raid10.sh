@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2012-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,13 +10,13 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 lv_devices() {
-	test $3 -eq $(get lv_devices $1/$2 | wc -w)
+	test "$3" -eq "$(get lv_devices "$1/$2" | wc -w)"
 }
 
 ########################################################
@@ -23,9 +24,7 @@ lv_devices() {
 ########################################################
 aux have_raid 1 3 0 || skip
 
-aux prepare_pvs 6 20  # 6 devices for RAID10 (2-mirror,3-stripe) test
-vgcreate -s 512k $vg $(cat DEVICES)
-
+aux prepare_vg 6 20  # 6 devices for RAID10 (2-mirror,3-stripe) test
 #
 # Create RAID10:
 #

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -14,7 +15,7 @@
 # to improve code coverage
 #
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -28,7 +29,7 @@ pvcreate --metadatacopies 0 "$dev3"
 # FIXME takes very long time
 #pvck "$dev1"
 
-vgcreate $vg "${DEVICES[@]}"
+vgcreate $SHARED "$vg" "${DEVICES[@]}"
 
 lvcreate -l 5 -i5 -I256 -n $lv $vg
 lvcreate -aey -l 5 -n $lv1 $vg
@@ -58,10 +59,10 @@ vgremove -f $vg
 # missing params
 not pvresize
 # negative size
-not pvresize --setphysicalvolumesize -10M "$dev1"
+not pvresize --setphysicalvolumesize -10M -y "$dev1"
 # not existing device
-not pvresize --setphysicalvolumesize 10M "$dev7"
-pvresize --setphysicalvolumesize 10M "$dev1"
+not pvresize --setphysicalvolumesize 10M -y "$dev7"
+pvresize --setphysicalvolumesize 10M -y "$dev1"
 pvresize "$dev1"
 
 

@@ -12,7 +12,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -468,10 +468,12 @@ const char *dm_size_to_string(struct dm_pool *mem, uint64_t size,
 	unsigned base = BASE_UNKNOWN;
 	unsigned s;
 	int precision;
+	double d;
 	uint64_t byte = UINT64_C(0);
 	uint64_t units = UINT64_C(1024);
 	char *size_buf = NULL;
 	char new_unit_type = '\0', unit_type_buf[2];
+	const char *prefix = "";
 	const char * const size_str[][3] = {
 		/* BASE_UNKNOWN */
 		{"         ", "   ", " "},	/* [0] */
@@ -570,7 +572,7 @@ const char *dm_size_to_string(struct dm_pool *mem, uint64_t size,
 		byte = unit_factor;
 	} else {
 		/* Human-readable style */
-		if (unit_type == 'H') {
+		if (unit_type == 'H' || unit_type == 'R') {
 			units = UINT64_C(1000);
 			base = BASE_1000;
 		} else {
@@ -586,6 +588,16 @@ const char *dm_size_to_string(struct dm_pool *mem, uint64_t size,
 		for (s = 0; s < NUM_UNIT_PREFIXES && size < byte; s++)
 			byte /= units;
 
+		if ((s < NUM_UNIT_PREFIXES) &&
+		    ((unit_type == 'R') || (unit_type == 'r'))) {
+			/* When the rounding would cause difference, add '<' prefix
+			 * i.e.  2043M is more then 1.9949G prints <2.00G
+			 * This version is for 2 digits fixed precision */
+			d = 100. * (double) size / byte;
+			if (!_close_enough(floorl(d), nearbyintl(d)))
+				prefix = "<";
+		}
+
 		include_suffix = 1;
 	}
 
@@ -599,7 +611,7 @@ const char *dm_size_to_string(struct dm_pool *mem, uint64_t size,
 		precision = 2;
 	}
 
-	snprintf(size_buf, SIZE_BUF - 1, "%.*f%s", precision,
+	snprintf(size_buf, SIZE_BUF, "%s%.*f%s", prefix, precision,
 		 (double) size / byte, include_suffix ? size_str[base + s][suffix_type] : "");
 
 	return size_buf;
@@ -614,7 +626,7 @@ uint64_t dm_units_to_factor(const char *units, char *unit_type,
 	uint64_t multiplier;
 
 	if (endptr)
-		*endptr = (char *) units;
+		*endptr = units;
 
 	if (isdigit(*units)) {
 		custom_value = strtod(units, &ptr);
@@ -639,6 +651,8 @@ uint64_t dm_units_to_factor(const char *units, char *unit_type,
 	switch (*units) {
 	case 'h':
 	case 'H':
+	case 'r':
+	case 'R':
 		multiplier = v = UINT64_C(1);
 		*unit_type = *units;
 		break;
@@ -695,7 +709,7 @@ uint64_t dm_units_to_factor(const char *units, char *unit_type,
 	}
 
 	if (endptr)
-		*endptr = (char *) units + 1;
+		*endptr = units + 1;
 
 	if (_close_enough(custom_value, 0.))
 		return v * multiplier; /* Use integer arithmetic */

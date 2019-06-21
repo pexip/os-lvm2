@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -10,7 +11,7 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description='Exercise fsadm filesystem resize'
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -35,6 +36,7 @@ grep xfs /proc/filesystems || check_xfs=${check_xfs:-no_xfs}
 
 which mkfs.reiserfs || check_reiserfs=${check_reiserfs:-mkfs.reiserfs}
 which reiserfsck || check_reiserfs=${check_reiserfs:-reiserfsck}
+modprobe reiserfs || true
 grep reiserfs /proc/filesystems || check_reiserfs=${check_reiserfs:-no_reiserfs}
 
 vg_lv=$vg/$lv1
@@ -44,7 +46,8 @@ dev_vg_lv2="$DM_DEV_DIR/$vg_lv2"
 mount_dir="mnt"
 mount_space_dir="mnt space dir"
 # for recursive call
-export LVM_BINARY=$(which lvm)
+LVM_BINARY=$(which lvm)
+export LVM_BINARY
 
 test ! -d "$mount_dir" && mkdir "$mount_dir"
 test ! -d "$mount_space_dir" && mkdir "$mount_space_dir"
@@ -78,7 +81,7 @@ fscheck_reiserfs()
 check_missing()
 {
 	local t
-	eval t=$\check_$1
+	eval "t=\$check_$1"
 	test -z "$t" && return 0
 	test "$t" = skip && return 1
 	echo "WARNING: fsadm test skipped $1 tests, $t tool is missing."
@@ -131,6 +134,7 @@ if check_missing ext3; then
 	not fsadm -y --lvresize resize $vg_lv 4M
 	echo n | not lvresize -L4M -r -n $vg_lv
 	lvresize -L+20M -r -n $vg_lv
+	lvresize -L-10M -r -y $vg_lv
 	umount "$mount_dir"
 	umount "$mount_space_dir"
 	fscheck_ext3
@@ -139,7 +143,7 @@ if check_missing ext3; then
 fi
 
 if check_missing xfs; then
-	mkfs.xfs -l internal,size=1000b -f "$dev_vg_lv"
+	mkfs.xfs -l internal,size=2000b -f "$dev_vg_lv"
 
 	fsadm --lvresize resize $vg_lv 30M
 	# Fails - not enough space for 4M fs

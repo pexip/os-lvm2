@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -16,7 +16,7 @@
 #ifndef _SEGTYPES_H
 #define _SEGTYPES_H
 
-#include "metadata-exported.h"
+#include "lib/metadata/metadata-exported.h"
 
 struct segtype_handler;
 struct cmd_context;
@@ -28,49 +28,51 @@ struct dm_config_node;
 struct dev_manager;
 
 /* Feature flags */
-#define SEG_CAN_SPLIT		0x0000000000000001ULL
-#define SEG_AREAS_STRIPED	0x0000000000000002ULL
-#define SEG_AREAS_MIRRORED	0x0000000000000004ULL
-#define SEG_SNAPSHOT		0x0000000000000008ULL
-#define SEG_FORMAT1_SUPPORT	0x0000000000000010ULL
-#define SEG_VIRTUAL		0x0000000000000020ULL
-#define SEG_CANNOT_BE_ZEROED	0x0000000000000040ULL
-#define SEG_MONITORED		0x0000000000000080ULL
-#define SEG_REPLICATOR		0x0000000000000100ULL
-#define SEG_REPLICATOR_DEV	0x0000000000000200ULL
-#define SEG_RAID		0x0000000000000400ULL
-#define SEG_THIN_POOL		0x0000000000000800ULL
-#define SEG_THIN_VOLUME		0x0000000000001000ULL
-#define SEG_CACHE		0x0000000000002000ULL
-#define SEG_CACHE_POOL		0x0000000000004000ULL
-#define SEG_MIRROR		0x0000000000008000ULL
-#define SEG_ONLY_EXCLUSIVE	0x0000000000010000ULL /* In cluster only exlusive activation */
-#define SEG_CAN_ERROR_WHEN_FULL	0x0000000000020000ULL
+#define SEG_CAN_SPLIT		(1ULL <<  0)
+#define SEG_AREAS_STRIPED	(1ULL <<  1)
+#define SEG_AREAS_MIRRORED	(1ULL <<  2)
+#define SEG_SNAPSHOT		(1ULL <<  3)
+/* #define SEG_FORMAT1_SUPPORT	(1ULL <<  4) */
+#define SEG_VIRTUAL		(1ULL <<  5)
+#define SEG_CANNOT_BE_ZEROED	(1ULL <<  6)
+#define SEG_MONITORED		(1ULL <<  7)
+#define SEG_RAID		(1ULL << 10)
+#define SEG_THIN_POOL		(1ULL << 11)
+#define SEG_THIN_VOLUME		(1ULL << 12)
+#define SEG_CACHE		(1ULL << 13)
+#define SEG_CACHE_POOL		(1ULL << 14)
+#define SEG_MIRROR		(1ULL << 15)
+#define SEG_ONLY_EXCLUSIVE	(1ULL << 16) /* In cluster only exlusive activation */
+#define SEG_CAN_ERROR_WHEN_FULL	(1ULL << 17)
 
-#define SEG_RAID0		0x0000000000040000ULL
-#define SEG_RAID0_META		0x0000000000080000ULL
-#define SEG_RAID1		0x0000000000100000ULL
-#define SEG_RAID10		0x0000000000200000ULL
-#define SEG_RAID4		0x0000000000400000ULL
-#define SEG_RAID5_N		0x0000000000800000ULL
-#define SEG_RAID5_LA		0x0000000001000000ULL
-#define SEG_RAID5_LS		0x0000000002000000ULL
-#define SEG_RAID5_RA		0x0000000004000000ULL
-#define SEG_RAID5_RS		0x0000000008000000ULL
+#define SEG_RAID0		(1ULL << 18)
+#define SEG_RAID0_META		(1ULL << 19)
+#define SEG_RAID1		(1ULL << 20)
+#define SEG_RAID10_NEAR		(1ULL << 21)
+#define SEG_RAID10		SEG_RAID10_NEAR
+#define SEG_RAID4		(1ULL << 22)
+#define SEG_RAID5_N		(1ULL << 23)
+#define SEG_RAID5_LA		(1ULL << 24)
+#define SEG_RAID5_LS		(1ULL << 25)
+#define SEG_RAID5_RA		(1ULL << 26)
+#define SEG_RAID5_RS		(1ULL << 27)
 #define SEG_RAID5		SEG_RAID5_LS
-#define SEG_RAID6_NC		0x0000000010000000ULL
-#define SEG_RAID6_NR		0x0000000020000000ULL
-#define SEG_RAID6_ZR		0x0000000040000000ULL
-#define SEG_RAID6_LA_6		0x0000000080000000ULL
-#define SEG_RAID6_LS_6		0x0000000100000000ULL
-#define SEG_RAID6_RA_6		0x0000000200000000ULL
-#define SEG_RAID6_RS_6		0x0000000400000000ULL
-#define SEG_RAID6_N_6		0x0000000800000000ULL
+#define SEG_RAID6_NC		(1ULL << 28)
+#define SEG_RAID6_NR		(1ULL << 29)
+#define SEG_RAID6_ZR		(1ULL << 30)
+#define SEG_RAID6_LA_6		(1ULL << 31)
+#define SEG_RAID6_LS_6		(1ULL << 32)
+#define SEG_RAID6_RA_6		(1ULL << 33)
+#define SEG_RAID6_RS_6		(1ULL << 34)
+#define SEG_RAID6_N_6		(1ULL << 35)
 #define SEG_RAID6		SEG_RAID6_ZR
 
-#define SEG_STRIPED_TARGET	0x0000008000000000ULL
+#define SEG_STRIPED_TARGET	(1ULL << 39)
+#define SEG_LINEAR_TARGET	(1ULL << 40)
+#define SEG_VDO			(1ULL << 41)
+#define SEG_VDO_POOL		(1ULL << 42)
 
-#define SEG_UNKNOWN		0x8000000000000000ULL
+#define SEG_UNKNOWN		(1ULL << 63)
 
 #define SEG_TYPE_NAME_LINEAR		"linear"
 #define SEG_TYPE_NAME_STRIPED		"striped"
@@ -83,11 +85,14 @@ struct dev_manager;
 #define SEG_TYPE_NAME_ERROR		"error"
 #define SEG_TYPE_NAME_FREE		"free"
 #define SEG_TYPE_NAME_ZERO		"zero"
+#define SEG_TYPE_NAME_VDO		"vdo"
+#define SEG_TYPE_NAME_VDO_POOL		"vdo-pool"
 #define SEG_TYPE_NAME_RAID		"raid"
 #define SEG_TYPE_NAME_RAID0		"raid0"
 #define SEG_TYPE_NAME_RAID0_META	"raid0_meta"
 #define SEG_TYPE_NAME_RAID1		"raid1"
 #define SEG_TYPE_NAME_RAID10		"raid10"
+#define SEG_TYPE_NAME_RAID10_NEAR	"raid10_near"
 #define SEG_TYPE_NAME_RAID4		"raid4"
 #define SEG_TYPE_NAME_RAID5		"raid5"
 #define SEG_TYPE_NAME_RAID5_N		"raid5_n"
@@ -105,7 +110,7 @@ struct dev_manager;
 #define SEG_TYPE_NAME_RAID6_RS_6	"raid6_rs_6"
 #define SEG_TYPE_NAME_RAID6_N_6		"raid6_n_6"
 
-#define segtype_is_linear(segtype)	(!strcmp(segtype->name, SEG_TYPE_NAME_LINEAR))
+#define segtype_is_linear(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_LINEAR))
 #define segtype_is_striped_target(segtype)	((segtype)->flags & SEG_STRIPED_TARGET ? 1 : 0)
 #define segtype_is_cache(segtype)	((segtype)->flags & SEG_CACHE ? 1 : 0)
 #define segtype_is_cache_pool(segtype)	((segtype)->flags & SEG_CACHE_POOL ? 1 : 0)
@@ -132,23 +137,40 @@ struct dev_manager;
 #define segtype_is_raid6_nr(segtype)	((segtype)->flags & SEG_RAID6_NR ? 1 : 0)
 #define segtype_is_raid6_n_6(segtype)	((segtype)->flags & SEG_RAID6_N_6 ? 1 : 0)
 #define segtype_is_raid6_zr(segtype)	((segtype)->flags & SEG_RAID6_ZR ? 1 : 0)
-#define segtype_is_any_raid10(segtype)	((segtype)->flags & SEG_RAID10 ? 1 : 0)
+#define segtype_is_raid6_ls_6(segtype)	((segtype)->flags & SEG_RAID6_LS_6 ? 1 : 0)
+#define segtype_is_raid6_rs_6(segtype)	((segtype)->flags & SEG_RAID6_RS_6 ? 1 : 0)
+#define segtype_is_raid6_la_6(segtype)	((segtype)->flags & SEG_RAID6_LA_6 ? 1 : 0)
+#define segtype_is_raid6_ra_6(segtype)	((segtype)->flags & SEG_RAID6_RA_6 ? 1 : 0)
 #define segtype_is_raid10(segtype)	((segtype)->flags & SEG_RAID10 ? 1 : 0)
-#define segtype_is_raid10_near(segtype)	segtype_is_raid10(segtype)
+#define segtype_is_raid10_near(segtype)	((segtype)->flags & SEG_RAID10_NEAR ? 1 : 0)
+/* FIXME: once raid10_{far,offset} supported */
+#define segtype_is_raid10_far(segtype)		0 /* FIXME ((segtype)->flags & SEG_RAID10_FAR ? 1 : 0 */
+#define segtype_is_raid10_offset(segtype)	0 /* FIXME ((segtype)->flags & SEG_RAID10_OFFSET ? 1 : 0 */
+#define segtype_is_any_raid10(segtype)	(segtype_is_raid10(segtype) || segtype_is_raid10_near(segtype) || segtype_is_raid10_far(segtype) || segtype_is_raid10_offset(segtype))
 #define segtype_is_raid_with_meta(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid0(segtype))
+#define segtype_is_striped_raid(segtype)        (segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
+#define segtype_is_reshapable_raid(segtype)     ((segtype_is_striped_raid(segtype) && !segtype_is_any_raid0(segtype)) || segtype_is_raid10_near(segtype) || segtype_is_raid10_offset(segtype))
 #define segtype_is_snapshot(segtype)	((segtype)->flags & SEG_SNAPSHOT ? 1 : 0)
 #define segtype_is_striped(segtype)	((segtype)->flags & SEG_AREAS_STRIPED ? 1 : 0)
 #define segtype_is_thin(segtype)	((segtype)->flags & (SEG_THIN_POOL|SEG_THIN_VOLUME) ? 1 : 0)
 #define segtype_is_thin_pool(segtype)	((segtype)->flags & SEG_THIN_POOL ? 1 : 0)
 #define segtype_is_thin_volume(segtype)	((segtype)->flags & SEG_THIN_VOLUME ? 1 : 0)
+#define segtype_is_vdo(segtype)		((segtype)->flags & SEG_VDO ? 1 : 0)
+#define segtype_is_vdo_pool(segtype)	((segtype)->flags & SEG_VDO_POOL ? 1 : 0)
 #define segtype_is_virtual(segtype)	((segtype)->flags & SEG_VIRTUAL ? 1 : 0)
 #define segtype_is_unknown(segtype)	((segtype)->flags & SEG_UNKNOWN ? 1 : 0)
+
+#define segtype_can_split(segtype)	((segtype)->flags & SEG_CAN_SPLIT ? 1 : 0)
+#define segtype_cannot_be_zeroed(segtype) ((segtype)->flags & SEG_CANNOT_BE_ZEROED ? 1 : 0)
+#define segtype_monitored(segtype)	((segtype)->flags & SEG_MONITORED ? 1 : 0)
+#define segtype_only_exclusive(segtype)	((segtype)->flags & SEG_ONLY_EXCLUSIVE ? 1 : 0)
+#define segtype_can_error_when_full(segtype)	((segtype)->flags & SEG_CAN_ERROR_WHEN_FULL ? 1 : 0)
 
 #define segtype_supports_stripe_size(segtype)	\
 	((segtype_is_striped(segtype) || segtype_is_mirror(segtype) || \
 	  segtype_is_cache(segtype) || segtype_is_cache_pool(segtype) || \
 	  segtype_is_thin(segtype) || segtype_is_snapshot(segtype) || \
-	  (segtype_is_raid(segtype) && !segtype_is_raid1(segtype))) ? 1 : 0)
+	  (segtype_is_striped_raid(segtype))) ? 1 : 0)
 
 #define seg_is_striped_target(seg)	segtype_is_striped_target((seg)->segtype)
 #define seg_is_cache(seg)	segtype_is_cache((seg)->segtype)
@@ -179,20 +201,22 @@ struct dev_manager;
 #define seg_is_raid10(seg)	segtype_is_raid10((seg)->segtype)
 #define seg_is_raid10_near(seg)	segtype_is_raid10_near((seg)->segtype)
 #define seg_is_raid_with_meta(seg)	segtype_is_raid_with_meta((seg)->segtype)
-#define seg_is_replicator(seg)	((seg)->segtype->flags & SEG_REPLICATOR ? 1 : 0)
-#define seg_is_replicator_dev(seg) ((seg)->segtype->flags & SEG_REPLICATOR_DEV ? 1 : 0)
+#define seg_is_striped_raid(seg)	segtype_is_striped_raid((seg)->segtype)
+#define	seg_is_reshapable_raid(seg)	segtype_is_reshapable_raid((seg)->segtype)
 #define seg_is_snapshot(seg)	segtype_is_snapshot((seg)->segtype)
 #define seg_is_striped(seg)	segtype_is_striped((seg)->segtype)
 #define seg_is_thin(seg)	segtype_is_thin((seg)->segtype)
 #define seg_is_thin_pool(seg)	segtype_is_thin_pool((seg)->segtype)
 #define seg_is_thin_volume(seg)	segtype_is_thin_volume((seg)->segtype)
+#define seg_is_vdo(seg)		segtype_is_vdo((seg)->segtype)
+#define seg_is_vdo_pool(seg)	segtype_is_vdo_pool((seg)->segtype)
 #define seg_is_virtual(seg)	segtype_is_virtual((seg)->segtype)
 #define seg_unknown(seg)	segtype_is_unknown((seg)->segtype)
-#define seg_can_split(seg)	((seg)->segtype->flags & SEG_CAN_SPLIT ? 1 : 0)
-#define seg_cannot_be_zeroed(seg) ((seg)->segtype->flags & SEG_CANNOT_BE_ZEROED ? 1 : 0)
-#define seg_monitored(seg)	((seg)->segtype->flags & SEG_MONITORED ? 1 : 0)
-#define seg_only_exclusive(seg)	((seg)->segtype->flags & SEG_ONLY_EXCLUSIVE ? 1 : 0)
-#define seg_can_error_when_full(seg) ((seg)->segtype->flags & SEG_CAN_ERROR_WHEN_FULL ? 1 : 0)
+#define seg_can_split(seg)	segtype_can_split((seg)->segtype)
+#define seg_cannot_be_zeroed(seg)	segtype_cannot_be_zeroed((seg)->segtype)
+#define seg_monitored(seg)	segtype_monitored((seg)->segtype)
+#define seg_only_exclusive(seg)	segtype_only_exclusive((seg)->segtype)
+#define seg_can_error_when_full(seg)	segtype_can_error_when_full((seg)->segtype)
 
 struct segment_type {
 	struct dm_list list;		/* Internal */
@@ -202,6 +226,7 @@ struct segment_type {
 
 	struct segtype_handler *ops;
 	const char *name;
+	const char *dso;
 
 	void *library;			/* lvm_register_segtype() sets this. */
 	void *private;			/* For the segtype handler to use. */
@@ -244,7 +269,7 @@ struct segtype_handler {
 			       const struct lv_segment *seg,
 			       struct dm_list *modules);
 	void (*destroy) (struct segment_type * segtype);
-	int (*target_monitored) (struct lv_segment *seg, int *pending);
+	int (*target_monitored) (struct lv_segment *seg, int *pending, int *monitored);
 	int (*target_monitor_events) (struct lv_segment *seg, int events);
 	int (*target_unmonitor_events) (struct lv_segment *seg, int events);
 };
@@ -258,6 +283,7 @@ struct segtype_library;
 int lvm_register_segtype(struct segtype_library *seglib,
 			 struct segment_type *segtype);
 
+struct segment_type *init_linear_segtype(struct cmd_context *cmd);
 struct segment_type *init_striped_segtype(struct cmd_context *cmd);
 struct segment_type *init_zero_segtype(struct cmd_context *cmd);
 struct segment_type *init_error_segtype(struct cmd_context *cmd);
@@ -269,13 +295,29 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
 #define RAID_FEATURE_RAID0			(1U << 1) /* version 1.7 */
 #define RAID_FEATURE_RESHAPING			(1U << 2) /* version 1.8 */
 #define RAID_FEATURE_RAID4			(1U << 3) /* ! version 1.8 or 1.9.0 */
+#define RAID_FEATURE_SHRINK			(1U << 4) /* version 1.9.0 */
+#define RAID_FEATURE_RESHAPE			(1U << 5) /* version 1.10.1 */
+/*
+ * RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD
+ * This signifies a behavioral change in dm-raid.  Prior to upstream kernel
+ * commit 33e53f068, the kernel would refuse to allow 'rebuild' CTR args to
+ * be submitted when other devices in the array had uninitialized superblocks.
+ * After the commit, these parameters were allowed.
+ *
+ * The most obvious useful case of this new behavior is up-converting a
+ * linear device to RAID1.  A new superblock is allocated for the linear dev
+ * and it will be uninitialized, while all the new images are specified for
+ * 'rebuild'.  This valid scenario would not have been allowed prior to
+ * commit 33e53f068.
+ *
+ * Commit 33e53f068 did not bump the dm-raid version number.  So it exists
+ * in some, but not all 1.8.1 versions of dm-raid.  The only way to be
+ * certain the new behavior exists is to check for version 1.9.0.
+ */
+#define RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD	(1U << 6) /* version 1.9.0 */
 
 #ifdef RAID_INTERNAL
 int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
-#endif
-
-#ifdef REPLICATOR_INTERNAL
-int init_replicator_segtype(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
 
 #define THIN_FEATURE_DISCARDS			(1U << 0)
@@ -295,8 +337,13 @@ int init_thin_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 int init_cache_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
 
+#ifdef VDO_INTERNAL
+int init_vdo_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
+#endif
+
 #define CACHE_FEATURE_POLICY_MQ			(1U << 0)
 #define CACHE_FEATURE_POLICY_SMQ		(1U << 1)
+#define CACHE_FEATURE_METADATA2			(1U << 2)
 
 #define SNAPSHOT_FEATURE_FIXED_LEAK		(1U << 0) /* version 1.12 */
 

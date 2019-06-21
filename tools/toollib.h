@@ -16,8 +16,8 @@
 #ifndef _LVM_TOOLLIB_H
 #define _LVM_TOOLLIB_H
 
-#include "metadata-exported.h"
-#include "report.h"
+#include "lib/metadata/metadata-exported.h"
+#include "lib/report/report.h"
 
 int become_daemon(struct cmd_context *cmd, int skip_lvm);
 
@@ -98,6 +98,18 @@ typedef int (*process_single_pvseg_fn_t) (struct cmd_context * cmd,
 					  struct pv_segment * pvseg,
 					  struct processing_handle *handle);
 
+/*
+ * Called prior to process_single_lv() to decide if the LV should be
+ * processed.  If this returns 0, the LV is not processed.
+ *
+ * This can evaluate the combination of command definition and
+ * the LV object to decide if the combination is allowed.
+ */
+typedef int (*check_single_lv_fn_t) (struct cmd_context *cmd,
+				     struct logical_volume *lv,
+				     struct processing_handle *handle,
+				     int lv_is_named_arg);
+
 int process_each_vg(struct cmd_context *cmd,
 	            int argc, char **argv,
 		    const char *one_vgname,
@@ -125,6 +137,7 @@ int process_each_segment_in_pv(struct cmd_context *cmd,
 int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 		    const char *one_vgname, const char *one_lvname,
 		    uint32_t flags, struct processing_handle *handle,
+		    check_single_lv_fn_t check_single_lv,
 		    process_single_lv_fn_t process_single_lv);
 
 
@@ -141,6 +154,7 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			  struct dm_list *arg_lvnames, const struct dm_list *tagsl,
 			  int stop_on_error, struct processing_handle *handle,
+			  check_single_lv_fn_t check_single_lv,
 			  process_single_lv_fn_t process_single_lv);
 
 struct processing_handle *init_processing_handle(struct cmd_context *cmd, struct processing_handle *parent_handle);
@@ -158,6 +172,12 @@ int select_match_pv(struct cmd_context *cmd, struct processing_handle *handle,
 const char *extract_vgname(struct cmd_context *cmd, const char *lv_name);
 const char *skip_dev_dir(struct cmd_context *cmd, const char *vg_name,
 			 unsigned *dev_dir_found);
+
+int opt_in_list_is_set(struct cmd_context *cmd, int *opts, int count,
+		       int *match_count, int *unmatch_count);
+
+void opt_array_to_str(struct cmd_context *cmd, int *opts, int count,
+		      char *buf, int len);
 
 int pvcreate_params_from_args(struct cmd_context *cmd, struct pvcreate_params *pp);
 int pvcreate_each_device(struct cmd_context *cmd, struct processing_handle *handle, struct pvcreate_params *pp);
@@ -189,18 +209,19 @@ int get_activation_monitoring_mode(struct cmd_context *cmd,
 
 int get_pool_params(struct cmd_context *cmd,
 		    const struct segment_type *segtype,
-		    int *passed_args,
 		    uint64_t *pool_metadata_size,
 		    int *pool_metadata_spare,
 		    uint32_t *chunk_size,
 		    thin_discards_t *discards,
-		    int *zero);
+		    thin_zero_t *zero_new_blocks);
 
 int get_stripe_params(struct cmd_context *cmd, const struct segment_type *segtype,
 		      uint32_t *stripes, uint32_t *stripe_size,
 		      unsigned *stripes_supplied, unsigned *stripe_size_supplied);
 
 int get_cache_params(struct cmd_context *cmd,
+		     uint32_t *chunk_size,
+		     cache_metadata_format_t *format,
 		     cache_mode_t *cache_mode,
 		     const char **name,
 		     struct dm_config_tree **settings);
@@ -219,5 +240,7 @@ int validate_restricted_lvname_param(struct cmd_context *cmd, const char **vg_na
 
 int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
                     struct processing_handle *handle __attribute__((unused)));
+
+int get_lvt_enum(struct logical_volume *lv);
 
 #endif

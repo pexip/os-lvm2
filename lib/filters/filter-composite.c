@@ -13,26 +13,32 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "filter.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/filters/filter.h"
+#include "lib/device/device.h"
 
-static int _and_p(struct dev_filter *f, struct device *dev)
+static int _and_p(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
 {
 	struct dev_filter **filters;
+	int ret;
 
-	for (filters = (struct dev_filter **) f->private; *filters; ++filters)
-		if (!(*filters)->passes_filter(*filters, dev))
+	for (filters = (struct dev_filter **) f->private; *filters; ++filters) {
+		ret = (*filters)->passes_filter(cmd, *filters, dev);
+
+		if (!ret)
 			return 0;	/* No 'stack': a filter, not an error. */
+	}
 
 	return 1;
 }
 
-static int _and_p_with_dev_ext_info(struct dev_filter *f, struct device *dev)
+static int _and_p_with_dev_ext_info(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
 {
 	int r;
 
 	dev_ext_enable(dev, external_device_info_source());
-	r = _and_p(f, dev);
+	r = _and_p(cmd, f, dev);
 	dev_ext_disable(dev);
 
 	return r;
@@ -48,20 +54,8 @@ static void _composite_destroy(struct dev_filter *f)
 	for (filters = (struct dev_filter **) f->private; *filters; ++filters)
 		(*filters)->destroy(*filters);
 
-	dm_free(f->private);
-	dm_free(f);
-}
-
-static int _dump(struct dev_filter *f, int merge_existing)
-{
-	struct dev_filter **filters;
-
-	for (filters = (struct dev_filter **) f->private; *filters; ++filters)
-		if ((*filters)->dump &&
-		    !(*filters)->dump(*filters, merge_existing))
-			return_0;
-
-	return 1;
+	free(f->private);
+	free(f);
 }
 
 static void _wipe(struct dev_filter *f)
@@ -80,7 +74,7 @@ struct dev_filter *composite_filter_create(int n, int use_dev_ext_info, struct d
 	if (!filters)
 		return_NULL;
 
-	if (!(filters_copy = dm_malloc(sizeof(*filters) * (n + 1)))) {
+	if (!(filters_copy = malloc(sizeof(*filters) * (n + 1)))) {
 		log_error("Composite filters allocation failed.");
 		return NULL;
 	}
@@ -88,15 +82,14 @@ struct dev_filter *composite_filter_create(int n, int use_dev_ext_info, struct d
 	memcpy(filters_copy, filters, sizeof(*filters) * n);
 	filters_copy[n] = NULL;
 
-	if (!(cft = dm_zalloc(sizeof(*cft)))) {
+	if (!(cft = zalloc(sizeof(*cft)))) {
 		log_error("Composite filters allocation failed.");
-		dm_free(filters_copy);
+		free(filters_copy);
 		return NULL;
 	}
 
 	cft->passes_filter = use_dev_ext_info ? _and_p_with_dev_ext_info : _and_p;
 	cft->destroy = _composite_destroy;
-	cft->dump = _dump;
 	cft->wipe = _wipe;
 	cft->use_count = 0;
 	cft->private = filters_copy;

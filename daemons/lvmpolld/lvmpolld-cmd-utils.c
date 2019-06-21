@@ -19,10 +19,12 @@
 
 #define MIN_ARGV_SIZE  8
 
-static const char *const const polling_ops[] = { [PVMOVE] = LVMPD_REQ_PVMOVE,
-						 [CONVERT] = LVMPD_REQ_CONVERT,
-						 [MERGE] = LVMPD_REQ_MERGE,
-						 [MERGE_THIN] = LVMPD_REQ_MERGE_THIN };
+static const char *const polling_ops[] = {
+	[PVMOVE] = LVMPD_REQ_PVMOVE,
+	[CONVERT] = LVMPD_REQ_CONVERT,
+	[MERGE] = LVMPD_REQ_MERGE,
+	[MERGE_THIN] = LVMPD_REQ_MERGE_THIN
+};
 
 const char *polling_op(enum poll_type type)
 {
@@ -34,7 +36,7 @@ static int add_to_cmd_arr(const char ***cmdargv, const char *str, unsigned *ind)
 	const char **newargv;
 
 	if (*ind && !(*ind % MIN_ARGV_SIZE)) {
-		newargv = dm_realloc(*cmdargv, (*ind / MIN_ARGV_SIZE + 1) * MIN_ARGV_SIZE * sizeof(char *));
+		newargv = realloc(*cmdargv, (*ind / MIN_ARGV_SIZE + 1) * MIN_ARGV_SIZE * sizeof(char *));
 		if (!newargv)
 			return 0;
 		*cmdargv = newargv;
@@ -48,7 +50,7 @@ static int add_to_cmd_arr(const char ***cmdargv, const char *str, unsigned *ind)
 const char **cmdargv_ctr(const struct lvmpolld_lv *pdlv, const char *lvm_binary, unsigned abort_polling, unsigned handle_missing_pvs)
 {
 	unsigned i = 0;
-	const char **cmd_argv = dm_malloc(MIN_ARGV_SIZE * sizeof(char *));
+	const char **cmd_argv = malloc(MIN_ARGV_SIZE * sizeof(char *));
 
 	if (!cmd_argv)
 		return NULL;
@@ -96,7 +98,7 @@ const char **cmdargv_ctr(const struct lvmpolld_lv *pdlv, const char *lvm_binary,
 
 	return cmd_argv;
 err:
-	dm_free(cmd_argv);
+	free(cmd_argv);
 	return NULL;
 }
 
@@ -120,7 +122,7 @@ static int copy_env(const char ***cmd_envp, unsigned *i, const char *exclude)
 const char **cmdenvp_ctr(const struct lvmpolld_lv *pdlv)
 {
 	unsigned i = 0;
-	const char **cmd_envp = dm_malloc(MIN_ARGV_SIZE * sizeof(char *));
+	const char **cmd_envp = malloc(MIN_ARGV_SIZE * sizeof(char *));
 
 	if (!cmd_envp)
 		return NULL;
@@ -139,6 +141,6 @@ const char **cmdenvp_ctr(const struct lvmpolld_lv *pdlv)
 
 	return cmd_envp;
 err:
-	dm_free(cmd_envp);
+	free(cmd_envp);
 	return NULL;
 }

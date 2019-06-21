@@ -13,10 +13,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
+#include "lib/misc/lib.h"
 
-#include "crc.h"
-#include "xlate.h"
+#include "lib/misc/crc.h"
+#include "lib/mm/xlate.h"
 
 /* Calculate an endian-independent CRC of supplied buffer */
 #ifndef DEBUG_CRC32
@@ -63,7 +63,7 @@ static uint32_t _calc_crc_new(uint32_t initial, const uint8_t *buf, uint32_t siz
 	const uint32_t *start = (const uint32_t *) buf;
 	const uint32_t *end = (const uint32_t *) (buf + (size & 0xfffffffc));
 	uint32_t crc = initial;
-   
+
 	/* Process 4 bytes per iteration */
 	while (start < end) {
 		crc = crc ^ xlate32(*start++);

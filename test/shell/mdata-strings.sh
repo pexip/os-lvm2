@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2013 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,6 @@
 
 # 'Test for proper escaping of strings in metadata (bz431474)'
 
-SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -41,7 +41,9 @@ pvcreate "$dev1" || created="$dev2"
 pvdisplay 2>&1 | tee err
 should grep -F "$pv_ugly" err
 should check pv_field "$dev1" pv_name "$dev1"
-vgcreate $vg "$created"
+vgcreate $SHARED $vg "$created"
 # 'no parse errors and VG really exists'
 vgs $vg 2>err
 not grep "Parse error" err
+
+dmsetup remove "${PREFIX}${pv_ugly}"

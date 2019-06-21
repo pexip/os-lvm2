@@ -16,16 +16,16 @@
  * This file holds common pool functions.
  */
 
-#include "lib.h"
-#include "activate.h"
-#include "locking.h"
-#include "metadata.h"
-#include "segtype.h"
-#include "lv_alloc.h"
-#include "defaults.h"
-#include "dev-type.h"
-#include "display.h"
-#include "toolcontext.h"
+#include "lib/misc/lib.h"
+#include "lib/activate/activate.h"
+#include "lib/locking/locking.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/segtype.h"
+#include "lib/metadata/lv_alloc.h"
+#include "lib/config/defaults.h"
+#include "lib/device/dev-type.h"
+#include "lib/display/display.h"
+#include "lib/commands/toolcontext.h"
 #include <stddef.h>
 
 int attach_pool_metadata_lv(struct lv_segment *pool_seg,
@@ -394,44 +394,13 @@ int validate_pool_chunk_size(struct cmd_context *cmd,
 			     const struct segment_type *segtype,
 			     uint32_t chunk_size)
 {
-	uint32_t min_size, max_size;
-	const char *name;
-	int r = 1;
+	if (segtype_is_cache(segtype) || segtype_is_cache_pool(segtype))
+		return validate_cache_chunk_size(cmd, chunk_size);
 
-	if (segtype_is_cache(segtype) || segtype_is_cache_pool(segtype)) {
-		min_size = DM_CACHE_MIN_DATA_BLOCK_SIZE;
-		max_size = DM_CACHE_MAX_DATA_BLOCK_SIZE;
-		name = "Cache";
-	} else if (segtype_is_thin(segtype)) {
-		min_size = DM_THIN_MIN_DATA_BLOCK_SIZE;
-		max_size = DM_THIN_MAX_DATA_BLOCK_SIZE;
-		name = "Thin";
-	} else {
-		log_error(INTERNAL_ERROR "Cannot validate chunk size of "
-			  "%s segtype.", segtype->name);
-		return 0;
-	}
-
-	if ((chunk_size < min_size) || (chunk_size > max_size)) {
-		log_error("%s pool chunk size %s is not in the range %s to %s.",
-			  name, display_size(cmd, chunk_size),
-			  display_size(cmd, min_size),
-			  display_size(cmd, max_size));
-		r = 0;
-	}
-
-	if (chunk_size & (min_size - 1)) {
-		log_error("%s pool chunk size %s must be a multiple of %s.",
-			  name, display_size(cmd, chunk_size),
-			  display_size(cmd, min_size));
-		r = 0;
-	}
-
-	return r;
+	return validate_thin_pool_chunk_size(cmd, chunk_size);
 }
 
 int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
-					       int passed_args,
 					       int chunk_size_calc_policy)
 {
 	struct logical_volume *pool_data_lv;
@@ -439,24 +408,17 @@ int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
 	struct physical_volume *pv;
 	struct cmd_context *cmd = pool_lv->vg->cmd;
 	unsigned long previous_hint = 0, hint = 0;
-	uint32_t default_chunk_size;
 	uint32_t min_chunk_size, max_chunk_size;
 
-	if (passed_args & PASS_ARG_CHUNK_SIZE)
-		return 1;
+	if (!chunk_size_calc_policy)
+		return 1; /* Chunk size was specified by user */
 
 	if (lv_is_thin_pool(pool_lv)) {
-		if (find_config_tree_int(cmd, allocation_thin_pool_chunk_size_CFG, NULL))
-			return 1;
 		min_chunk_size = DM_THIN_MIN_DATA_BLOCK_SIZE;
 		max_chunk_size = DM_THIN_MAX_DATA_BLOCK_SIZE;
-		default_chunk_size = get_default_allocation_thin_pool_chunk_size_CFG(cmd, NULL);
 	} else if (lv_is_cache_pool(pool_lv)) {
-		if (find_config_tree_int(cmd, allocation_cache_pool_chunk_size_CFG, NULL))
-			return 1;
 		min_chunk_size = DM_CACHE_MIN_DATA_BLOCK_SIZE;
 		max_chunk_size = DM_CACHE_MAX_DATA_BLOCK_SIZE;
-		default_chunk_size = get_default_allocation_cache_pool_chunk_size_CFG(cmd, NULL);
 	} else {
 		log_error(INTERNAL_ERROR "%s is not a pool logical volume.", display_lvname(pool_lv));
 		return 0;
@@ -494,39 +456,13 @@ int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
 				display_size(cmd, hint), display_lvname(pool_lv),
 				display_size(cmd, min_chunk_size),
 				display_size(cmd, max_chunk_size));
-	else
-		first_seg(pool_lv)->chunk_size =
-			(hint >= default_chunk_size) ? hint : default_chunk_size;
-
-	return 1;
-}
-
-int update_pool_params(const struct segment_type *segtype,
-		       struct volume_group *vg, unsigned target_attr,
-		       int passed_args, uint32_t pool_data_extents,
-		       uint32_t *pool_metadata_extents,
-		       int *chunk_size_calc_policy, uint32_t *chunk_size,
-		       thin_discards_t *discards, int *zero)
-{
-	if (segtype_is_cache_pool(segtype) || segtype_is_cache(segtype)) {
-		if (!update_cache_pool_params(segtype, vg, target_attr, passed_args,
-					      pool_data_extents, pool_metadata_extents,
-					      chunk_size_calc_policy, chunk_size))
-			return_0;
-	} else if (!update_thin_pool_params(segtype, vg, target_attr, passed_args,
-					    pool_data_extents, pool_metadata_extents,
-					    chunk_size_calc_policy, chunk_size,
-					    discards, zero)) /* thin-pool */
-			return_0;
-
-	if ((uint64_t) *chunk_size > (uint64_t) pool_data_extents * vg->extent_size) {
-		log_error("Size of %s data volume cannot be smaller than chunk size %s.",
-			  segtype->name, display_size(vg->cmd, *chunk_size));
-		return 0;
+	else if (hint > first_seg(pool_lv)->chunk_size) {
+		log_debug_alloc("Updating chunk size %s for pool %s to %s.",
+				display_size(cmd, first_seg(pool_lv)->chunk_size),
+				display_lvname(pool_lv),
+				display_size(cmd, hint));
+		first_seg(pool_lv)->chunk_size = hint;
 	}
-
-	log_verbose("Preferred pool metadata size %s.",
-		    display_size(vg->cmd, (uint64_t)*pool_metadata_extents * vg->extent_size));
 
 	return 1;
 }
@@ -590,7 +526,7 @@ int create_pool(struct logical_volume *pool_lv,
 		 * or directly converted to invisible device via suspend/resume
 		 */
 		pool_lv->status |= LV_TEMPORARY;
-		if (!activate_lv_local(pool_lv->vg->cmd, pool_lv)) {
+		if (!activate_lv(pool_lv->vg->cmd, pool_lv)) {
 			log_error("Aborting. Failed to activate pool metadata %s.",
 				  display_lvname(pool_lv));
 			goto bad;
@@ -602,7 +538,7 @@ int create_pool(struct logical_volume *pool_lv,
 		}
 		pool_lv->status &= ~LV_TEMPORARY;
 		/* Deactivates cleared metadata LV */
-		if (!deactivate_lv_local(pool_lv->vg->cmd, pool_lv)) {
+		if (!deactivate_lv(pool_lv->vg->cmd, pool_lv)) {
 			log_error("Aborting. Could not deactivate pool metadata %s.",
 				  display_lvname(pool_lv));
 			return 0;
@@ -724,7 +660,7 @@ static struct logical_volume *_alloc_pool_metadata_spare(struct volume_group *vg
 		return_0;
 
 	/* Spare LV should not be active */
-	if (!deactivate_lv_local(vg->cmd, lv)) {
+	if (!deactivate_lv(vg->cmd, lv)) {
 		log_error("Unable to deactivate pool metadata spare LV. "
 			  "Manual intervention required.");
 		return 0;

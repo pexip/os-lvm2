@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2010 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 
 . lib/inittest
 
@@ -33,14 +34,6 @@ lvconvert -m 1 $vg/lv
 not lvconvert -m2 $vg/lv
 
 # Log conversion (disk -> core)
-lvconvert --mirrorlog core $vg/lv
-
-# Log conversion (core -> mirrored)
-# FIXME on cluster
-test -e LOCAL_CLVMD && SHOULD=should
-$SHOULD lvconvert --mirrorlog mirrored $vg/lv
-
-# Log conversion (mirrored -> core)
 lvconvert --mirrorlog core $vg/lv
 
 # Log conversion (core -> disk)

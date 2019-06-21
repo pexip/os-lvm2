@@ -16,8 +16,8 @@
 #ifndef _LVM_TOOLCONTEXT_H
 #define _LVM_TOOLCONTEXT_H
 
-#include "dev-cache.h"
-#include "dev-type.h"
+#include "lib/device/dev-cache.h"
+#include "lib/device/dev-type.h"
 
 #include <limits.h>
 
@@ -42,6 +42,7 @@ struct config_info {
 	int cache_vgmetadata;
 	const char *msg_prefix;
 	const char *fmt_name;
+	const char *dmeventd_executable;
 	uint64_t unit_factor;
 	int cmd_name;		/* Show command name? */
 	mode_t umask;
@@ -88,10 +89,20 @@ struct cmd_context {
 	 * Command line and arguments.
 	 */
 	const char *cmd_line;
+	const char *name; /* needed before cmd->command is set */
+	struct command_name *cname;
 	struct command *command;
 	char **argv;
-	struct arg_values *arg_values;
+	struct arg_values *opt_arg_values;
 	struct dm_list arg_value_groups;
+	int opt_count; /* total number of options (beginning with - or --) */
+
+	/*
+	 * Position args remaining after command name
+	 * and --options are removed from original argc/argv.
+	 */
+	int position_argc;
+	char **position_argv;
 
 	/*
 	 * Format handlers.
@@ -134,9 +145,7 @@ struct cmd_context {
 	unsigned report_binary_values_as_numeric:1;
 	unsigned report_mark_hidden_devices:1;
 	unsigned metadata_read_only:1;
-	unsigned ignore_clustered_vgs:1;
 	unsigned threaded:1;			/* set if running within a thread e.g. clvmd */
-	unsigned independent_metadata_areas:1;	/* active formats have MDAs outside PVs */
 	unsigned unknown_system_id:1;
 	unsigned include_historical_lvs:1;	/* also process/report/display historical LVs */
 	unsigned record_historical_lvs:1;	/* record historical LVs */
@@ -144,24 +153,30 @@ struct cmd_context {
 	unsigned include_shared_vgs:1;		/* report/display cmds can reveal lockd VGs */
 	unsigned include_active_foreign_vgs:1;	/* cmd should process foreign VGs with active LVs */
 	unsigned vg_read_print_access_error:1;	/* print access errors from vg_read */
+	unsigned force_access_clustered:1;
 	unsigned lockd_gl_disable:1;
 	unsigned lockd_vg_disable:1;
 	unsigned lockd_lv_disable:1;
 	unsigned lockd_gl_removed:1;
-	unsigned lockd_vg_rescan:1;
 	unsigned lockd_vg_default_sh:1;
 	unsigned lockd_vg_enforce_sh:1;
+	unsigned lockd_lv_sh:1;
 	unsigned vg_notify:1;
 	unsigned lv_notify:1;
 	unsigned pv_notify:1;
+	unsigned activate_component:1;		/* command activates component LV */
+	unsigned process_component_lvs:1;	/* command processes also component LVs */
+	unsigned mirror_warn_printed:1;		/* command already printed warning about non-monitored mirrors */
+	unsigned pvscan_cache_single:1;
+	unsigned can_use_one_scan:1;
+	unsigned is_clvmd:1;
+	unsigned use_full_md_check:1;
+	unsigned is_activating:1;
 
 	/*
 	 * Filtering.
 	 */
-	struct dev_filter *lvmetad_filter;	/* pre-lvmetad filter chain */
-	struct dev_filter *filter;		/* post-lvmetad filter chain */
-	struct dev_filter *full_filter;		/* lvmetad_filter + filter */
-	int dump_filter;			/* Dump filter when exiting? */
+	struct dev_filter *filter;
 
 	/*
 	 * Configuration.
@@ -219,7 +234,7 @@ struct cmd_context {
  * system_dir may be NULL to use the default value.
  * The environment variable LVM_SYSTEM_DIR always takes precedence.
  */
-struct cmd_context *create_toolcontext(unsigned is_long_lived,
+struct cmd_context *create_toolcontext(unsigned is_clvmd,
 				       const char *system_dir,
 				       unsigned set_buffering,
 				       unsigned threaded,
@@ -233,6 +248,7 @@ int config_files_changed(struct cmd_context *cmd);
 int init_lvmcache_orphans(struct cmd_context *cmd);
 int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache);
 int init_connections(struct cmd_context *cmd);
+int init_run_by_dmeventd(struct cmd_context *cmd);
 
 /*
  * A config context is a very light weight cmd struct that

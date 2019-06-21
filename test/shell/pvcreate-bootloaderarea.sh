@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -10,7 +11,7 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description='Test pvcreate bootloader area support'
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -29,7 +30,7 @@ check pv_field "$dev1" pe_start "1048576"
 
 #COMM 'pvcreate with booloader area size - test corner cases'
 dev_size=$(pvs -o pv_size --noheadings "$dev1")
-pv_size=$[dev_size - 1048576] # device size - 1m pe_start = area for data
+pv_size=$(( dev_size - 1048576 )) # device size - 1m pe_start = area for data
 
 # try to use the whole data area for bootloader area, remaining data area is zero then (pe_start = pv_size)
 pvcreate --bootloaderareasize ${pv_size}b --dataalignment 1048576b "$dev1"
@@ -38,23 +39,20 @@ check pv_field "$dev1" ba_start 1048576
 check pv_field "$dev1" ba_size $pv_size
 
 # try to use the whole data area for bootloader area only and add one more byte - this must error out
-not pvcreate --bootloaderareasize $[pv_size + 1] --dataalignment 1048576b "$dev1" 2>err
+not pvcreate --bootloaderareasize $(( pv_size + 1 )) --dataalignment 1048576b "$dev1" 2>err
 grep "Bootloader area with data-aligned start must not exceed device size" err
 
 # restoring the PV should also restore the bootloader area correctly
 pvremove -ff "$dev1"
 pvcreate --dataalignment 256k --bootloaderareasize 600k "$dev1"
-vgcreate $vg "$dev1"
-vgcfgbackup -f $TESTDIR/vg_with_ba_backup $vg
+vgcreate $SHARED $vg "$dev1"
+vgcfgbackup -f "$TESTDIR/vg_with_ba_backup" "$vg"
 pv_uuid=$(get pv_field "$dev1" pv_uuid)
 vgremove -ff $vg
 pvremove -ff "$dev1"
-pvcreate --dataalignment 256k --restorefile $TESTDIR/vg_with_ba_backup --uuid "$pv_uuid" "$dev1"
+pvcreate --dataalignment 256k --restorefile "$TESTDIR/vg_with_ba_backup" --uuid "$pv_uuid" "$dev1"
 check pv_field "$dev1" ba_start "262144"
 check pv_field "$dev1" ba_size "786432"
 check pv_field "$dev1" pe_start "1048576"
 
-# error out when restoring the PV and trying to use overlapping bootloader area
 pvremove -ff "$dev1"
-not pvcreate --restorefile $TESTDIR/vg_with_ba_backup --uuid "$pv_uuid" --bootloaderareasize 1m "$dev1" 2>err
-grep "Bootloader area would overlap data area" err

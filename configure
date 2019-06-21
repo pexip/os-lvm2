@@ -636,13 +636,16 @@ missingkernel
 kerneldir
 interface
 CMIRRORD_PIDFILE
-CLVMD_PIDFILE
 LVMLOCKD_PIDFILE
 LVMPOLLD_PIDFILE
-LVMETAD_PIDFILE
 DMEVENTD_PIDFILE
 WRITE_INSTALL
+VDO_LIB
+VDO_INCLUDE
+VDO
 VALGRIND_POOL
+USRSBINDIR
+SILENT_RULES
 USE_TRACKING
 UDEV_HAS_BUILTIN_BLKID
 UDEV_RULE_EXEC_DETECTION
@@ -652,16 +655,22 @@ UDEV_RULES
 UDEV_PC
 THIN
 TESTSUITE_DATA
-TESTING
 STATIC_LINK
 STATICDIR
 SNAPSHOTS
+SYSCONFDIR
 SELINUX_PC
 SELINUX_LIBS
+SBINDIR
+SALCK_LIBS
+SALCK_CFLAGS
+SACKPT_LIBS
+SACKPT_CFLAGS
 REPLICATORS
 READLINE_LIBS
-RT_LIB
-RAID
+RT_LIBS
+QUORUM_LIBS
+QUORUM_CFLAGS
 PYTHON3DIR
 PYTHON2DIR
 PYTHON3_LIBDIRS
@@ -672,9 +681,9 @@ PYTHON3_BINDINGS
 PYTHON2_BINDINGS
 PYTHON_BINDINGS
 PYTHON3
+PYTHON2
 PTHREAD_LIBS
 M_LIBS
-POOL
 PKGCONFIG
 ODIRECT
 OCFDIR
@@ -689,8 +698,6 @@ LVM_MINOR
 LVM_MAJOR
 LVM_LIBAPI
 LVM_VERSION
-LVM1_FALLBACK
-LVM1
 LIB_SUFFIX
 LDDEPS
 JOBS
@@ -699,17 +706,19 @@ HAVE_VALGRIND
 HAVE_REALTIME
 HAVE_LIBDL
 BLKDEACTIVATE
+FSADM_PATH
 FSADM
 ELDFLAGS
 DM_LIB_PATCHLEVEL
 DMEVENTD_PATH
-DMEVENTD
 DL_LIBS
+DLM_LIBS
+DLM_CFLAGS
 DEVMAPPER
 DEFAULT_USE_LVMLOCKD
 DEFAULT_USE_LVMPOLLD
-DEFAULT_USE_LVMETAD
 DEFAULT_USE_BLKID_WIPING
+DEFAULT_SYS_LOCK_DIR
 DEFAULT_SYS_DIR
 DEFAULT_SPARSE_SEGTYPE
 DEFAULT_RUN_DIR
@@ -717,7 +726,6 @@ DEFAULT_RAID10_SEGTYPE
 DEFAULT_PROFILE_SUBDIR
 DEFAULT_PID_DIR
 DEFAULT_MIRROR_SEGTYPE
-DEFAULT_FALLBACK_TO_LVM1
 DEFAULT_LOCK_DIR
 DEFAULT_DM_RUN_DIR
 DEFAULT_DATA_ALIGNMENT
@@ -727,31 +735,25 @@ DEFAULT_ARCHIVE_SUBDIR
 DEBUG
 COPTIMISE_FLAG
 CONFDIR
+CONFDB_LIBS
+CONFDB_CFLAGS
 CMDLIB
-CLVMD_PATH
-CLVMD_CMANAGERS
-CLVMD
-CLUSTER
 CLDWHOLEARCHIVE
 CLDNOWHOLEARCHIVE
 CLDFLAGS
 CACHE
-BUILD_NOTIFYDBUS
+BUILD_DMFILEMAPD
 BUILD_LOCKDDLM
 BUILD_LOCKDSANLOCK
 BUILD_LVMLOCKD
 BUILD_LVMPOLLD
-BUILD_LVMETAD
 BUILD_LVMDBUSD
 BUILD_DMEVENTD
 BUILD_CMIRRORD
 BLKID_PC
-APPLIB
 MODPROBE_CMD
 MSGFMT
 PYTHON3_CONFIG
-PYTHON2_CONFIG
-PYTHON2
 pkgpyexecdir
 pyexecdir
 pkgpythondir
@@ -762,7 +764,6 @@ PYTHON_PREFIX
 PYTHON_VERSION
 PYTHON
 LVM2CMD_LIB
-LVM2APP_LIB
 UDEV_LIBS
 UDEV_CFLAGS
 SYSTEMD_LIBS
@@ -777,37 +778,20 @@ LOCKD_SANLOCK_LIBS
 LOCKD_SANLOCK_CFLAGS
 VALGRIND_LIBS
 VALGRIND_CFLAGS
-CUNIT_LIBS
-CUNIT_CFLAGS
 GENPNG
 GENHTML
 LCOV
 HAVE_WSYNCNAND
 HAVE_WCLOBBERED
 HAVE_WJUMP
-SACKPT_LIBS
-SACKPT_CFLAGS
-DLM_LIBS
-DLM_CFLAGS
 CPG_LIBS
 CPG_CFLAGS
-CMAP_LIBS
-CMAP_CFLAGS
-CONFDB_LIBS
-CONFDB_CFLAGS
-SALCK_LIBS
-SALCK_CFLAGS
-QUORUM_LIBS
-QUORUM_CFLAGS
-COROSYNC_LIBS
-COROSYNC_CFLAGS
-CMAN_LIBS
-CMAN_CFLAGS
 PKGCONFIGINIT_LIBS
 PKGCONFIGINIT_CFLAGS
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
 PKG_CONFIG
+VDO_FORMAT_CMD
 CACHE_RESTORE_CMD
 CACHE_REPAIR_CMD
 CACHE_DUMP_CMD
@@ -819,11 +803,14 @@ THIN_CHECK_CMD
 HAVE_FULL_RELRO
 HAVE_PIE
 POW_LIB
-LIBOBJS
 ALLOCA
+LIBOBJS
+SORT
+WC
 CHMOD
 CSCOPE_CMD
 CFLOW_CMD
+AR
 RANLIB
 MKDIR_P
 SET_MAKE
@@ -900,6 +887,7 @@ ac_subst_files=''
 ac_user_opts='
 enable_option_checking
 enable_dependency_tracking
+enable_silent_rules
 enable_static_link
 with_user
 with_group
@@ -908,16 +896,10 @@ with_device_gid
 with_device_mode
 with_device_nodes_on
 with_default_name_mangling
-enable_lvm1_fallback
-with_lvm1
-with_pool
-with_cluster
 with_snapshots
 with_mirrors
-with_raid
 with_default_mirror_segtype
 with_default_raid10_segtype
-with_replicators
 with_default_sparse_segtype
 with_thin
 with_thin_check
@@ -931,6 +913,8 @@ with_cache_dump
 with_cache_repair
 with_cache_restore
 enable_cache_check_needs_check
+with_vdo
+with_vdo_format
 enable_readline
 enable_realtime
 enable_ocf
@@ -938,26 +922,21 @@ with_ocfdir
 with_default_pid_dir
 with_default_dm_run_dir
 with_default_run_dir
-with_clvmd
-with_clvmd_pidfile
 enable_cmirrord
 with_cmirrord_pidfile
 enable_debug
 with_optimisation
 enable_profiling
-enable_testing
 enable_valgrind_pool
 enable_devmapper
-enable_lvmetad
 enable_lvmpolld
-enable_lockd_sanlock
-enable_lockd_dlm
+enable_lvmlockd_sanlock
+enable_lvmlockd_dlm
 enable_use_lvmlockd
 with_lvmlockd_pidfile
-enable_use_lvmetad
-with_lvmetad_pidfile
 enable_use_lvmpolld
 with_lvmpolld_pidfile
+enable_dmfilemapd
 enable_notify_dbus
 enable_blkid_wiping
 enable_udev_systemd_background_jobs
@@ -968,12 +947,8 @@ enable_compat
 enable_units_compat
 enable_ioctl
 enable_o_direct
-enable_applib
 enable_cmdlib
 enable_dbus_service
-enable_python_bindings
-enable_python2_bindings
-enable_python3_bindings
 enable_pkgconfig
 enable_write_install
 enable_fsadm
@@ -1018,26 +993,8 @@ PKG_CONFIG_PATH
 PKG_CONFIG_LIBDIR
 PKGCONFIGINIT_CFLAGS
 PKGCONFIGINIT_LIBS
-CMAN_CFLAGS
-CMAN_LIBS
-COROSYNC_CFLAGS
-COROSYNC_LIBS
-QUORUM_CFLAGS
-QUORUM_LIBS
-SALCK_CFLAGS
-SALCK_LIBS
-CONFDB_CFLAGS
-CONFDB_LIBS
-CMAP_CFLAGS
-CMAP_LIBS
 CPG_CFLAGS
 CPG_LIBS
-DLM_CFLAGS
-DLM_LIBS
-SACKPT_CFLAGS
-SACKPT_LIBS
-CUNIT_CFLAGS
-CUNIT_LIBS
 VALGRIND_CFLAGS
 VALGRIND_LIBS
 LOCKD_SANLOCK_CFLAGS
@@ -1667,10 +1624,9 @@ Optional Features:
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
   --disable-dependency-tracking
                           speeds up one-time build.
+  --disable-silent-rules  disable silent building
   --enable-static_link    use this to link the tools to their libraries
                           statically (default is dynamic linking
-  --enable-lvm1_fallback  use this to fall back and use LVM1 binaries if
-                          device-mapper is missing from the kernel
   --disable-thin_check_needs_check
                           required if thin_check version is < 0.3.0
   --disable-cache_check_needs_check
@@ -1682,16 +1638,15 @@ Optional Features:
   --enable-cmirrord       enable the cluster mirror log daemon
   --enable-debug          enable debugging
   --enable-profiling      gather gcov profiling data
-  --enable-testing        enable testing targets in the makefile
   --enable-valgrind-pool  enable valgrind awareness of pools
   --disable-devmapper     disable LVM2 device-mapper interaction
-  --enable-lvmetad        enable the LVM Metadata Daemon
   --enable-lvmpolld       enable the LVM Polling Daemon
-  --enable-lockd-sanlock  enable the LVM lock daemon using sanlock
-  --enable-lockd-dlm      enable the LVM lock daemon using dlm
+  --enable-lvmlockd-sanlock
+                          enable the LVM lock daemon using sanlock
+  --enable-lvmlockd-dlm   enable the LVM lock daemon using dlm
   --disable-use-lvmlockd  disable usage of LVM lock daemon
-  --disable-use-lvmetad   disable usage of LVM Metadata Daemon
   --disable-use-lvmpolld  disable usage of LVM Poll Daemon
+  --enable-dmfilemapd     enable the dmstats filemap daemon
   --enable-notify-dbus    enable LVM notification using dbus
   --disable-blkid_wiping  disable libblkid detection of signatures when wiping
                           and use native code instead
@@ -1707,15 +1662,8 @@ Optional Features:
                           that do not use KiB-style unit suffixes
   --disable-ioctl         disable ioctl calls to device-mapper in the kernel
   --disable-o_direct      disable O_DIRECT
-  --enable-applib         build application library
   --enable-cmdlib         build shared command library
   --enable-dbus-service   install D-Bus support
-  --enable-python_bindings
-                          build default Python applib bindings
-  --enable-python2_bindings
-                          build Python2 applib bindings
-  --enable-python3_bindings
-                          build Python3 applib bindings
   --enable-pkgconfig      install pkgconfig support
   --enable-write_install  install user writable files
   --disable-fsadm         disable fsadm
@@ -1736,20 +1684,12 @@ Optional Packages:
                           create nodes on resume or create [ON=resume]
   --with-default-name-mangling=MANGLING
                           default name mangling: auto/none/hex [auto]
-  --with-lvm1=TYPE        LVM1 metadata support: internal/shared/none
-                          [internal]
-  --with-pool=TYPE        GFS pool read-only support: internal/shared/none
-                          [internal]
-  --with-cluster=TYPE     cluster LVM locking support: internal/shared/none
-                          [internal]
   --with-snapshots=TYPE   snapshot support: internal/shared/none [internal]
   --with-mirrors=TYPE     mirror support: internal/shared/none [internal]
-  --with-raid=TYPE        raid support: internal/shared/none [internal]
   --with-default-mirror-segtype=TYPE
                           default mirror segtype: raid1/mirror [raid1]
   --with-default-raid10-segtype=TYPE
                           default mirror segtype: raid10/mirror [raid10]
-  --with-replicators=TYPE replicator support: internal/shared/none [none]
   --with-default-sparse-segtype=TYPE
                           default sparse segtype: thin/snapshot [thin]
   --with-thin=TYPE        thin provisioning support: internal/shared/none
@@ -1766,6 +1706,8 @@ Optional Packages:
                           cache_repair tool: [autodetect]
   --with-cache-restore=PATH
                           cache_restore tool: [autodetect]
+  --with-vdo=TYPE         vdo support: internal/none [internal]
+  --with-vdo-format=PATH  vdoformat tool: [autodetect]
   --with-ocfdir=DIR       install OCF files in
                           [PREFIX/lib/ocf/resource.d/lvm2]
   --with-default-pid-dir=PID_DIR
@@ -1774,23 +1716,11 @@ Optional Packages:
                           Default DM run directory. [autodetect]
   --with-default-run-dir=RUN_DIR
                           Default LVM run directory. [autodetect_run_dir/lvm]
-  --with-clvmd=TYPE       build cluster LVM Daemon
-                          The following cluster manager combinations are valid:
-                           * cman                  (RHEL5 or equivalent)
-                           * cman,corosync,openais (or selection of them)
-                           * singlenode            (localhost only)
-                           * all                   (autodetect)
-                           * none                  (disable build)
-                          [none]
-  --with-clvmd-pidfile=PATH
-                          clvmd pidfile [PID_DIR/clvmd.pid]
   --with-cmirrord-pidfile=PATH
                           cmirrord pidfile [PID_DIR/cmirrord.pid]
   --with-optimisation=OPT C optimisation flag [OPT=-O2]
   --with-lvmlockd-pidfile=PATH
                           lvmlockd pidfile [PID_DIR/lvmlockd.pid]
-  --with-lvmetad-pidfile=PATH
-                          lvmetad pidfile [PID_DIR/lvmetad.pid]
   --with-lvmpolld-pidfile=PATH
                           lvmpolld pidfile [PID_DIR/lvmpolld.pid]
   --with-localedir=DIR    locale-dependent data [DATAROOTDIR/locale]
@@ -1846,33 +1776,8 @@ Some influential environment variables:
               C compiler flags for PKGCONFIGINIT, overriding pkg-config
   PKGCONFIGINIT_LIBS
               linker flags for PKGCONFIGINIT, overriding pkg-config
-  CMAN_CFLAGS C compiler flags for CMAN, overriding pkg-config
-  CMAN_LIBS   linker flags for CMAN, overriding pkg-config
-  COROSYNC_CFLAGS
-              C compiler flags for COROSYNC, overriding pkg-config
-  COROSYNC_LIBS
-              linker flags for COROSYNC, overriding pkg-config
-  QUORUM_CFLAGS
-              C compiler flags for QUORUM, overriding pkg-config
-  QUORUM_LIBS linker flags for QUORUM, overriding pkg-config
-  SALCK_CFLAGS
-              C compiler flags for SALCK, overriding pkg-config
-  SALCK_LIBS  linker flags for SALCK, overriding pkg-config
-  CONFDB_CFLAGS
-              C compiler flags for CONFDB, overriding pkg-config
-  CONFDB_LIBS linker flags for CONFDB, overriding pkg-config
-  CMAP_CFLAGS C compiler flags for CMAP, overriding pkg-config
-  CMAP_LIBS   linker flags for CMAP, overriding pkg-config
   CPG_CFLAGS  C compiler flags for CPG, overriding pkg-config
   CPG_LIBS    linker flags for CPG, overriding pkg-config
-  DLM_CFLAGS  C compiler flags for DLM, overriding pkg-config
-  DLM_LIBS    linker flags for DLM, overriding pkg-config
-  SACKPT_CFLAGS
-              C compiler flags for SACKPT, overriding pkg-config
-  SACKPT_LIBS linker flags for SACKPT, overriding pkg-config
-  CUNIT_CFLAGS
-              C compiler flags for CUNIT, overriding pkg-config
-  CUNIT_LIBS  linker flags for CUNIT, overriding pkg-config
   VALGRIND_CFLAGS
               C compiler flags for VALGRIND, overriding pkg-config
   VALGRIND_LIBS
@@ -3009,6 +2914,7 @@ ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
+CONFIGURE_LINE="$0 $@"
 
 ac_config_headers="$ac_config_headers include/configure.h"
 
@@ -3161,7 +3067,8 @@ if test -z "$CFLAGS"; then :
 fi
 case "$host_os" in
 	linux*)
-		CLDFLAGS="$CLDFLAGS -Wl,--version-script,.export.sym"
+		CLDFLAGS="${CLDFLAGS:"$LDFLAGS"} -Wl,--version-script,.export.sym"
+		# equivalent to -rdynamic
 		ELDFLAGS="-Wl,--export-dynamic"
 		# FIXME Generate list and use --dynamic-list=.dlopen.sym
 		CLDWHOLEARCHIVE="-Wl,-whole-archive"
@@ -3169,20 +3076,18 @@ case "$host_os" in
 		LDDEPS="$LDDEPS .export.sym"
 		LIB_SUFFIX=so
 		DEVMAPPER=yes
-		BUILD_LVMETAD=no
 		BUILD_LVMPOLLD=no
 		LOCKDSANLOCK=no
 		LOCKDDLM=no
 		ODIRECT=yes
 		DM_IOCTLS=yes
 		SELINUX=yes
-		CLUSTER=internal
 		FSADM=yes
 		BLKDEACTIVATE=yes
 		;;
 	darwin*)
 		CFLAGS="$CFLAGS -no-cpp-precomp -fno-common"
-		CLDFLAGS="$CLDFLAGS"
+		CLDFLAGS="${CLDFLAGS:"$LDFLAGS"}"
 		ELDFLAGS=
 		CLDWHOLEARCHIVE="-all_load"
 		CLDNOWHOLEARCHIVE=
@@ -3191,9 +3096,11 @@ case "$host_os" in
 		ODIRECT=no
 		DM_IOCTLS=no
 		SELINUX=no
-		CLUSTER=none
 		FSADM=no
 		BLKDEACTIVATE=no
+		;;
+	*)
+		CLDFLAGS="${CLDFLAGS:"$LDFLAGS"}"
 		;;
 esac
 
@@ -4359,6 +4266,7 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 CFLAGS=$save_CFLAGS
 CXXFLAGS=$save_CXXFLAGS
+PATH_SBIN="$PATH:/usr/sbin:/sbin"
 
 
 ac_ext=c
@@ -4941,6 +4849,98 @@ else
 fi
 
 if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}ar", so it can be a program name with args.
+set dummy ${ac_tool_prefix}ar; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_AR+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$AR"; then
+  ac_cv_prog_AR="$AR" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_AR="${ac_tool_prefix}ar"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+AR=$ac_cv_prog_AR
+if test -n "$AR"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $AR" >&5
+$as_echo "$AR" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_prog_AR"; then
+  ac_ct_AR=$AR
+  # Extract the first word of "ar", so it can be a program name with args.
+set dummy ar; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_ac_ct_AR+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$ac_ct_AR"; then
+  ac_cv_prog_ac_ct_AR="$ac_ct_AR" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_ac_ct_AR="ar"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+ac_ct_AR=$ac_cv_prog_ac_ct_AR
+if test -n "$ac_ct_AR"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_AR" >&5
+$as_echo "$ac_ct_AR" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_ct_AR" = x; then
+    AR=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    AR=$ac_ct_AR
+  fi
+else
+  AR="$ac_cv_prog_AR"
+fi
+
+if test -n "$ac_tool_prefix"; then
   # Extract the first word of "${ac_tool_prefix}cflow", so it can be a program name with args.
 set dummy ${ac_tool_prefix}cflow; ac_word=$2
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
@@ -5232,6 +5232,202 @@ esac
   fi
 else
   CHMOD="$ac_cv_path_CHMOD"
+fi
+
+if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}wc", so it can be a program name with args.
+set dummy ${ac_tool_prefix}wc; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_WC+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $WC in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_WC="$WC" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_WC="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+WC=$ac_cv_path_WC
+if test -n "$WC"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $WC" >&5
+$as_echo "$WC" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_path_WC"; then
+  ac_pt_WC=$WC
+  # Extract the first word of "wc", so it can be a program name with args.
+set dummy wc; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_ac_pt_WC+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $ac_pt_WC in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_ac_pt_WC="$ac_pt_WC" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_ac_pt_WC="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+ac_pt_WC=$ac_cv_path_ac_pt_WC
+if test -n "$ac_pt_WC"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_pt_WC" >&5
+$as_echo "$ac_pt_WC" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_pt_WC" = x; then
+    WC=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    WC=$ac_pt_WC
+  fi
+else
+  WC="$ac_cv_path_WC"
+fi
+
+if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}sort", so it can be a program name with args.
+set dummy ${ac_tool_prefix}sort; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_SORT+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $SORT in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_SORT="$SORT" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_SORT="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+SORT=$ac_cv_path_SORT
+if test -n "$SORT"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $SORT" >&5
+$as_echo "$SORT" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_path_SORT"; then
+  ac_pt_SORT=$SORT
+  # Extract the first word of "sort", so it can be a program name with args.
+set dummy sort; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_ac_pt_SORT+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $ac_pt_SORT in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_ac_pt_SORT="$ac_pt_SORT" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_ac_pt_SORT="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+ac_pt_SORT=$ac_cv_path_ac_pt_SORT
+if test -n "$ac_pt_SORT"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_pt_SORT" >&5
+$as_echo "$ac_pt_SORT" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_pt_SORT" = x; then
+    SORT=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    SORT=$ac_pt_SORT
+  fi
+else
+  SORT="$ac_cv_path_SORT"
 fi
 
 
@@ -5856,7 +6052,7 @@ fi
 
 
 for ac_header in assert.h ctype.h dirent.h errno.h fcntl.h float.h \
-  getopt.h inttypes.h langinfo.h libgen.h limits.h locale.h paths.h \
+  getopt.h inttypes.h langinfo.h libaio.h libgen.h limits.h locale.h paths.h \
   signal.h stdarg.h stddef.h stdio.h stdlib.h string.h sys/file.h \
   sys/ioctl.h syslog.h sys/mman.h sys/param.h sys/resource.h sys/stat.h \
   sys/time.h sys/types.h sys/utsname.h sys/wait.h time.h \
@@ -5876,7 +6072,7 @@ fi
 done
 
 
-for ac_header in termios.h sys/statvfs.h sys/timerfd.h linux/magic.h linux/fiemap.h
+for ac_header in termios.h sys/statvfs.h sys/timerfd.h sys/vfs.h linux/magic.h linux/fiemap.h
 do :
   as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
 ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
@@ -6068,6 +6264,26 @@ _ACEOF
 
 
 fi
+
+ac_fn_c_check_member "$LINENO" "struct stat" "st_blocks" "ac_cv_member_struct_stat_st_blocks" "$ac_includes_default"
+if test "x$ac_cv_member_struct_stat_st_blocks" = xyes; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_STRUCT_STAT_ST_BLOCKS 1
+_ACEOF
+
+
+$as_echo "#define HAVE_ST_BLOCKS 1" >>confdefs.h
+
+else
+  case " $LIBOBJS " in
+  *" fileblocks.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS fileblocks.$ac_objext"
+ ;;
+esac
+
+fi
+
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether struct tm is in sys/time.h or time.h" >&5
 $as_echo_n "checking whether struct tm is in sys/time.h or time.h... " >&6; }
@@ -6319,6 +6535,103 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 ;;
   esac
+
+
+
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __builtin_clz" >&5
+$as_echo_n "checking for __builtin_clz... " >&6; }
+if ${ax_cv_have___builtin_clz+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+            __builtin_clz(0)
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ax_cv_have___builtin_clz=yes
+else
+  ax_cv_have___builtin_clz=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_have___builtin_clz" >&5
+$as_echo "$ax_cv_have___builtin_clz" >&6; }
+
+    if test yes = $ax_cv_have___builtin_clz; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE___BUILTIN_CLZ 1
+_ACEOF
+
+fi
+
+
+
+
+
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __builtin_clzll" >&5
+$as_echo_n "checking for __builtin_clzll... " >&6; }
+if ${ax_cv_have___builtin_clzll+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+            __builtin_clzll(0)
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ax_cv_have___builtin_clzll=yes
+else
+  ax_cv_have___builtin_clzll=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_have___builtin_clzll" >&5
+$as_echo "$ax_cv_have___builtin_clzll" >&6; }
+
+    if test yes = $ax_cv_have___builtin_clzll; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE___BUILTIN_CLZLL 1
+_ACEOF
+
+fi
+
+
+
+
+
+
+$as_echo "#define _GNU_SOURCE 1" >>confdefs.h
+
+
+$as_echo "#define _REENTRANT 1" >>confdefs.h
+
 
 
 ################################################################################
@@ -7787,6 +8100,20 @@ fi
 $as_echo "$USE_TRACKING" >&6; }
 
 ################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build silently" >&5
+$as_echo_n "checking whether to build silently... " >&6; }
+# Check whether --enable-silent-rules was given.
+if test "${enable_silent_rules+set}" = set; then :
+  enableval=$enable_silent_rules; SILENT_RULES=$enableval
+else
+  SILENT_RULES=yes
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $SILENT_RULES" >&5
+$as_echo "$SILENT_RULES" >&6; }
+
+
+################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to use static linking" >&5
 $as_echo_n "checking whether to use static linking... " >&6; }
 # Check whether --enable-static_link was given.
@@ -7880,9 +8207,14 @@ $as_echo "$ac_cv_flag_HAVE_FULL_RELRO" >&6; }
 
 ################################################################################
 
-if test "$prefix" = NONE; then
-  datarootdir=${ac_default_prefix}/share
-fi
+
+################################################################################
+test "$exec_prefix" = NONE -a "$prefix" = NONE && exec_prefix=""
+
+test "x$prefix" = xNONE && prefix=$ac_default_prefix
+# Let make expand exec_prefix.
+test "x$exec_prefix" = xNONE && exec_prefix='${prefix}'
+
 
 ################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking file owner" >&5
@@ -8018,98 +8350,6 @@ _ACEOF
 
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable lvm1 fallback" >&5
-$as_echo_n "checking whether to enable lvm1 fallback... " >&6; }
-# Check whether --enable-lvm1_fallback was given.
-if test "${enable_lvm1_fallback+set}" = set; then :
-  enableval=$enable_lvm1_fallback; LVM1_FALLBACK=$enableval
-else
-  LVM1_FALLBACK=no
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $LVM1_FALLBACK" >&5
-$as_echo "$LVM1_FALLBACK" >&6; }
-
-if test "$LVM1_FALLBACK" = yes; then
-	DEFAULT_FALLBACK_TO_LVM1=1
-
-$as_echo "#define LVM1_FALLBACK 1" >>confdefs.h
-
-else
-	DEFAULT_FALLBACK_TO_LVM1=0
-fi
-
-cat >>confdefs.h <<_ACEOF
-#define DEFAULT_FALLBACK_TO_LVM1 $DEFAULT_FALLBACK_TO_LVM1
-_ACEOF
-
-
-################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include support for lvm1 metadata" >&5
-$as_echo_n "checking whether to include support for lvm1 metadata... " >&6; }
-
-# Check whether --with-lvm1 was given.
-if test "${with_lvm1+set}" = set; then :
-  withval=$with_lvm1; LVM1=$withval
-else
-  LVM1=internal
-fi
-
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $LVM1" >&5
-$as_echo "$LVM1" >&6; }
-
-case "$LVM1" in
-  none|shared) ;;
-  internal)
-$as_echo "#define LVM1_INTERNAL 1" >>confdefs.h
- ;;
-  *) as_fn_error $? "--with-lvm1 parameter invalid" "$LINENO" 5 ;;
-esac
-
-################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include support for GFS pool metadata" >&5
-$as_echo_n "checking whether to include support for GFS pool metadata... " >&6; }
-
-# Check whether --with-pool was given.
-if test "${with_pool+set}" = set; then :
-  withval=$with_pool; POOL=$withval
-else
-  POOL=internal
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $POOL" >&5
-$as_echo "$POOL" >&6; }
-
-case "$POOL" in
-  none|shared) ;;
-  internal)
-$as_echo "#define POOL_INTERNAL 1" >>confdefs.h
- ;;
-  *) as_fn_error $? "--with-pool parameter invalid" "$LINENO" 5
-esac
-
-################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include support for cluster locking" >&5
-$as_echo_n "checking whether to include support for cluster locking... " >&6; }
-
-# Check whether --with-cluster was given.
-if test "${with_cluster+set}" = set; then :
-  withval=$with_cluster; CLUSTER=$withval
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $CLUSTER" >&5
-$as_echo "$CLUSTER" >&6; }
-
-case "$CLUSTER" in
-  none|shared) ;;
-  internal)
-$as_echo "#define CLUSTER_LOCKING_INTERNAL 1" >>confdefs.h
- ;;
-  *) as_fn_error $? "--with-cluster parameter invalid" "$LINENO" 5 ;;
-esac
-
-################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include snapshots" >&5
 $as_echo_n "checking whether to include snapshots... " >&6; }
 
@@ -8154,19 +8394,6 @@ $as_echo "#define MIRRORED_INTERNAL 1" >>confdefs.h
 esac
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include raid" >&5
-$as_echo_n "checking whether to include raid... " >&6; }
-
-# Check whether --with-raid was given.
-if test "${with_raid+set}" = set; then :
-  withval=$with_raid; RAID=$withval
-else
-  RAID=internal
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $RAID" >&5
-$as_echo "$RAID" >&6; }
-
 
 # Check whether --with-default-mirror-segtype was given.
 if test "${with_default_mirror_segtype+set}" = set; then :
@@ -8183,15 +8410,10 @@ else
   DEFAULT_RAID10_SEGTYPE="raid10"
 fi
 
-case "$RAID" in
-  none)  test "$DEFAULT_MIRROR_SEGTYPE" = "raid1" && DEFAULT_MIRROR_SEGTYPE="mirror"
-	test "$DEFAULT_RAID10_SEGTYPE" = "raid10" && DEFAULT_RAID10_SEGTYPE="mirror" ;;
-  shared) ;;
-  internal)
+
+
 $as_echo "#define RAID_INTERNAL 1" >>confdefs.h
- ;;
-  *) as_fn_error $? "--with-raid parameter invalid" "$LINENO" 5 ;;
-esac
+
 
 
 cat >>confdefs.h <<_ACEOF
@@ -8206,28 +8428,6 @@ _ACEOF
 
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include replicators" >&5
-$as_echo_n "checking whether to include replicators... " >&6; }
-
-# Check whether --with-replicators was given.
-if test "${with_replicators+set}" = set; then :
-  withval=$with_replicators; REPLICATORS=$withval
-else
-  REPLICATORS=none
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $REPLICATORS" >&5
-$as_echo "$REPLICATORS" >&6; }
-
-case "$REPLICATORS" in
-  none|shared) ;;
-  internal)
-$as_echo "#define REPLICATOR_INTERNAL 1" >>confdefs.h
- ;;
-  *) as_fn_error $? "--with-replicators parameter invalid ($REPLICATORS)" "$LINENO" 5 ;;
-esac
-
-
 
 # Check whether --with-default-sparse-segtype was given.
 if test "${with_default_sparse_segtype+set}" = set; then :
@@ -8327,7 +8527,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8370,7 +8570,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8451,7 +8651,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8494,7 +8694,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8558,7 +8758,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8601,7 +8801,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8665,7 +8865,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8708,7 +8908,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8876,7 +9076,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8919,7 +9119,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -8989,6 +9189,11 @@ $as_echo "$as_me: WARNING: $CACHE_CHECK_CMD: Old version \"$CACHE_CHECK_VSN\" fo
 				CACHE_CHECK_VERSION_WARN=y
 				CACHE_CHECK_NEEDS_CHECK=no
 			fi
+			if test "$CACHE_CHECK_VSN_MINOR" -lt 7 ; then
+				{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: $CACHE_CHECK_CMD: Old version \"$CACHE_CHECK_VSN\" does not support new cache format V2" >&5
+$as_echo "$as_me: WARNING: $CACHE_CHECK_CMD: Old version \"$CACHE_CHECK_VSN\" does not support new cache format V2" >&2;}
+				CACHE_CHECK_VERSION_WARN=y
+			fi
 		fi
 	fi
 	# Empty means a config way to ignore cache dumping
@@ -9007,7 +9212,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -9050,7 +9255,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -9114,7 +9319,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -9157,7 +9362,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -9221,7 +9426,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -9264,7 +9469,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -9349,10 +9554,167 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
+################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include vdo" >&5
+$as_echo_n "checking whether to include vdo... " >&6; }
+
+# Check whether --with-vdo was given.
+if test "${with_vdo+set}" = set; then :
+  withval=$with_vdo; VDO=$withval
+else
+  VDO="none"
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $VDO" >&5
+$as_echo "$VDO" >&6; }
+
+
+# Check whether --with-vdo-format was given.
+if test "${with_vdo_format+set}" = set; then :
+  withval=$with_vdo_format; VDO_FORMAT_CMD=$withval
+else
+  VDO_FORMAT_CMD="autodetect"
+fi
+
+case "$VDO" in
+ none) ;;
+ internal)
+
+$as_echo "#define VDO_INTERNAL 1" >>confdefs.h
+
+	if test "$VDO_FORMAT_CMD" = "autodetect"; then
+		if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}vdoformat", so it can be a program name with args.
+set dummy ${ac_tool_prefix}vdoformat; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_VDO_FORMAT_CMD+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $VDO_FORMAT_CMD in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_VDO_FORMAT_CMD="$VDO_FORMAT_CMD" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_VDO_FORMAT_CMD="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+VDO_FORMAT_CMD=$ac_cv_path_VDO_FORMAT_CMD
+if test -n "$VDO_FORMAT_CMD"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $VDO_FORMAT_CMD" >&5
+$as_echo "$VDO_FORMAT_CMD" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_path_VDO_FORMAT_CMD"; then
+  ac_pt_VDO_FORMAT_CMD=$VDO_FORMAT_CMD
+  # Extract the first word of "vdoformat", so it can be a program name with args.
+set dummy vdoformat; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_ac_pt_VDO_FORMAT_CMD+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $ac_pt_VDO_FORMAT_CMD in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_ac_pt_VDO_FORMAT_CMD="$ac_pt_VDO_FORMAT_CMD" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_ac_pt_VDO_FORMAT_CMD="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+ac_pt_VDO_FORMAT_CMD=$ac_cv_path_ac_pt_VDO_FORMAT_CMD
+if test -n "$ac_pt_VDO_FORMAT_CMD"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_pt_VDO_FORMAT_CMD" >&5
+$as_echo "$ac_pt_VDO_FORMAT_CMD" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_pt_VDO_FORMAT_CMD" = x; then
+    VDO_FORMAT_CMD=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    VDO_FORMAT_CMD=$ac_pt_VDO_FORMAT_CMD
+  fi
+else
+  VDO_FORMAT_CMD="$ac_cv_path_VDO_FORMAT_CMD"
+fi
+
+		if test -z "$VDO_FORMAT_CMD"; then
+			{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: vdoformat not found in path $PATH" >&5
+$as_echo "$as_me: WARNING: vdoformat not found in path $PATH" >&2;}
+			VDO_FORMAT_CMD=/usr/bin/vdoformat
+			VDO_CONFIGURE_WARN=y
+		fi
+	fi
+	;;
+ *) as_fn_error $? "--with-vdo parameter invalid" "$LINENO" 5 ;;
+esac
+
+
+cat >>confdefs.h <<_ACEOF
+#define VDO_FORMAT_CMD "$VDO_FORMAT_CMD"
+_ACEOF
+
+#
+# Do we need to use the API??
+# Do we want to link lvm2 with a big library for vdoformating ?
+#
+#AC_ARG_WITH(vdo-include,
+#	    AC_HELP_STRING([--with-vdo-include=PATH],
+#			   [vdo support: Path to utils headers: [/usr/include/vdo/utils]]),
+#			   VDO_INCLUDE=$withval, VDO_INCLUDE="/usr/include/vdo/utils")
+#AC_MSG_RESULT($VDO_INCLUDE)
+#
+#AC_ARG_WITH(vdo-lib,
+#            AC_HELP_STRING([--with-vdo-lib=PATH],
+#                           [vdo support: Path to utils lib: [/usr/lib]]),
+#                           VDO_LIB=$withval, VDO_LIB="/usr/lib")
+#AC_MSG_RESULT($VDO_LIB)
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable readline" >&5
-$as_echo_n "checking whether to enable readline... " >&6; }
 # Check whether --enable-readline was given.
 if test "${enable_readline+set}" = set; then :
   enableval=$enable_readline; READLINE=$enableval
@@ -9360,8 +9722,6 @@ else
   READLINE=maybe
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $READLINE" >&5
-$as_echo "$READLINE" >&6; }
 
 ################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable realtime support" >&5
@@ -9650,915 +10010,6 @@ _ACEOF
 
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build cluster LVM daemon" >&5
-$as_echo_n "checking whether to build cluster LVM daemon... " >&6; }
-
-# Check whether --with-clvmd was given.
-if test "${with_clvmd+set}" = set; then :
-  withval=$with_clvmd; CLVMD=$withval
-else
-  CLVMD=none
-fi
-
-test "$CLVMD" = yes && CLVMD=all
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $CLVMD" >&5
-$as_echo "$CLVMD" >&6; }
-
-test "$CLVMD" != none -a "$CLUSTER" = none && CLUSTER=internal
-
-test "$CLVMD" != none && pkg_config_init
-
-CLVMD_CMANAGERS=""
-CLVMD_NEEDS_QDISKD=no
-
-if [ `expr x"$CLVMD" : '.*gulm.*'` != 0 ]; then
-	as_fn_error $? "Since version 2.02.87 GULM locking is no longer supported." "$LINENO" 5;
-fi
-if [ `expr x"$CLVMD" : '.*cman.*'` != 0 ]; then
-	BUILDCMAN=yes
-	CLVMD_CMANAGERS="$CLVMD_CMANAGERS cman"
-	CLVMD_NEEDS_QDISKD=yes
-fi
-if [ `expr x"$CLVMD" : '.*corosync.*'` != 0 ]; then
-	BUILDCOROSYNC=yes
-	CLVMD_CMANAGERS="$CLVMD_CMANAGERS corosync"
-fi
-if [ `expr x"$CLVMD" : '.*openais.*'` != 0 ]; then
-	BUILDOPENAIS=yes
-	CLVMD_CMANAGERS="$CLVMD_CMANAGERS openais"
-fi
-test "$CLVMD_NEEDS_QDISKD" != no && CLVMD_CMANAGERS="$CLVMD_CMANAGERS qdiskd"
-
-soft_bailout() {
-	NOTFOUND=1
-}
-
-hard_bailout() {
-	as_fn_error $? "bailing out" "$LINENO" 5
-}
-
-if test "$CLVMD" = all; then
-	bailout=soft_bailout
-	BUILDCMAN=yes
-	BUILDCOROSYNC=yes
-	BUILDOPENAIS=yes
-else
-	bailout=hard_bailout
-fi
-
-check_lib_no_libs() {
-	lib_no_libs_arg1=$1
-	shift
-	lib_no_libs_arg2=$1
-	shift
-	lib_no_libs_args=$@
-	as_ac_Lib=`$as_echo "ac_cv_lib_$lib_no_libs_arg1''_$lib_no_libs_arg2" | $as_tr_sh`
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $lib_no_libs_arg2 in -l$lib_no_libs_arg1" >&5
-$as_echo_n "checking for $lib_no_libs_arg2 in -l$lib_no_libs_arg1... " >&6; }
-if eval \${$as_ac_Lib+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-l$lib_no_libs_arg1 $lib_no_libs_args $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char $lib_no_libs_arg2 ();
-int
-main ()
-{
-return $lib_no_libs_arg2 ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  eval "$as_ac_Lib=yes"
-else
-  eval "$as_ac_Lib=no"
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-eval ac_res=\$$as_ac_Lib
-	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
-$as_echo "$ac_res" >&6; }
-if eval test \"x\$"$as_ac_Lib"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_LIB$lib_no_libs_arg1" | $as_tr_cpp` 1
-_ACEOF
-
-  LIBS="-l$lib_no_libs_arg1 $LIBS"
-
-else
-  $bailout
-fi
-
-	LIBS=$ac_check_lib_save_LIBS
-}
-
-if test "$BUILDCMAN" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for CMAN" >&5
-$as_echo_n "checking for CMAN... " >&6; }
-
-if test -n "$CMAN_CFLAGS"; then
-    pkg_cv_CMAN_CFLAGS="$CMAN_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libcman\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libcman") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CMAN_CFLAGS=`$PKG_CONFIG --cflags "libcman" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$CMAN_LIBS"; then
-    pkg_cv_CMAN_LIBS="$CMAN_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libcman\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libcman") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CMAN_LIBS=`$PKG_CONFIG --libs "libcman" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        CMAN_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libcman" 2>&1`
-        else
-	        CMAN_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libcman" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$CMAN_PKG_ERRORS" >&5
-
-	NOTFOUND=0
-		for ac_header in libcman.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "libcman.h" "ac_cv_header_libcman_h" "$ac_includes_default"
-if test "x$ac_cv_header_libcman_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBCMAN_H 1
-_ACEOF
-
-else
-  $bailout
-fi
-
-done
-
-		check_lib_no_libs cman cman_init
-		if test $NOTFOUND = 0; then
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no pkg for libcman, using -lcman" >&5
-$as_echo "no pkg for libcman, using -lcman" >&6; }
-			CMAN_LIBS="-lcman"
-			HAVE_CMAN=yes
-		fi
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	NOTFOUND=0
-		for ac_header in libcman.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "libcman.h" "ac_cv_header_libcman_h" "$ac_includes_default"
-if test "x$ac_cv_header_libcman_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBCMAN_H 1
-_ACEOF
-
-else
-  $bailout
-fi
-
-done
-
-		check_lib_no_libs cman cman_init
-		if test $NOTFOUND = 0; then
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no pkg for libcman, using -lcman" >&5
-$as_echo "no pkg for libcman, using -lcman" >&6; }
-			CMAN_LIBS="-lcman"
-			HAVE_CMAN=yes
-		fi
-else
-	CMAN_CFLAGS=$pkg_cv_CMAN_CFLAGS
-	CMAN_LIBS=$pkg_cv_CMAN_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_CMAN=yes
-fi
-	CHECKCONFDB=yes
-	CHECKDLM=yes
-fi
-
-if test "$BUILDCOROSYNC" = yes -o "$BUILDOPENAIS" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for COROSYNC" >&5
-$as_echo_n "checking for COROSYNC... " >&6; }
-
-if test -n "$COROSYNC_CFLAGS"; then
-    pkg_cv_COROSYNC_CFLAGS="$COROSYNC_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"corosync\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "corosync") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_COROSYNC_CFLAGS=`$PKG_CONFIG --cflags "corosync" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$COROSYNC_LIBS"; then
-    pkg_cv_COROSYNC_LIBS="$COROSYNC_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"corosync\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "corosync") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_COROSYNC_LIBS=`$PKG_CONFIG --libs "corosync" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        COROSYNC_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "corosync" 2>&1`
-        else
-	        COROSYNC_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "corosync" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$COROSYNC_PKG_ERRORS" >&5
-
-	$bailout
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	$bailout
-else
-	COROSYNC_CFLAGS=$pkg_cv_COROSYNC_CFLAGS
-	COROSYNC_LIBS=$pkg_cv_COROSYNC_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_COROSYNC=yes
-fi
-	CHECKCONFDB=yes
-	CHECKCMAP=yes
-fi
-
-if test "$BUILDCOROSYNC" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for QUORUM" >&5
-$as_echo_n "checking for QUORUM... " >&6; }
-
-if test -n "$QUORUM_CFLAGS"; then
-    pkg_cv_QUORUM_CFLAGS="$QUORUM_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libquorum\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libquorum") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_QUORUM_CFLAGS=`$PKG_CONFIG --cflags "libquorum" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$QUORUM_LIBS"; then
-    pkg_cv_QUORUM_LIBS="$QUORUM_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libquorum\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libquorum") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_QUORUM_LIBS=`$PKG_CONFIG --libs "libquorum" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        QUORUM_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libquorum" 2>&1`
-        else
-	        QUORUM_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libquorum" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$QUORUM_PKG_ERRORS" >&5
-
-	$bailout
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	$bailout
-else
-	QUORUM_CFLAGS=$pkg_cv_QUORUM_CFLAGS
-	QUORUM_LIBS=$pkg_cv_QUORUM_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_QUORUM=yes
-fi
-	CHECKCPG=yes
-	CHECKDLM=yes
-fi
-
-if test "$BUILDOPENAIS" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SALCK" >&5
-$as_echo_n "checking for SALCK... " >&6; }
-
-if test -n "$SALCK_CFLAGS"; then
-    pkg_cv_SALCK_CFLAGS="$SALCK_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libSaLck\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libSaLck") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_SALCK_CFLAGS=`$PKG_CONFIG --cflags "libSaLck" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$SALCK_LIBS"; then
-    pkg_cv_SALCK_LIBS="$SALCK_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libSaLck\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libSaLck") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_SALCK_LIBS=`$PKG_CONFIG --libs "libSaLck" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        SALCK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libSaLck" 2>&1`
-        else
-	        SALCK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libSaLck" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$SALCK_PKG_ERRORS" >&5
-
-	$bailout
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	$bailout
-else
-	SALCK_CFLAGS=$pkg_cv_SALCK_CFLAGS
-	SALCK_LIBS=$pkg_cv_SALCK_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_SALCK=yes
-fi
-	CHECKCPG=yes
-fi
-
-
-
-if test "$CHECKCONFDB" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for CONFDB" >&5
-$as_echo_n "checking for CONFDB... " >&6; }
-
-if test -n "$CONFDB_CFLAGS"; then
-    pkg_cv_CONFDB_CFLAGS="$CONFDB_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libconfdb\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libconfdb") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CONFDB_CFLAGS=`$PKG_CONFIG --cflags "libconfdb" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$CONFDB_LIBS"; then
-    pkg_cv_CONFDB_LIBS="$CONFDB_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libconfdb\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libconfdb") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CONFDB_LIBS=`$PKG_CONFIG --libs "libconfdb" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        CONFDB_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libconfdb" 2>&1`
-        else
-	        CONFDB_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libconfdb" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$CONFDB_PKG_ERRORS" >&5
-
-	HAVE_CONFDB=no
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	HAVE_CONFDB=no
-else
-	CONFDB_CFLAGS=$pkg_cv_CONFDB_CFLAGS
-	CONFDB_LIBS=$pkg_cv_CONFDB_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_CONFDB=yes
-fi
-
-	for ac_header in corosync/confdb.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "corosync/confdb.h" "ac_cv_header_corosync_confdb_h" "$ac_includes_default"
-if test "x$ac_cv_header_corosync_confdb_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_COROSYNC_CONFDB_H 1
-_ACEOF
- HAVE_CONFDB_H=yes
-else
-  HAVE_CONFDB_H=no
-fi
-
-done
-
-
-	if test "$HAVE_CONFDB" != yes -a "$HAVE_CONFDB_H" = yes; then
-		check_lib_no_libs confdb confdb_initialize
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no pkg for confdb, using -lconfdb" >&5
-$as_echo "no pkg for confdb, using -lconfdb" >&6; }
-		CONFDB_LIBS="-lconfdb"
-		HAVE_CONFDB=yes
-	fi
-fi
-
-
-if test "$CHECKCMAP" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for CMAP" >&5
-$as_echo_n "checking for CMAP... " >&6; }
-
-if test -n "$CMAP_CFLAGS"; then
-    pkg_cv_CMAP_CFLAGS="$CMAP_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libcmap\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libcmap") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CMAP_CFLAGS=`$PKG_CONFIG --cflags "libcmap" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$CMAP_LIBS"; then
-    pkg_cv_CMAP_LIBS="$CMAP_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libcmap\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libcmap") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CMAP_LIBS=`$PKG_CONFIG --libs "libcmap" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        CMAP_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libcmap" 2>&1`
-        else
-	        CMAP_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libcmap" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$CMAP_PKG_ERRORS" >&5
-
-	HAVE_CMAP=no
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	HAVE_CMAP=no
-else
-	CMAP_CFLAGS=$pkg_cv_CMAP_CFLAGS
-	CMAP_LIBS=$pkg_cv_CMAP_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_CMAP=yes
-fi
-
-	for ac_header in corosync/cmap.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "corosync/cmap.h" "ac_cv_header_corosync_cmap_h" "$ac_includes_default"
-if test "x$ac_cv_header_corosync_cmap_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_COROSYNC_CMAP_H 1
-_ACEOF
- HAVE_CMAP_H=yes
-else
-  HAVE_CMAP_H=no
-fi
-
-done
-
-
-	if test "$HAVE_CMAP" != yes -a "$HAVE_CMAP_H" = yes; then
-		check_lib_no_libs cmap cmap_initialize
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no pkg for cmap, using -lcmap" >&5
-$as_echo "no pkg for cmap, using -lcmap" >&6; }
-		CMAP_LIBS="-lcmap"
-		HAVE_CMAP=yes
-	fi
-fi
-
-if test "$BUILDCOROSYNC" = yes -a \
-	"$HAVE_CMAP" != yes -a "$HAVE_CONFDB" != yes -a "$CLVMD" != all; then
-	as_fn_error $? "bailing out... cmap (corosync >= 2.0) or confdb (corosync < 2.0) library is required" "$LINENO" 5
-fi
-
-if test "$CHECKCPG" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for CPG" >&5
-$as_echo_n "checking for CPG... " >&6; }
-
-if test -n "$CPG_CFLAGS"; then
-    pkg_cv_CPG_CFLAGS="$CPG_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libcpg\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libcpg") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CPG_CFLAGS=`$PKG_CONFIG --cflags "libcpg" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$CPG_LIBS"; then
-    pkg_cv_CPG_LIBS="$CPG_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libcpg\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libcpg") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CPG_LIBS=`$PKG_CONFIG --libs "libcpg" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        CPG_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libcpg" 2>&1`
-        else
-	        CPG_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libcpg" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$CPG_PKG_ERRORS" >&5
-
-	$bailout
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	$bailout
-else
-	CPG_CFLAGS=$pkg_cv_CPG_CFLAGS
-	CPG_LIBS=$pkg_cv_CPG_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_CPG=yes
-fi
-fi
-
-if test "$CHECKDLM" = yes; then
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for DLM" >&5
-$as_echo_n "checking for DLM... " >&6; }
-
-if test -n "$DLM_CFLAGS"; then
-    pkg_cv_DLM_CFLAGS="$DLM_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libdlm\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libdlm") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_DLM_CFLAGS=`$PKG_CONFIG --cflags "libdlm" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$DLM_LIBS"; then
-    pkg_cv_DLM_LIBS="$DLM_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libdlm\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libdlm") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_DLM_LIBS=`$PKG_CONFIG --libs "libdlm" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        DLM_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libdlm" 2>&1`
-        else
-	        DLM_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libdlm" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$DLM_PKG_ERRORS" >&5
-
-	NOTFOUND=0
-		for ac_header in libdlm.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "libdlm.h" "ac_cv_header_libdlm_h" "$ac_includes_default"
-if test "x$ac_cv_header_libdlm_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBDLM_H 1
-_ACEOF
-
-else
-  $bailout
-fi
-
-done
-
-		check_lib_no_libs dlm dlm_lock -lpthread
-		if test $NOTFOUND = 0; then
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no pkg for libdlm, using -ldlm" >&5
-$as_echo "no pkg for libdlm, using -ldlm" >&6; }
-			DLM_LIBS="-ldlm -lpthread"
-			HAVE_DLM=yes
-		fi
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	NOTFOUND=0
-		for ac_header in libdlm.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "libdlm.h" "ac_cv_header_libdlm_h" "$ac_includes_default"
-if test "x$ac_cv_header_libdlm_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBDLM_H 1
-_ACEOF
-
-else
-  $bailout
-fi
-
-done
-
-		check_lib_no_libs dlm dlm_lock -lpthread
-		if test $NOTFOUND = 0; then
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no pkg for libdlm, using -ldlm" >&5
-$as_echo "no pkg for libdlm, using -ldlm" >&6; }
-			DLM_LIBS="-ldlm -lpthread"
-			HAVE_DLM=yes
-		fi
-else
-	DLM_CFLAGS=$pkg_cv_DLM_CFLAGS
-	DLM_LIBS=$pkg_cv_DLM_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_DLM=yes
-fi
-fi
-
-if test "$CLVMD" = all; then
-	CLVMD=none
-	CLVMD_CMANAGERS=""
-	CLVMD_NEEDS_QDISKD=no
-	if test "$HAVE_CMAN" = yes -a \
-		"$HAVE_DLM" = yes; then
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: Enabling clvmd cman cluster manager" >&5
-$as_echo "Enabling clvmd cman cluster manager" >&6; }
-		CLVMD="$CLVMD,cman"
-		CLVMD_CMANAGERS="$CLVMD_CMANAGERS cman"
-		CLVMD_NEEDS_QDISKD=yes
-	fi
-	if test "$HAVE_COROSYNC" = yes -a \
-		"$HAVE_QUORUM" = yes -a \
-		"$HAVE_CPG" = yes -a \
-		"$HAVE_DLM" = yes; then
-	   if test "$HAVE_CONFDB" = yes -o "$HAVE_CMAP" = yes; then
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: Enabling clvmd corosync cluster manager" >&5
-$as_echo "Enabling clvmd corosync cluster manager" >&6; }
-		CLVMD="$CLVMD,corosync"
-		CLVMD_CMANAGERS="$CLVMD_CMANAGERS corosync"
-	   fi
-	fi
-	if test "$HAVE_COROSYNC" = yes -a \
-		"$HAVE_CPG" = yes -a \
-		"$HAVE_SALCK" = yes; then
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: Enabling clvmd openais cluster manager" >&5
-$as_echo "Enabling clvmd openais cluster manager" >&6; }
-		CLVMD="$CLVMD,openais"
-		CLVMD_CMANAGERS="$CLVMD_CMANAGERS openais"
-	fi
-	test "$CLVMD_NEEDS_QDISKD" != no && CLVMD_CMANAGERS="$CLVMD_CMANAGERS qdiskd"
-	test "$CLVMD" = none && { $as_echo "$as_me:${as_lineno-$LINENO}: result: Disabling clvmd build. No cluster manager detected." >&5
-$as_echo "Disabling clvmd build. No cluster manager detected." >&6; }
-fi
-
-if [ `expr x"$CLVMD" : '.*corosync.*'` != 0 ]; then
-   test "$HAVE_CMAP" = yes && CLVMD_CMANAGERS="$CLVMD_CMANAGERS dlm"
-fi
-
-################################################################################
-if test "$CLVMD" != none; then
-
-# Check whether --with-clvmd-pidfile was given.
-if test "${with_clvmd_pidfile+set}" = set; then :
-  withval=$with_clvmd_pidfile; CLVMD_PIDFILE=$withval
-else
-  CLVMD_PIDFILE="$DEFAULT_PID_DIR/clvmd.pid"
-fi
-
-
-cat >>confdefs.h <<_ACEOF
-#define CLVMD_PIDFILE "$CLVMD_PIDFILE"
-_ACEOF
-
-fi
-
-################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build cluster mirror log daemon" >&5
 $as_echo_n "checking whether to build cluster mirror log daemon... " >&6; }
 # Check whether --enable-cmirrord was given.
@@ -10593,89 +10044,6 @@ fi
 ################################################################################
 if [ "$BUILD_CMIRRORD" = yes ]; then
 	pkg_config_init
-
-
-$as_echo "#define CMIRROR_HAS_CHECKPOINT 1" >>confdefs.h
-
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SACKPT" >&5
-$as_echo_n "checking for SACKPT... " >&6; }
-
-if test -n "$SACKPT_CFLAGS"; then
-    pkg_cv_SACKPT_CFLAGS="$SACKPT_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libSaCkpt\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libSaCkpt") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_SACKPT_CFLAGS=`$PKG_CONFIG --cflags "libSaCkpt" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$SACKPT_LIBS"; then
-    pkg_cv_SACKPT_LIBS="$SACKPT_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libSaCkpt\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libSaCkpt") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_SACKPT_LIBS=`$PKG_CONFIG --libs "libSaCkpt" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        SACKPT_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libSaCkpt" 2>&1`
-        else
-	        SACKPT_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libSaCkpt" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$SACKPT_PKG_ERRORS" >&5
-
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no libSaCkpt, compiling without it" >&5
-$as_echo "no libSaCkpt, compiling without it" >&6; }
-
-$as_echo "#define CMIRROR_HAS_CHECKPOINT 0" >>confdefs.h
-
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no libSaCkpt, compiling without it" >&5
-$as_echo "no libSaCkpt, compiling without it" >&6; }
-
-$as_echo "#define CMIRROR_HAS_CHECKPOINT 0" >>confdefs.h
-
-else
-	SACKPT_CFLAGS=$pkg_cv_SACKPT_CFLAGS
-	SACKPT_LIBS=$pkg_cv_SACKPT_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	HAVE_SACKPT=yes
-fi
 
 	if test "$HAVE_CPG" != yes; then
 
@@ -11246,114 +10614,6 @@ $as_echo "$as_me: WARNING: GD.pm perl module is not installed" >&2;}
 fi
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable unit testing" >&5
-$as_echo_n "checking whether to enable unit testing... " >&6; }
-# Check whether --enable-testing was given.
-if test "${enable_testing+set}" = set; then :
-  enableval=$enable_testing; TESTING=$enableval
-else
-  TESTING=no
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $TESTING" >&5
-$as_echo "$TESTING" >&6; }
-
-if test "$TESTING" = yes; then
-	pkg_config_init
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for CUNIT" >&5
-$as_echo_n "checking for CUNIT... " >&6; }
-
-if test -n "$CUNIT_CFLAGS"; then
-    pkg_cv_CUNIT_CFLAGS="$CUNIT_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"cunit >= 2.0\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "cunit >= 2.0") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CUNIT_CFLAGS=`$PKG_CONFIG --cflags "cunit >= 2.0" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$CUNIT_LIBS"; then
-    pkg_cv_CUNIT_LIBS="$CUNIT_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"cunit >= 2.0\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "cunit >= 2.0") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_CUNIT_LIBS=`$PKG_CONFIG --libs "cunit >= 2.0" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
-else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        CUNIT_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "cunit >= 2.0" 2>&1`
-        else
-	        CUNIT_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "cunit >= 2.0" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$CUNIT_PKG_ERRORS" >&5
-
-	as_fn_error $? "Package requirements (cunit >= 2.0) were not met:
-
-$CUNIT_PKG_ERRORS
-
-Consider adjusting the PKG_CONFIG_PATH environment variable if you
-installed software in a non-standard prefix.
-
-Alternatively, you may set the environment variables CUNIT_CFLAGS
-and CUNIT_LIBS to avoid the need to call pkg-config.
-See the pkg-config man page for more details." "$LINENO" 5
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	{ { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
-$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
-as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
-is in your PATH or set the PKG_CONFIG environment variable to the full
-path to pkg-config.
-
-Alternatively, you may set the environment variables CUNIT_CFLAGS
-and CUNIT_LIBS to avoid the need to call pkg-config.
-See the pkg-config man page for more details.
-
-To get pkg-config, see <http://pkg-config.freedesktop.org/>.
-See \`config.log' for more details" "$LINENO" 5; }
-else
-	CUNIT_CFLAGS=$pkg_cv_CUNIT_CFLAGS
-	CUNIT_LIBS=$pkg_cv_CUNIT_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-
-fi
-fi
-
-################################################################################
 TESTSUITE_DATA='${datarootdir}/lvm2-testsuite'
 # double eval needed ${datarootdir} -> ${prefix}/share -> real path
 
@@ -11480,18 +10740,6 @@ $as_echo "#define DEVMAPPER_SUPPORT 1" >>confdefs.h
 fi
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build LVMetaD" >&5
-$as_echo_n "checking whether to build LVMetaD... " >&6; }
-# Check whether --enable-lvmetad was given.
-if test "${enable_lvmetad+set}" = set; then :
-  enableval=$enable_lvmetad; LVMETAD=$enableval
-fi
-
-test -n "$LVMETAD" && BUILD_LVMETAD=$LVMETAD
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $BUILD_LVMETAD" >&5
-$as_echo "$BUILD_LVMETAD" >&6; }
-
-################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lvmpolld" >&5
 $as_echo_n "checking whether to build lvmpolld... " >&6; }
 # Check whether --enable-lvmpolld was given.
@@ -11506,11 +10754,11 @@ $as_echo "$BUILD_LVMPOLLD" >&6; }
 ################################################################################
 BUILD_LVMLOCKD=no
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lockdsanlock" >&5
-$as_echo_n "checking whether to build lockdsanlock... " >&6; }
-# Check whether --enable-lockd-sanlock was given.
-if test "${enable_lockd_sanlock+set}" = set; then :
-  enableval=$enable_lockd_sanlock; LOCKDSANLOCK=$enableval
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lvmlockdsanlock" >&5
+$as_echo_n "checking whether to build lvmlockdsanlock... " >&6; }
+# Check whether --enable-lvmlockd-sanlock was given.
+if test "${enable_lvmlockd_sanlock+set}" = set; then :
+  enableval=$enable_lvmlockd_sanlock; LOCKDSANLOCK=$enableval
 fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDSANLOCK" >&5
@@ -11597,11 +10845,11 @@ $as_echo "#define LOCKDSANLOCK_SUPPORT 1" >>confdefs.h
 fi
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lockddlm" >&5
-$as_echo_n "checking whether to build lockddlm... " >&6; }
-# Check whether --enable-lockd-dlm was given.
-if test "${enable_lockd_dlm+set}" = set; then :
-  enableval=$enable_lockd_dlm; LOCKDDLM=$enableval
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lvmlockddlm" >&5
+$as_echo_n "checking whether to build lvmlockddlm... " >&6; }
+# Check whether --enable-lvmlockd-dlm was given.
+if test "${enable_lvmlockd_dlm+set}" = set; then :
+  enableval=$enable_lvmlockd_dlm; LOCKDDLM=$enableval
 fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDDLM" >&5
@@ -11697,16 +10945,9 @@ if test "$BUILD_LVMLOCKD" = yes; then
 	if test "$LVMPOLLD" = no; then :
   as_fn_error $? "cannot build lvmlockd with --disable-lvmpolld." "$LINENO" 5
 fi
-	if test "$LVMETAD" = no; then :
-  as_fn_error $? "cannot build lvmlockd with --disable-lvmetad." "$LINENO" 5
-fi
 	if test "$BUILD_LVMPOLLD" = no; then :
   BUILD_LVMPOLLD=yes; { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Enabling lvmpolld - required by lvmlockd." >&5
 $as_echo "$as_me: WARNING: Enabling lvmpolld - required by lvmlockd." >&2;}
-fi
-	if test "$BUILD_LVMETAD" = no; then :
-  BUILD_LVMETAD=yes; { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Enabling lvmetad - required by lvmlockd." >&5
-$as_echo "$as_me: WARNING: Enabling lvmetad - required by lvmlockd." >&2;}
 fi
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking defaults for use_lvmlockd" >&5
 $as_echo_n "checking defaults for use_lvmlockd... " >&6; }
@@ -11745,48 +10986,6 @@ fi
 
 cat >>confdefs.h <<_ACEOF
 #define DEFAULT_USE_LVMLOCKD $DEFAULT_USE_LVMLOCKD
-_ACEOF
-
-
-################################################################################
-if test "$BUILD_LVMETAD" = yes; then
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking defaults for use_lvmetad" >&5
-$as_echo_n "checking defaults for use_lvmetad... " >&6; }
-	# Check whether --enable-use_lvmetad was given.
-if test "${enable_use_lvmetad+set}" = set; then :
-  enableval=$enable_use_lvmetad; case ${enableval} in
-		       yes) DEFAULT_USE_LVMETAD=1 ;;
-		       *) DEFAULT_USE_LVMETAD=0 ;;
-		       esac
-else
-  DEFAULT_USE_LVMETAD=1
-fi
-
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $DEFAULT_USE_LVMETAD" >&5
-$as_echo "$DEFAULT_USE_LVMETAD" >&6; }
-
-$as_echo "#define LVMETAD_SUPPORT 1" >>confdefs.h
-
-
-
-# Check whether --with-lvmetad-pidfile was given.
-if test "${with_lvmetad_pidfile+set}" = set; then :
-  withval=$with_lvmetad_pidfile; LVMETAD_PIDFILE=$withval
-else
-  LVMETAD_PIDFILE="$DEFAULT_PID_DIR/lvmetad.pid"
-fi
-
-
-cat >>confdefs.h <<_ACEOF
-#define LVMETAD_PIDFILE "$LVMETAD_PIDFILE"
-_ACEOF
-
-else
-	DEFAULT_USE_LVMETAD=0
-fi
-
-cat >>confdefs.h <<_ACEOF
-#define DEFAULT_USE_LVMETAD $DEFAULT_USE_LVMETAD
 _ACEOF
 
 
@@ -11833,27 +11032,54 @@ _ACEOF
 
 
 ################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build dmfilemapd" >&5
+$as_echo_n "checking whether to build dmfilemapd... " >&6; }
+# Check whether --enable-dmfilemapd was given.
+if test "${enable_dmfilemapd+set}" = set; then :
+  enableval=$enable_dmfilemapd; BUILD_DMFILEMAPD=$enableval
+else
+  BUILD_DMFILEMAPD=no
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $BUILD_DMFILEMAPD" >&5
+$as_echo "$BUILD_DMFILEMAPD" >&6; }
+
+$as_echo "#define DMFILEMAPD \$BUILD_DMFILEMAPD" >>confdefs.h
+
+
+if test "$BUILD_DMFILEMAPD" = yes; then
+   ac_fn_c_check_header_mongrel "$LINENO" "linux/fiemap.h" "ac_cv_header_linux_fiemap_h" "$ac_includes_default"
+if test "x$ac_cv_header_linux_fiemap_h" = xyes; then :
+
+else
+  as_fn_error $? "--enable-dmfilemapd requires fiemap.h" "$LINENO" 5
+fi
+
+
+fi
+
+################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build notifydbus" >&5
 $as_echo_n "checking whether to build notifydbus... " >&6; }
 # Check whether --enable-notify-dbus was given.
 if test "${enable_notify_dbus+set}" = set; then :
-  enableval=$enable_notify_dbus; NOTIFYDBUS=$enableval
+  enableval=$enable_notify_dbus; NOTIFYDBUS_SUPPORT=$enableval
+else
+  NOTIFYDBUS_SUPPORT=no
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $NOTIFYDBUS" >&5
-$as_echo "$NOTIFYDBUS" >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $NOTIFYDBUS_SUPPORT" >&5
+$as_echo "$NOTIFYDBUS_SUPPORT" >&6; }
 
-BUILD_NOTIFYDBUS=$NOTIFYDBUS
-
-if test "$BUILD_NOTIFYDBUS" = yes; then
+if test "$NOTIFYDBUS_SUPPORT" = yes; then
 
 $as_echo "#define NOTIFYDBUS_SUPPORT 1" >>confdefs.h
 
-	LIBS="-lsystemd $LIBS"
+	SYSTEMD_LIBS="-lsystemd"
 fi
 
 ################################################################################
-if test "$BUILD_NOTIFYDBUS" = yes; then
+if test "$NOTIFYDBUS_SUPPORT" = yes; then
 
 pkg_failed=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for NOTIFY_DBUS" >&5
@@ -11929,8 +11155,6 @@ fi
 
 ################################################################################
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable libblkid detection of signatures when wiping" >&5
-$as_echo_n "checking whether to enable libblkid detection of signatures when wiping... " >&6; }
 # Check whether --enable-blkid_wiping was given.
 if test "${enable_blkid_wiping+set}" = set; then :
   enableval=$enable_blkid_wiping; BLKID_WIPING=$enableval
@@ -11938,9 +11162,8 @@ else
   BLKID_WIPING=maybe
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $BLKID_WIPING" >&5
-$as_echo "$BLKID_WIPING" >&6; }
 
+DEFAULT_USE_BLKID_WIPING=0
 if test "$BLKID_WIPING" != no; then
 	pkg_config_init
 
@@ -12020,20 +11243,19 @@ else
 	BLKID_LIBS=$pkg_cv_BLKID_LIBS
         { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
-	test "$BLKID_WIPING" = maybe && BLKID_WIPING=yes
-fi
-	if test "$BLKID_WIPING" = yes; then
-		BLKID_PC="blkid"
-		DEFAULT_USE_BLKID_WIPING=1
+	 BLKID_WIPING=yes
+			    BLKID_PC="blkid"
+			    DEFAULT_USE_BLKID_WIPING=1
 
 $as_echo "#define BLKID_WIPING_SUPPORT 1" >>confdefs.h
 
-	else
-		DEFAULT_USE_BLKID_WIPING=0
-	fi
-else
-	DEFAULT_USE_BLKID_WIPING=0
+
 fi
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable libblkid detection of signatures when wiping" >&5
+$as_echo_n "checking whether to enable libblkid detection of signatures when wiping... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $BLKID_WIPING" >&5
+$as_echo "$BLKID_WIPING" >&6; }
 
 cat >>confdefs.h <<_ACEOF
 #define DEFAULT_USE_BLKID_WIPING $DEFAULT_USE_BLKID_WIPING
@@ -12041,8 +11263,6 @@ _ACEOF
 
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to use udev-systemd protocol for jobs in background" >&5
-$as_echo_n "checking whether to use udev-systemd protocol for jobs in background... " >&6; }
 # Check whether --enable-udev-systemd-background-jobs was given.
 if test "${enable_udev_systemd_background_jobs+set}" = set; then :
   enableval=$enable_udev_systemd_background_jobs; UDEV_SYSTEMD_BACKGROUND_JOBS=$enableval
@@ -12050,8 +11270,6 @@ else
   UDEV_SYSTEMD_BACKGROUND_JOBS=maybe
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $UDEV_SYSTEMD_BACKGROUND_JOBS" >&5
-$as_echo "$UDEV_SYSTEMD_BACKGROUND_JOBS" >&6; }
 
 if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" != no; then
 	pkg_config_init
@@ -12132,9 +11350,14 @@ else
 	SYSTEMD_LIBS=$pkg_cv_SYSTEMD_LIBS
         { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
-	test "$UDEV_SYSTEMD_BACKGROUND_JOBS" = maybe && UDEV_SYSTEMD_BACKGROUND_JOBS=yes
+	UDEV_SYSTEMD_BACKGROUND_JOBS=yes
 fi
 fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to use udev-systemd protocol for jobs in background" >&5
+$as_echo_n "checking whether to use udev-systemd protocol for jobs in background... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $UDEV_SYSTEMD_BACKGROUND_JOBS" >&5
+$as_echo "$UDEV_SYSTEMD_BACKGROUND_JOBS" >&6; }
 
 ################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable synchronisation with udev processing" >&5
@@ -12391,23 +11614,6 @@ $as_echo "#define O_DIRECT_SUPPORT 1" >>confdefs.h
 fi
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build liblvm2app.so application library" >&5
-$as_echo_n "checking whether to build liblvm2app.so application library... " >&6; }
-# Check whether --enable-applib was given.
-if test "${enable_applib+set}" = set; then :
-  enableval=$enable_applib; APPLIB=$enableval
-else
-  APPLIB=no
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $APPLIB" >&5
-$as_echo "$APPLIB" >&6; }
-
-test "$APPLIB" = yes \
-  && LVM2APP_LIB=-llvm2app \
-  || LVM2APP_LIB=
-
-################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to compile liblvm2cmd.so" >&5
 $as_echo_n "checking whether to compile liblvm2cmd.so... " >&6; }
 # Check whether --enable-cmdlib was given.
@@ -12436,615 +11642,14 @@ fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $BUILD_LVMDBUSD" >&5
 $as_echo "$BUILD_LVMDBUSD" >&6; }
+if test "$NOTIFYDBUS_SUPPORT" = yes && test "BUILD_LVMDBUSD" = yes; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Building D-Bus support without D-Bus notifications." >&5
+$as_echo "$as_me: WARNING: Building D-Bus support without D-Bus notifications." >&2;}
+fi
 
 ################################################################################
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build Python wrapper for liblvm2app.so" >&5
-$as_echo_n "checking whether to build Python wrapper for liblvm2app.so... " >&6; }
-# Check whether --enable-python_bindings was given.
-if test "${enable_python_bindings+set}" = set; then :
-  enableval=$enable_python_bindings; PYTHON_BINDINGS=$enableval
-else
-  PYTHON_BINDINGS=no
-fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON_BINDINGS" >&5
-$as_echo "$PYTHON_BINDINGS" >&6; }
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build Python2 wrapper for liblvm2app.so" >&5
-$as_echo_n "checking whether to build Python2 wrapper for liblvm2app.so... " >&6; }
-# Check whether --enable-python2_bindings was given.
-if test "${enable_python2_bindings+set}" = set; then :
-  enableval=$enable_python2_bindings; PYTHON2_BINDINGS=$enableval
-else
-  PYTHON2_BINDINGS=no
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON2_BINDINGS" >&5
-$as_echo "$PYTHON2_BINDINGS" >&6; }
-
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build Python3 wrapper for liblvm2app.so" >&5
-$as_echo_n "checking whether to build Python3 wrapper for liblvm2app.so... " >&6; }
-# Check whether --enable-python3_bindings was given.
-if test "${enable_python3_bindings+set}" = set; then :
-  enableval=$enable_python3_bindings; PYTHON3_BINDINGS=$enableval
-else
-  PYTHON3_BINDINGS=no
-fi
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON3_BINDINGS" >&5
-$as_echo "$PYTHON3_BINDINGS" >&6; }
-
-if test "$PYTHON_BINDINGS" = yes; then
-	as_fn_error $? "--enable-python-bindings is replaced by --enable-python2-bindings and --enable-python3-bindings" "$LINENO" 5
-fi
-
-if test "$PYTHON2_BINDINGS" = yes; then
-
-
-
-
-
-
-        if test -n "$PYTHON"; then
-      # If the user set $PYTHON, use it and don't search something else.
-      { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether $PYTHON version is >= 2" >&5
-$as_echo_n "checking whether $PYTHON version is >= 2... " >&6; }
-      prog="import sys
-# split strings by '.' and convert to numeric.  Append some zeros
-# because we need at least 4 digits for the hex conversion.
-# map returns an iterator in Python 3.0 and a list in 2.x
-minver = list(map(int, '2'.split('.'))) + [0, 0, 0]
-minverhex = 0
-# xrange is not present in Python 3.0 and range returns an iterator
-for i in list(range(0, 4)): minverhex = (minverhex << 8) + minver[i]
-sys.exit(sys.hexversion < minverhex)"
-  if { echo "$as_me:$LINENO: $PYTHON -c "$prog"" >&5
-   ($PYTHON -c "$prog") >&5 2>&5
-   ac_status=$?
-   echo "$as_me:$LINENO: \$? = $ac_status" >&5
-   (exit $ac_status); }; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-			       as_fn_error $? "Python interpreter is too old" "$LINENO" 5
-fi
-      am_display_PYTHON=$PYTHON
-    else
-      # Otherwise, try each interpreter until we find one that satisfies
-      # VERSION.
-      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for a Python interpreter with version >= 2" >&5
-$as_echo_n "checking for a Python interpreter with version >= 2... " >&6; }
-if ${am_cv_pathless_PYTHON+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-
-	for am_cv_pathless_PYTHON in python python2 python3 python3.3 python3.2 python3.1 python3.0 python2.7  python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0 none; do
-	  test "$am_cv_pathless_PYTHON" = none && break
-	  prog="import sys
-# split strings by '.' and convert to numeric.  Append some zeros
-# because we need at least 4 digits for the hex conversion.
-# map returns an iterator in Python 3.0 and a list in 2.x
-minver = list(map(int, '2'.split('.'))) + [0, 0, 0]
-minverhex = 0
-# xrange is not present in Python 3.0 and range returns an iterator
-for i in list(range(0, 4)): minverhex = (minverhex << 8) + minver[i]
-sys.exit(sys.hexversion < minverhex)"
-  if { echo "$as_me:$LINENO: $am_cv_pathless_PYTHON -c "$prog"" >&5
-   ($am_cv_pathless_PYTHON -c "$prog") >&5 2>&5
-   ac_status=$?
-   echo "$as_me:$LINENO: \$? = $ac_status" >&5
-   (exit $ac_status); }; then :
-  break
-fi
-	done
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $am_cv_pathless_PYTHON" >&5
-$as_echo "$am_cv_pathless_PYTHON" >&6; }
-      # Set $PYTHON to the absolute path of $am_cv_pathless_PYTHON.
-      if test "$am_cv_pathless_PYTHON" = none; then
-	PYTHON=:
-      else
-        # Extract the first word of "$am_cv_pathless_PYTHON", so it can be a program name with args.
-set dummy $am_cv_pathless_PYTHON; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_PYTHON+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $PYTHON in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_PYTHON="$PYTHON" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_PYTHON="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-PYTHON=$ac_cv_path_PYTHON
-if test -n "$PYTHON"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON" >&5
-$as_echo "$PYTHON" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-
-      fi
-      am_display_PYTHON=$am_cv_pathless_PYTHON
-    fi
-
-
-  if test "$PYTHON" = :; then
-      as_fn_error $? "no suitable Python interpreter found" "$LINENO" 5
-  else
-
-
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON version" >&5
-$as_echo_n "checking for $am_display_PYTHON version... " >&6; }
-if ${am_cv_python_version+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  am_cv_python_version=`$PYTHON -c "import sys; sys.stdout.write(sys.version[:3])"`
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $am_cv_python_version" >&5
-$as_echo "$am_cv_python_version" >&6; }
-  PYTHON_VERSION=$am_cv_python_version
-
-
-
-  PYTHON_PREFIX='${prefix}'
-
-  PYTHON_EXEC_PREFIX='${exec_prefix}'
-
-
-
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON platform" >&5
-$as_echo_n "checking for $am_display_PYTHON platform... " >&6; }
-if ${am_cv_python_platform+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  am_cv_python_platform=`$PYTHON -c "import sys; sys.stdout.write(sys.platform)"`
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $am_cv_python_platform" >&5
-$as_echo "$am_cv_python_platform" >&6; }
-  PYTHON_PLATFORM=$am_cv_python_platform
-
-
-  # Just factor out some code duplication.
-  am_python_setup_sysconfig="\
-import sys
-# Prefer sysconfig over distutils.sysconfig, for better compatibility
-# with python 3.x.  See automake bug#10227.
-try:
-    import sysconfig
-except ImportError:
-    can_use_sysconfig = 0
-else:
-    can_use_sysconfig = 1
-# Can't use sysconfig in CPython 2.7, since it's broken in virtualenvs:
-# <https://github.com/pypa/virtualenv/issues/118>
-try:
-    from platform import python_implementation
-    if python_implementation() == 'CPython' and sys.version[:3] == '2.7':
-        can_use_sysconfig = 0
-except ImportError:
-    pass"
-
-
-            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON script directory" >&5
-$as_echo_n "checking for $am_display_PYTHON script directory... " >&6; }
-if ${am_cv_python_pythondir+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  if test "x$prefix" = xNONE
-     then
-       am_py_prefix=$ac_default_prefix
-     else
-       am_py_prefix=$prefix
-     fi
-     am_cv_python_pythondir=`$PYTHON -c "
-$am_python_setup_sysconfig
-if can_use_sysconfig:
-    sitedir = sysconfig.get_path('purelib', vars={'base':'$am_py_prefix'})
-else:
-    from distutils import sysconfig
-    sitedir = sysconfig.get_python_lib(0, 0, prefix='$am_py_prefix')
-sys.stdout.write(sitedir)"`
-     case $am_cv_python_pythondir in
-     $am_py_prefix*)
-       am__strip_prefix=`echo "$am_py_prefix" | sed 's|.|.|g'`
-       am_cv_python_pythondir=`echo "$am_cv_python_pythondir" | sed "s,^$am__strip_prefix,$PYTHON_PREFIX,"`
-       ;;
-     *)
-       case $am_py_prefix in
-         /usr|/System*) ;;
-         *)
-	  am_cv_python_pythondir=$PYTHON_PREFIX/lib/python$PYTHON_VERSION/site-packages
-	  ;;
-       esac
-       ;;
-     esac
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $am_cv_python_pythondir" >&5
-$as_echo "$am_cv_python_pythondir" >&6; }
-  pythondir=$am_cv_python_pythondir
-
-
-
-  pkgpythondir=\${pythondir}/$PACKAGE
-
-
-        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON extension module directory" >&5
-$as_echo_n "checking for $am_display_PYTHON extension module directory... " >&6; }
-if ${am_cv_python_pyexecdir+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  if test "x$exec_prefix" = xNONE
-     then
-       am_py_exec_prefix=$am_py_prefix
-     else
-       am_py_exec_prefix=$exec_prefix
-     fi
-     am_cv_python_pyexecdir=`$PYTHON -c "
-$am_python_setup_sysconfig
-if can_use_sysconfig:
-    sitedir = sysconfig.get_path('platlib', vars={'platbase':'$am_py_prefix'})
-else:
-    from distutils import sysconfig
-    sitedir = sysconfig.get_python_lib(1, 0, prefix='$am_py_prefix')
-sys.stdout.write(sitedir)"`
-     case $am_cv_python_pyexecdir in
-     $am_py_exec_prefix*)
-       am__strip_prefix=`echo "$am_py_exec_prefix" | sed 's|.|.|g'`
-       am_cv_python_pyexecdir=`echo "$am_cv_python_pyexecdir" | sed "s,^$am__strip_prefix,$PYTHON_EXEC_PREFIX,"`
-       ;;
-     *)
-       case $am_py_exec_prefix in
-         /usr|/System*) ;;
-         *)
-	   am_cv_python_pyexecdir=$PYTHON_EXEC_PREFIX/lib/python$PYTHON_VERSION/site-packages
-	   ;;
-       esac
-       ;;
-     esac
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $am_cv_python_pyexecdir" >&5
-$as_echo "$am_cv_python_pyexecdir" >&6; }
-  pyexecdir=$am_cv_python_pyexecdir
-
-
-
-  pkgpyexecdir=\${pyexecdir}/$PACKAGE
-
-
-
-  fi
-
-
-	if test -n "$ac_tool_prefix"; then
-  # Extract the first word of "${ac_tool_prefix}python2", so it can be a program name with args.
-set dummy ${ac_tool_prefix}python2; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_PYTHON2+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $PYTHON2 in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_PYTHON2="$PYTHON2" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_PYTHON2="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-PYTHON2=$ac_cv_path_PYTHON2
-if test -n "$PYTHON2"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON2" >&5
-$as_echo "$PYTHON2" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-
-fi
-if test -z "$ac_cv_path_PYTHON2"; then
-  ac_pt_PYTHON2=$PYTHON2
-  # Extract the first word of "python2", so it can be a program name with args.
-set dummy python2; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_ac_pt_PYTHON2+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $ac_pt_PYTHON2 in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_ac_pt_PYTHON2="$ac_pt_PYTHON2" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_ac_pt_PYTHON2="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-ac_pt_PYTHON2=$ac_cv_path_ac_pt_PYTHON2
-if test -n "$ac_pt_PYTHON2"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_pt_PYTHON2" >&5
-$as_echo "$ac_pt_PYTHON2" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-  if test "x$ac_pt_PYTHON2" = x; then
-    PYTHON2=""
-  else
-    case $cross_compiling:$ac_tool_warned in
-yes:)
-{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
-$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
-ac_tool_warned=yes ;;
-esac
-    PYTHON2=$ac_pt_PYTHON2
-  fi
-else
-  PYTHON2="$ac_cv_path_PYTHON2"
-fi
-
-	test -z "$PYTHON2" && as_fn_error $? "python2 is required for --enable-python2_bindings but cannot be found" "$LINENO" 5
-	if test -n "$ac_tool_prefix"; then
-  # Extract the first word of "${ac_tool_prefix}python2-config", so it can be a program name with args.
-set dummy ${ac_tool_prefix}python2-config; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_PYTHON2_CONFIG+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $PYTHON2_CONFIG in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_PYTHON2_CONFIG="$PYTHON2_CONFIG" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_PYTHON2_CONFIG="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-PYTHON2_CONFIG=$ac_cv_path_PYTHON2_CONFIG
-if test -n "$PYTHON2_CONFIG"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON2_CONFIG" >&5
-$as_echo "$PYTHON2_CONFIG" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-
-fi
-if test -z "$ac_cv_path_PYTHON2_CONFIG"; then
-  ac_pt_PYTHON2_CONFIG=$PYTHON2_CONFIG
-  # Extract the first word of "python2-config", so it can be a program name with args.
-set dummy python2-config; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_ac_pt_PYTHON2_CONFIG+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $ac_pt_PYTHON2_CONFIG in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_ac_pt_PYTHON2_CONFIG="$ac_pt_PYTHON2_CONFIG" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_ac_pt_PYTHON2_CONFIG="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-ac_pt_PYTHON2_CONFIG=$ac_cv_path_ac_pt_PYTHON2_CONFIG
-if test -n "$ac_pt_PYTHON2_CONFIG"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_pt_PYTHON2_CONFIG" >&5
-$as_echo "$ac_pt_PYTHON2_CONFIG" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-  if test "x$ac_pt_PYTHON2_CONFIG" = x; then
-    PYTHON2_CONFIG=""
-  else
-    case $cross_compiling:$ac_tool_warned in
-yes:)
-{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
-$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
-ac_tool_warned=yes ;;
-esac
-    PYTHON2_CONFIG=$ac_pt_PYTHON2_CONFIG
-  fi
-else
-  PYTHON2_CONFIG="$ac_cv_path_PYTHON2_CONFIG"
-fi
-
-	test -z "$PYTHON2_CONFIG" && if test -n "$ac_tool_prefix"; then
-  # Extract the first word of "${ac_tool_prefix}python-config", so it can be a program name with args.
-set dummy ${ac_tool_prefix}python-config; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_PYTHON2_CONFIG+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $PYTHON2_CONFIG in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_PYTHON2_CONFIG="$PYTHON2_CONFIG" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_PYTHON2_CONFIG="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-PYTHON2_CONFIG=$ac_cv_path_PYTHON2_CONFIG
-if test -n "$PYTHON2_CONFIG"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PYTHON2_CONFIG" >&5
-$as_echo "$PYTHON2_CONFIG" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-
-fi
-if test -z "$ac_cv_path_PYTHON2_CONFIG"; then
-  ac_pt_PYTHON2_CONFIG=$PYTHON2_CONFIG
-  # Extract the first word of "python-config", so it can be a program name with args.
-set dummy python-config; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if ${ac_cv_path_ac_pt_PYTHON2_CONFIG+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  case $ac_pt_PYTHON2_CONFIG in
-  [\\/]* | ?:[\\/]*)
-  ac_cv_path_ac_pt_PYTHON2_CONFIG="$ac_pt_PYTHON2_CONFIG" # Let the user override the test with a path.
-  ;;
-  *)
-  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
-    ac_cv_path_ac_pt_PYTHON2_CONFIG="$as_dir/$ac_word$ac_exec_ext"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-  ;;
-esac
-fi
-ac_pt_PYTHON2_CONFIG=$ac_cv_path_ac_pt_PYTHON2_CONFIG
-if test -n "$ac_pt_PYTHON2_CONFIG"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_pt_PYTHON2_CONFIG" >&5
-$as_echo "$ac_pt_PYTHON2_CONFIG" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-  if test "x$ac_pt_PYTHON2_CONFIG" = x; then
-    PYTHON2_CONFIG=""
-  else
-    case $cross_compiling:$ac_tool_warned in
-yes:)
-{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
-$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
-ac_tool_warned=yes ;;
-esac
-    PYTHON2_CONFIG=$ac_pt_PYTHON2_CONFIG
-  fi
-else
-  PYTHON2_CONFIG="$ac_cv_path_PYTHON2_CONFIG"
-fi
-
-	test -z "$PYTHON2_CONFIG" && as_fn_error $? "python headers are required for --enable-python2_bindings but cannot be found" "$LINENO" 5
-	PYTHON2_INCDIRS=`"$PYTHON2_CONFIG" --includes`
-	PYTHON2_LIBDIRS=`"$PYTHON2_CONFIG" --libs`
-	PYTHON2DIR=$pythondir
-	PYTHON_BINDINGS=yes
-fi
-
-if test "$PYTHON3_BINDINGS" = yes -o "$BUILD_LVMDBUSD" = yes; then
-	unset PYTHON PYTHON_CONFIG
+if test "$BUILD_LVMDBUSD" = yes; then
 	unset am_cv_pathless_PYTHON ac_cv_path_PYTHON am_cv_python_platform
 	unset am_cv_python_pythondir am_cv_python_version am_cv_python_pyexecdir
 	unset ac_cv_path_PYTHON_CONFIG ac_cv_path_ac_pt_PYTHON_CONFIG
@@ -13089,7 +11694,7 @@ if ${am_cv_pathless_PYTHON+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-	for am_cv_pathless_PYTHON in python python2 python3 python3.3 python3.2 python3.1 python3.0 python2.7  python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0 none; do
+	for am_cv_pathless_PYTHON in python python2 python3 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0 python2.7  python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0 none; do
 	  test "$am_cv_pathless_PYTHON" = none && break
 	  prog="import sys
 # split strings by '.' and convert to numeric.  Append some zeros
@@ -13413,10 +12018,8 @@ fi
 	PYTHON3_INCDIRS=`"$PYTHON3_CONFIG" --includes`
 	PYTHON3_LIBDIRS=`"$PYTHON3_CONFIG" --libs`
 	PYTHON3DIR=$pythondir
-	PYTHON_BINDINGS=yes
-fi
+	test "$PYTHON3_BINDINGS" = yes && PYTHON_BINDINGS=yes
 
-if test "$BUILD_LVMDBUSD" = yes; then
 	# To get this macro, install autoconf-archive package then run autoreconf
 
     if test -z $PYTHON;
@@ -13482,10 +12085,6 @@ $as_echo "no" >&6; }
 
 fi
 
-if test "$PYTHON_BINDINGS" = yes -o "$PYTHON2_BINDINGS" = yes -o "$PYTHON3_BINDINGS" = yes; then
-	test "$APPLIB" != yes && as_fn_error $? "Python_bindings require --enable-applib" "$LINENO" 5
-fi
-
 ################################################################################
 # Check whether --enable-pkgconfig was given.
 if test "${enable_pkgconfig+set}" = set; then :
@@ -13531,15 +12130,15 @@ $as_echo "$BLKDEACTIVATE" >&6; }
 $as_echo_n "checking whether to use dmeventd... " >&6; }
 # Check whether --enable-dmeventd was given.
 if test "${enable_dmeventd+set}" = set; then :
-  enableval=$enable_dmeventd; DMEVENTD=$enableval
+  enableval=$enable_dmeventd; BUILD_DMEVENTD=$enableval
+else
+  BUILD_DMEVENTD=no
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $DMEVENTD" >&5
-$as_echo "$DMEVENTD" >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $BUILD_DMEVENTD" >&5
+$as_echo "$BUILD_DMEVENTD" >&6; }
 
-BUILD_DMEVENTD=$DMEVENTD
-
-if test "$DMEVENTD" = yes; then
+if test "$BUILD_DMEVENTD" = yes; then
    if test "$MIRRORS" != internal; then
       as_fn_error $? "--enable-dmeventd currently requires --with-mirrors=internal" "$LINENO" 5
    fi
@@ -13643,9 +12242,6 @@ fi
 
 
 ################################################################################
-test "$exec_prefix" = NONE -a "$prefix" = NONE && exec_prefix=""
-
-################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -ldl" >&5
 $as_echo_n "checking for dlopen in -ldl... " >&6; }
 if ${ac_cv_lib_dl_dlopen+:} false; then :
@@ -13695,9 +12291,7 @@ fi
 
 
 ################################################################################
-if [ \( "$LVM1" = shared -o "$POOL" = shared -o "$CLUSTER" = shared \
-      -o "$SNAPSHOTS" = shared -o "$MIRRORS" = shared \
-      -o "$RAID" = shared -o "$CACHE" = shared \
+if [ \( "$LVM1" = shared -o "$POOL" = shared \
       \) -a "$STATIC_LINK" = yes ]; then
 	as_fn_error $? "Features cannot be 'shared' when building statically" "$LINENO" 5
 fi
@@ -13930,8 +12524,24 @@ fi
 fi
 
 ################################################################################
+RT_LIBS=
+HAVE_REALTIME=no
 if test "$REALTIME" = yes; then
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for clock_gettime in -lrt" >&5
+	for ac_func in clock_gettime
+do :
+  ac_fn_c_check_func "$LINENO" "clock_gettime" "ac_cv_func_clock_gettime"
+if test "x$ac_cv_func_clock_gettime" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_CLOCK_GETTIME 1
+_ACEOF
+ HAVE_REALTIME=yes
+fi
+done
+
+
+	if test "$HAVE_REALTIME" != yes; then :
+   # try again with -lrt
+	      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for clock_gettime in -lrt" >&5
 $as_echo_n "checking for clock_gettime in -lrt... " >&6; }
 if ${ac_cv_lib_rt_clock_gettime+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -13968,18 +12578,15 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_rt_clock_gettime" >&5
 $as_echo "$ac_cv_lib_rt_clock_gettime" >&6; }
 if test "x$ac_cv_lib_rt_clock_gettime" = xyes; then :
-  HAVE_REALTIME=yes
-else
-  HAVE_REALTIME=no
+  RT_LIBS="-lrt"; HAVE_REALTIME=yes
 fi
 
+fi
 
 	if test "$HAVE_REALTIME" = yes; then
 
 $as_echo "#define HAVE_REALTIME 1" >>confdefs.h
 
-		LIBS="-lrt $LIBS"
-		RT_LIB="-lrt"
 	else
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Disabling realtime clock" >&5
 $as_echo "$as_me: WARNING: Disabling realtime clock" >&2;}
@@ -14148,7 +12755,8 @@ if test "x$ac_cv_lib_readline_readline" = xyes; then :
 
 $as_echo "#define READLINE_SUPPORT 1" >>confdefs.h
 
-				LIBS=$lvm_saved_libs
+				READLINE=yes
+		LIBS=$lvm_saved_libs
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for rl_line_buffer in -lreadline" >&5
 $as_echo_n "checking for rl_line_buffer in -lreadline... " >&6; }
 if ${ac_cv_lib_readline_rl_line_buffer+:} false; then :
@@ -14468,6 +13076,10 @@ fi
 done
 
 fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable readline" >&5
+$as_echo_n "checking whether to enable readline... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $READLINE" >&5
+$as_echo "$READLINE" >&6; }
 
 if test "$BUILD_CMIRRORD" = yes; then
 	for ac_func in atexit
@@ -14486,13 +13098,15 @@ done
 fi
 
 if test "$BUILD_LVMLOCKD" = yes; then
-	for ac_func in clock_gettime strtoull
+	if test "$HAVE_REALTIME" != yes; then :
+  as_fn_error $? "Realtime clock support is mandatory for lvmlockd." "$LINENO" 5
+fi
+	for ac_func in strtoull
 do :
-  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
-ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
-if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
+  ac_fn_c_check_func "$LINENO" "strtoull" "ac_cv_func_strtoull"
+if test "x$ac_cv_func_strtoull" = xyes; then :
   cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
+#define HAVE_STRTOULL 1
 _ACEOF
 
 else
@@ -14610,209 +13224,7 @@ fi
 
 fi
 
-if test "$CLVMD" != none; then
-	for ac_header in mntent.h netdb.h netinet/in.h pthread.h search.h sys/mount.h sys/socket.h sys/uio.h sys/un.h utmpx.h
-do :
-  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
-ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
-if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
-_ACEOF
-
-else
-  as_fn_error $? "bailing out" "$LINENO" 5
-fi
-
-done
-
-	for ac_func in dup2 getmntent memmove select socket
-do :
-  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
-ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
-if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
-_ACEOF
-
-else
-  hard_bailout
-fi
-done
-
-	# getmntent is in the standard C library on UNICOS, in -lsun on Irix 4,
-# -lseq on Dynix/PTX, -lgen on Unixware.
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing getmntent" >&5
-$as_echo_n "checking for library containing getmntent... " >&6; }
-if ${ac_cv_search_getmntent+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_func_search_save_LIBS=$LIBS
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char getmntent ();
-int
-main ()
-{
-return getmntent ();
-  ;
-  return 0;
-}
-_ACEOF
-for ac_lib in '' sun seq gen; do
-  if test -z "$ac_lib"; then
-    ac_res="none required"
-  else
-    ac_res=-l$ac_lib
-    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
-  fi
-  if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_search_getmntent=$ac_res
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext
-  if ${ac_cv_search_getmntent+:} false; then :
-  break
-fi
-done
-if ${ac_cv_search_getmntent+:} false; then :
-
-else
-  ac_cv_search_getmntent=no
-fi
-rm conftest.$ac_ext
-LIBS=$ac_func_search_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_getmntent" >&5
-$as_echo "$ac_cv_search_getmntent" >&6; }
-ac_res=$ac_cv_search_getmntent
-if test "$ac_res" != no; then :
-  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
-  ac_cv_func_getmntent=yes
-
-$as_echo "#define HAVE_GETMNTENT 1" >>confdefs.h
-
-else
-  ac_cv_func_getmntent=no
-fi
-
-
-	for ac_header in sys/select.h sys/socket.h
-do :
-  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
-ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
-if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
-_ACEOF
-
-fi
-
-done
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking types of arguments for select" >&5
-$as_echo_n "checking types of arguments for select... " >&6; }
-if ${ac_cv_func_select_args+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  for ac_arg234 in 'fd_set *' 'int *' 'void *'; do
- for ac_arg1 in 'int' 'size_t' 'unsigned long int' 'unsigned int'; do
-  for ac_arg5 in 'struct timeval *' 'const struct timeval *'; do
-   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-$ac_includes_default
-#ifdef HAVE_SYS_SELECT_H
-# include <sys/select.h>
-#endif
-#ifdef HAVE_SYS_SOCKET_H
-# include <sys/socket.h>
-#endif
-
-int
-main ()
-{
-extern int select ($ac_arg1,
-					    $ac_arg234, $ac_arg234, $ac_arg234,
-					    $ac_arg5);
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  ac_cv_func_select_args="$ac_arg1,$ac_arg234,$ac_arg5"; break 3
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-  done
- done
-done
-# Provide a safe default value.
-: "${ac_cv_func_select_args=int,int *,struct timeval *}"
-
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_func_select_args" >&5
-$as_echo "$ac_cv_func_select_args" >&6; }
-ac_save_IFS=$IFS; IFS=','
-set dummy `echo "$ac_cv_func_select_args" | sed 's/\*/\*/g'`
-IFS=$ac_save_IFS
-shift
-
-cat >>confdefs.h <<_ACEOF
-#define SELECT_TYPE_ARG1 $1
-_ACEOF
-
-
-cat >>confdefs.h <<_ACEOF
-#define SELECT_TYPE_ARG234 ($2)
-_ACEOF
-
-
-cat >>confdefs.h <<_ACEOF
-#define SELECT_TYPE_ARG5 ($3)
-_ACEOF
-
-rm -f conftest*
-
-fi
-
-if test "$CLUSTER" != none; then
-	for ac_header in sys/socket.h sys/un.h
-do :
-  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
-ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
-if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
-_ACEOF
-
-else
-  hard_bailout
-fi
-
-done
-
-	for ac_func in socket
-do :
-  ac_fn_c_check_func "$LINENO" "socket" "ac_cv_func_socket"
-if test "x$ac_cv_func_socket" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_SOCKET 1
-_ACEOF
-
-else
-  hard_bailout
-fi
-done
-
-fi
-
-if test "$DMEVENTD" = yes; then
+if test "$BUILD_DMEVENTD" = yes; then
 	for ac_header in arpa/inet.h
 do :
   ac_fn_c_check_header_mongrel "$LINENO" "arpa/inet.h" "ac_cv_header_arpa_inet_h" "$ac_includes_default"
@@ -14881,6 +13293,23 @@ done
 
 fi
 
+if test "$BUILD_DMFILEMAPD" = yes; then
+	for ac_header in sys/inotify.h
+do :
+  ac_fn_c_check_header_mongrel "$LINENO" "sys/inotify.h" "ac_cv_header_sys_inotify_h" "$ac_includes_default"
+if test "x$ac_cv_header_sys_inotify_h" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_SYS_INOTIFY_H 1
+_ACEOF
+
+else
+  hard_bailout
+fi
+
+done
+
+fi
+
 ################################################################################
 if test -n "$ac_tool_prefix"; then
   # Extract the first word of "${ac_tool_prefix}modprobe", so it can be a program name with args.
@@ -14896,7 +13325,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -14939,7 +13368,7 @@ else
   ;;
   *)
   as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
+for as_dir in $PATH_SBIN
 do
   IFS=$as_save_IFS
   test -z "$as_dir" && as_dir=.
@@ -14989,23 +13418,29 @@ _ACEOF
 
 fi
 
+SYSCONFDIR="$(eval echo $(eval echo $sysconfdir))"
 
-lvm_exec_prefix=$exec_prefix
-test "$lvm_exec_prefix" = NONE && lvm_exec_prefix=$prefix
-test "$lvm_exec_prefix" = NONE && lvm_exec_prefix=$ac_default_prefix
-LVM_PATH="$lvm_exec_prefix/sbin/lvm"
+SBINDIR="$(eval echo $(eval echo $sbindir))"
+LVM_PATH="$SBINDIR/lvm"
 
 cat >>confdefs.h <<_ACEOF
 #define LVM_PATH "$LVM_PATH"
 _ACEOF
 
 
-clvmd_prefix=$ac_default_prefix
-test "$prefix" != NONE && clvmd_prefix=$prefix
-CLVMD_PATH="$clvmd_prefix/sbin/clvmd"
+LVMCONFIG_PATH="$SBINDIR/lvmconfig"
 
 cat >>confdefs.h <<_ACEOF
-#define CLVMD_PATH "$CLVMD_PATH"
+#define LVMCONFIG_PATH "$LVMCONFIG_PATH"
+_ACEOF
+
+
+USRSBINDIR="$(eval echo $(eval echo $usrsbindir))"
+
+FSADM_PATH="$SBINDIR/fsadm"
+
+cat >>confdefs.h <<_ACEOF
+#define FSADM_PATH "$FSADM_PATH"
 _ACEOF
 
 
@@ -15032,7 +13467,7 @@ if test "$BUILD_DMEVENTD" = yes; then
 if test "${with_dmeventd_path+set}" = set; then :
   withval=$with_dmeventd_path; DMEVENTD_PATH=$withval
 else
-  DMEVENTD_PATH="$lvm_exec_prefix/sbin/dmeventd"
+  DMEVENTD_PATH="$SBINDIR/dmeventd"
 fi
 
 
@@ -15113,6 +13548,11 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
+# Select default system locking dir, prefer /run/lock over /var/lock
+DEFAULT_SYS_LOCK_DIR="$RUN_DIR/lock"
+test -d "$DEFAULT_SYS_LOCK_DIR" || DEFAULT_SYS_LOCK_DIR="/var/lock"
+
+# Support configurable locking subdir for lvm
 
 # Check whether --with-default-locking-dir was given.
 if test "${with_default_locking_dir+set}" = set; then :
@@ -15120,8 +13560,7 @@ if test "${with_default_locking_dir+set}" = set; then :
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for default lock directory" >&5
 $as_echo_n "checking for default lock directory... " >&6; }
-	     DEFAULT_LOCK_DIR="$RUN_DIR/lock/lvm"
-	     test -d "$RUN_DIR/lock" || DEFAULT_LOCK_DIR="/var/lock/lvm"
+	     DEFAULT_LOCK_DIR="$DEFAULT_SYS_LOCK_DIR/lvm"
 	     { $as_echo "$as_me:${as_lineno-$LINENO}: result: $DEFAULT_LOCK_DIR" >&5
 $as_echo "$DEFAULT_LOCK_DIR" >&6; }
 fi
@@ -15184,6 +13623,12 @@ LVM_MINOR=`echo "$VER" | $AWK -F '.' '{print $2}'`
 LVM_PATCHLEVEL=`echo "$VER" | $AWK -F '[(.]' '{print $3}'`
 LVM_LIBAPI=`echo "$VER" | $AWK -F '[()]' '{print $2}'`
 
+
+cat >>confdefs.h <<_ACEOF
+#define LVM_CONFIGURE_LINE "$CONFIGURE_LINE"
+_ACEOF
+
+
 ################################################################################
 
 
@@ -15334,17 +13779,8 @@ LVM_LIBAPI=`echo "$VER" | $AWK -F '[()]' '{print $2}'`
 
 
 
-
-
-
-
-
-
-
-
-
 ################################################################################
-ac_config_files="$ac_config_files Makefile make.tmpl daemons/Makefile daemons/clvmd/Makefile daemons/cmirrord/Makefile daemons/dmeventd/Makefile daemons/dmeventd/libdevmapper-event.pc daemons/dmeventd/plugins/Makefile daemons/dmeventd/plugins/lvm2/Makefile daemons/dmeventd/plugins/raid/Makefile daemons/dmeventd/plugins/mirror/Makefile daemons/dmeventd/plugins/snapshot/Makefile daemons/dmeventd/plugins/thin/Makefile daemons/lvmdbusd/Makefile daemons/lvmdbusd/path.py daemons/lvmetad/Makefile daemons/lvmpolld/Makefile daemons/lvmlockd/Makefile conf/Makefile conf/example.conf conf/lvmlocal.conf conf/command_profile_template.profile conf/metadata_profile_template.profile include/.symlinks include/Makefile lib/Makefile lib/format1/Makefile lib/format_pool/Makefile lib/locking/Makefile lib/mirror/Makefile lib/replicator/Makefile include/lvm-version.h lib/raid/Makefile lib/snapshot/Makefile lib/thin/Makefile lib/cache_segtype/Makefile libdaemon/Makefile libdaemon/client/Makefile libdaemon/server/Makefile libdm/Makefile libdm/libdevmapper.pc liblvm/Makefile liblvm/liblvm2app.pc man/Makefile po/Makefile python/Makefile python/setup.py scripts/blkdeactivate.sh scripts/blk_availability_init_red_hat scripts/blk_availability_systemd_red_hat.service scripts/clvmd_init_red_hat scripts/cmirrord_init_red_hat scripts/com.redhat.lvmdbus1.service scripts/dm_event_systemd_red_hat.service scripts/dm_event_systemd_red_hat.socket scripts/lvm2_cluster_activation_red_hat.sh scripts/lvm2_cluster_activation_systemd_red_hat.service scripts/lvm2_clvmd_systemd_red_hat.service scripts/lvm2_cmirrord_systemd_red_hat.service scripts/lvm2_lvmdbusd_systemd_red_hat.service scripts/lvm2_lvmetad_init_red_hat scripts/lvm2_lvmetad_systemd_red_hat.service scripts/lvm2_lvmetad_systemd_red_hat.socket scripts/lvm2_lvmpolld_init_red_hat scripts/lvm2_lvmpolld_systemd_red_hat.service scripts/lvm2_lvmpolld_systemd_red_hat.socket scripts/lvm2_lvmlockd_systemd_red_hat.service scripts/lvm2_lvmlocking_systemd_red_hat.service scripts/lvm2_monitoring_init_red_hat scripts/lvm2_monitoring_systemd_red_hat.service scripts/lvm2_pvscan_systemd_red_hat@.service scripts/lvm2_tmpfiles_red_hat.conf scripts/lvmdump.sh scripts/Makefile test/Makefile test/api/Makefile test/unit/Makefile tools/Makefile udev/Makefile unit-tests/datastruct/Makefile unit-tests/regex/Makefile unit-tests/mm/Makefile"
+ac_config_files="$ac_config_files Makefile make.tmpl libdm/make.tmpl daemons/Makefile daemons/cmirrord/Makefile daemons/dmeventd/Makefile daemons/dmeventd/libdevmapper-event.pc daemons/dmeventd/plugins/Makefile daemons/dmeventd/plugins/lvm2/Makefile daemons/dmeventd/plugins/raid/Makefile daemons/dmeventd/plugins/mirror/Makefile daemons/dmeventd/plugins/snapshot/Makefile daemons/dmeventd/plugins/thin/Makefile daemons/dmeventd/plugins/vdo/Makefile daemons/lvmdbusd/Makefile daemons/lvmdbusd/lvmdbusd daemons/lvmdbusd/lvmdb.py daemons/lvmdbusd/lvm_shell_proxy.py daemons/lvmdbusd/path.py daemons/lvmpolld/Makefile daemons/lvmlockd/Makefile conf/Makefile conf/example.conf conf/lvmlocal.conf conf/command_profile_template.profile conf/metadata_profile_template.profile include/Makefile lib/Makefile include/lvm-version.h libdaemon/Makefile libdaemon/client/Makefile libdaemon/server/Makefile libdm/Makefile libdm/dm-tools/Makefile libdm/libdevmapper.pc man/Makefile po/Makefile scripts/lvm2-pvscan.service scripts/blkdeactivate.sh scripts/blk_availability_init_red_hat scripts/blk_availability_systemd_red_hat.service scripts/cmirrord_init_red_hat scripts/com.redhat.lvmdbus1.service scripts/dm_event_systemd_red_hat.service scripts/dm_event_systemd_red_hat.socket scripts/lvm2_cmirrord_systemd_red_hat.service scripts/lvm2_lvmdbusd_systemd_red_hat.service scripts/lvm2_lvmpolld_init_red_hat scripts/lvm2_lvmpolld_systemd_red_hat.service scripts/lvm2_lvmpolld_systemd_red_hat.socket scripts/lvmlockd.service scripts/lvmlocks.service scripts/lvm2_monitoring_init_red_hat scripts/lvm2_monitoring_systemd_red_hat.service scripts/lvm2_tmpfiles_red_hat.conf scripts/lvmdump.sh scripts/Makefile test/Makefile tools/Makefile udev/Makefile"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -16041,8 +14477,8 @@ do
     "include/configure.h") CONFIG_HEADERS="$CONFIG_HEADERS include/configure.h" ;;
     "Makefile") CONFIG_FILES="$CONFIG_FILES Makefile" ;;
     "make.tmpl") CONFIG_FILES="$CONFIG_FILES make.tmpl" ;;
+    "libdm/make.tmpl") CONFIG_FILES="$CONFIG_FILES libdm/make.tmpl" ;;
     "daemons/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/Makefile" ;;
-    "daemons/clvmd/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/clvmd/Makefile" ;;
     "daemons/cmirrord/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/cmirrord/Makefile" ;;
     "daemons/dmeventd/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/dmeventd/Makefile" ;;
     "daemons/dmeventd/libdevmapper-event.pc") CONFIG_FILES="$CONFIG_FILES daemons/dmeventd/libdevmapper-event.pc" ;;
@@ -16052,9 +14488,12 @@ do
     "daemons/dmeventd/plugins/mirror/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/dmeventd/plugins/mirror/Makefile" ;;
     "daemons/dmeventd/plugins/snapshot/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/dmeventd/plugins/snapshot/Makefile" ;;
     "daemons/dmeventd/plugins/thin/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/dmeventd/plugins/thin/Makefile" ;;
+    "daemons/dmeventd/plugins/vdo/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/dmeventd/plugins/vdo/Makefile" ;;
     "daemons/lvmdbusd/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/lvmdbusd/Makefile" ;;
+    "daemons/lvmdbusd/lvmdbusd") CONFIG_FILES="$CONFIG_FILES daemons/lvmdbusd/lvmdbusd" ;;
+    "daemons/lvmdbusd/lvmdb.py") CONFIG_FILES="$CONFIG_FILES daemons/lvmdbusd/lvmdb.py" ;;
+    "daemons/lvmdbusd/lvm_shell_proxy.py") CONFIG_FILES="$CONFIG_FILES daemons/lvmdbusd/lvm_shell_proxy.py" ;;
     "daemons/lvmdbusd/path.py") CONFIG_FILES="$CONFIG_FILES daemons/lvmdbusd/path.py" ;;
-    "daemons/lvmetad/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/lvmetad/Makefile" ;;
     "daemons/lvmpolld/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/lvmpolld/Makefile" ;;
     "daemons/lvmlockd/Makefile") CONFIG_FILES="$CONFIG_FILES daemons/lvmlockd/Makefile" ;;
     "conf/Makefile") CONFIG_FILES="$CONFIG_FILES conf/Makefile" ;;
@@ -16062,65 +14501,40 @@ do
     "conf/lvmlocal.conf") CONFIG_FILES="$CONFIG_FILES conf/lvmlocal.conf" ;;
     "conf/command_profile_template.profile") CONFIG_FILES="$CONFIG_FILES conf/command_profile_template.profile" ;;
     "conf/metadata_profile_template.profile") CONFIG_FILES="$CONFIG_FILES conf/metadata_profile_template.profile" ;;
-    "include/.symlinks") CONFIG_FILES="$CONFIG_FILES include/.symlinks" ;;
     "include/Makefile") CONFIG_FILES="$CONFIG_FILES include/Makefile" ;;
     "lib/Makefile") CONFIG_FILES="$CONFIG_FILES lib/Makefile" ;;
-    "lib/format1/Makefile") CONFIG_FILES="$CONFIG_FILES lib/format1/Makefile" ;;
-    "lib/format_pool/Makefile") CONFIG_FILES="$CONFIG_FILES lib/format_pool/Makefile" ;;
-    "lib/locking/Makefile") CONFIG_FILES="$CONFIG_FILES lib/locking/Makefile" ;;
-    "lib/mirror/Makefile") CONFIG_FILES="$CONFIG_FILES lib/mirror/Makefile" ;;
-    "lib/replicator/Makefile") CONFIG_FILES="$CONFIG_FILES lib/replicator/Makefile" ;;
     "include/lvm-version.h") CONFIG_FILES="$CONFIG_FILES include/lvm-version.h" ;;
-    "lib/raid/Makefile") CONFIG_FILES="$CONFIG_FILES lib/raid/Makefile" ;;
-    "lib/snapshot/Makefile") CONFIG_FILES="$CONFIG_FILES lib/snapshot/Makefile" ;;
-    "lib/thin/Makefile") CONFIG_FILES="$CONFIG_FILES lib/thin/Makefile" ;;
-    "lib/cache_segtype/Makefile") CONFIG_FILES="$CONFIG_FILES lib/cache_segtype/Makefile" ;;
     "libdaemon/Makefile") CONFIG_FILES="$CONFIG_FILES libdaemon/Makefile" ;;
     "libdaemon/client/Makefile") CONFIG_FILES="$CONFIG_FILES libdaemon/client/Makefile" ;;
     "libdaemon/server/Makefile") CONFIG_FILES="$CONFIG_FILES libdaemon/server/Makefile" ;;
     "libdm/Makefile") CONFIG_FILES="$CONFIG_FILES libdm/Makefile" ;;
+    "libdm/dm-tools/Makefile") CONFIG_FILES="$CONFIG_FILES libdm/dm-tools/Makefile" ;;
     "libdm/libdevmapper.pc") CONFIG_FILES="$CONFIG_FILES libdm/libdevmapper.pc" ;;
-    "liblvm/Makefile") CONFIG_FILES="$CONFIG_FILES liblvm/Makefile" ;;
-    "liblvm/liblvm2app.pc") CONFIG_FILES="$CONFIG_FILES liblvm/liblvm2app.pc" ;;
     "man/Makefile") CONFIG_FILES="$CONFIG_FILES man/Makefile" ;;
     "po/Makefile") CONFIG_FILES="$CONFIG_FILES po/Makefile" ;;
-    "python/Makefile") CONFIG_FILES="$CONFIG_FILES python/Makefile" ;;
-    "python/setup.py") CONFIG_FILES="$CONFIG_FILES python/setup.py" ;;
+    "scripts/lvm2-pvscan.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2-pvscan.service" ;;
     "scripts/blkdeactivate.sh") CONFIG_FILES="$CONFIG_FILES scripts/blkdeactivate.sh" ;;
     "scripts/blk_availability_init_red_hat") CONFIG_FILES="$CONFIG_FILES scripts/blk_availability_init_red_hat" ;;
     "scripts/blk_availability_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/blk_availability_systemd_red_hat.service" ;;
-    "scripts/clvmd_init_red_hat") CONFIG_FILES="$CONFIG_FILES scripts/clvmd_init_red_hat" ;;
     "scripts/cmirrord_init_red_hat") CONFIG_FILES="$CONFIG_FILES scripts/cmirrord_init_red_hat" ;;
     "scripts/com.redhat.lvmdbus1.service") CONFIG_FILES="$CONFIG_FILES scripts/com.redhat.lvmdbus1.service" ;;
     "scripts/dm_event_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/dm_event_systemd_red_hat.service" ;;
     "scripts/dm_event_systemd_red_hat.socket") CONFIG_FILES="$CONFIG_FILES scripts/dm_event_systemd_red_hat.socket" ;;
-    "scripts/lvm2_cluster_activation_red_hat.sh") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_cluster_activation_red_hat.sh" ;;
-    "scripts/lvm2_cluster_activation_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_cluster_activation_systemd_red_hat.service" ;;
-    "scripts/lvm2_clvmd_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_clvmd_systemd_red_hat.service" ;;
     "scripts/lvm2_cmirrord_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_cmirrord_systemd_red_hat.service" ;;
     "scripts/lvm2_lvmdbusd_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmdbusd_systemd_red_hat.service" ;;
-    "scripts/lvm2_lvmetad_init_red_hat") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmetad_init_red_hat" ;;
-    "scripts/lvm2_lvmetad_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmetad_systemd_red_hat.service" ;;
-    "scripts/lvm2_lvmetad_systemd_red_hat.socket") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmetad_systemd_red_hat.socket" ;;
     "scripts/lvm2_lvmpolld_init_red_hat") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmpolld_init_red_hat" ;;
     "scripts/lvm2_lvmpolld_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmpolld_systemd_red_hat.service" ;;
     "scripts/lvm2_lvmpolld_systemd_red_hat.socket") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmpolld_systemd_red_hat.socket" ;;
-    "scripts/lvm2_lvmlockd_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmlockd_systemd_red_hat.service" ;;
-    "scripts/lvm2_lvmlocking_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_lvmlocking_systemd_red_hat.service" ;;
+    "scripts/lvmlockd.service") CONFIG_FILES="$CONFIG_FILES scripts/lvmlockd.service" ;;
+    "scripts/lvmlocks.service") CONFIG_FILES="$CONFIG_FILES scripts/lvmlocks.service" ;;
     "scripts/lvm2_monitoring_init_red_hat") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_monitoring_init_red_hat" ;;
     "scripts/lvm2_monitoring_systemd_red_hat.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_monitoring_systemd_red_hat.service" ;;
-    "scripts/lvm2_pvscan_systemd_red_hat@.service") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_pvscan_systemd_red_hat@.service" ;;
     "scripts/lvm2_tmpfiles_red_hat.conf") CONFIG_FILES="$CONFIG_FILES scripts/lvm2_tmpfiles_red_hat.conf" ;;
     "scripts/lvmdump.sh") CONFIG_FILES="$CONFIG_FILES scripts/lvmdump.sh" ;;
     "scripts/Makefile") CONFIG_FILES="$CONFIG_FILES scripts/Makefile" ;;
     "test/Makefile") CONFIG_FILES="$CONFIG_FILES test/Makefile" ;;
-    "test/api/Makefile") CONFIG_FILES="$CONFIG_FILES test/api/Makefile" ;;
-    "test/unit/Makefile") CONFIG_FILES="$CONFIG_FILES test/unit/Makefile" ;;
     "tools/Makefile") CONFIG_FILES="$CONFIG_FILES tools/Makefile" ;;
     "udev/Makefile") CONFIG_FILES="$CONFIG_FILES udev/Makefile" ;;
-    "unit-tests/datastruct/Makefile") CONFIG_FILES="$CONFIG_FILES unit-tests/datastruct/Makefile" ;;
-    "unit-tests/regex/Makefile") CONFIG_FILES="$CONFIG_FILES unit-tests/regex/Makefile" ;;
-    "unit-tests/mm/Makefile") CONFIG_FILES="$CONFIG_FILES unit-tests/mm/Makefile" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
   esac
@@ -16720,14 +15134,25 @@ $as_echo "$as_me: WARNING: Support for thin provisioning is limited since some t
 fi
 
 if test -n "$THIN_CHECK_VERSION_WARN"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: You should also install thin_check vsn 0.3.2 (or later) to use lvm2 thin provisioning" >&5
-$as_echo "$as_me: WARNING: You should also install thin_check vsn 0.3.2 (or later) to use lvm2 thin provisioning" >&2;}
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: You should also install latest thin_check vsn 0.7.0 (or later) for lvm2 thin provisioning" >&5
+$as_echo "$as_me: WARNING: You should also install latest thin_check vsn 0.7.0 (or later) for lvm2 thin provisioning" >&2;}
 fi
 
 if test -n "$CACHE_CONFIGURE_WARN"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Support for cache is limited since some cache tools are missing!" >&5
 $as_echo "$as_me: WARNING: Support for cache is limited since some cache tools are missing!" >&2;}
 fi
+
+if test -n "$CACHE_CHECK_VERSION_WARN"; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: You should install latest cache_check vsn 0.7.0 to use lvm2 cache metadata format 2" >&5
+$as_echo "$as_me: WARNING: You should install latest cache_check vsn 0.7.0 to use lvm2 cache metadata format 2" >&2;}
+fi
+
+if test -n "$VDO_CONFIGURE_WARN"; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&5
+$as_echo "$as_me: WARNING: unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&2;}
+fi
+
 
 if test "$ODIRECT" != yes; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: O_DIRECT disabled: low-memory pvmove may lock up" >&5

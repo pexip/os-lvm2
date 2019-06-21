@@ -1,3 +1,122 @@
+Version 1.02.155 - 18th December 2018
+=====================================
+  Include correct internal header inside libdm list.c.
+  Enhance ioctl flattening and add parameters only when needed.
+  Add DM_DEVICE_ARM_POLL for API completness matching kernel.
+  Do not add parameters for RESUME with DM_DEVICE_CREATE dm task.
+
+Version 1.02.153 - 31st October 2018
+====================================
+
+Version 1.02.151 - 10th October 2018
+====================================
+  Add hot fix to avoiding locking collision when monitoring thin-pools.
+
+Version 1.02.150 - 01 August 2018
+=================================
+  Add vdo plugin for monitoring VDO devices.
+
+Version 1.02.149 - 19th July 2018
+=================================
+
+Version 1.02.148 - 18th June 2018
+=================================
+
+Version 1.02.147 - 13th June 2018
+=================================
+
+Version 1.02.147-rc1 - 24th May 2018
+====================================
+  Reuse uname() result for mirror target.
+  Recognize also mounted btrfs through dm_device_has_mounted_fs().
+  Add missing log_error() into dm_stats_populate() returning 0.
+  Avoid calling dm_stats_populat() for DM devices without any stats regions.
+  Support DM_DEBUG_WITH_LINE_NUMBERS envvar for debug msg with source:line.
+  Configured command for thin pool threshold handling gets whole environment.
+  Fix tests for failing dm_snprintf() in stats code.
+  Parsing mirror status accepts 'userspace' keyword in status.
+  Introduce dm_malloc_aligned for page alignment of buffers.
+
+Version 1.02.146 - 18th December 2017
+=====================================
+  Activation tree of thin pool skips duplicated check of pool status.
+  Remove code supporting replicator target.
+  Do not ignore failure of _info_by_dev().
+  Propagate delayed resume for pvmove subvolumes.
+  Suppress integrity encryption keys in 'table' output unless --showkeys supplied.
+
+Version 1.02.145 - 3rd November 2017
+====================================
+  Keep Install section only in dm-event.socket systemd unit.
+  Issue a specific error with dmsetup status if device is unknown.
+  Fix RT_LIBS reference in generated libdevmapper.pc for pkg-config
+
+Version 1.02.144 - 6th October 2017
+===================================
+  Schedule exit when received SIGTERM in dmeventd.
+  Also try to unmount /boot on blkdeactivate -u if on top of supported device.
+  Use blkdeactivate -r wait in blk-availability systemd service/initscript.
+  Add blkdeactivate -r wait option to wait for MD resync/recovery/reshape.
+  Fix blkdeactivate regression with failing DM/MD devs deactivation (1.02.142).
+  Fix typo in blkdeactivate's '--{dm,lvm,mpath}options' option name.
+  Correct return value testing when get reserved values for reporting.
+  Take -S with dmsetup suspend/resume/clear/wipe_table/remove/deps/status/table.
+
+Version 1.02.143 - 13th September 2017
+======================================
+  Restore umask when creation of node fails.
+  Add --concise to dmsetup create for many devices with tables in one command.
+  Accept minor number without major in library when it knows dm major number.
+  Introduce single-line concise table output format: dmsetup table --concise
+
+Version 1.02.142 - 20th July 2017
+=================================
+  Create /dev/disk/by-part{uuid,label} and gpt-auto-root symlinks with udev.
+
+Version 1.02.141 - 28th June 2017
+=================================
+  Fix reusing of dm_task structure for status reading (used by dmeventd).
+  Add dm_percent_to_round_float for adjusted percentage rounding.
+  Reset array with dead rimage devices once raid gets in sync.
+  Drop unneeded --config option from raid dmeventd plugin.
+  dm_get_status_raid() handle better some incosistent md statuses.
+  Accept truncated files in calls to dm_stats_update_regions_from_fd().
+  Restore Warning by 5% increment when thin-pool is over 80% (1.02.138).
+
+Version 1.02.140 - 3rd May 2017
+===============================
+  Add missing configure --enable-dmfilemapd status message and fix --disable.
+
+Version 1.02.139 - 13th April 2017
+==================================
+  Fix assignment in _target_version() when dm task can't run.
+  Flush stdout on each iteration when using --count or --interval.
+  Show detailed error message when execvp fails while starting dmfilemapd.
+  Fix segmentation fault when dmfilemapd is run with no arguments.
+  Numerous minor dmfilemapd fixes from coverity.
+
+Version 1.02.138 - 28th March 2017
+==================================
+  Support additional raid5/6 configurations.
+  Provide dm_tree_node_add_cache_target@base compatible symbol.
+  Support DM_CACHE_FEATURE_METADATA2, new cache metadata format 2.
+  Improve code to handle mode mask for cache nodes.
+  Cache status check for passthrough also require trailing space.
+  Add extra memory page when limiting pthread stack size in dmeventd.
+  Avoids immediate resume when preloaded device is smaller.
+  Do not suppress kernel key description in dmsetup table output for dm-crypt.
+  Support configurable command executed from dmeventd thin plugin.
+  Support new R|r human readable units output format.
+  Thin dmeventd plugin reacts faster on lvextend failure path with umount.
+  Add dm_stats_bind_from_fd() to bind a stats handle from a file descriptor.
+  Do not try call callback when reverting activation on error path.
+  Fix file mapping for extents with physically adjacent extents in dmstats.
+  Validation vsnprintf result in runtime translate of dm_log (1.02.136).
+  Separate filemap extent allocation from region table in dmstats.
+  Fix segmentation fault when filemap region creation fails in dmstats.
+  Fix performance of region cleanup for failed filemap creation in dmstats.
+  Fix very slow region deletion with many regions in dmstats.
+
 Version 1.02.137 - 30th November 2016
 =====================================
   Document raid status values.

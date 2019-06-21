@@ -38,8 +38,8 @@ static int _vgrename_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg, struct processing_handle *handle)
 {
 	struct vgrename_params *vp = (struct vgrename_params *) handle->custom_handle;
-	char old_path[NAME_LEN];
-	char new_path[NAME_LEN];
+	char old_path[PATH_MAX];
+	char new_path[PATH_MAX];
 	struct id id;
 	const char *name;
 	char *dev_dir;
@@ -59,17 +59,10 @@ static int _vgrename_single(struct cmd_context *cmd, const char *vg_name,
 	/*
 	 * Check if a VG already exists with the new VG name.
 	 *
-	 * When not using lvmetad, it's essential that a full scan has
-	 * been done to ensure we see all existing VG names, so we
-	 * do not use an existing name.  This has been done by
-	 * process_each_vg REQUIRES_FULL_LABEL_SCAN.
-	 *
 	 * (FIXME: We could look for the new name in the list of all
 	 * VGs that process_each_vg created, but we don't have access
-	 * to that list here, so we have to look in lvmcache.
-	 * This requires populating lvmcache when using lvmetad.)
+	 * to that list here, so we have to look in lvmcache.)
 	 */
-	lvmcache_seed_infos_from_lvmetad(cmd);
 
 	if (lvmcache_vginfo_from_vgname(vp->vg_name_new, NULL)) {
 		log_error("New VG name \"%s\" already exists", vp->vg_name_new);
@@ -104,23 +97,14 @@ static int _vgrename_single(struct cmd_context *cmd, const char *vg_name,
 	 *   this uuid-for-name case.
 	 */
 	if (vp->lock_vg_old_first || vp->old_name_is_uuid) {
-		if (vp->old_name_is_uuid)
-			lvmcache_lock_ordering(0);
-
 		if (!_lock_new_vg_for_rename(cmd, vp->vg_name_new))
 			return ECMD_FAILED;
-
-		lvmcache_lock_ordering(1);
 	}
 
 	dev_dir = cmd->dev_dir;
 
 	if (!archive(vg))
 		goto error;
-
-	/* Remove references based on old name */
-	if (!drop_cached_metadata(vg))
-		stack;
 
 	if (!lockd_rename_vg_before(cmd, vg)) {
 		stack;
@@ -136,8 +120,12 @@ static int _vgrename_single(struct cmd_context *cmd, const char *vg_name,
 		goto error;
 	}
 
-	sprintf(old_path, "%s%s", dev_dir, vg_name);
-	sprintf(new_path, "%s%s", dev_dir, vp->vg_name_new);
+	if ((dm_snprintf(old_path, sizeof(old_path), "%s%s", dev_dir, vg_name) < 0) ||
+	    (dm_snprintf(new_path, sizeof(new_path), "%s%s", dev_dir, vp->vg_name_new) < 0)) {
+		log_error("Renaming path is too long %s/%s  %s/%s",
+			  dev_dir, vg_name, dev_dir, vp->vg_name_new);
+		goto error;
+	}
 
 	if (activation() && dir_exists(old_path)) {
 		log_verbose("Renaming \"%s\" to \"%s\"", old_path, new_path);

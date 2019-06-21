@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2013 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # test merge of thin snapshot
 
-SKIP_WITH_LVMLOCKD=1
+
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
@@ -21,12 +22,22 @@ MKFS=mkfs.ext2
 which $MKFS  || skip
 which fsck || skip
 
+MKFS="$MKFS -b4096"
 #
 # Main
 #
 aux have_thin 1 0 0 || skip
 
 aux prepare_vg 2
+
+lvcreate -T -L8M $vg/pool -V10M -n $lv1
+lvcreate -s -K -n snap $vg/$lv1
+# check exclusive lock is preserved after merge
+check lv_field "$vg/$lv1" lv_active_exclusively "active exclusively"
+lvconvert --merge $vg/snap
+check lv_field "$vg/$lv1" lv_active_exclusively "active exclusively"
+lvremove -ff $vg
+
 
 lvcreate -T -L8M $vg/pool -V10M -n $lv1
 lvchange --addtag tagL $vg/$lv1
@@ -44,7 +55,14 @@ touch mntsnap/test_snap
 
 lvs -o+tags,thin_id $vg
 
-lvconvert --merge $vg/snap
+lvcreate -s -n snap1 $vg/$lv1
+
+lvconvert --merge $vg/snap &>out
+grep "Merging of thin snapshot $vg/snap will occur on next activation of $vg/${lv1}." out
+
+# Can't merge another snapshot while "snap" is still being 'merged'.
+not lvconvert --merge $vg/snap1 &>out
+grep "Cannot merge snapshot" out
 
 umount mnt
 
@@ -109,5 +127,13 @@ check lv_not_exists $vg oldsnapof_${lv1}
 lvcreate -s -L10 -n oldsnapof_snap $vg/snap
 lvconvert --merge $vg/snap
 lvremove -f $vg/oldsnapof_snap
+check lv_field  $vg/$lv1 thin_id "4"
+
+# Check --mergethin
+lvcreate -s -n snap $vg/$lv1
+check lv_field  $vg/snap thin_id "5"
+lvconvert --mergethin $vg/snap  &>out
+grep "Volume $vg/snap replaced origin $vg/${lv1}." out
+check lv_field  $vg/$lv1 thin_id "5"
 
 vgremove -ff $vg
