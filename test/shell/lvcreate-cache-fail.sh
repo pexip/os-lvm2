@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -12,7 +13,7 @@
 # Exercise creation of cache and cache pool volumes and failure path
 # https://bugzilla.redhat.com/1355923
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -20,7 +21,7 @@ SKIP_WITH_LVMPOLLD=1
 aux have_cache 1 3 0 || skip
 
 #aux prepare_pvs 1 4707950
-#vgcreate $vg "$dev1"
+#vgcreate $SHARED $vg "$dev1"
 #lvcreate -L4T -n $lv1 $vg
 #lvcreate -H -L500G -n cache $vg/$lv1
 #fail lvcreate -H -l 127999 -n cache $vg/$lv1

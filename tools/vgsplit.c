@@ -112,7 +112,7 @@ static int _move_lvs(struct volume_group *vg_from, struct volume_group *vg_to)
 	dm_list_iterate_safe(lvh, lvht, &vg_from->lvs) {
 		lv = dm_list_item(lvh, struct lv_list)->lv;
 
-		if ((lv->status & SNAPSHOT))
+		if (lv_is_snapshot(lv))
 			continue;
 
 		if (lv_is_raid(lv))
@@ -193,7 +193,7 @@ static int _move_snapshots(struct volume_group *vg_from,
 	dm_list_iterate_safe(lvh, lvht, &vg_from->lvs) {
 		lv = dm_list_item(lvh, struct lv_list)->lv;
 
-		if (!(lv->status & SNAPSHOT))
+		if (!lv_is_snapshot(lv))
 			continue;
 
 		dm_list_iterate_items(seg, &lv->segments) {
@@ -341,8 +341,8 @@ static int _move_thins(struct volume_group *vg_from,
 				    _lv_is_in_vg(vg_from, data_lv)) {
 					log_error("Can't split external origin %s "
 						  "and pool %s between two Volume Groups.",
-						  seg->external_lv->name,
-						  seg->pool_lv->name);
+						  display_lvname(seg->external_lv),
+						  display_lvname(seg->pool_lv));
 					return 0;
 				}
 				if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
@@ -517,7 +517,7 @@ static struct volume_group *_vgsplit_from(struct cmd_context *cmd,
 		return NULL;
 	}
 
-	if (is_lockd_type(vg_from->lock_type)) {
+	if (vg_is_shared(vg_from)) {
 		log_error("vgsplit not allowed for lock_type %s", vg_from->lock_type);
 		unlock_and_release_vg(cmd, vg_from, vg_name_from);
 		return NULL;
@@ -529,7 +529,7 @@ static struct volume_group *_vgsplit_from(struct cmd_context *cmd,
 /*
  * Has the user given an option related to a new vg as the split destination?
  */
-static int new_vg_option_specified(struct cmd_context *cmd)
+static int _new_vg_option_specified(struct cmd_context *cmd)
 {
 	return(arg_is_set(cmd, clustered_ARG) ||
 	       arg_is_set(cmd, alloc_ARG) ||
@@ -581,6 +581,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
+	lvmcache_label_scan(cmd);
+
 	if (strcmp(vg_name_to, vg_name_from) < 0)
 		lock_vg_from_first = 0;
 
@@ -616,7 +618,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (existing_vg) {
-		if (new_vg_option_specified(cmd)) {
+		if (_new_vg_option_specified(cmd)) {
 			log_error("Volume group \"%s\" exists, but new VG "
 				    "option specified", vg_name_to);
 			goto bad;
@@ -643,7 +645,6 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		    !vg_set_max_lv(vg_to, vp_new.max_lv) ||
 		    !vg_set_max_pv(vg_to, vp_new.max_pv) ||
 		    !vg_set_alloc_policy(vg_to, vp_new.alloc) ||
-		    !vg_set_clustered(vg_to, vp_new.clustered) ||
 		    !vg_set_system_id(vg_to, vp_new.system_id) ||
 		    !vg_set_mda_copies(vg_to, vp_new.vgmetadatacopies))
 			goto_bad;
@@ -705,6 +706,9 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!vg_rename(cmd, vg_to, vg_name_to))
 		goto_bad;
 
+	/* Set old VG name so the metadata operations recognise that the PVs are in an existing VG */
+	vg_to->old_name = vg_from->name;
+
 	/* store it on disks */
 	log_verbose("Writing out updated volume groups");
 
@@ -723,8 +727,6 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!vg_write(vg_to) || !vg_commit(vg_to))
 		goto_bad;
 
-	lvmetad_vg_update_finish(vg_to);
-
 	backup(vg_to);
 
 	/*
@@ -736,15 +738,15 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		if (!vg_write(vg_from) || !vg_commit(vg_from))
 			goto_bad;
 
-		lvmetad_vg_update_finish(vg_from);
-
 		backup(vg_from);
 	}
 
 	/*
 	 * Finally, remove the EXPORTED flag from the new VG and write it out.
+	 * We need to unlock vg_to because vg_read_for_update wants to lock it.
 	 */
 	if (!test_mode()) {
+		unlock_vg(cmd, NULL, vg_name_to);
 		release_vg(vg_to);
 		vg_to = vg_read_for_update(cmd, vg_name_to, NULL,
 					   READ_ALLOW_EXPORTED, 0);
@@ -759,8 +761,6 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 
 	if (!vg_write(vg_to) || !vg_commit(vg_to))
 		goto_bad;
-
-	lvmetad_vg_update_finish(vg_to);
 
 	backup(vg_to);
 

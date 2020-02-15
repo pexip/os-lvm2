@@ -1,5 +1,6 @@
-#!/bin/sh
-# Copyright (C) 2013 Red Hat, Inc. All rights reserved.
+#!/usr/bin/env bash
+
+# Copyright (C) 2013-2017 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -18,15 +19,18 @@ aux have_raid 1 3 0 || skip
 aux raid456_replace_works || skip
 
 aux lvmconf 'allocation/maximise_cling = 0' \
-	    'allocation/mirror_logs_require_separate_pvs = 1'
+	    'allocation/mirror_logs_require_separate_pvs = 1' \
+	    'activation/raid_fault_policy = "allocate"'
 
-aux prepare_vg 8
+aux prepare_vg 8 80
+get_devs
+
+offset=$(get first_extent_sector $dev1)
 
 function delay
 {
-	for d in $(< DEVICES)
-	do
-		aux delay_dev "$d" 0 $1 $(get first_extent_sector "$d")
+	for d in "${DEVICES[@]}"; do
+		aux delay_dev "$d" 0 $1 "$offset"
 	done
 }
 
@@ -36,6 +40,23 @@ RAID_SIZE=32
 
 # Fast sync and repair afterwards
 delay 0
+
+# RAID1 transient failure check
+lvcreate --type raid1 -m 1 -L $RAID_SIZE -n $lv1 $vg "$dev1" "$dev2"
+aux wait_for_sync $vg $lv1
+# enforce replacing live rimage leg with error target
+dmsetup remove -f $vg-${lv1}_rimage_1 || true
+# let it notice there is problem
+echo a > "$DM_DEV_DIR/$vg/$lv1"
+check grep_dmsetup status $vg-$lv1 AD
+lvconvert -y --repair $vg/$lv1 "$dev3"
+lvs -a -o+devices $vg
+aux wait_for_sync $vg $lv1
+# Raid should have fixed device
+check grep_dmsetup status $vg-$lv1 AA
+check lv_on $vg ${lv1}_rimage_1 "$dev3"
+lvremove -ff $vg/$lv1
+
 
 # RAID1 dual-leg single replace after initial sync
 lvcreate --type raid1 -m 1 -L $RAID_SIZE -n $lv1 $vg "$dev1" "$dev2"
@@ -72,19 +93,23 @@ delay 0
 lvcreate --type raid5 -i 2 -L $RAID_SIZE -n $lv1 $vg "$dev1" "$dev2" "$dev3"
 aux wait_for_sync $vg $lv1
 aux disable_dev "$dev3"
+vgreduce --removemissing -f $vg
 lvconvert -y --repair $vg/$lv1
-vgreduce --removemissing $vg
 aux enable_dev "$dev3"
+pvcreate -yff "$dev3"
 vgextend $vg "$dev3"
 lvremove -ff $vg/$lv1
 
 # Delayed sync to allow for repair during rebuild
-delay 50
+delay 60
 
 # RAID5 single replace during initial sync
 lvcreate --type raid5 -i 2 -L $RAID_SIZE -n $lv1 $vg "$dev1" "$dev2" "$dev3"
 aux disable_dev "$dev3"
-not lvconvert -y --repair $vg/$lv1
+# FIXME: there is quite big sleep on several 'status' read retries
+# so over 3sec - it may actually finish full sync
+# Use 'should' for this test result.
+should not lvconvert -y --repair $vg/$lv1
 aux wait_for_sync $vg $lv1
 lvconvert -y --repair $vg/$lv1
 vgreduce --removemissing $vg

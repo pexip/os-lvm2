@@ -13,7 +13,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 
 #include <sys/file.h>
 #include <fcntl.h>
@@ -187,8 +187,7 @@ retry_fcntl:
 		goto fail_close_unlink;
 	}
 
-	memset(buffer, 0, sizeof(buffer));
-	snprintf(buffer, sizeof(buffer)-1, "%u\n", getpid());
+	snprintf(buffer, sizeof(buffer), "%u\n", getpid());
 
 	bufferlen = strlen(buffer);
 	write_out = write(fd, buffer, bufferlen);
@@ -221,6 +220,8 @@ retry_fcntl:
 
 		goto fail_close_unlink;
 	}
+
+	/* coverity[leaked_handle] intentional leak of fd handle here  */
 
 	return 1;
 

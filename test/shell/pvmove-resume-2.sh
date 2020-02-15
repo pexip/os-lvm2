@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -30,7 +31,7 @@ test_pvmove_resume() {
 	lvcreate -an -Zn -l15 -n $lv1 $vg "$dev1"
 	lvcreate -an -Zn -l15 -n $lv2 $vg "$dev1"
 
-	aux delay_dev "$dev2" 0 1000 $(get first_extent_sector "$dev2"):
+	aux delay_dev "$dev2" 0 1000 "$(get first_extent_sector "$dev2"):"
 
 	pvmove -i5 "$dev1" &
 	PVMOVE=$!
@@ -43,9 +44,17 @@ test_pvmove_resume() {
 
 	wait
 
-	while dmsetup status "$vg-$lv1"; do dmsetup remove "$vg-$lv1" || true; done
-	while dmsetup status "$vg-$lv2"; do dmsetup remove "$vg-$lv2" || true; done
-	while dmsetup status "$vg-pvmove0"; do dmsetup remove "$vg-pvmove0" || true; done
+	local finished
+	for i in {1..100}; do
+		finished=1
+		for d in  "$vg-$lv1" "$vg-$lv2" "$vg-pvmove0" ; do
+			dmsetup status "$d" 2>/dev/null && {
+				dmsetup remove "$d" || finished=0
+			}
+		done
+		test "$finished" -eq 0 || break
+	done
+	test "$finished" -eq 0 && die "Can't remove device"
 
 	check lv_attr_bit type $vg/pvmove0 "p"
 
@@ -57,16 +66,14 @@ test_pvmove_resume() {
 		# as clvmd starts to abort on internal errors on various
 		# errors, based on the fact pvmove is killed -9
 		# Restart clvmd
-		kill $(< LOCAL_CLVMD)
-		for i in $(seq 1 100) ; do
+		kill "$(< LOCAL_CLVMD)"
+		for i in {1 100} ; do
 			test $i -eq 100 && die "Shutdown of clvmd is too slow."
 			test -e "$CLVMD_PIDFILE" || break
 			sleep .1
 		done # wait for the pid removal
 		aux prepare_clvmd
 	fi
-
-	aux notify_lvmetad "$dev1" "$dev2"
 
 	# call resume function (see below)
 	# with expected number of spawned
@@ -76,7 +83,7 @@ test_pvmove_resume() {
 	aux enable_dev "$dev2"
 
 	i=0
-	while get lv_field $vg name -a | egrep "^\[?pvmove"; do
+	while get lv_field $vg name -a | grep -E "^\[?pvmove"; do
 		# wait for 30 secs at max
 		test $i -ge 300 && die "Pvmove is too slow or does not progress."
 		sleep .1
@@ -101,7 +108,7 @@ lvchange_all() {
 		aux lvmpolld_dump | tee lvmpolld_dump.txt
 		aux check_lvmpolld_init_rq_count 1 "$vg/pvmove0" || should false
 	elif test -e HAVE_DM_DELAY; then
-		test $(aux count_processes_with_tag) -eq $1 || should false
+		test "$(aux count_processes_with_tag)" -eq "$1" || should false
 	fi
 }
 
@@ -112,7 +119,7 @@ vgchange_single() {
 		aux lvmpolld_dump | tee lvmpolld_dump.txt
 		aux check_lvmpolld_init_rq_count 1 "$vg/pvmove0"
 	elif test -e HAVE_DM_DELAY; then
-		test $(aux count_processes_with_tag) -eq $1
+		test "$(aux count_processes_with_tag)" -eq "$1"
 	fi
 }
 
@@ -125,11 +132,11 @@ pvmove_fg() {
 		aux lvmpolld_dump | tee lvmpolld_dump.txt
 		aux check_lvmpolld_init_rq_count 0 "$vg/pvmove0"
 	else
-		test $(aux count_processes_with_tag) -eq 0
+		test "$(aux count_processes_with_tag)" -eq 0
 	fi
 
 	# ...thus finish polling
-	get lv_field $vg name -a | egrep "^\[?pvmove0"
+	get lv_field $vg name -a | grep -E "^\[?pvmove0"
 
 	aux enable_dev "$dev2"
 
@@ -145,11 +152,11 @@ pvmove_bg() {
 		aux lvmpolld_dump | tee lvmpolld_dump.txt
 		aux check_lvmpolld_init_rq_count 0 "$vg/pvmove0"
 	else
-		test $(aux count_processes_with_tag) -eq 0
+		test "$(aux count_processes_with_tag)" -eq 0
 	fi
 
 	# ...thus finish polling
-	get lv_field $vg name -a | egrep "^\[?pvmove0"
+	get lv_field $vg name -a | grep -E "^\[?pvmove0"
 
 	LVM_TEST_TAG="kill_me_$PREFIX" pvmove -b
 }
@@ -163,11 +170,11 @@ pvmove_fg_single() {
 		aux lvmpolld_dump | tee lvmpolld_dump.txt
 		aux check_lvmpolld_init_rq_count 0 "$vg/pvmove0"
 	else
-		test $(aux count_processes_with_tag) -eq 0
+		test "$(aux count_processes_with_tag)" -eq 0
 	fi
 
 	# ...thus finish polling
-	get lv_field $vg name -a | egrep "^\[?pvmove0"
+	get lv_field $vg name -a | grep -E "^\[?pvmove0"
 
 	aux enable_dev "$dev2"
 
@@ -183,11 +190,11 @@ pvmove_bg_single() {
 		aux lvmpolld_dump | tee lvmpolld_dump.txt
 		aux check_lvmpolld_init_rq_count 0 "$vg/pvmove0"
 	else
-		test $(aux count_processes_with_tag) -eq 0
+		test "$(aux count_processes_with_tag)" -eq 0
 	fi
 
 	# ...thus finish polling
-	get lv_field $vg name -a | egrep "^\[?pvmove0"
+	get lv_field $vg name -a | grep -E "^\[?pvmove0"
 
 	LVM_TEST_TAG="kill_me_$PREFIX" pvmove -b "$dev1"
 }

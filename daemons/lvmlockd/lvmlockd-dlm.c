@@ -11,13 +11,13 @@
 #define _XOPEN_SOURCE 500  /* pthread */
 #define _ISOC99_SOURCE
 
-#include "tool.h"
+#include "tools/tool.h"
 
 #include "daemon-server.h"
-#include "xlate.h"
+#include "lib/mm/xlate.h"
 
 #include "lvmlockd-internal.h"
-#include "lvmlockd-client.h"
+#include "daemons/lvmlockd/lvmlockd-client.h"
 
 /*
  * Using synchronous _wait dlm apis so do not define _REENTRANT and
@@ -508,7 +508,7 @@ lockrv:
 	}
 	if (rv < 0) {
 		log_error("S %s R %s lock_dlm acquire error %d errno %d", ls->name, r->name, rv, errno);
-		return rv;
+		return -ELMERR;
 	}
 
 	if (rdd->vb) {
@@ -581,6 +581,7 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 	}
 	if (rv < 0) {
 		log_error("S %s R %s convert_dlm error %d", ls->name, r->name, rv);
+		rv = -ELMERR;
 	}
 	return rv;
 }
@@ -654,6 +655,7 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 			      0, NULL, NULL, NULL);
 	if (rv < 0) {
 		log_error("S %s R %s unlock_dlm error %d", ls->name, r->name, rv);
+		rv = -ELMERR;
 	}
 
 	return rv;
@@ -697,7 +699,7 @@ int lm_hosts_dlm(struct lockspace *ls, int notify)
 		return 0;
 
 	memset(ls_nodes_path, 0, sizeof(ls_nodes_path));
-	snprintf(ls_nodes_path, PATH_MAX-1, "%s/%s/nodes",
+	snprintf(ls_nodes_path, PATH_MAX, "%s/%s/nodes",
 		 DLM_LOCKSPACES_PATH, ls->name);
 
 	if (!(ls_dir = opendir(ls_nodes_path)))

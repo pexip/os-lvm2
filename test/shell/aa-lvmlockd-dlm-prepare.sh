@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2012 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,6 @@
 
 test_description='Set up things to run tests with dlm'
 
-. lib/utils
 . lib/inittest
 
 [ -z "$LVM_TEST_LOCK_TYPE_DLM" ] && skip;

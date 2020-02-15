@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -16,13 +16,15 @@
 #ifndef _LVM_DISPLAY_H
 #define _LVM_DISPLAY_H
 
-#include "metadata-exported.h"
-#include "locking.h"
-#include "lvm-string.h"
+#include "lib/metadata/metadata-exported.h"
+#include "lib/locking/locking.h"
+#include "lib/misc/lvm-string.h"
 
 #include <stdint.h>
 
 const char *display_lvname(const struct logical_volume *lv);
+
+const char *display_percent(struct cmd_context *cmd, dm_percent_t percent);
 
 /* Specify size in KB */
 const char *display_size(const struct cmd_context *cmd, uint64_t size);

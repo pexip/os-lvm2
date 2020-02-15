@@ -1,5 +1,6 @@
-#!/bin/sh
-# Copyright (C) 2007-2012 Red Hat, Inc. All rights reserved.
+#!/usr/bin/env bash
+
+# Copyright (C) 2007-2017 Red Hat, Inc. All rights reserved.
 # Copyright (C) 2007-2008 NEC Corporation
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -12,7 +13,7 @@
 
 test_description="check namings of mirrored LV"
 
-SKIP_WITH_LVMLOCKD=1
+
 
 . lib/inittest
 
@@ -21,43 +22,33 @@ SKIP_WITH_LVMLOCKD=1
 
 lv_devices_() {
 	local d
+	local i
 	local lv=$1
 	shift
-	local devices=$@
+	local devices=( "$@" )
 	local devs
 
 	devs=$(get lv_devices "$lv")
 
 	for d in $devs; do
-		(echo "$devices" | grep "$d") || return 1
-		devices=$(echo "$devices" | sed "s/$d//")
+		(echo "${devices[@]}" | grep "$d") || return 1
+		for i in "${!devices[@]}"; do
+			if [ "${devices[i]}" = "$d" ] ; then
+				unset "devices[i]"
+			fi
+		done
 	done
 
-	test -z "$(echo $devices | sed 's/ //g')"
+	test "${#devices[@]}" -eq 0 ||
+		die "Left devices " "${devices[@]}"
 }
 
 lv_mirror_log_() {
-	get lv_field $1 mirror_log | tr -d []
+	get lv_field "$1" mirror_log | tr -d []
 }
 
 lv_convert_lv_() {
-	get lv_field $1 convert_lv | tr -d []
-}
-
-enable_devs() {
-	aux enable_dev "$dev1"
-	aux enable_dev "$dev2"
-	aux enable_dev "$dev3"
-	aux enable_dev "$dev4"
-	aux enable_dev "$dev5"
-}
-
-delay_devs() {
-	aux delay_dev "$dev1" 0 1000 $(get first_extent_sector "$dev1"):
-	aux delay_dev "$dev2" 0 1000 $(get first_extent_sector "$dev2"):
-	aux delay_dev "$dev3" 0 1000 $(get first_extent_sector "$dev3"):
-	aux delay_dev "$dev4" 0 1000 $(get first_extent_sector "$dev4"):
-	aux delay_dev "$dev5" 0 1000 $(get first_extent_sector "$dev5"):
+	get lv_field "$1" convert_lv | tr -d []
 }
 
 # ---------------------------------------------------------------------
@@ -87,7 +78,7 @@ lvcreate -an -Zn -l2 --type mirror -m1 -n $lv1 $vg
 lv_devices_ $vg/$lv1 ${lv1}_mimage_0 ${lv1}_mimage_1
 
 #COMM "mirror log is ${lv1}_mlog"
-test $(lv_mirror_log_ $vg/$lv1) = ${lv1}_mlog
+test "$(lv_mirror_log_ $vg/$lv1)" = "${lv1}_mlog"
 
 # "cleanup"
 check_and_cleanup_lvs_
@@ -119,16 +110,33 @@ check_and_cleanup_lvs_
 
 #COMM "converting mirror names is ${lv1}_mimagetmp_2"
 lvcreate -aey -l2 --type mirror -m1 -n $lv1 $vg
-delay_devs
+# Use large enough polling interval so mirror is keeping mimagetmp
 LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -i+40 -b $vg/$lv1
+
+#
+# TODO: lvmpolld is not 'preserving' -i  interval setting from
+# lvconvert initiating command - so there is not much to test
+# if the lvconvert is already finished at this point
+# and lvmpolld cleaned metadata and refreshed DM table
+#
+# It' unclear if this is undocumented feature of bug.
+#
+if test ! -f LOCAL_LVMPOLLD ; then
+
+for i in $(seq 1 10) ; do
+	# check if background process already started
+	# this is recognized by presence of LV1_mimage_2
+	check lvl $vg/${lv1}_mimage_2 && break
+	sleep .1
+done
 convlv=$(lv_convert_lv_ $vg/$lv1)
-test $convlv = ${lv1}_mimagetmp_2
+test "$convlv" = "${lv1}_mimagetmp_2"
 lv_devices_ $vg/$lv1 $convlv ${lv1}_mimage_2
 lv_devices_ $vg/$convlv ${lv1}_mimage_0 ${lv1}_mimage_1
 lv_mirror_log_ $vg/$convlv ${lv1}_mlog
-enable_devs
+check lv_exists $vg ${lv1}_mimagetmp_2
 
-#COMM "mirror log name after re-adding is ${lv1}_mlog" \
+#COMM "mirror log name after re-adding is ${lv1}_mlog"
 lvconvert -f --mirrorlog core $vg/$lv1
 lvconvert --mirrorlog disk $vg/$lv1
 convlv=$(lv_convert_lv_ $vg/$lv1)
@@ -136,12 +144,13 @@ lv_devices_ $vg/$lv1 $convlv ${lv1}_mimage_2
 lv_devices_ $vg/$convlv ${lv1}_mimage_0 ${lv1}_mimage_1
 lv_mirror_log_ $vg/$convlv ${lv1}_mlog
 
-#COMM "renamed converting mirror names: $lv1 to $lv2" \
+#COMM "renamed converting mirror names: $lv1 to $lv2"
 lvrename $vg/$lv1 $vg/$lv2
 convlv=$(lv_convert_lv_ $vg/$lv2)
 lv_devices_ $vg/$lv2 $convlv ${lv2}_mimage_2
 lv_devices_ $vg/$convlv ${lv2}_mimage_0 ${lv2}_mimage_1
 lv_mirror_log_ $vg/$convlv ${lv2}_mlog
+fi  # ! -f LOCAL_LVMPOLLD
 
 #COMM "cleanup"
 check_and_cleanup_lvs_

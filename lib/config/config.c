@@ -14,15 +14,16 @@
  */
 
 
-#include "lib.h"
+#include "lib/misc/lib.h"
 
-#include "config.h"
-#include "crc.h"
-#include "device.h"
-#include "str_list.h"
-#include "toolcontext.h"
-#include "lvm-file.h"
-#include "memlock.h"
+#include "lib/config/config.h"
+#include "lib/misc/crc.h"
+#include "lib/device/device.h"
+#include "lib/datastruct/str_list.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/misc/lvm-file.h"
+#include "lib/mm/memlock.h"
+#include "lib/label/label.h"
 
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -65,12 +66,12 @@ struct config_source {
  * Map each ID to respective definition of the configuration item.
  */
 static struct cfg_def_item _cfg_def_items[CFG_COUNT + 1] = {
-#define cfg_section(id, name, parent, flags, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_SECTION, {0}, flags, since_version, {0}, deprecated_since_version, deprecation_comment, comment},
-#define cfg(id, name, parent, flags, type, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.v_##type = default_value}, flags, since_version, {.v_UNCONFIGURED = unconfigured_value}, deprecated_since_version, deprecation_comment, comment},
-#define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.fn_##type = get_default_##id}, flags | CFG_DEFAULT_RUN_TIME, since_version, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, deprecation_comment, comment},
-#define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | types, {.v_CFG_TYPE_STRING = default_value}, flags, since_version, {.v_UNCONFIGURED = unconfigured_value}, deprecated_since_version, deprecation_comment, comment},
-#define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | types, {.fn_CFG_TYPE_STRING = get_default_##id}, flags | CFG_DEFAULT_RUN_TIME, since_version, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, deprecation_comment, comment},
-#include "config_settings.h"
+#define cfg_section(id, name, parent, flags, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_SECTION, {0}, (flags), since_version, {0}, deprecated_since_version, deprecation_comment, comment},
+#define cfg(id, name, parent, flags, type, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.v_##type = (default_value)}, (flags), since_version, {.v_UNCONFIGURED = (unconfigured_value)}, deprecated_since_version, deprecation_comment, comment},
+#define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.fn_##type = get_default_##id}, (flags) | CFG_DEFAULT_RUN_TIME, since_version, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, (deprecation_comment), comment},
+#define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | (types), {.v_CFG_TYPE_STRING = (default_value)}, (flags), (since_version), {.v_UNCONFIGURED = (unconfigured_value)}, deprecated_since_version, deprecation_comment, comment},
+#define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | (types), {.fn_CFG_TYPE_STRING = get_default_##id}, (flags) | CFG_DEFAULT_RUN_TIME, (since_version), {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, deprecation_comment, comment},
+#include "lib/config/config_settings.h"
 #undef cfg_section
 #undef cfg
 #undef cfg_runtime
@@ -481,7 +482,8 @@ int override_config_tree_from_profile(struct cmd_context *cmd,
 
 	if (profile->source == CONFIG_PROFILE_COMMAND)
 		return _override_config_tree_from_command_profile(cmd, profile);
-	else if (profile->source == CONFIG_PROFILE_METADATA)
+
+	if (profile->source == CONFIG_PROFILE_METADATA)
 		return _override_config_tree_from_metadata_profile(cmd, profile);
 
 	log_error(INTERNAL_ERROR "override_config_tree_from_profile: incorrect profile source type");
@@ -493,7 +495,7 @@ int override_config_tree_from_profile(struct cmd_context *cmd,
  * and function avoids parsing of mda into config tree which
  * remains unmodified and should not be used.
  */
-int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
+int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_reason_t reason,
 			off_t offset, size_t size, off_t offset2, size_t size2,
 			checksum_fn_t checksum_fn, uint32_t checksum,
 			int checksum_only, int no_dup_node_check)
@@ -527,21 +529,32 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
 		}
 		fb = fb + mmap_offset;
 	} else {
-		if (!(buf = dm_malloc(size + size2))) {
+		if (!(buf = malloc(size + size2))) {
 			log_error("Failed to allocate circular buffer.");
 			return 0;
 		}
-		if (!dev_read_circular(dev, (uint64_t) offset, size,
-				       (uint64_t) offset2, size2, buf)) {
+
+		if (!dev_read_bytes(dev, offset, size, buf))
 			goto out;
+
+		if (size2) {
+			if (!dev_read_bytes(dev, offset2, size2, buf + size))
+				goto out;
 		}
+
 		fb = buf;
 	}
 
+	/*
+	 * The checksum passed in is the checksum from the mda_header
+	 * preceding this metadata.  They should always match.
+	 * FIXME: handle case where mda_header checksum is bad,
+	 * but the checksum calculated here is correct.
+	 */
 	if (checksum_fn && checksum !=
 	    (checksum_fn(checksum_fn(INITIAL_CRC, (const uint8_t *)fb, size),
 			 (const uint8_t *)(fb + size), size2))) {
-		log_error("%s: Checksum error", dev_name(dev));
+		log_error("%s: Checksum error at offset %" PRIu64, dev_name(dev), (uint64_t) offset);
 		goto out;
 	}
 
@@ -560,7 +573,7 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
 
       out:
 	if (!use_mmap)
-		dm_free(buf);
+		free(buf);
 	else {
 		/* unmap the file */
 		if (munmap(fb - mmap_offset, size + mmap_offset)) {
@@ -600,7 +613,7 @@ int config_file_read(struct dm_config_tree *cft)
 		}
 	}
 
-	r = config_file_read_fd(cft, cf->dev, 0, (size_t) info.st_size, 0, 0,
+	r = config_file_read_fd(cft, cf->dev, DEV_IO_MDA_CONTENT, 0, (size_t) info.st_size, 0, 0,
 				(checksum_fn_t) NULL, 0, 0, 0);
 
 	if (!cf->keep_open) {
@@ -619,9 +632,9 @@ struct timespec config_file_timestamp(struct dm_config_tree *cft)
 }
 
 #define cfg_def_get_item_p(id) (&_cfg_def_items[id])
-#define cfg_def_get_default_unconfigured_value_hint(cmd,item) ((item->flags & CFG_DEFAULT_RUN_TIME) ? item->default_unconfigured_value.fn_UNCONFIGURED(cmd) : item->default_unconfigured_value.v_UNCONFIGURED)
-#define cfg_def_get_default_value_hint(cmd,item,type,profile) ((item->flags & CFG_DEFAULT_RUN_TIME) ? item->default_value.fn_##type(cmd,profile) : item->default_value.v_##type)
-#define cfg_def_get_default_value(cmd,item,type,profile) (item->flags & CFG_DEFAULT_UNDEFINED ? 0 : cfg_def_get_default_value_hint(cmd,item,type,profile))
+#define cfg_def_get_default_unconfigured_value_hint(cmd,item) (((item)->flags & CFG_DEFAULT_RUN_TIME) ? (item)->default_unconfigured_value.fn_UNCONFIGURED(cmd) : (item)->default_unconfigured_value.v_UNCONFIGURED)
+#define cfg_def_get_default_value_hint(cmd,item,type,profile) (((item)->flags & CFG_DEFAULT_RUN_TIME) ? (item)->default_value.fn_##type(cmd,profile) : (item)->default_value.v_##type)
+#define cfg_def_get_default_value(cmd,item,type,profile) ((item)->flags & CFG_DEFAULT_UNDEFINED ? 0 : cfg_def_get_default_value_hint(cmd,item,type,profile))
 
 static int _cfg_def_make_path(char *buf, size_t buf_size, int id, cfg_def_item_t *item, int xlate)
 {
@@ -702,8 +715,8 @@ static struct dm_config_value *_get_def_array_values(struct cmd_context *cmd,
 		return array;
 	}
 
-	if (!(p = token = enc_value = dm_strdup(def_enc_value))) {
-		log_error("_get_def_array_values: dm_strdup failed");
+	if (!(p = token = enc_value = strdup(def_enc_value))) {
+		log_error("_get_def_array_values: strdup failed");
 		return NULL;
 	}
 	/* Proper value always starts with '#'. */
@@ -728,7 +741,7 @@ static struct dm_config_value *_get_def_array_values(struct cmd_context *cmd,
 
 		if (!(v = dm_config_create_value(cft))) {
 			log_error("Failed to create default config array value for %s.", def->name);
-			dm_free(enc_value);
+			free(enc_value);
 			return NULL;
 		}
 
@@ -742,20 +755,22 @@ static struct dm_config_value *_get_def_array_values(struct cmd_context *cmd,
 		switch (toupper(token[0])) {
 			case 'I':
 			case 'B':
+				errno = 0;
 				v->v.i = strtoll(token + 1, &r, 10);
-				if (*r)
+				if (errno || *r)
 					goto bad;
 				v->type = DM_CFG_INT;
 				break;
 			case 'F':
+				errno = 0;
 				v->v.f = strtod(token + 1, &r);
-				if (*r)
+				if (errno || *r)
 					goto bad;
 				v->type = DM_CFG_FLOAT;
 				break;
 			case 'S':
 				if (!(r = dm_pool_strdup(cft->mem, token + 1))) {
-					dm_free(enc_value);
+					free(enc_value);
 					log_error("Failed to duplicate token for default "
 						  "array value of %s.", def->name);
 					return NULL;
@@ -771,13 +786,13 @@ static struct dm_config_value *_get_def_array_values(struct cmd_context *cmd,
 		token = p;
 	}
 
-	dm_free(enc_value);
+	free(enc_value);
 	return array;
 bad:
 	log_error(INTERNAL_ERROR "Default array value malformed for \"%s\", "
 		  "value: \"%s\", token: \"%s\".", def->name,
 		  def->default_value.v_CFG_TYPE_STRING, token);
-	dm_free(enc_value);
+	free(enc_value);
 	return NULL;
 }
 
@@ -1877,6 +1892,12 @@ int config_write(struct dm_config_tree *cft,
 	}
 
 	log_verbose("Dumping configuration to %s", file);
+
+	if (tree_spec->withgeneralpreamble)
+		fprintf(baton.fp, CFG_PREAMBLE_GENERAL);
+	if (tree_spec->withlocalpreamble)
+		fprintf(baton.fp, CFG_PREAMBLE_LOCAL);
+
 	if (!argc) {
 		if (!dm_config_write_node_out(cft->root, &_out_spec, &baton)) {
 			log_error("Failure while writing to %s", file);
@@ -2442,21 +2463,13 @@ const char *get_default_activation_mirror_image_fault_policy_CFG(struct cmd_cont
 
 int get_default_allocation_thin_pool_chunk_size_CFG(struct cmd_context *cmd, struct profile *profile)
 {
-	const char *str;
 	uint32_t chunk_size;
+	int chunk_size_calc_method;
 
-	if (!(str = find_config_tree_str(cmd, allocation_thin_pool_chunk_size_policy_CFG, profile))) {
-		log_error(INTERNAL_ERROR "Cannot find configuration.");
-		return 0;
-	}
-
-	if (!strcasecmp(str, "generic"))
+	if (!get_default_allocation_thin_pool_chunk_size(cmd, profile, &chunk_size,
+							 &chunk_size_calc_method)) {
+		stack; /* Ignore this error, never happens... */
 		chunk_size = DEFAULT_THIN_POOL_CHUNK_SIZE * 2;
-	else if (!strcasecmp(str, "performance"))
-		chunk_size = DEFAULT_THIN_POOL_CHUNK_SIZE_PERFORMANCE * 2;
-	else {
-		log_error("Thin pool chunk size calculation policy \"%s\" is unrecognised.", str);
-		return 0;
 	}
 
 	return (int) chunk_size;

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -10,11 +11,11 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 test_description='Test pvcreate option values'
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 PAGESIZE=$(getconf PAGESIZE)
 # MDA_SIZE_MIN defined in lib/format_text/layout.h
-MDA_SIZE_MIN=$((8*$PAGESIZE))
+MDA_SIZE_MIN=$(( 8 * PAGESIZE ))
 
 . lib/inittest
 
@@ -27,7 +28,7 @@ not pvcreate --setphysicalvolumesize -1024 "$dev1"
 not pvcreate --metadatasize -1024 "$dev1"
 
 #COMM 'pvcreate rejects metadatasize that is less than minimum size'
-not pvcreate --dataalignment $((${MDA_SIZE_MIN}/2))b --metadatasize $((${MDA_SIZE_MIN}/2))b "$dev1" 2>err
+not pvcreate --dataalignment $(( MDA_SIZE_MIN / 2 ))b --metadatasize $(( MDA_SIZE_MIN / 2 ))b "$dev1" 2>err
 grep "Metadata area size too small" err
 
 #COMM 'pvcreate accepts metadatasize that is at least the minimum size'
@@ -44,7 +45,7 @@ pvremove "$dev1"
 #Verify vg_mda_size is smaller pv_mda_size
 pvcreate --metadatasize 512k "$dev1"
 pvcreate --metadatasize 96k "$dev2"
-vgcreate $vg "$dev1" "$dev2"
+vgcreate $SHARED $vg "$dev1" "$dev2"
 pvs -o +pv_mda_size
 check compare_fields vgs $vg vg_mda_size pvs "$dev2" pv_mda_size
 vgremove $vg
@@ -107,8 +108,8 @@ fi
 pvcreate --dataalignment 512k "$dev1"
 check pv_field "$dev1" pe_start "512.00k"
 
-#COMM 'vgcreate/vgremove do not modify data offset of existing PV'
-vgcreate $vg "$dev1"  --config 'devices { data_alignment = 1024 }'
+#COMM 'vgcreate $SHARED/vgremove do not modify data offset of existing PV'
+vgcreate $SHARED $vg "$dev1"  --config 'devices { data_alignment = 1024 }'
 check pv_field "$dev1" pe_start "512.00k"
 vgremove $vg --config 'devices { data_alignment = 1024 }'
 check pv_field "$dev1" pe_start "512.00k"
@@ -142,31 +143,12 @@ pvcreate --metadatasize 128k --metadatacopies 2 --dataalignmentoffset 7s "$dev1"
 check pv_field "$dev1" pv_mda_count 2
 # FIXME: compare start of 2nd mda with and without --dataalignmentoffset
 
-#COMM 'pv with LVM1 compatible data alignment can be convereted'
-#compatible == LVM1_PE_ALIGN == 64k
-if test -n "$LVM_TEST_LVM1" ; then
-pvcreate --dataalignment 256k "$dev1"
-vgcreate -s 1m $vg "$dev1"
-vgconvert -M1 $vg
-vgconvert -M2 $vg
-check pv_field "$dev1" pe_start 256.00k
-vgremove $vg
-fi
-
-#COMM 'pv with LVM1 incompatible data alignment cannot be convereted'
-if test -n "$LVM_TEST_LVM1" ; then
-pvcreate --dataalignment 10k "$dev1"
-vgcreate -s 1m $vg "$dev1"
-not vgconvert -M1 $vg
-vgremove $vg
-fi
-
 #COMM 'vgcfgrestore allows pe_start=0'
 #basically it produces nonsense, but it tests vgcfgrestore,
 #not that final cfg is usable...
 pvcreate --metadatacopies 0 "$dev1"
 pvcreate "$dev2"
-vgcreate $vg "$dev1" "$dev2"
+vgcreate $SHARED $vg "$dev1" "$dev2"
 vgcfgbackup -f backup.$$ $vg
 sed 's/pe_start = [0-9]*/pe_start = 0/' backup.$$ > backup.$$1
 vgcfgrestore -f backup.$$1 $vg
@@ -189,14 +171,14 @@ for ignore in y n; do
 		check pv_field "$dev1" pv_mda_used_count "$mdacp"
 		check pv_field "$dev2" pv_mda_used_count "$mdacp"
 	fi
-	echo "vgcreate has proper vg_mda_count and vg_mda_used_count"
+	echo "vgcreate $SHARED has proper vg_mda_count and vg_mda_used_count"
 	if [ $pv_in_vg = 1 ]; then
-		vgcreate $vg "$dev1" "$dev2"
-		check vg_field $vg vg_mda_count "$(($mdacp * 2))"
+		vgcreate $SHARED $vg "$dev1" "$dev2"
+		check vg_field $vg vg_mda_count $(( mdacp * 2 ))
 		if [ $ignore = y ]; then
 			check vg_field $vg vg_mda_used_count "1"
 		else
-			check vg_field $vg vg_mda_used_count "$(($mdacp * 2))"
+			check vg_field $vg vg_mda_used_count "$(( mdacp * 2 ))"
 		fi
 		check vg_field $vg vg_mda_copies "unmanaged"
 		vgremove $vg

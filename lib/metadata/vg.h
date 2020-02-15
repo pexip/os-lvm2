@@ -15,8 +15,8 @@
 #ifndef _LVM_VG_H
 #define _LVM_VG_H
 
-#include "uuid.h"
-#include "libdevmapper.h"
+#include "lib/uuid/uuid.h"
+#include "device_mapper/all.h"
 
 struct cmd_context;
 struct format_instance;
@@ -32,13 +32,6 @@ typedef enum {
 	ALLOC_INHERIT
 } alloc_policy_t;
 
-struct pv_to_write {
-	struct dm_list list;
-	struct physical_volume *pv;
-	struct pvcreate_params *pp;
-	int new_pv;
-};
-
 #define MAX_EXTENT_COUNT  (UINT32_MAX)
 
 struct volume_group {
@@ -47,11 +40,8 @@ struct volume_group {
 	struct format_instance *fid;
 	const struct format_type *original_fmt;	/* Set when processing backup files */
 	struct lvmcache_vginfo *vginfo;
-	struct dm_list *cmd_vgs;/* List of wanted/locked and opened VGs */
-	uint32_t cmd_missing_vgs;/* Flag marks missing VG */
 	uint32_t seqno;		/* Metadata sequence number */
 	unsigned skip_validate_lock_args : 1;
-	unsigned lvmetad_update_pending: 1;
 
 	/*
 	 * The parsed committed (on-disk) copy of this VG; is NULL if this VG is committed
@@ -61,8 +51,7 @@ struct volume_group {
 	 * _vg_update_vg_committed.
 	 */
 	struct volume_group *vg_committed;
-	struct dm_config_tree *cft_precommitted; /* Precommitted metadata */
-	struct volume_group *vg_precommitted; /* Parsed from cft */
+	struct volume_group *vg_precommitted;
 
 	alloc_policy_t alloc;
 	struct profile *profile;
@@ -72,7 +61,6 @@ struct volume_group {
 	const char *name;
 	const char *old_name;		/* Set during vgrename and vgcfgrestore */
 	const char *system_id;
-	char *lvm1_system_id;
 	const char *lock_type;
 	const char *lock_args;
 
@@ -92,27 +80,7 @@ struct volume_group {
 	 * a PV label yet. They need to be pvcreate'd at vg_write time.
 	 */
 
-	struct dm_list pvs_to_write; /* struct pv_to_write */
-
 	struct dm_list pv_write_list; /* struct pv_list */
-
-	/*
-	 * List of physical volumes that carry outdated metadata that belongs
-	 * to this VG. Currently only populated when lvmetad is in use. The PVs
-	 * on this list could still belong to the VG (but their MDA carries an
-	 * out-of-date copy of the VG metadata) or they could no longer belong
-	 * to the VG. With lvmetad, this list is populated with all PVs that
-	 * have a VGID matching ours, but seqno that is smaller than the
-	 * current seqno for the VG. The MDAs on still-in-VG PVs are updated as
-	 * part of the normal vg_write/vg_commit process. The MDAs on PVs that
-	 * no longer belong to the VG are wiped during vg_read.
-	 *
-	 * However, even though still-in-VG PVs *may* be on the list, this is
-	 * not guaranteed. The in-lvmetad list is cleared whenever out-of-VG
-	 * outdated PVs are wiped during vg_read.
-	 */
-
-	struct dm_list pvs_outdated;
 
 	/*
 	 * logical volumes
@@ -184,7 +152,6 @@ char *vg_lock_args_dup(const struct volume_group *vg);
 uint32_t vg_seqno(const struct volume_group *vg);
 uint64_t vg_status(const struct volume_group *vg);
 int vg_set_alloc_policy(struct volume_group *vg, alloc_policy_t alloc);
-int vg_set_clustered(struct volume_group *vg, int clustered);
 int vg_set_system_id(struct volume_group *vg, const char *system_id);
 int vg_set_lock_type(struct volume_group *vg, const char *lock_type);
 uint64_t vg_size(const struct volume_group *vg);

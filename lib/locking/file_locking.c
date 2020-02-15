@@ -13,15 +13,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "locking.h"
+#include "lib/misc/lib.h"
+#include "lib/locking/locking.h"
 #include "locking_types.h"
-#include "activate.h"
-#include "config.h"
-#include "defaults.h"
-#include "lvm-string.h"
-#include "lvm-flock.h"
-#include "lvmcache.h"
+#include "lib/config/config.h"
+#include "lib/config/defaults.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/misc/lvm-flock.h"
 
 #include <limits.h>
 #include <unistd.h>
@@ -45,90 +43,21 @@ static int _file_lock_resource(struct cmd_context *cmd, const char *resource,
 			       uint32_t flags, const struct logical_volume *lv)
 {
 	char lockfile[PATH_MAX];
-	unsigned origin_only = (flags & LCK_ORIGIN_ONLY) ? 1 : 0;
-	unsigned revert = (flags & LCK_REVERT) ? 1 : 0;
 
-	switch (flags & LCK_SCOPE_MASK) {
-	case LCK_ACTIVATION:
+	if (is_orphan_vg(resource) || is_global_vg(resource)) {
 		if (dm_snprintf(lockfile, sizeof(lockfile),
-				"%s/A_%s", _lock_dir, resource + 1) < 0) {
-			log_error("Too long locking filename %s/A_%s.", _lock_dir, resource + 1);
+				"%s/P_%s", _lock_dir, resource + 1) < 0) {
+			log_error("Too long locking filename %s/P_%s.", _lock_dir, resource + 1);
+			return 0;
+		}
+	} else
+		if (dm_snprintf(lockfile, sizeof(lockfile), "%s/V_%s", _lock_dir, resource) < 0) {
+			log_error("Too long locking filename %s/V_%s.", _lock_dir, resource);
 			return 0;
 		}
 
-		if (!lock_file(lockfile, flags))
-			return_0;
-		break;
-	case LCK_VG:
-		if (!strcmp(resource, VG_SYNC_NAMES)) {
-			fs_unlock();
-		} else if (strcmp(resource, VG_GLOBAL))
-			/* Skip cache refresh for VG_GLOBAL - the caller handles it */
-			lvmcache_drop_metadata(resource, 0);
-
-		/* LCK_CACHE does not require a real lock */
-		if (flags & LCK_CACHE)
-			break;
-
-		if (is_orphan_vg(resource) || is_global_vg(resource)) {
-			if (dm_snprintf(lockfile, sizeof(lockfile),
-					"%s/P_%s", _lock_dir, resource + 1) < 0) {
-				log_error("Too long locking filename %s/P_%s.",
-					  _lock_dir, resource + 1);
-				return 0;
-			}
-		} else
-			if (dm_snprintf(lockfile, sizeof(lockfile),
-					"%s/V_%s", _lock_dir, resource) < 0) {
-				log_error("Too long locking filename %s/V_%s.",
-					  _lock_dir, resource);
-				return 0;
-			}
-
-		if (!lock_file(lockfile, flags))
-			return_0;
-		break;
-	case LCK_LV:
-		switch (flags & LCK_TYPE_MASK) {
-		case LCK_UNLOCK:
-			log_very_verbose("Unlocking LV %s%s%s", resource, origin_only ? " without snapshots" : "", revert ? " (reverting)" : "");
-			if (!lv_resume_if_active(cmd, resource, origin_only, 0, revert, lv_committed(lv)))
-				return 0;
-			break;
-		case LCK_NULL:
-			log_very_verbose("Locking LV %s (NL)", resource);
-			if (!lv_deactivate(cmd, resource, lv_committed(lv)))
-				return 0;
-			break;
-		case LCK_READ:
-			log_very_verbose("Locking LV %s (R)", resource);
-			if (!lv_activate_with_filter(cmd, resource, 0, (lv->status & LV_NOSCAN) ? 1 : 0,
-						     (lv->status & LV_TEMPORARY) ? 1 : 0, lv_committed(lv)))
-				return 0;
-			break;
-		case LCK_PREAD:
-			log_very_verbose("Locking LV %s (PR) - ignored", resource);
-			break;
-		case LCK_WRITE:
-			log_very_verbose("Locking LV %s (W)%s", resource, origin_only ? " without snapshots" : "");
-			if (!lv_suspend_if_active(cmd, resource, origin_only, 0, lv_committed(lv), lv))
-				return 0;
-			break;
-		case LCK_EXCL:
-			log_very_verbose("Locking LV %s (EX)", resource);
-			if (!lv_activate_with_filter(cmd, resource, 1, (lv->status & LV_NOSCAN) ? 1 : 0,
-						     (lv->status & LV_TEMPORARY) ? 1 : 0, lv_committed(lv)))
-				return 0;
-			break;
-		default:
-			break;
-		}
-		break;
-	default:
-		log_error("Unrecognised lock scope: %d",
-			  flags & LCK_SCOPE_MASK);
-		return 0;
-	}
+	if (!lock_file(lockfile, flags))
+		return_0;
 
 	return 1;
 }
@@ -144,7 +73,7 @@ int init_file_locking(struct locking_type *locking, struct cmd_context *cmd,
 	locking->lock_resource = _file_lock_resource;
 	locking->reset_locking = _reset_file_locking;
 	locking->fin_locking = _fin_file_locking;
-	locking->flags = 0;
+	locking->flags = LCK_FLOCK;
 
 	/* Get lockfile directory from config file */
 	locking_dir = find_config_tree_str(cmd, global_locking_dir_CFG, NULL);

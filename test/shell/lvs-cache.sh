@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -14,13 +15,32 @@
 # Full CLI uses  --type
 # Shorthand CLI uses -H | --cache
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux have_cache 1 3 0 || skip
 aux prepare_vg 5 8000
+
+# Use 10M origin size
+lvcreate -aey -L10 -n $lv1 $vg
+lvcreate -H -L5 $vg/$lv1
+
+# replace 10M size with 5M size of cache device
+NEWCLINE=$(dmsetup table $vg-$lv1 | sed 's/20480/10240/')
+dmsetup reload $vg-$lv1 --table "$NEWCLINE"
+dmsetup resume $vg-$lv1
+
+# Check that mismatching cache target is shown by lvs
+lvs -a $vg 2>&1 | grep "WARNING"
+check lv_attr_bit state $vg/$lv1 "X"
+
+lvs -o+lv_active $vg
+
+lvremove -f $vg
+
+
 
 lvcreate --type cache-pool -L10 $vg/cpool
 lvcreate --type cache -l 1 --cachepool $vg/cpool -n corigin $vg
@@ -69,3 +89,5 @@ lvremove -f $vg
 
 lvcreate -n foo -l 1 $vg
 lvs -a -S 'cache_policy=undefined' | grep foo
+
+vgremove -ff $vg

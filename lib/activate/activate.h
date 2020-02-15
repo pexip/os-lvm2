@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2018 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -16,7 +16,7 @@
 #ifndef LVM_ACTIVATE_H
 #define LVM_ACTIVATE_H
 
-#include "metadata-exported.h"
+#include "lib/metadata/metadata-exported.h"
 
 struct lvinfo {
 	int exists;
@@ -37,6 +37,7 @@ typedef enum {
 	SEG_STATUS_SNAPSHOT,
 	SEG_STATUS_THIN,
 	SEG_STATUS_THIN_POOL,
+	SEG_STATUS_VDO_POOL,
 	SEG_STATUS_UNKNOWN
 } lv_seg_status_type_t;
 
@@ -50,15 +51,17 @@ struct lv_seg_status {
 		struct dm_status_snapshot *snapshot;
 		struct dm_status_thin *thin;
 		struct dm_status_thin_pool *thin_pool;
+		struct lv_status_vdo vdo_pool;
 	};
 };
 
 struct lv_with_info_and_seg_status {
-	const struct logical_volume *lv;	/* input */
 	int info_ok;
+	const struct logical_volume *lv;        /* output */
 	struct lvinfo info;			/* output */
 	int seg_part_of_lv;			/* output */
-	struct lv_seg_status seg_status;	/* input/output, see lv_seg_status */
+	struct lv_seg_status seg_status;	/* output, see lv_seg_status */
+	/* TODO: add extra status for snapshot origin */
 };
 
 struct lv_activate_opts {
@@ -82,6 +85,7 @@ struct lv_activate_opts {
 				 * flags are persistent in udev db for any spurious event
 				 * that follows. */
 	unsigned resuming;	/* Set when resuming after a suspend. */
+	const struct logical_volume *component_lv;
 };
 
 void set_activation(int activation, int silent);
@@ -89,7 +93,6 @@ int activation(void);
 
 int driver_version(char *version, size_t size);
 int library_version(char *version, size_t size);
-int lvm1_present(struct cmd_context *cmd);
 
 int module_present(struct cmd_context *cmd, const char *target_name);
 int target_present_version(struct cmd_context *cmd, const char *target_name,
@@ -123,6 +126,16 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 
 int lv_mknodes(struct cmd_context *cmd, const struct logical_volume *lv);
 
+int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv);
+
+int activate_lv(struct cmd_context *cmd, const struct logical_volume *lv);
+int deactivate_lv(struct cmd_context *cmd, const struct logical_volume *lv);
+int suspend_lv(struct cmd_context *cmd, const struct logical_volume *lv);
+int suspend_lv_origin(struct cmd_context *cmd, const struct logical_volume *lv);
+int resume_lv(struct cmd_context *cmd, const struct logical_volume *lv);
+int resume_lv_origin(struct cmd_context *cmd, const struct logical_volume *lv);
+int revert_lv(struct cmd_context *cmd, const struct logical_volume *lv);
+
 /*
  * Returns 1 if info structure has been populated, else 0 on failure.
  * When lvinfo* is NULL, it returns 1 if the device is locally active, 0 otherwise.
@@ -133,31 +146,24 @@ int lv_info_by_lvid(struct cmd_context *cmd, const char *lvid_s, int use_layer,
 		    struct lvinfo *info, int with_open_count, int with_read_ahead);
 
 /*
- * Returns 1 if lv_seg_status structure has been populated,
- * else 0 on failure or if device not active locally.
- */
-int lv_status(struct cmd_context *cmd, const struct lv_segment *lv_seg,
-	      int use_layer, struct lv_seg_status *lv_seg_status);
-
-/*
  * Returns 1 if lv_info_and_seg_status structure has been populated,
  * else 0 on failure or if device not active locally.
  *
  * lv_info_with_seg_status is the same as calling lv_info and then lv_status,
  * but this fn tries to do that with one ioctl if possible.
  */
-int lv_info_with_seg_status(struct cmd_context *cmd, const struct logical_volume *lv,
-			    const struct lv_segment *lv_seg, int use_layer,
+int lv_info_with_seg_status(struct cmd_context *cmd,
+			    const struct lv_segment *lv_seg,
 			    struct lv_with_info_and_seg_status *status,
 			    int with_open_count, int with_read_ahead);
 
 int lv_check_not_in_use(const struct logical_volume *lv, int error_if_used);
 
 /*
- * Returns 1 if activate_lv has been set: 1 = activate; 0 = don't.
+ * Returns 1 if activate has been set: 1 = activate; 0 = don't.
  */
 int lv_activation_filter(struct cmd_context *cmd, const char *lvid_s,
-			 int *activate_lv, const struct logical_volume *lv);
+			 int *activate, const struct logical_volume *lv);
 /*
  * Checks against the auto_activation_volume_list and
  * returns 1 if the LV should be activated, 0 otherwise.
@@ -172,11 +178,13 @@ int lv_snapshot_percent(const struct logical_volume *lv, dm_percent_t *percent);
 int lv_mirror_percent(struct cmd_context *cmd, const struct logical_volume *lv,
 		      int wait, dm_percent_t *percent, uint32_t *event_nr);
 int lv_raid_percent(const struct logical_volume *lv, dm_percent_t *percent);
+int lv_raid_dev_count(const struct logical_volume *lv, uint32_t *dev_cnt);
+int lv_raid_data_offset(const struct logical_volume *lv, uint64_t *data_offset);
 int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health);
 int lv_raid_mismatch_count(const struct logical_volume *lv, uint64_t *cnt);
 int lv_raid_sync_action(const struct logical_volume *lv, char **sync_action);
 int lv_raid_message(const struct logical_volume *lv, const char *msg);
-int lv_cache_status(const struct logical_volume *lv,
+int lv_cache_status(const struct logical_volume *cache_lv,
 		    struct lv_status_cache **status);
 int lv_thin_pool_percent(const struct logical_volume *lv, int metadata,
 			 dm_percent_t *percent);
@@ -185,6 +193,8 @@ int lv_thin_percent(const struct logical_volume *lv, int mapped,
 int lv_thin_pool_transaction_id(const struct logical_volume *lv,
 				uint64_t *transaction_id);
 int lv_thin_device_id(const struct logical_volume *lv, uint32_t *device_id);
+int lv_vdo_pool_status(const struct logical_volume *lv, int flush,
+		       struct lv_status_vdo **status);
 
 /*
  * Return number of LVs in the VG that are active.
@@ -193,24 +203,23 @@ int lvs_in_vg_activated(const struct volume_group *vg);
 int lvs_in_vg_opened(const struct volume_group *vg);
 
 int lv_is_active(const struct logical_volume *lv);
-int lv_is_active_locally(const struct logical_volume *lv);
-int lv_is_active_remotely(const struct logical_volume *lv);
-int lv_is_active_but_not_locally(const struct logical_volume *lv);
-int lv_is_active_exclusive(const struct logical_volume *lv);
-int lv_is_active_exclusive_locally(const struct logical_volume *lv);
-int lv_is_active_exclusive_remotely(const struct logical_volume *lv);
+
+/* Check is any component LV is active */
+const struct logical_volume *lv_component_is_active(const struct logical_volume *lv);
+const struct logical_volume *lv_holder_is_active(const struct logical_volume *lv);
+int deactivate_lv_with_sub_lv(const struct logical_volume *lv);
 
 int lv_has_target_type(struct dm_pool *mem, const struct logical_volume *lv,
 		       const char *layer, const char *target_type);
 
 int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume *lv,
-			   const struct lv_activate_opts *laopts, int do_reg);
+			   const struct lv_activate_opts *laopts, int monitor);
 
 #ifdef DMEVENTD
-#  include "libdevmapper-event.h"
-char *get_monitor_dso_path(struct cmd_context *cmd, const char *libpath);
-int target_registered_with_dmeventd(struct cmd_context *cmd, const char *libpath,
-				    const struct logical_volume *lv, int *pending);
+#  include "daemons/dmeventd/libdevmapper-event.h"
+char *get_monitor_dso_path(struct cmd_context *cmd, int id);
+int target_registered_with_dmeventd(struct cmd_context *cmd, const char *dso,
+				    const struct logical_volume *lv, int *pending, int *monitored);
 int target_register_events(struct cmd_context *cmd, const char *dso, const struct logical_volume *lv,
 			    int evmask __attribute__((unused)), int set, int timeout);
 #endif
@@ -231,6 +240,7 @@ struct dev_usable_check_params {
 	unsigned int check_suspended:1;
 	unsigned int check_error_target:1;
 	unsigned int check_reserved:1;
+	unsigned int check_lv:1;
 };
 
 /*
@@ -256,6 +266,7 @@ void fs_unlock(void);
 #define TARGET_NAME_STRIPED "striped"
 #define TARGET_NAME_THIN "thin"
 #define TARGET_NAME_THIN_POOL "thin-pool"
+#define TARGET_NAME_VDO "vdo"
 #define TARGET_NAME_ZERO "zero"
 
 #define MODULE_NAME_CLUSTERED_MIRROR "clog"
@@ -266,6 +277,7 @@ void fs_unlock(void);
 #define MODULE_NAME_MIRROR TARGET_NAME_MIRROR
 #define MODULE_NAME_SNAPSHOT TARGET_NAME_SNAPSHOT
 #define MODULE_NAME_RAID TARGET_NAME_RAID
+#define MODULE_NAME_VDO "kvdo"          /* does NOT use dm- prefix */
 #define MODULE_NAME_ZERO TARGET_NAME_ZERO
 
 #endif

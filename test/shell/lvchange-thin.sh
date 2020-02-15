@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2013-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
@@ -20,8 +21,8 @@ aux have_thin 1 0 0 || skip
 
 aux prepare_pvs 3
 
-vgcreate -s 128k $vg  "$dev1" "$dev2"
-vgcreate -s 128k $vg2 "$dev3"
+vgcreate $SHARED -s 128k $vg  "$dev1" "$dev2"
+vgcreate $SHARED -s 128k $vg2 "$dev3"
 
 lvcreate -L10M -T $vg/pool
 
@@ -29,7 +30,7 @@ lvcreate -L10M -T $vg/pool
 # tests for checking thin-pool discard passdown are skipped
 pvmajor=$(get pv_field "$dev1" major)
 pvminor=$(get pv_field "$dev1" minor)
-test "$(< /sys/dev/block/$pvmajor\:$pvminor/queue/discard_granularity)" -ne "0" || \
+test "$(< "/sys/dev/block/$pvmajor\:$pvminor/queue/discard_granularity")" -ne 0 || \
         no_discard=1
 
 #
@@ -49,7 +50,7 @@ test -n "$no_discard" || check grep_dmsetup status $vg-pool " no_discard_passdow
 lvchange --discards passdown $vg/pool
 check grep_dmsetup table $vg-pool -v "passdown"
 test -n "$no_discard" || check grep_dmsetup status $vg-pool " discard_passdown"
-exit
+
 # zero_ARG  (default is 'yes')
 check grep_dmsetup table $vg-pool -v "zeroing"
 lvchange --zero n $vg/pool

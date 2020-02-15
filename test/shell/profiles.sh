@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright (C) 2013 Red Hat, Inc. All rights reserved.
 #
@@ -13,7 +13,7 @@
 # test basic profile functionality
 #
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -81,10 +81,9 @@ aux profileconf valid_cmd_profile 'global/units = "h"' \
 
 aux profileconf valid_mda_profile 'allocation/thin_pool_zero = 0' \
 				  'allocation/thin_pool_discards = "passdown"' \
-				  'allocation/thin_pool_chunk_size = 64'\
+				  'allocation/thin_pool_chunk_size = 64' \
 				  'activation/thin_pool_autoextend_threshold = 100' \
-				  'activation/thin_pool_autoextend_percent = 20' \
-
+				  'activation/thin_pool_autoextend_percent = 20'
 
 aux profileconf extra_mda_profile 'allocation/thin_pool_chunk_size = 128'
 
@@ -101,7 +100,7 @@ not grep "$MSG_IGNORING_INVALID_MDA_PROFILE" msg
 # attaching/detaching profiles to VG/LV
 aux prepare_pvs 1 8
 pvcreate "$dev1"
-vgcreate $vg1 "$dev1"
+vgcreate $SHARED $vg1 "$dev1"
 check vg_field $vg1 vg_profile ""
 lvcreate -l 1 -n $lv1 $vg1
 check lv_field $vg1/$lv1 lv_profile ""
@@ -131,3 +130,5 @@ lvm dumpconfig --type profilable-command --file etc/profile/generated.profile
 pvs --profile generated &> msg
 not grep "$MSG_NOT_PROFILABLE" msg
 not grep "$MSG_IGNORING_INVALID_CMD_PROFILE" msg
+
+vgremove -ff $vg1

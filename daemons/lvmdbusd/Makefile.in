@@ -23,13 +23,10 @@ LVMDBUS_SRCDIR_FILES = \
 	cfg.py \
 	cmdhandler.py \
 	fetch.py \
-	__init__.py \
 	job.py \
 	loader.py \
-	lvmdb.py \
-	main.py \
-	lvm_shell_proxy.py \
 	lv.py \
+	main.py \
 	manager.py \
 	objectmanager.py \
 	pv.py \
@@ -37,30 +34,40 @@ LVMDBUS_SRCDIR_FILES = \
 	state.py \
 	udevwatch.py \
 	utils.py \
-	vg.py
+	vg.py \
+	__init__.py
 
 LVMDBUS_BUILDDIR_FILES = \
+	lvmdb.py \
+	lvm_shell_proxy.py \
 	path.py
 
-LVMDBUSD = $(srcdir)/lvmdbusd
+LVMDBUSD = lvmdbusd
+
+CLEAN_DIRS += __pycache__
 
 include $(top_builddir)/make.tmpl
 
 .PHONY: install_lvmdbusd
 
+all:
+	$(Q) test -x $(LVMDBUSD) || chmod 755 $(LVMDBUSD)
+
 install_lvmdbusd:
-	$(INSTALL_DIR) $(sbindir)
-	$(INSTALL_SCRIPT) $(LVMDBUSD) $(sbindir)
-	$(INSTALL_DIR) $(DESTDIR)$(lvmdbusdir)
-	(cd $(srcdir); $(INSTALL_DATA) $(LVMDBUS_SRCDIR_FILES) $(DESTDIR)$(lvmdbusdir))
-	$(INSTALL_DATA) $(LVMDBUS_BUILDDIR_FILES) $(DESTDIR)$(lvmdbusdir)
-	PYTHON=$(PYTHON3) $(PYCOMPILE) --destdir "$(DESTDIR)" --basedir "$(lvmdbusdir)" $(LVMDBUS_SRCDIR_FILES) $(LVMDBUS_BUILDDIR_FILES)
-	$(CHMOD) 755 $(DESTDIR)$(lvmdbusdir)/__pycache__
-	$(CHMOD) 444 $(DESTDIR)$(lvmdbusdir)/__pycache__/*.py[co]
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_DIR) $(sbindir)
+	$(Q) $(INSTALL_SCRIPT) $(LVMDBUSD) $(sbindir)
+	$(Q) $(INSTALL_DIR) $(DESTDIR)$(lvmdbusdir)
+	$(Q) (cd $(srcdir); $(INSTALL_DATA) $(LVMDBUS_SRCDIR_FILES) $(DESTDIR)$(lvmdbusdir))
+	$(Q) $(INSTALL_DATA) $(LVMDBUS_BUILDDIR_FILES) $(DESTDIR)$(lvmdbusdir)
+	$(Q) PYTHON=$(PYTHON3) $(PYCOMPILE) --destdir "$(DESTDIR)" --basedir "$(lvmdbusdir)" $(LVMDBUS_SRCDIR_FILES) $(LVMDBUS_BUILDDIR_FILES)
+	$(Q) $(CHMOD) 755 $(DESTDIR)$(lvmdbusdir)/__pycache__
+	$(Q) $(CHMOD) 444 $(DESTDIR)$(lvmdbusdir)/__pycache__/*.py[co]
 
 install_lvm2: install_lvmdbusd
 
 install: install_lvm2
 
 DISTCLEAN_TARGETS+= \
-	$(LVMDBUS_BUILDDIR_FILES)
+	$(LVMDBUS_BUILDDIR_FILES) \
+	$(LVMDBUSD)

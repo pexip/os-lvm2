@@ -16,13 +16,13 @@
 #ifndef _LVM_CONFIG_H
 #define _LVM_CONFIG_H
 
-#include "libdevmapper.h"
+#include "device_mapper/all.h"
+#include "lib/device/device.h"
 
 /* 16 bits: 3 bits for major, 4 bits for minor, 9 bits for patchlevel */
 /* FIXME Max LVM version supported: 7.15.511. Extend bits when needed. */
 #define vsn(major, minor, patchlevel) (major << 13 | minor << 9 | patchlevel)
 
-struct device;
 struct cmd_context;
 
 typedef enum {
@@ -141,6 +141,7 @@ typedef struct cfg_def_item {
 	uint16_t deprecated_since_version;				/* version since this item is deprecated */
 	const char *deprecation_comment;				/* comment about reasons for deprecation and settings that supersede this one */
 	const char *comment;						/* comment */
+	const char *file_premable;					/* comment text to use at the start of the file */
 } cfg_def_item_t;
 
 /* configuration definition tree types */
@@ -173,6 +174,8 @@ struct config_def_tree_spec {
 	unsigned withversions:1;		/* include versions */
 	unsigned withspaces:1;			/* add more spaces in output for better readability */
 	unsigned unconfigured:1;		/* use unconfigured path strings */
+	unsigned withgeneralpreamble:1;		/* include preamble for a general config file */
+	unsigned withlocalpreamble:1;		/* include preamble for a local config file */
 	uint8_t *check_status;			/* status of last tree check (currently needed for CFG_DEF_TREE_MISSING only) */
 };
 
@@ -193,7 +196,7 @@ enum {
 #define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment) id,
 #define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) id,
 #define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment) id,
-#include "config_settings.h"
+#include "lib/config/config_settings.h"
 #undef cfg_section
 #undef cfg
 #undef cfg_runtime
@@ -236,7 +239,7 @@ config_source_t config_get_source_type(struct dm_config_tree *cft);
 typedef uint32_t (*checksum_fn_t) (uint32_t initial, const uint8_t *buf, uint32_t size);
 
 struct dm_config_tree *config_open(config_source_t source, const char *filename, int keep_open);
-int config_file_read_fd(struct dm_config_tree *cft, struct device *dev,
+int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_reason_t reason,
 			off_t offset, size_t size, off_t offset2, size_t size2,
 			checksum_fn_t checksum_fn, uint32_t checksum,
 			int skip_parse, int no_dup_node_check);

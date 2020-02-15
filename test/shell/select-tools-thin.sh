@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
@@ -29,7 +30,7 @@ aux prepare_pvs 1 16
 # selecting on initial state (here, thin origin LV thin_orig is removed
 # first, but thin snap should be still selectable based on origin=thin_orig
 # condition even though thin_orig has just been removed)
-vgcreate -s 4m $vg1 "$dev1"
+vgcreate $SHARED -s 4m $vg1 "$dev1"
 lvcreate -l100%FREE -T $vg1/pool
 lvcreate -V4m -T $vg1/pool -n thin_orig
 lvcreate -s $vg1/thin_orig -n thin_snap

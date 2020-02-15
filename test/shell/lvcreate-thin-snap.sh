@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright (C) 2012 Red Hat, Inc. All rights reserved.
 #
@@ -10,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
@@ -22,8 +22,8 @@ check_lv_field_modules_()
 	mod=$1
 	shift
 
-	for d in $*; do
-		check lv_field $vg/$d modules $mod
+	for d in "$@"; do
+		check lv_field "$vg/$d" modules "$mod"
 	done
 }
 
@@ -35,8 +35,9 @@ aux have_thin 1 0 0 || skip
 which mkfs.ext4 || skip
 
 aux prepare_pvs 2 64
+get_devs
 
-vgcreate $vg -s 64K $(cat DEVICES)
+vgcreate $SHARED -s 64K "$vg" "${DEVICES[@]}"
 
 lvcreate -L10M -V10M -T $vg/pool --name $lv1
 mkfs.ext4 "$DM_DEV_DIR/$vg/$lv1"

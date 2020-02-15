@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -47,7 +48,7 @@ grep "$MARKED_AS_USED_MSG" err
 not pvchange -u "$dev1" 2>err
 grep "$MARKED_AS_USED_MSG" err
 not vgcreate $vg2 "$dev1" 2>err
-grep "$MARKED_AS_USED" err
+grep "$MARKED_AS_USED_MSG" err
 not pvremove "$dev1" 2>err
 grep "$MARKED_AS_USED_MSG" err
 
@@ -78,7 +79,7 @@ aux enable_dev "$dev1"
 #        causing LVM tools to not see the VG inconsistency and once
 #        VG repair is always done, delete this line which removes
 #        persistent .cache as a workaround
-rm -f $TESTDIR/etc/.cache
+rm -f "$TESTDIR/etc/.cache"
 
 vgck $vg1
 # check $dev1 does not contain the PV_EXT_FLAG anymore - it
@@ -112,7 +113,7 @@ grep "$MARKED_AS_USED_MSG" err
 not pvchange -u "$dev1" 2>err
 grep "$MARKED_AS_USED_MSG" err
 not vgcreate $vg2 "$dev1" 2>err
-grep "$MARKED_AS_USED" err
+grep "$MARKED_AS_USED_MSG" err
 not pvremove "$dev1" 2>err
 grep "$MARKED_AS_USED_MSG" err
 
@@ -143,7 +144,7 @@ aux enable_dev "$dev1"
 #        causing LVM tools to not see the VG inconsistency and once
 #        VG repair is always done, delete this line which removes
 #        persistent .cache as a workaround
-rm -f $TESTDIR/etc/.cache
+rm -f "$TESTDIR/etc/.cache"
 
 vgck $vg1
 # check $dev1 does not contain the PV_EXT_FLAG anymore - it

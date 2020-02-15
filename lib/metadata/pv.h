@@ -15,8 +15,8 @@
 #ifndef _LVM_PV_H
 #define _LVM_PV_H
 
-#include "uuid.h"
-#include "libdevmapper.h"
+#include "lib/uuid/uuid.h"
+#include "device_mapper/all.h"
 
 struct device;
 struct format_type;
@@ -93,7 +93,7 @@ uint64_t pv_mda_free(const struct physical_volume *pv);
 uint64_t pv_used(const struct physical_volume *pv);
 uint32_t pv_mda_count(const struct physical_volume *pv);
 uint32_t pv_mda_used_count(const struct physical_volume *pv);
-unsigned pv_mda_set_ignored(const struct physical_volume *pv, unsigned ignored);
+unsigned pv_mda_set_ignored(const struct physical_volume *pv, unsigned mda_ignored);
 int is_orphan(const struct physical_volume *pv);
 int is_missing_pv(const struct physical_volume *pv);
 int is_used_pv(const struct physical_volume *pv);

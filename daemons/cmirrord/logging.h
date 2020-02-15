@@ -13,9 +13,6 @@
 #ifndef _LVM_CLOG_LOGGING_H
 #define _LVM_CLOG_LOGGING_H
 
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
-
 #include "configure.h"
 #include <stdio.h>
 #include <stdint.h>

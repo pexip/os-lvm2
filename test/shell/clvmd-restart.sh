@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2011-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -20,14 +21,14 @@ SKIP_WITH_LVMPOLLD=1
 . lib/inittest
 
 # only clvmd based test, skip otherwise
-read LOCAL_CLVMD < LOCAL_CLVMD
+read -r LOCAL_CLVMD < LOCAL_CLVMD
 
 # TODO read from build, for now hardcoded
 CLVMD_SOCKET="/var/run/lvm/clvmd.sock"
 
 restart_clvmd_() {
 	"$LVM_CLVMD_BINARY" -S
-	ls -la $CLVMD_SOCKET || true
+	ls -la "$CLVMD_SOCKET" || true
 
 	for i in $(seq 1 20) ; do
 		test -S "$CLVMD_SOCKET" && break

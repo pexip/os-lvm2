@@ -10,13 +10,11 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#define _REENTRANT
+#include "tools/tool.h"
 
-#include "tool.h"
-
-#include "daemon-io.h"
 #include "daemon-server.h"
 #include "daemon-log.h"
+#include "libdaemon/client/daemon-io.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -42,7 +40,7 @@ static int _pthread_create(pthread_t *t, void *(*fun)(void *), void *arg, int st
 	/*
 	 * We use a smaller stack since it gets preallocated in its entirety
 	 */
-	pthread_attr_setstacksize(&attr, stacksize);
+	pthread_attr_setstacksize(&attr, stacksize + getpagesize());
 	return pthread_create(t, &attr, fun, arg);
 }
 #endif
@@ -334,6 +332,11 @@ static void _daemonise(daemon_state s)
 	struct timeval tval;
 	sigset_t my_sigset;
 
+	if ((fd = open("/dev/null", O_RDWR)) == -1) {
+		fprintf(stderr, "Unable to open /dev/null.\n");
+		exit(EXIT_FAILURE);
+	}
+
 	sigemptyset(&my_sigset);
 	if (sigprocmask(SIG_SETMASK, &my_sigset, NULL) < 0) {
 		fprintf(stderr, "Unable to restore signals.\n");
@@ -350,6 +353,7 @@ static void _daemonise(daemon_state s)
 		break;
 
 	default:
+		(void) close(fd);
 		/* Wait for response from child */
 		while (!waitpid(pid, &child_status, WNOHANG) && !_shutdown_requested) {
 			tval.tv_sec = 0;
@@ -371,15 +375,30 @@ static void _daemonise(daemon_state s)
 		exit(WEXITSTATUS(child_status));
 	}
 
-	if (chdir("/"))
+	if (chdir("/")) {
+		perror("Cannot chdir to /");
 		exit(1);
+	}
 
+	if ((dup2(fd, STDIN_FILENO) == -1) ||
+	    (dup2(fd, STDOUT_FILENO) == -1) ||
+	    (dup2(fd, STDERR_FILENO) == -1)) {
+		perror("Error setting terminal FDs to /dev/null");
+		exit(2);
+	}
+
+	if ((fd > STDERR_FILENO) && close(fd)) {
+		perror("Failed to close /dev/null descriptor");
+		exit(3);
+	}
+
+	/* Switch to sysconf(_SC_OPEN_MAX) ?? */
 	if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
 		fd = 256; /* just have to guess */
 	else
 		fd = rlim.rlim_cur;
 
-	for (--fd; fd >= 0; fd--) {
+	for (--fd; fd > STDERR_FILENO; fd--) {
 #ifdef __linux__
 		/* Do not close fds preloaded by systemd! */
 		if (_systemd_activation && fd == SD_FD_SOCKET_SERVER)
@@ -387,11 +406,6 @@ static void _daemonise(daemon_state s)
 #endif
 		(void) close(fd);
 	}
-
-	if ((open("/dev/null", O_RDONLY) < 0) ||
-	    (open("/dev/null", O_WRONLY) < 0) ||
-	    (open("/dev/null", O_WRONLY) < 0))
-		exit(1);
 
 	setsid();
 }
@@ -482,7 +496,7 @@ fail:
 	return NULL;
 }
 
-static int handle_connect(daemon_state s)
+static int _handle_connect(daemon_state s)
 {
 	thread_state *ts;
 	struct sockaddr_un sockaddr;
@@ -491,14 +505,15 @@ static int handle_connect(daemon_state s)
 
 	client.socket_fd = accept(s.socket_fd, (struct sockaddr *) &sockaddr, &sl);
 	if (client.socket_fd < 0) {
-		ERROR(&s, "Failed to accept connection errno %d.", errno);
+		if (errno != EAGAIN || !_shutdown_requested)
+			ERROR(&s, "Failed to accept connection: %s.", strerror(errno));
 		return 0;
 	}
 
 	 if (fcntl(client.socket_fd, F_SETFD, FD_CLOEXEC))
 		WARN(&s, "setting CLOEXEC on client socket fd %d failed", client.socket_fd);
 
-	if (!(ts = dm_malloc(sizeof(thread_state)))) {
+	if (!(ts = malloc(sizeof(thread_state)))) {
 		if (close(client.socket_fd))
 			perror("close");
 		ERROR(&s, "Failed to allocate thread state");
@@ -512,8 +527,8 @@ static int handle_connect(daemon_state s)
 	ts->s = s;
 	ts->client = client;
 
-	if (pthread_create(&ts->client.thread_id, NULL, _client_thread, ts)) {
-		ERROR(&s, "Failed to create client thread errno %d.", errno);
+	if ((errno = pthread_create(&ts->client.thread_id, NULL, _client_thread, ts))) {
+		ERROR(&s, "Failed to create client thread: %s.", strerror(errno));
 		return 0;
 	}
 
@@ -530,7 +545,7 @@ static void _reap(daemon_state s, int waiting)
 			if ((errno = pthread_join(ts->client.thread_id, &rv)))
 				ERROR(&s, "pthread_join failed: %s", strerror(errno));
 			last->next = ts->next;
-			dm_free(ts);
+			free(ts);
 		} else
 			last = ts;
 		ts = last->next;
@@ -634,7 +649,7 @@ void daemon_start(daemon_state s)
 			perror("select error");
 		if (FD_ISSET(s.socket_fd, &in)) {
 			timeout_count = 0;
-			handle_connect(s);
+			_handle_connect(s);
 		}
 
 		_reap(s, 0);

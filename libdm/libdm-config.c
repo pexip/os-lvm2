@@ -13,7 +13,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -72,7 +72,7 @@ static struct dm_config_node *_create_node(struct dm_pool *mem);
 static char *_dup_tok(struct parser *p);
 static char *_dup_token(struct dm_pool *mem, const char *b, const char *e);
 
-static const int sep = '/';
+static const int _sep = '/';
 
 #define MAX_INDENT 32
 
@@ -244,7 +244,7 @@ static int _line_append(struct config_output *out, const char *fmt, ...)
 	 */
 
 	va_start(ap, fmt);
-	n = vsnprintf(&buf[0], sizeof buf - 1, fmt, ap);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
 
 	if (n < 0) {
@@ -530,11 +530,11 @@ static struct dm_config_node *_find_or_make_node(struct dm_pool *mem,
 
 	while (cn || mem) {
 		/* trim any leading slashes */
-		while (*path && (*path == sep))
+		while (*path && (*path == _sep))
 			path++;
 
 		/* find the end of this segment */
-		for (e = path; *e && (*e != sep); e++) ;
+		for (e = path; *e && (*e != _sep); e++) ;
 
 		/* hunt for the node */
 		cn_found = NULL;
@@ -679,13 +679,23 @@ static struct dm_config_value *_type(struct parser *p)
 	switch (p->t) {
 	case TOK_INT:
 		v->type = DM_CFG_INT;
+		errno = 0;
 		v->v.i = strtoll(p->tb, NULL, 0);	/* FIXME: check error */
+		if (errno) {
+			log_error("Failed to read int token.");
+			return NULL;
+		}
 		match(TOK_INT);
 		break;
 
 	case TOK_FLOAT:
 		v->type = DM_CFG_FLOAT;
+		errno = 0;
 		v->v.f = strtod(p->tb, NULL);	/* FIXME: check error */
+		if (errno) {
+			log_error("Failed to read float token.");
+			return NULL;
+		}
 		match(TOK_FLOAT);
 		break;
 
@@ -953,7 +963,7 @@ static const char *_find_config_str(const void *start, node_lookup_fn find_fn,
 	if (n && n->v) {
 		if ((n->v->type == DM_CFG_STRING) &&
 		    (allow_empty || (*n->v->v.str))) {
-			log_very_verbose("Setting %s to %s", path, n->v->v.str);
+			/* log_very_verbose("Setting %s to %s", path, n->v->v.str); */
 			return n->v->v.str;
 		}
 		if ((n->v->type != DM_CFG_STRING) || (!allow_empty && fail))
@@ -984,7 +994,7 @@ static int64_t _find_config_int64(const void *start, node_lookup_fn find,
 	const struct dm_config_node *n = find(start, path);
 
 	if (n && n->v && n->v->type == DM_CFG_INT) {
-		log_very_verbose("Setting %s to %" PRId64, path, n->v->v.i);
+		/* log_very_verbose("Setting %s to %" PRId64, path, n->v->v.i); */
 		return n->v->v.i;
 	}
 
@@ -999,7 +1009,7 @@ static float _find_config_float(const void *start, node_lookup_fn find,
 	const struct dm_config_node *n = find(start, path);
 
 	if (n && n->v && n->v->type == DM_CFG_FLOAT) {
-		log_very_verbose("Setting %s to %f", path, n->v->v.f);
+		/* log_very_verbose("Setting %s to %f", path, n->v->v.f); */
 		return n->v->v.f;
 	}
 
@@ -1048,12 +1058,12 @@ static int _find_config_bool(const void *start, node_lookup_fn find,
 		switch (v->type) {
 		case DM_CFG_INT:
 			b = v->v.i ? 1 : 0;
-			log_very_verbose("Setting %s to %d", path, b);
+			/* log_very_verbose("Setting %s to %d", path, b); */
 			return b;
 
 		case DM_CFG_STRING:
 			b = _str_to_bool(v->v.str, fail);
-			log_very_verbose("Setting %s to %d", path, b);
+			/* log_very_verbose("Setting %s to %d", path, b); */
 			return b;
 		default:
 			;

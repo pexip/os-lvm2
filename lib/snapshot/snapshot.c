@@ -13,13 +13,14 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "metadata.h"
-#include "segtype.h"
-#include "text_export.h"
-#include "config.h"
-#include "activate.h"
-#include "str_list.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/segtype.h"
+#include "lib/format_text/text_export.h"
+#include "lib/config/config.h"
+#include "lib/activate/activate.h"
+#include "lib/datastruct/str_list.h"
 
 #define SEG_LOG_ERROR(t, p...) \
 	log_error(t " segment %s of logical volume %s.", ## p, \
@@ -179,24 +180,19 @@ static int _snap_target_present(struct cmd_context *cmd,
 }
 
 #  ifdef DMEVENTD
-
-static const char *_get_snapshot_dso_path(struct cmd_context *cmd)
-{
-	return get_monitor_dso_path(cmd, find_config_tree_str(cmd, dmeventd_snapshot_library_CFG, NULL));
-}
-
 /* FIXME Cache this */
-static int _target_registered(struct lv_segment *seg, int *pending)
+static int _target_registered(struct lv_segment *seg, int *pending, int *monitored)
 {
-	return target_registered_with_dmeventd(seg->lv->vg->cmd, _get_snapshot_dso_path(seg->lv->vg->cmd),
-					       seg->cow, pending);
+	return target_registered_with_dmeventd(seg->lv->vg->cmd,
+					       seg->segtype->dso,
+					       seg->cow, pending, monitored);
 }
 
 /* FIXME This gets run while suspended and performs banned operations. */
 static int _target_set_events(struct lv_segment *seg, int evmask, int set)
 {
 	/* FIXME Make timeout (10) configurable */
-	return target_register_events(seg->lv->vg->cmd, _get_snapshot_dso_path(seg->lv->vg->cmd),
+	return target_register_events(seg->lv->vg->cmd, seg->segtype->dso,
 				      seg->cow, evmask, set, 10);
 }
 
@@ -229,7 +225,8 @@ static int _snap_modules_needed(struct dm_pool *mem,
 
 static void _snap_destroy(struct segment_type *segtype)
 {
-	dm_free(segtype);
+	free((void *) segtype->dso);
+	free(segtype);
 }
 
 static struct segtype_handler _snapshot_ops = {
@@ -257,7 +254,7 @@ struct segment_type *init_segtype(struct cmd_context *cmd);
 struct segment_type *init_segtype(struct cmd_context *cmd)
 #endif
 {
-	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
+	struct segment_type *segtype = zalloc(sizeof(*segtype));
 
 	if (!segtype)
 		return_NULL;
@@ -268,7 +265,9 @@ struct segment_type *init_segtype(struct cmd_context *cmd)
 
 #ifdef DEVMAPPER_SUPPORT
 #  ifdef DMEVENTD
-	if (_get_snapshot_dso_path(cmd))
+	segtype->dso = get_monitor_dso_path(cmd, dmeventd_snapshot_library_CFG);
+
+	if (segtype->dso)
 		segtype->flags |= SEG_MONITORED;
 #  endif	/* DMEVENTD */
 #endif

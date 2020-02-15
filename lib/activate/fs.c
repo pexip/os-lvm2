@@ -13,13 +13,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
+#include "lib/misc/lib.h"
 #include "fs.h"
-#include "activate.h"
-#include "toolcontext.h"
-#include "lvm-string.h"
-#include "lvm-file.h"
-#include "memlock.h"
+#include "lib/activate/activate.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/misc/lvm-file.h"
+#include "lib/mm/memlock.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -186,11 +186,11 @@ static int _mk_link(const char *dev_dir, const char *vg_name,
 			    !stat(lv_path, &buf)) {
 				if (buf_lp.st_rdev == buf.st_rdev)
 					return 1;
-				else
-					log_warn("Symlink %s that should have been "
-						 "created by udev does not have "
-						 "correct target. Falling back to "
-						 "direct link creation", lv_path);
+
+				log_warn("Symlink %s that should have been "
+					 "created by udev does not have "
+					 "correct target. Falling back to "
+					 "direct link creation", lv_path);
 			} else
 				log_warn("Symlink %s that should have been "
 					 "created by udev could not be checked "
@@ -239,7 +239,9 @@ static int _rm_link(const char *dev_dir, const char *vg_name,
 			return 1;
 		log_sys_error("lstat", lv_path);
 		return 0;
-	} else if (dm_udev_get_sync_support() && udev_checking() && check_udev)
+	}
+
+	if (dm_udev_get_sync_support() && udev_checking() && check_udev)
 		log_warn("The link %s should have been removed by udev "
 			 "but it is still present. Falling back to "
 			 "direct link removal.", lv_path);
@@ -325,7 +327,7 @@ static void _del_fs_op(struct fs_op_parms *fsp)
 {
 	_count_fs_ops[fsp->type]--;
 	dm_list_del(&fsp->list);
-	dm_free(fsp);
+	free(fsp);
 }
 
 /* Check if there is other the type of fs operation stacked */
@@ -399,7 +401,7 @@ static int _stack_fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 				_del_fs_op(fsp);
 		}
 
-	if (!(fsp = dm_malloc(sizeof(*fsp) + len))) {
+	if (!(fsp = malloc(sizeof(*fsp) + len))) {
 		log_error("No space to stack fs operation");
 		return 0;
 	}
@@ -439,7 +441,7 @@ static int _fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 		  const char *lv_name, const char *dev, const char *old_lv_name,
 		  int check_udev)
 {
-	if (critical_section()) {
+	if (prioritized_section()) {
 		if (!_stack_fs_op(type, dev_dir, vg_name, lv_name, dev,
 				  old_lv_name, check_udev))
 			return_0;
@@ -478,14 +480,14 @@ int fs_rename_lv(const struct logical_volume *lv, const char *dev,
 			 _fs_op(FS_ADD, lv->vg->cmd->dev_dir, lv->vg->name,
 				lv->name, dev, "", lv->vg->cmd->current_settings.udev_rules));
 	}
-	else 
-		return _fs_op(FS_RENAME, lv->vg->cmd->dev_dir, lv->vg->name, lv->name,
-			      dev, old_lvname, lv->vg->cmd->current_settings.udev_rules);
+
+	return _fs_op(FS_RENAME, lv->vg->cmd->dev_dir, lv->vg->name, lv->name,
+		      dev, old_lvname, lv->vg->cmd->current_settings.udev_rules);
 }
 
 void fs_unlock(void)
 {
-	if (!critical_section()) {
+	if (!prioritized_section()) {
 		log_debug_activation("Syncing device names");
 		/* Wait for all processed udev devices */
 		if (!dm_udev_wait(_fs_cookie))

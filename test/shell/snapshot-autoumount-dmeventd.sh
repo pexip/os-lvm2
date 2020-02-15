@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2010-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # no automatic extensions please
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -35,12 +36,12 @@ mkdir "$mntdir"
 # Use remount-ro  to avoid logging kernel WARNING
 mount -o errors=remount-ro "$DM_DEV_DIR/mapper/$vg-snap" "$mntdir"
 
-test $(dmsetup info -c --noheadings -o open $vg-snap) -eq 1
+test "$(dmsetup info -c --noheadings -o open $vg-snap)" -eq 1
 
-cat /proc/mounts | grep "$mntdir"
+grep "$mntdir" /proc/mounts
 
 # overfill 4M snapshot (with metadata)
-not dd if=/dev/zero of="$mntdir/file$1" bs=1M count=4 conv=fdatasync
+not dd if=/dev/zero of="$mntdir/file" bs=1M count=4 conv=fdatasync
 
 # Should be nearly instant check of dmeventd for invalid snapshot.
 # Wait here for umount and open_count drops to 0 as it may
@@ -48,9 +49,9 @@ not dd if=/dev/zero of="$mntdir/file$1" bs=1M count=4 conv=fdatasync
 # removed from /proc/mounts, but still opened).
 for i in {1..100}; do
 	sleep .1
-	test $(dmsetup info -c --noheadings -o open $vg-snap) -eq 0 && break
+	test "$(dmsetup info -c --noheadings -o open $vg-snap)" -eq 0 && break
 done
 
-cat /proc/mounts | not grep "$mntdir"
+not grep "$mntdir" /proc/mounts
 
 vgremove -f $vg

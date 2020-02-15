@@ -15,9 +15,9 @@
 
 #include "tools.h"
 
-static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
-			   struct volume_group *vg,
-			   struct processing_handle *handle __attribute__((unused)))
+static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
+			    struct volume_group *vg,
+			    struct processing_handle *handle __attribute__((unused)))
 {
 	/*
 	 * Though vgremove operates per VG by definition, internally, it
@@ -62,7 +62,7 @@ static int vgremove_single(struct cmd_context *cmd, const char *vg_name,
 		}
 
 		if ((ret = process_each_lv_in_vg(cmd, vg, NULL, NULL, 1, &void_handle,
-						 (process_single_lv_fn_t)lvremove_single)) != ECMD_PROCESSED) {
+						 NULL, (process_single_lv_fn_t)lvremove_single)) != ECMD_PROCESSED) {
 			stack;
 			return ret;
 		}
@@ -108,10 +108,17 @@ int vgremove(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	cmd->lockd_gl_disable = 1;
 
+	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for orphan PVs");
+		return ECMD_FAILED;
+	}
+
 	cmd->handles_missing_pvs = 1;
 	ret = process_each_vg(cmd, argc, argv, NULL, NULL,
 			      READ_FOR_UPDATE, 0,
-			      NULL, &vgremove_single);
+			      NULL, &_vgremove_single);
+
+	unlock_vg(cmd, NULL, VG_ORPHANS);
 
 	return ret;
 }

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2012 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -16,16 +16,18 @@
 #ifndef _LVM_LV_ALLOC_H
 #define _LVM_LV_ALLOC_H
 
-#include "metadata-exported.h"
+#include "lib/metadata/metadata-exported.h"
 
 struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 				    struct logical_volume *lv,
 				    uint32_t le, uint32_t len,
+				    uint32_t reshape_len,
 				    uint64_t status,
 				    uint32_t stripe_size,
 				    struct logical_volume *log_lv,
 				    uint32_t area_count,
 				    uint32_t area_len,
+				    uint32_t data_copies,
 				    uint32_t chunk_size,
 				    uint32_t region_size,
 				    uint32_t extents_copied,
@@ -45,20 +47,20 @@ int release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t s, uint
 struct alloc_handle;
 struct alloc_handle *allocate_extents(struct volume_group *vg,
 				      struct logical_volume *lv,
-                                      const struct segment_type *segtype,
-                                      uint32_t stripes,
-                                      uint32_t mirrors, uint32_t log_count,
-				      uint32_t log_region_size, uint32_t extents,
-                                      struct dm_list *allocatable_pvs,
+				      const struct segment_type *segtype,
+				      uint32_t stripes,
+				      uint32_t mirrors, uint32_t log_count,
+				      uint32_t region_size, uint32_t extents,
+				      struct dm_list *allocatable_pvs,
 				      alloc_policy_t alloc, int approx_alloc,
 				      struct dm_list *parallel_areas);
 
 int lv_add_segment(struct alloc_handle *ah,
 		   uint32_t first_area, uint32_t num_areas,
 		   struct logical_volume *lv,
-                   const struct segment_type *segtype,
-                   uint32_t stripe_size,
-                   uint64_t status,
+		   const struct segment_type *segtype,
+		   uint32_t stripe_size,
+		   uint64_t status,
 		   uint32_t region_size);
 
 int lv_add_mirror_areas(struct alloc_handle *ah,

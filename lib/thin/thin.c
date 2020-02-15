@@ -12,14 +12,15 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "display.h"
-#include "metadata.h"
-#include "segtype.h"
-#include "text_export.h"
-#include "config.h"
-#include "activate.h"
-#include "str_list.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/display/display.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/segtype.h"
+#include "lib/format_text/text_export.h"
+#include "lib/config/config.h"
+#include "lib/activate/activate.h"
+#include "lib/datastruct/str_list.h"
 
 /* Dm kernel module name for thin provisiong */
 static const char _thin_pool_module[] = "thin-pool";
@@ -45,7 +46,7 @@ static void _thin_pool_display(const struct lv_segment *seg)
 		  dm_list_size(&seg->lv->segs_using_this_lv));
 	log_print("  Transaction ID\t%" PRIu64, seg->transaction_id);
 	log_print("  Zero new blocks\t%s",
-		  seg->zero_new_blocks ? "yes" : "no");
+		  (seg->zero_new_blocks == THIN_ZERO_YES) ? "yes" : "no");
 
 	log_print(" ");
 }
@@ -84,6 +85,7 @@ static int _thin_pool_text_import(struct lv_segment *seg,
 	const char *lv_name;
 	struct logical_volume *pool_data_lv, *pool_metadata_lv;
 	const char *discards_str = NULL;
+	uint32_t zero = 0;
 
 	if (!dm_config_get_str(sn, "metadata", &lv_name))
 		return SEG_LOG_ERROR("Metadata must be a string in");
@@ -124,8 +126,10 @@ static int _thin_pool_text_import(struct lv_segment *seg,
 				     seg->device_id);
 
 	if (dm_config_has_node(sn, "zero_new_blocks") &&
-	    !dm_config_get_uint32(sn, "zero_new_blocks", &seg->zero_new_blocks))
+	    !dm_config_get_uint32(sn, "zero_new_blocks", &zero))
 		return SEG_LOG_ERROR("Could not read zero_new_blocks for");
+
+	seg->zero_new_blocks = (zero) ? THIN_ZERO_YES : THIN_ZERO_NO;
 
 	/* Read messages */
 	for (; sn; sn = sn->sib)
@@ -165,8 +169,13 @@ static int _thin_pool_text_export(const struct lv_segment *seg, struct formatter
 		return 0;
 	}
 
-	if (seg->zero_new_blocks)
+	if (seg->zero_new_blocks == THIN_ZERO_YES)
 		outf(f, "zero_new_blocks = 1");
+	else if (seg->zero_new_blocks != THIN_ZERO_NO) {
+		log_error(INTERNAL_ERROR "Invalid zero new blocks value %d.",
+			  seg->zero_new_blocks);
+		return 0;
+	}
 
 	dm_list_iterate_items(tmsg, &seg->thin_messages) {
 		/* Extra validation */
@@ -304,7 +313,7 @@ static int _thin_pool_add_target_line(struct dev_manager *dm,
 					       seg->transaction_id,
 					       metadata_dlid, pool_dlid,
 					       seg->chunk_size, low_water_mark,
-					       seg->zero_new_blocks ? 0 : 1))
+					       (seg->zero_new_blocks == THIN_ZERO_YES) ? 0 : 1))
 		return_0;
 
 	if (attr & THIN_FEATURE_DISCARDS) {
@@ -423,17 +432,12 @@ static int _thin_pool_target_percent(void **target_state __attribute__((unused))
 }
 
 #  ifdef DMEVENTD
-static const char *_get_thin_dso_path(struct cmd_context *cmd)
-{
-	return get_monitor_dso_path(cmd, find_config_tree_str(cmd, dmeventd_thin_library_CFG, NULL));
-}
-
 /* FIXME Cache this */
-static int _target_registered(struct lv_segment *seg, int *pending)
+static int _target_registered(struct lv_segment *seg, int *pending, int *monitored)
 {
 	return target_registered_with_dmeventd(seg->lv->vg->cmd,
-					       _get_thin_dso_path(seg->lv->vg->cmd),
-					       seg->lv, pending);
+					       seg->segtype->dso,
+					       seg->lv, pending, monitored);
 }
 
 /* FIXME This gets run while suspended and performs banned operations. */
@@ -441,7 +445,7 @@ static int _target_set_events(struct lv_segment *seg, int evmask, int set)
 {
 	/* FIXME Make timeout (10) configurable */
 	return target_register_events(seg->lv->vg->cmd,
-				      _get_thin_dso_path(seg->lv->vg->cmd),
+				      seg->segtype->dso,
 				      seg->lv, evmask, set, 10);
 }
 
@@ -742,7 +746,8 @@ static int _thin_target_present(struct cmd_context *cmd,
 
 static void _thin_destroy(struct segment_type *segtype)
 {
-	dm_free(segtype);
+	free((void *) segtype->dso);
+	free(segtype);
 }
 
 static struct segtype_handler _thin_pool_ops = {
@@ -799,7 +804,7 @@ int init_multiple_segtypes(struct cmd_context *cmd, struct segtype_library *segl
 	unsigned i;
 
 	for (i = 0; i < DM_ARRAY_SIZE(reg_segtypes); ++i) {
-		segtype = dm_zalloc(sizeof(*segtype));
+		segtype = zalloc(sizeof(*segtype));
 
 		if (!segtype) {
 			log_error("Failed to allocate memory for %s segtype",
@@ -813,8 +818,10 @@ int init_multiple_segtypes(struct cmd_context *cmd, struct segtype_library *segl
 
 #ifdef DEVMAPPER_SUPPORT
 #  ifdef DMEVENTD
+		segtype->dso = get_monitor_dso_path(cmd, dmeventd_thin_library_CFG);
+
 		if ((reg_segtypes[i].flags & SEG_THIN_POOL) &&
-		    _get_thin_dso_path(cmd))
+		    segtype->dso)
 			segtype->flags |= SEG_MONITORED;
 #  endif /* DMEVENTD */
 #endif

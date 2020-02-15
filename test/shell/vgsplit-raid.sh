@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -16,7 +17,7 @@ SKIP_WITH_LVMPOLLD=1
 . lib/inittest
 
 COMM() {
-	LAST_TEST="$@"
+	LAST_TEST="$*"
 }
 
 create_vg_() {

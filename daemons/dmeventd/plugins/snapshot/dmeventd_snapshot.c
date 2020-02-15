@@ -12,9 +12,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "dmeventd_lvm.h"
-#include "libdevmapper-event.h"
+#include "lib/misc/lib.h"
+#include "daemons/dmeventd/plugins/lvm2/dmeventd_lvm.h"
+#include "daemons/dmeventd/libdevmapper-event.h"
 
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
@@ -175,6 +175,7 @@ void process_event(struct dm_task *dmt,
 	const char *device = dm_task_get_name(dmt);
 	int percent;
 	struct dm_info info;
+	int ret;
 
 	/* No longer monitoring, waiting for remove */
 	if (!state->percent_check)
@@ -205,7 +206,8 @@ void process_event(struct dm_task *dmt,
 		/* Maybe configurable ? */
 		_remove(dm_task_get_uuid(dmt));
 #endif
-		pthread_kill(pthread_self(), SIGALRM);
+		if ((ret = pthread_kill(pthread_self(), SIGALRM)) && (ret != ESRCH))
+			log_sys_error("pthread_kill", "self");
 		goto out;
 	}
 
@@ -213,7 +215,8 @@ void process_event(struct dm_task *dmt,
 		/* TODO eventually recognize earlier when room is enough */
 		log_info("Dropping monitoring of fully provisioned snapshot %s.",
 			 device);
-		pthread_kill(pthread_self(), SIGALRM);
+		if ((ret = pthread_kill(pthread_self(), SIGALRM)) && (ret != ESRCH))
+			log_sys_error("pthread_kill", "self");
 		goto out;
 	}
 
@@ -231,7 +234,7 @@ void process_event(struct dm_task *dmt,
 
 		if (percent >= WARNING_THRESH) /* Print a warning to syslog. */
 			log_warn("WARNING: Snapshot %s is now %.2f%% full.",
-				 device, dm_percent_to_float(percent));
+				 device, dm_percent_to_round_float(percent, 2));
 
 		/* Try to extend the snapshot, in accord with user-set policies */
 		if (!_extend(state->cmd_lvextend))
@@ -254,10 +257,8 @@ int register_device(const char *device,
 
 	if (!dmeventd_lvm2_command(state->mem, state->cmd_lvextend,
 				   sizeof(state->cmd_lvextend),
-				   "lvextend --use-policies", device)) {
-		dmeventd_lvm2_exit_with_pool(state);
+				   "lvextend --use-policies", device))
 		goto_bad;
-	}
 
 	state->percent_check = CHECK_MINIMUM;
 	*user = state;
@@ -267,6 +268,9 @@ int register_device(const char *device,
 	return 1;
 bad:
 	log_error("Failed to monitor snapshot %s.", device);
+
+	if (state)
+		dmeventd_lvm2_exit_with_pool(state);
 
 	return 0;
 }

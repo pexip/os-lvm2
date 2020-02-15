@@ -16,12 +16,9 @@
 #ifndef _LVM_SHAREDLIB_H
 #define _LVM_SHAREDLIB_H
 
-#include "config.h"
+#include "lib/config/config.h"
 #include <dlfcn.h>
 
 void get_shared_library_path(struct cmd_context *cmd, const char *libname,
 			     char *path, size_t path_len);
-void *load_shared_library(struct cmd_context *cmd, const char *libname,
-			  const char *what, int silent);
-
 #endif

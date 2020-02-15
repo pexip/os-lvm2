@@ -19,10 +19,11 @@
 struct cmd_context;
 
 struct cmdline_context {
-        struct arg_props *arg_props;
-        struct command *commands;
-        int num_commands;
-        int commands_size;
+	struct opt_name *opt_names;
+	struct command *commands;
+	int num_commands;
+	struct command_name *command_names;
+	int num_command_names;
 };
 
 int lvm2_main(int argc, char **argv);
@@ -31,7 +32,7 @@ void *cmdlib_lvm2_init(unsigned static_compile);
 void lvm_fin(struct cmd_context *cmd);
 
 struct cmd_context *init_lvm(unsigned set_connections, unsigned set_filters);
-void lvm_register_commands(void);
+int lvm_register_commands(struct cmd_context *cmdtool, const char *name);
 int lvm_split(char *str, int *argc, char **argv, int max);
 int lvm_run_command(struct cmd_context *cmd, int argc, char **argv);
 int lvm_return_code(int ret);

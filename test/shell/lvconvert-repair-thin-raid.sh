@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright (C) 2015 Red Hat, Inc. All rights reserved.
 #
@@ -12,7 +12,7 @@
 
 # Test repairing of broken thin pool on raid
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest

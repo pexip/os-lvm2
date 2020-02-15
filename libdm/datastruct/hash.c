@@ -13,7 +13,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 
 struct dm_hash_node {
 	struct dm_hash_node *next;
@@ -102,11 +102,9 @@ struct dm_hash_table *dm_hash_create(unsigned size_hint)
 
 	hc->num_slots = new_size;
 	len = sizeof(*(hc->slots)) * new_size;
-	if (!(hc->slots = dm_malloc(len))) {
-		stack;
-		goto bad;
-	}
-	memset(hc->slots, 0, len);
+	if (!(hc->slots = dm_zalloc(len)))
+		goto_bad;
+
 	return hc;
 
       bad:

@@ -12,7 +12,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 #include "libdm-common.h"
 
 int dm_get_status_snapshot(struct dm_pool *mem, const char *params,
@@ -89,6 +89,8 @@ static unsigned _count_fields(const char *p)
  *   <raid_type> <#devs> <health_str> <sync_ratio>
  * Versions 1.5.0+  (6 fields):
  *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt>
+ * Versions 1.9.0+  (7 fields):
+ *   <raid_type> <#devs> <health_str> <sync_ratio> <sync_action> <mismatch_cnt> <data_offset>
  */
 int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		       struct dm_status_raid **status)
@@ -97,6 +99,7 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 	unsigned num_fields;
 	const char *p, *pp, *msg_fields = "";
 	struct dm_status_raid *s = NULL;
+	unsigned a = 0;
 
 	if ((num_fields = _count_fields(params)) < 4)
 		goto_bad;
@@ -117,7 +120,7 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 		goto_bad;
 
 	msg_fields = "<raid_type> <#devices> <health_chars> and <sync_ratio> ";
-	if (sscanf(params, "%s %u %s %" PRIu64 "/%" PRIu64,
+	if (sscanf(params, "%s %u %s " FMTu64 "/" FMTu64,
 		   s->raid_type,
 		   &s->dev_count,
 		   s->dev_health,
@@ -144,11 +147,44 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 	if (!(s->sync_action = dm_pool_zalloc(mem, pp - p)))
 		goto_bad;
 
-	if (sscanf(p, "%s %" PRIu64, s->sync_action, &s->mismatch_count) != 2)
+	if (sscanf(p, "%s " FMTu64, s->sync_action, &s->mismatch_count) != 2)
 		goto_bad;
+
+	if (num_fields < 7)
+		goto out;
+
+	/*
+	 * All pre-1.9.0 version parameters are read.  Now we check
+	 * for additional 1.9.0+ parameters (i.e. nr_fields at least 7).
+	 *
+	 * Note that data_offset will be 0 if the
+	 * kernel returns a pre-1.9.0 status.
+	 */
+	msg_fields = "<data_offset>";
+	if (!(p = _skip_fields(params, 6))) /* skip pre-1.9.0 params */
+		goto bad;
+	if (sscanf(p, FMTu64, &s->data_offset) != 1)
+		goto bad;
 
 out:
 	*status = s;
+
+	if (s->insync_regions == s->total_regions) {
+		/* FIXME: kernel gives misleading info here
+		 * Trying to recognize a true state */
+		while (i-- > 0)
+			if (s->dev_health[i] == 'a')
+				a++; /* Count number of 'a' */
+
+		if (a && a < s->dev_count) {
+			/* SOME legs are in 'a' */
+			if (!strcasecmp(s->sync_action, "recover")
+			    || !strcasecmp(s->sync_action, "idle"))
+				/* Kernel may possibly start some action
+				 * in near-by future, do not report 100% */
+				s->insync_regions--;
+		}
+	}
 
 	return 1;
 
@@ -226,14 +262,14 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 
 	/* Read in args that have definitive placement */
 	if (sscanf(params,
-		   " %" PRIu32
-		   " %" PRIu64 "/%" PRIu64
-		   " %" PRIu32
-		   " %" PRIu64 "/%" PRIu64
-		   " %" PRIu64 " %" PRIu64
-		   " %" PRIu64 " %" PRIu64
-		   " %" PRIu64 " %" PRIu64
-		   " %" PRIu64
+		   " " FMTu32
+		   " " FMTu64 "/" FMTu64
+		   " " FMTu32
+		   " " FMTu64 "/" FMTu64
+		   " " FMTu64 " " FMTu64
+		   " " FMTu64 " " FMTu64
+		   " " FMTu64 " " FMTu64
+		   " " FMTu64
 		   " %d",
 		   &s->metadata_block_size,
 		   &s->metadata_used_blocks, &s->metadata_total_blocks,
@@ -256,8 +292,10 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 			s->feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
 		else if (!strncmp(p, "writeback ", 10))
 			s->feature_flags |= DM_CACHE_FEATURE_WRITEBACK;
-		else if (!strncmp(p, "passthrough ", 11))
+		else if (!strncmp(p, "passthrough ", 12))
 			s->feature_flags |= DM_CACHE_FEATURE_PASSTHROUGH;
+		else if (!strncmp(p, "metadata2 ", 10))
+			s->feature_flags |= DM_CACHE_FEATURE_METADATA2;
 		else
 			log_error("Unknown feature in status: %s", params);
 
@@ -311,6 +349,8 @@ bad:
 int parse_thin_pool_status(const char *params, struct dm_status_thin_pool *s)
 {
 	int pos;
+
+	memset(s, 0, sizeof(*s));
 
 	if (!params) {
 		log_error("Failed to parse invalid thin params.");
@@ -368,7 +408,7 @@ int dm_get_status_thin_pool(struct dm_pool *mem, const char *params,
 {
 	struct dm_status_thin_pool *s;
 
-	if (!(s = dm_pool_zalloc(mem, sizeof(struct dm_status_thin_pool)))) {
+	if (!(s = dm_pool_alloc(mem, sizeof(struct dm_status_thin_pool)))) {
 		log_error("Failed to allocate thin_pool status structure.");
 		return 0;
 	}
@@ -467,6 +507,11 @@ int dm_get_status_mirror(struct dm_pool *mem, const char *params,
 
 	if (!(pos = _skip_fields(pos, argc)))
 		goto_out;
+
+	if (strncmp(pos, "userspace", 9) == 0) {
+		pos += 9;
+		/* FIXME: support status of userspace mirror implementation */
+	}
 
 	if (sscanf(pos, "%u %n", &argc, &used) != 1)
 		goto_out;

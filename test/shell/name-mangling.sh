@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2012 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,9 +12,7 @@
 
 # This test is not using any lvm command
 # so skip duplicate CLMVD and lvmetad test
-SKIP_WITH_LVMLOCKD=1
-SKIP_WITH_CLVMD=1
-SKIP_WITH_LVMETAD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -75,13 +74,13 @@ function check_create_and_remove()
 
 	if [ "$dm_name" = "FAIL_MIXED" ]; then
 		r=0
-		grep "$FAILED_MIXED_STR" err || r=1
+		grep "$FAIL_MIXED_STR" err || r=1
 	elif [ "$dm_name" = "FAIL_MULTI" ]; then
 		r=0
-		grep "$FAILED_MULTI_STR" err || r=1
+		grep "$FAIL_MULTI_STR" err || r=1
 	elif [ "$dm_name" = "FAIL_BLACK" ]; then
 		r=0
-		grep "$FAILED_BLACK_STR" err || r=1
+		grep "$FAIL_BLACK_STR" err || r=1
 	fi
 
 	return $r
@@ -172,7 +171,7 @@ function check_mangle_cmd()
 		fi
 	fi
 
-	if [ $r = 0 -a $rename_expected = 1 ]; then
+	if [ "$r" = 0 ] && [ "$rename_expected" = 1 ]; then
 		# successfuly renamed to expected name
 		remove_dm_dev none "$expected"
 	elif [ $r = 1 ]; then
@@ -196,8 +195,8 @@ ln -s "$DM_DEV_DIR/mapper/${PREFIX}abc" "$DM_DEV_DIR/${PREFIX}xyz"
 aux dmsetup status "$DM_DEV_DIR/${PREFIX}xyz" || r=1
 rm -f "$DM_DEV_DIR/${PREFIX}xyz"
 remove_dm_dev auto "abc"
-if [ r = 1 ]; then
-	exit 1
+if [ "$r" = 1 ]; then
+	return "$r"
 fi
 
 ### ALL WHITELISTED CHARACTERS ###

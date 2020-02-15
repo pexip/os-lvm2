@@ -22,9 +22,9 @@
 #define _LVM_METADATA_H
 
 #include "ctype.h"
-#include "dev-cache.h"
-#include "lvm-string.h"
-#include "metadata-exported.h"
+#include "lib/device/dev-cache.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/metadata/metadata-exported.h"
 
 //#define MAX_STRIPES 128U
 //#define SECTOR_SHIFT 9L
@@ -80,8 +80,7 @@ struct metadata_area_ops {
 					 const char *vg_name,
 					 struct metadata_area * mda,
 					 struct cached_vg_fmtdata **vg_fmtdata,
-					 unsigned *use_previous_vg,
-					 int single_device);
+					 unsigned *use_previous_vg);
 	struct volume_group *(*vg_read_precommit) (struct format_instance * fi,
 					 const char *vg_name,
 					 struct metadata_area * mda,
@@ -162,6 +161,13 @@ struct metadata_area_ops {
 #define MDA_INCONSISTENT 0x00000002
 #define MDA_FAILED       0x00000004
 
+/* The primary metadata area on a device if the format supports more than one. */
+#define MDA_PRIMARY	 0x00000008
+
+#define mda_is_primary(mda) (((mda->status) & MDA_PRIMARY) ? 1 : 0)
+#define MDA_CONTENT_REASON(primary_mda) ((primary_mda) ? DEV_IO_MDA_CONTENT : DEV_IO_MDA_EXTRA_CONTENT)
+#define MDA_HEADER_REASON(primary_mda)  ((primary_mda) ? DEV_IO_MDA_HEADER : DEV_IO_MDA_EXTRA_HEADER)
+
 struct metadata_area {
 	struct dm_list list;
 	struct metadata_area_ops *ops;
@@ -172,9 +178,14 @@ struct metadata_area *mda_copy(struct dm_pool *mem,
 			       struct metadata_area *mda);
 
 unsigned mda_is_ignored(struct metadata_area *mda);
-void mda_set_ignored(struct metadata_area *mda, unsigned ignored);
+void mda_set_ignored(struct metadata_area *mda, unsigned mda_ignored);
 unsigned mda_locns_match(struct metadata_area *mda1, struct metadata_area *mda2);
 struct device *mda_get_device(struct metadata_area *mda);
+
+/*
+ * fic is used to create an fid.  It's used to pass fmt/vgname/vgid args
+ * to create_instance() which creates an fid for the specified vg.
+ */
 
 struct format_instance_ctx {
 	uint32_t type;
@@ -353,36 +364,18 @@ unsigned long set_pe_align_offset(struct physical_volume *pv,
 
 int pv_write_orphan(struct cmd_context *cmd, struct physical_volume *pv);
 
-struct physical_volume *pvcreate_vol(struct cmd_context *cmd, const char *pv_name,
-                                     struct pvcreate_params *pp, int write_now);
-
 int check_dev_block_size_for_vg(struct device *dev, const struct volume_group *vg,
 				unsigned int *max_phys_block_size_found);
-
-/* Manipulate PV structures */
-int pv_add(struct volume_group *vg, struct physical_volume *pv);
-int pv_remove(struct volume_group *vg, struct physical_volume *pv);
-struct physical_volume *pv_find(struct volume_group *vg, const char *pv_name);
-
-/* Find a PV within a given VG */
-int get_pv_from_vg_by_id(const struct format_type *fmt, const char *vg_name,
-			 const char *vgid, const char *pvid,
-			 struct physical_volume *pv);
+int check_pv_dev_sizes(struct volume_group *vg);
+uint32_t vg_bad_status_bits(const struct volume_group *vg, uint64_t status);
+int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
+		 struct physical_volume *pv, int new_pv);
 
 struct logical_volume *find_lv_in_vg_by_lvid(struct volume_group *vg,
 					     const union lvid *lvid);
 
 struct lv_list *find_lv_in_lv_list(const struct dm_list *ll,
 				   const struct logical_volume *lv);
-
-/* Return the VG that contains a given LV (based on path given in lv_name) */
-/* or environment var */
-struct volume_group *find_vg_with_lv(const char *lv_name);
-
-/* Find LV with given lvid (used during activation) */
-struct logical_volume *lv_from_lvid(struct cmd_context *cmd,
-				    const char *lvid_s,
-				    unsigned precommitted);
 
 /* FIXME Merge these functions with ones above */
 struct physical_volume *find_pv(struct volume_group *vg, struct device *dev);
@@ -405,7 +398,7 @@ int check_new_thin_pool(const struct logical_volume *pool_lv);
 /*
  * Remove a dev_dir if present.
  */
-const char *strip_dir(const char *vg_name, const char *dir);
+const char *strip_dir(const char *vg_name, const char *dev_dir);
 
 struct logical_volume *alloc_lv(struct dm_pool *mem);
 
@@ -419,11 +412,6 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg);
  * Does every LV segment have the same number of stripes?
  */
 int lv_has_constant_stripes(struct logical_volume *lv);
-
-/*
- * Checks that a replicator segment is correct.
- */
-int check_replicator_segment(const struct lv_segment *replicator_seg);
 
 /*
  * Sometimes (eg, after an lvextend), it is possible to merge two
@@ -446,13 +434,10 @@ int remove_seg_from_segs_using_this_lv(struct logical_volume *lv, struct lv_segm
 
 int add_glv_to_indirect_glvs(struct dm_pool *mem,
 			     struct generic_logical_volume *origin_glv,
-			     struct generic_logical_volume *user_glv);
-int remove_glv_from_indirect_glvs(struct generic_logical_volume *glv,
-				  struct generic_logical_volume *user_glv);
+			     struct generic_logical_volume *glv);
+int remove_glv_from_indirect_glvs(struct generic_logical_volume *origin_glv,
+				  struct generic_logical_volume *glv);
 
-int for_each_sub_lv_except_pools(struct logical_volume *lv,
-				 int (*fn)(struct logical_volume *lv, void *data),
-				 void *data);
 int for_each_sub_lv(struct logical_volume *lv,
 		    int (*fn)(struct logical_volume *lv, void *data),
 		    void *data);
@@ -460,6 +445,8 @@ int for_each_sub_lv(struct logical_volume *lv,
 int move_lv_segments(struct logical_volume *lv_to,
 		     struct logical_volume *lv_from,
 		     uint64_t set_status, uint64_t reset_status);
+/* Widen existing segment areas */
+int add_lv_segment_areas(struct lv_segment *seg, uint32_t new_area_count);
 
 /*
  * Calculate readahead from underlying PV devices
@@ -471,12 +458,8 @@ void lv_calculate_readahead(const struct logical_volume *lv, uint32_t *read_ahea
  */
 size_t export_vg_to_buffer(struct volume_group *vg, char **buf);
 struct dm_config_tree *export_vg_to_config_tree(struct volume_group *vg);
-struct volume_group *import_vg_from_buffer(const char *buf,
-					   struct format_instance *fid);
 struct volume_group *import_vg_from_config_tree(const struct dm_config_tree *cft,
 						struct format_instance *fid);
-struct volume_group *import_vg_from_lvmetad_config_tree(const struct dm_config_tree *cft,
-							struct format_instance *fid);
 
 /*
  * Mirroring functions
@@ -491,20 +474,20 @@ int fixup_imported_mirrors(struct volume_group *vg);
  * From thin_manip.c
  */
 int attach_pool_lv(struct lv_segment *seg, struct logical_volume *pool_lv,
-		   struct logical_volume *origin_lv,
+		   struct logical_volume *origin,
 		   struct generic_logical_volume *indirect_origin,
 		   struct logical_volume *merge_lv);
 int detach_pool_lv(struct lv_segment *seg);
 int attach_pool_message(struct lv_segment *pool_seg, dm_thin_message_t type,
 			struct logical_volume *lv, uint32_t delete_id,
-			int auto_increment);
+			int no_update);
 int lv_is_merging_thin_snapshot(const struct logical_volume *lv);
 int pool_has_message(const struct lv_segment *seg,
 		     const struct logical_volume *lv, uint32_t device_id);
 int pool_metadata_min_threshold(const struct lv_segment *pool_seg);
 int pool_below_threshold(const struct lv_segment *pool_seg);
 int pool_check_overprovisioning(const struct logical_volume *lv);
-int create_pool(struct logical_volume *lv, const struct segment_type *segtype,
+int create_pool(struct logical_volume *pool_lv, const struct segment_type *segtype,
 		struct alloc_handle *ah, uint32_t stripes, uint32_t stripe_size);
 
 /*

@@ -13,7 +13,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 
 #include <ctype.h>
 #include <math.h>  /* fabs() */
@@ -95,8 +95,8 @@ struct report_group_item {
 		uint32_t finished_count;
 	} store;
 	struct report_group_item *parent;
-	int output_done:1;
-	int needs_closing:1;
+	unsigned output_done:1;
+	unsigned needs_closing:1;
 	void *data;
 };
 
@@ -373,7 +373,7 @@ int dm_report_field_percent(struct dm_report *rh,
 		return 0;
 	}
 
-	if (dm_snprintf(repstr, 7, "%.2f", dm_percent_to_float(*data)) < 0) {
+	if (dm_snprintf(repstr, 7, "%.2f", dm_percent_to_round_float(*data, 2)) < 0) {
 		dm_pool_free(rh->mem, sortval);
 		log_error("dm_report_field_percent: percentage too large.");
 		return 0;
@@ -547,8 +547,8 @@ static int _report_field_string_list(struct dm_report *rh,
 out:
 	if (!r && sort_value)
 		dm_pool_free(rh->mem, sort_value);
-	if (arr)
-		dm_free(arr);
+	dm_free(arr);
+
 	return r;
 }
 
@@ -748,10 +748,11 @@ static void _display_fields_more(struct dm_report *rh,
 			id_len = strlen(type->prefix) + 3;
 
 	for (f = 0; fields[f].report_fn; f++) {
-		if ((type = _find_type(rh, fields[f].type)) && type->desc)
-			desc = type->desc;
-		else
-			desc = " ";
+		if (!(type = _find_type(rh, fields[f].type))) {
+			log_debug(INTERNAL_ERROR "Field type undefined.");
+			continue;
+		}
+		desc = (type->desc) ? : " ";
 		if (desc != last_desc) {
 			if (*last_desc)
 				log_warn(" ");
@@ -1013,16 +1014,18 @@ static int _field_match(struct dm_report *rh, const char *field, size_t flen,
 			rh->report_types |= implicit ? _implicit_report_fields[f].type
 						     : rh->fields[f].type;
 			return 1;
-		} else
-			return _add_field(rh, f, implicit, 0) ? 1 : 0;
+		}
+
+		return _add_field(rh, f, implicit, 0) ? 1 : 0;
 	}
 
 	if ((type = _all_match(rh, field, flen))) {
 		if (report_type_only) {
 			rh->report_types |= type;
 			return 1;
-		} else
-			return  _add_all_fields(rh, type);
+		}
+
+		return  _add_all_fields(rh, type);
 	}
 
 	return 0;
@@ -1426,10 +1429,10 @@ static int _dbl_less_or_equal(double d1, double d2)
 }
 
 #define _uint64 *(const uint64_t *)
-#define _uint64arr(var,index) ((const uint64_t *)var)[index]
+#define _uint64arr(var,index) ((const uint64_t *)(var))[(index)]
 #define _str (const char *)
 #define _dbl *(const double *)
-#define _dblarr(var,index) ((const double *)var)[index]
+#define _dblarr(var,index) ((const double *)(var))[(index)]
 
 static int _do_check_value_is_strictly_reserved(unsigned type, const void *res_val, int res_range,
 						const void *val, struct field_selection *fs)
@@ -2378,7 +2381,7 @@ static const char *_get_reserved(struct dm_report *rh, unsigned type,
 {
 	const struct dm_report_reserved_value *iter = implicit ? NULL : rh->reserved_values;
 	const struct dm_report_field_reserved_value *frv;
-	const char *tmp_begin, *tmp_end, *tmp_s = s;
+	const char *tmp_begin = NULL, *tmp_end = NULL, *tmp_s = s;
 	const char *name = NULL;
 	char c;
 
@@ -2423,6 +2426,29 @@ float dm_percent_to_float(dm_percent_t percent)
 {
 	/* Add 0.f to prevent returning -0.00 */
 	return (float) percent / DM_PERCENT_1 + 0.f;
+}
+
+float dm_percent_to_round_float(dm_percent_t percent, unsigned digits)
+{
+	static const float power10[] = {
+		1.f, .1f, .01f, .001f, .0001f, .00001f, .000001f,
+		.0000001f, .00000001f, .000000001f,
+		.0000000001f
+	};
+	float r;
+	float f = dm_percent_to_float(percent);
+
+	if (digits >= DM_ARRAY_SIZE(power10))
+		digits = DM_ARRAY_SIZE(power10) - 1; /* no better precision */
+
+	r = DM_PERCENT_1 * power10[digits];
+
+	if ((percent < r) && (percent > DM_PERCENT_0))
+		f = power10[digits];
+	else if ((percent > (DM_PERCENT_100 - r)) && (percent < DM_PERCENT_100))
+		f = (float) (DM_PERCENT_100 - r) / DM_PERCENT_1;
+
+	return f;
 }
 
 dm_percent_t dm_make_percent(uint64_t numerator, uint64_t denominator)
@@ -2601,7 +2627,7 @@ static const char *_tok_value_string_list(const struct dm_report_field_type *ft,
 							    "for selection field %s.";
 	struct selection_str_list *ssl = NULL;
 	struct dm_str_list *item;
-	const char *begin_item, *end_item, *tmp;
+	const char *begin_item = NULL, *end_item = NULL, *tmp;
 	uint32_t op_flags, end_op_flag_expected, end_op_flag_hit = 0;
 	struct dm_str_list **arr;
 	size_t list_size;
@@ -3062,26 +3088,31 @@ static void _get_final_time(time_range_t range, struct tm *tm,
 				tm_up.tm_sec += 1;
 				break;
 			}
+			/* fall through */
 		case RANGE_MINUTE:
 			if (tm_up.tm_min < 59) {
 				tm_up.tm_min += 1;
 				break;
 			}
+			/* fall through */
 		case RANGE_HOUR:
 			if (tm_up.tm_hour < 23) {
 				tm_up.tm_hour += 1;
 				break;
 			}
+			/* fall through */
 		case RANGE_DAY:
 			if (tm_up.tm_mday < _get_days_in_month(tm_up.tm_mon, tm_up.tm_year)) {
 				tm_up.tm_mday += 1;
 				break;
 			}
+			/* fall through */
 		case RANGE_MONTH:
 			if (tm_up.tm_mon < 11) {
 				tm_up.tm_mon += 1;
 				break;
 			}
+			/* fall through */
 		case RANGE_YEAR:
 			tm_up.tm_year += 1;
 			break;
@@ -3157,6 +3188,7 @@ static const char *_tok_value_time(const struct dm_report_field_type *ft,
 			goto out;
 		}
 
+		errno = 0;
 		if (((t = strtoull(time_str, NULL, 10)) == ULLONG_MAX) && errno == ERANGE) {
 			log_error(_out_of_range_msg, time_str, ft->id);
 			goto out;
@@ -3383,7 +3415,7 @@ static int _get_reserved_value(struct dm_report *rh, uint32_t field_num,
 		handler = (dm_report_reserved_handler) tmp_value;
 		if ((r = handler(rh, rh->selection->mem, field_num,
 				 DM_REPORT_RESERVED_GET_DYNAMIC_VALUE,
-				 rvw->matched_name, &tmp_value) <= 0)) {
+				 rvw->matched_name, &tmp_value)) <= 0) {
 			if (r == -1)
 				log_error(INTERNAL_ERROR "%s reserved value handler for field %s has missing"
 					  "implementation of DM_REPORT_RESERVED_GET_DYNAMIC_VALUE action",
@@ -3527,6 +3559,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 					if (rvw->reserved->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE)
 						fs->value->next->v.i = (((const uint64_t *) rvw->value)[1]);
 				} else {
+					errno = 0;
 					if (((fs->value->v.i = strtoull(s, NULL, 10)) == ULLONG_MAX) &&
 						 (errno == ERANGE)) {
 						log_error(_out_of_range_msg, s, field_id);
@@ -3545,6 +3578,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 					if (rvw->reserved->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE)
 						fs->value->next->v.d = (((const double *) rvw->value)[1]);
 				} else {
+					errno = 0;
 					fs->value->v.d = strtod(s, NULL);
 					if (errno == ERANGE) {
 						log_error(_out_of_range_msg, s, field_id);
@@ -3566,6 +3600,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 					if (rvw->reserved->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE)
 						fs->value->next->v.i = (((const uint64_t *) rvw->value)[1]);
 				} else {
+					errno = 0;
 					fs->value->v.d = strtod(s, NULL);
 					if ((errno == ERANGE) || (fs->value->v.d < 0) || (fs->value->v.d > 100)) {
 						log_error(_out_of_range_msg, s, field_id);
@@ -4204,7 +4239,7 @@ static void _recalculate_fields(struct dm_report *rh)
 {
 	struct row *row;
 	struct dm_report_field *field;
-	size_t len;
+	int len;
 
 	dm_list_iterate_items(row, &rh->rows) {
 		dm_list_iterate_items(field, &row->fields) {

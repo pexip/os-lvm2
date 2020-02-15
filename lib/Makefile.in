@@ -16,45 +16,16 @@ srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 top_builddir = @top_builddir@
 
-ifeq ("@LVM1@", "shared")
-  SUBDIRS = format1
-endif
-
-ifeq ("@POOL@", "shared")
-  SUBDIRS += format_pool
-endif
-
-ifeq ("@SNAPSHOTS@", "shared")
-  SUBDIRS += snapshot
-endif
-
-ifeq ("@MIRRORS@", "shared")
-  SUBDIRS += mirror
-endif
-
-ifeq ("@RAID@", "shared")
-  SUBDIRS += raid
-endif
-
-ifeq ("@REPLICATORS@", "shared")
-  SUBDIRS += replicator
-endif
-
-ifeq ("@THIN@", "shared")
-  SUBDIRS += thin
-endif
-
-ifeq ("@CACHE@", "shared")
-  SUBDIRS += cache_segtype
-endif
-
 SOURCES =\
 	activate/activate.c \
 	cache/lvmcache.c \
+	cache_segtype/cache.c \
 	commands/toolcontext.c \
 	config/config.c \
 	datastruct/btree.c \
 	datastruct/str_list.c \
+	device/bcache.c \
+	device/bcache-utils.c \
 	device/dev-cache.c \
 	device/dev-ext.c \
 	device/dev-io.c \
@@ -63,6 +34,7 @@ SOURCES =\
 	device/dev-type.c \
 	device/dev-luks.c \
 	device/dev-dasd.c \
+	device/dev-lvm1-pool.c \
 	display/display.c \
 	error/errseg.c \
 	unknown/unknown.c \
@@ -77,6 +49,7 @@ SOURCES =\
 	filters/filter-type.c \
 	filters/filter-usable.c \
 	filters/filter-internal.c \
+	filters/filter-signature.c \
 	format_text/archive.c \
 	format_text/archiver.c \
 	format_text/export.c \
@@ -89,7 +62,6 @@ SOURCES =\
 	label/label.c \
 	locking/file_locking.c \
 	locking/locking.c \
-	locking/no_locking.c \
 	log/log.c \
 	metadata/cache_manip.c \
 	metadata/lv.c \
@@ -102,11 +74,12 @@ SOURCES =\
 	metadata/pv_manip.c \
 	metadata/pv_map.c \
 	metadata/raid_manip.c \
-	metadata/replicator_manip.c \
 	metadata/segtype.c \
 	metadata/snapshot_manip.c \
 	metadata/thin_manip.c \
+	metadata/vdo_manip.c \
 	metadata/vg.c \
+	mirror/mirrored.c \
 	misc/crc.c \
 	misc/lvm-exec.c \
 	misc/lvm-file.c \
@@ -117,81 +90,23 @@ SOURCES =\
 	misc/lvm-string.c \
 	misc/lvm-wrappers.c \
 	misc/lvm-percent.c \
+	misc/sharedlib.c \
 	mm/memlock.c \
 	notify/lvmnotify.c \
 	properties/prop_common.c \
+	raid/raid.c \
 	report/properties.c \
 	report/report.c \
+	snapshot/snapshot.c \
 	striped/striped.c \
+	thin/thin.c \
 	uuid/uuid.c \
 	zero/zero.c
-
-ifeq ("@LVM1@", "internal")
-  SOURCES +=\
-	format1/disk-rep.c \
-	format1/format1.c \
-	format1/import-export.c \
-	format1/import-extents.c \
-	format1/layout.c \
-	format1/lvm1-label.c \
-	format1/vg_number.c
-endif
-
-ifeq ("@POOL@", "internal")
-  SOURCES +=\
-	format_pool/disk_rep.c \
-	format_pool/format_pool.c \
-	format_pool/import_export.c \
-	format_pool/pool_label.c
-endif
-
-ifeq ("@CLUSTER@", "internal")
-  SOURCES += locking/cluster_locking.c
-endif
-
-ifeq ("@CLUSTER@", "shared")
-  SUBDIRS += locking
-endif
-
-ifeq ("@SNAPSHOTS@", "internal")
-  SOURCES += snapshot/snapshot.c
-endif
-
-ifeq ("@MIRRORS@", "internal")
-  SOURCES += mirror/mirrored.c
-endif
-
-ifeq ("@RAID@", "internal")
-  SOURCES += raid/raid.c
-endif
-
-ifeq ("@REPLICATORS@", "internal")
-  SOURCES += replicator/replicator.c
-endif
-
-ifeq ("@THIN@", "internal")
-  SOURCES += thin/thin.c
-endif
-
-ifeq ("@CACHE@", "internal")
-  SOURCES += cache_segtype/cache.c
-endif
 
 ifeq ("@DEVMAPPER@", "yes")
   SOURCES +=\
 	activate/dev_manager.c \
 	activate/fs.c
-endif
-
-ifeq ("@HAVE_LIBDL@", "yes")
-  SOURCES +=\
-	locking/external_locking.c \
-	misc/sharedlib.c
-endif
-
-ifeq ("@BUILD_LVMETAD@", "yes")
-  SOURCES +=\
-	cache/lvmetad.c
 endif
 
 ifeq ("@BUILD_LVMPOLLD@", "yes")
@@ -204,34 +119,19 @@ ifeq ("@BUILD_LVMLOCKD@", "yes")
 	locking/lvmlockd.c
 endif
 
-ifeq ("@DMEVENTD@", "yes")
-  CLDFLAGS += -L$(top_builddir)/daemons/dmeventd
-  LIBS += -ldevmapper-event
+ifeq ("@VDO@", "internal")
+  SOURCES += vdo/vdo.c
 endif
 
 LIB_NAME = liblvm-internal
 LIB_STATIC = $(LIB_NAME).a
 
-ifeq ($(MAKECMDGOALS),distclean)
-  SUBDIRS =\
-	format1 \
-	format_pool \
-	snapshot \
-	mirror \
-	notify \
-	raid \
-	replicator \
-	thin \
-	cache_segtype \
-	locking
-endif
-
 CFLOW_LIST = $(SOURCES)
 CFLOW_LIST_TARGET = $(LIB_NAME).cflow
 
-include $(top_builddir)/make.tmpl
+PROGS_CFLAGS = $(BLKID_CFLAGS) $(UDEV_CFLAGS)
 
-CFLAGS += $(BLKID_CFLAGS) $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
+include $(top_builddir)/make.tmpl
 
 $(SUBDIRS): $(LIB_STATIC)
 

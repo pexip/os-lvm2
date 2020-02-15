@@ -58,19 +58,12 @@ static int _poll_lvs_in_vg(struct cmd_context *cmd,
 {
 	struct lv_list *lvl;
 	struct logical_volume *lv;
-	struct lvinfo info;
-	int lv_active;
 	int count = 0;
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
 		lv = lvl->lv;
 
-		if (!lv_info(cmd, lv, 0, &info, 0, 0))
-			lv_active = 0;
-		else
-			lv_active = info.exists;
-
-		if (lv_active &&
+		if (lv_is_active(lv) &&
 		    (lv_is_pvmove(lv) || lv_is_converting(lv) || lv_is_merging(lv))) {
 			lv_spawn_background_polling(cmd, lv);
 			count++;
@@ -99,7 +92,7 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 		lv = lvl->lv;
 
-		if (!lv_is_visible(lv))
+		if (!lv_is_visible(lv) && (!cmd->process_component_lvs || !lv_is_component(lv)))
 			continue;
 
 		/* If LV is sparse, activate origin instead */
@@ -107,16 +100,14 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			lv = origin_from_cow(lv);
 
 		/* Only request activation of snapshot origin devices */
-		if ((lv->status & SNAPSHOT) || lv_is_cow(lv))
+		if (lv_is_snapshot(lv) || lv_is_cow(lv))
 			continue;
 
 		/* Only request activation of mirror LV */
-		if ((lv->status & MIRROR_IMAGE) || (lv->status & MIRROR_LOG))
+		if (lv_is_mirror_image(lv) || lv_is_mirror_log(lv))
 			continue;
 
-		/* Only request activation of the first replicator-dev LV */
-		/* Avoids retry with all heads in case of failure */
-		if (lv_is_replicator_dev(lv) && (lv != first_replicator_dev(lv)))
+		if (lv_is_vdo_pool(lv))
 			continue;
 
 		if (lv_activation_skip(lv, activate, arg_is_set(cmd, ignoreactivationskip_ARG)))
@@ -129,17 +120,8 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		expected_count++;
 
 		if (!lv_change_activate(cmd, lv, activate)) {
-			if (!lv_is_active_exclusive_remotely(lv))
-				stack;
-			else {
-				/*
-				 * If the LV is active exclusive remotely,
-				 * then ignore it here
-				 */
-				log_verbose("%s/%s is exclusively active on"
-					    " a remote node", vg->name, lv->name);
-				expected_count--; /* not accounted */
-			}
+			stack;
+			r = 0;
 			continue;
 		}
 
@@ -148,18 +130,30 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 	sigint_restore();
 
+	if (expected_count)
+		log_verbose("%sctivated %d logical volumes in volume group %s.",
+			    is_change_activating(activate) ? "A" : "Dea",
+			    count, vg->name);
+
+	/*
+	 * After sucessfull activation we need to initialise polling
+	 * for all activated LVs in a VG. Possible enhancement would
+	 * be adding --poll y|n cmdline option for pvscan and call
+	 * init_background_polling routine in autoactivation handler.
+	 */
+	if (count && is_change_activating(activate) &&
+	    !vgchange_background_polling(cmd, vg)) {
+		stack;
+		r = 0;
+	}
+
 	/* Wait until devices are available */
 	if (!sync_local_dev_names(vg->cmd)) {
 		log_error("Failed to sync local devices for VG %s.", vg->name);
 		r = 0;
 	}
 
-	if (expected_count)
-		log_verbose("%s %d logical volumes in volume group %s",
-			    is_change_activating(activate) ?
-			    "Activated" : "Deactivated", count, vg->name);
-
-	return (expected_count != count) ? 0 : r;
+	return r;
 }
 
 static int _vgchange_monitoring(struct cmd_context *cmd, struct volume_group *vg)
@@ -183,8 +177,9 @@ int vgchange_background_polling(struct cmd_context *cmd, struct volume_group *vg
 {
 	int polled;
 
-	if (lvs_in_vg_activated(vg) && background_polling()) {
-	        polled = _poll_lvs_in_vg(cmd, vg);
+	if (background_polling()) {
+		log_debug_activation("Starting background polling for volume group \"%s\".", vg->name);
+		polled = _poll_lvs_in_vg(cmd, vg);
 		if (polled)
 			log_print_unless_silent("Background polling started for %d logical volume(s) "
 						"in volume group \"%s\"",
@@ -211,7 +206,7 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	    strcmp(vg->system_id, cmd->system_id) &&
 	    do_activate) {
 		log_error("Cannot activate LVs in a foreign VG.");
-		return ECMD_FAILED;
+		return 0;
 	}
 
 	/*
@@ -221,19 +216,28 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
         cmd->handles_missing_pvs = 1;
 
 	/* FIXME: Force argument to deactivate them? */
-	if (!do_activate && (lv_open = lvs_in_vg_opened(vg))) {
+	if (!do_activate) {
 		dm_list_iterate_items(lvl, &vg->lvs)
-			if (lv_is_visible(lvl->lv) &&
-			    !lv_check_not_in_use(lvl->lv, 1)) {
-				log_error("Can't deactivate volume group \"%s\" with %d open "
-					  "logical volume(s)", vg->name, lv_open);
-				return 0;
+			label_scan_invalidate_lv(cmd, lvl->lv);
+
+	       	if ((lv_open = lvs_in_vg_opened(vg))) {
+			dm_list_iterate_items(lvl, &vg->lvs) {
+				if (lv_is_visible(lvl->lv) &&
+				    !lv_is_vdo_pool(lvl->lv) && // FIXME: API skip flag missing
+				    !lv_check_not_in_use(lvl->lv, 1)) {
+					log_error("Can't deactivate volume group \"%s\" with %d open logical volume(s)",
+						  vg->name, lv_open);
+					return 0;
+				}
 			}
+		}
 	}
 
 	/* FIXME Move into library where clvmd can use it */
 	if (do_activate)
 		check_current_backup(vg);
+	else /* Component LVs might be active, support easy deactivation */
+		cmd->process_component_lvs = 1;
 
 	if (do_activate && (active = lvs_in_vg_activated(vg))) {
 		log_verbose("%d logical volume(s) in volume group \"%s\" "
@@ -254,9 +258,8 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	/* Print message only if there was not found a missing VG */
-	if (!vg->cmd_missing_vgs)
-		log_print_unless_silent("%d logical volume(s) in volume group \"%s\" now active",
-					lvs_in_vg_activated(vg), vg->name);
+	log_print_unless_silent("%d logical volume(s) in volume group \"%s\" now active",
+				lvs_in_vg_activated(vg), vg->name);
 	return r;
 }
 
@@ -310,84 +313,6 @@ static int _vgchange_resizeable(struct cmd_context *cmd,
 		vg->status |= RESIZEABLE_VG;
 	else
 		vg->status &= ~RESIZEABLE_VG;
-
-	return 1;
-}
-
-static int _vgchange_clustered(struct cmd_context *cmd,
-			       struct volume_group *vg)
-{
-	int clustered = arg_int_value(cmd, clustered_ARG, 0);
-	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
-	struct lv_list *lvl;
-	struct lv_segment *mirror_seg;
-
-	if (find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL)) {
-		log_error("lvmlockd requires using the vgchange --lock-type option.");
-		return 0;
-	}
-
-	if (lock_type && !strcmp(lock_type, "clvm"))
-		clustered = 1;
-
-	if (clustered && vg_is_clustered(vg)) {
-		if (vg->system_id && *vg->system_id)
-			log_warn("WARNING: Clearing invalid system ID %s from volume group %s.",
-				 vg->system_id, vg->name);
-		else {
-			log_error("Volume group \"%s\" is already clustered", vg->name);
-			return 0;
-		}
-	}
-
-	if (!clustered && !vg_is_clustered(vg)) {
-		if ((!vg->system_id || !*vg->system_id) && cmd->system_id && *cmd->system_id)
-			log_warn("Setting missing system ID on Volume Group %s to %s.",
-				 vg->name, cmd->system_id);
-		else {
-			log_error("Volume group \"%s\" is already not clustered",
-				  vg->name);
-			return 0;
-		}
-	}
-
-	if (clustered && !arg_is_set(cmd, yes_ARG)) {
-		if (!clvmd_is_running()) {
-			if (yes_no_prompt("LVM cluster daemon (clvmd) is not running. "
-					  "Make volume group \"%s\" clustered "
-					  "anyway? [y/n]: ", vg->name) == 'n') {
-				log_error("No volume groups changed.");
-				return 0;
-			}
-
-		} else if (!locking_is_clustered() &&
-			   (yes_no_prompt("LVM locking type is not clustered. "
-					  "Make volume group \"%s\" clustered "
-					  "anyway? [y/n]: ", vg->name) == 'n')) {
-			log_error("No volume groups changed.");
-			return 0;
-		}
-#ifdef CMIRROR_REGION_COUNT_LIMIT
-		dm_list_iterate_items(lvl, &vg->lvs) {
-			if (!lv_is_mirror(lvl->lv))
-				continue;
-			mirror_seg = first_seg(lvl->lv);
-			if ((lvl->lv->size / mirror_seg->region_size) >
-			    CMIRROR_REGION_COUNT_LIMIT) {
-				log_error("Unable to convert %s to clustered mode:"
-					  " Mirror region size of %s is too small.",
-					  vg->name, lvl->lv->name);
-				return 0;
-			}
-		}
-#endif
-	}
-
-	if (!vg_set_system_id(vg, clustered ? NULL : cmd->system_id))
-		return_0;
-
-	if (!vg_set_clustered(vg, clustered))
-		return_0;
 
 	return 1;
 }
@@ -482,6 +407,9 @@ static int _vgchange_metadata_copies(struct cmd_context *cmd,
 {
 	uint32_t mda_copies = arg_uint_value(cmd, vgmetadatacopies_ARG, DEFAULT_VGMETADATACOPIES);
 
+	log_warn("vgchange_metadata_copies new %u vg_mda_copies %u D %u",
+		 mda_copies, vg_mda_copies(vg), DEFAULT_VGMETADATACOPIES);
+
 	if (mda_copies == vg_mda_copies(vg)) {
 		if (vg_mda_copies(vg) == VGMETADATACOPIES_UNMANAGED)
 			log_warn("Number of metadata copies for VG %s is already unmanaged.",
@@ -525,36 +453,372 @@ static int _vgchange_profile(struct cmd_context *cmd,
 	return 1;
 }
 
-static int _vgchange_locktype(struct cmd_context *cmd,
-			      struct volume_group *vg)
+/*
+ * This function will not be called unless the local host is allowed to use the
+ * VG.  Either the VG has no system_id, or the VG and host have matching
+ * system_ids, or the host has the VG's current system_id in its
+ * extra_system_ids list.  This function is not allowed to change the system_id
+ * of a foreign VG (VG owned by another host).
+ */
+static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg)
+{
+	const char *system_id;
+	const char *system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL);
+
+	if (!(system_id = system_id_from_string(cmd, system_id_arg_str))) {
+		log_error("Unable to set system ID.");
+		return 0;
+	}
+
+	if (!strcmp(vg->system_id, system_id)) {
+		log_error("Volume Group system ID is already \"%s\".", vg->system_id);
+		return 0;
+	}
+
+	if (!*system_id && cmd->system_id && strcmp(system_id, cmd->system_id)) {
+		log_warn("WARNING: Removing the system ID allows unsafe access from other hosts.");
+
+		if (!arg_is_set(cmd, yes_ARG) &&
+		    yes_no_prompt("Remove system ID %s from volume group %s? [y/n]: ",
+				  vg->system_id, vg->name) == 'n') {
+			log_error("System ID of volume group %s not changed.", vg->name);
+			return 0;
+		}
+	}
+
+	if (*system_id && (!cmd->system_id || strcmp(system_id, cmd->system_id))) {
+		if (lvs_in_vg_activated(vg)) {
+			log_error("Logical Volumes in VG %s must be deactivated before system ID can be changed.",
+				  vg->name);
+			return 0;
+		}
+
+		if (cmd->system_id)
+			log_warn("WARNING: Requested system ID %s does not match local system ID %s.",
+				 system_id, cmd->system_id ? : "");
+		else
+			log_warn("WARNING: No local system ID is set.");
+		log_warn("WARNING: Volume group %s might become inaccessible from this machine.",
+			 vg->name);
+
+		if (!arg_is_set(cmd, yes_ARG) &&
+		    yes_no_prompt("Set foreign system ID %s on volume group %s? [y/n]: ",
+				  system_id, vg->name) == 'n') {
+			log_error("Volume group %s system ID not changed.", vg->name);
+			return 0;
+		}
+	}
+
+	log_verbose("Changing system ID for VG %s from \"%s\" to \"%s\".",
+		    vg->name, vg->system_id, system_id);
+
+	vg->system_id = system_id;
+	
+	return 1;
+}
+
+static int _passes_lock_start_filter(struct cmd_context *cmd,
+				     struct volume_group *vg,
+				     const int cfg_id)
+{
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	const char *str;
+
+	/* undefined list means no restrictions, all vg names pass */
+
+	cn = find_config_tree_array(cmd, cfg_id, NULL);
+	if (!cn)
+		return 1;
+
+	/* with a defined list, the vg name must be included to pass */
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (cv->type == DM_CFG_EMPTY_ARRAY)
+			break;
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Ignoring invalid string in lock_start list");
+			continue;
+		}
+		str = cv->v.str;
+		if (!*str) {
+			log_error("Ignoring empty string in config file");
+			continue;
+		}
+
+		/* ignoring tags for now */
+
+		if (!strcmp(str, vg->name))
+			return 1;
+	}
+
+	return 0;
+}
+
+static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg,
+				struct vgchange_params *vp)
+{
+	const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
+	int auto_opt = 0;
+	int r;
+
+	if (!vg_is_shared(vg))
+		return 1;
+
+	if (arg_is_set(cmd, force_ARG))
+		goto do_start;
+
+	/*
+	 * Recognize both "auto" and "autonowait" options.
+	 * Any waiting is done at the end of vgchange.
+	 */
+	if (start_opt && !strncmp(start_opt, "auto", 4))
+		auto_opt = 1;
+
+	if (!_passes_lock_start_filter(cmd, vg, activation_lock_start_list_CFG)) {
+		log_verbose("Not starting %s since it does not pass lock_start_list", vg->name);
+		return 1;
+	}
+
+	if (auto_opt && !_passes_lock_start_filter(cmd, vg, activation_auto_lock_start_list_CFG)) {
+		log_verbose("Not starting %s since it does not pass auto_lock_start_list", vg->name);
+		return 1;
+	}
+
+do_start:
+	r = lockd_start_vg(cmd, vg, 0);
+
+	if (r)
+		vp->lock_start_count++;
+	if (!strcmp(vg->lock_type, "sanlock"))
+		vp->lock_start_sanlock = 1;
+
+	return r;
+}
+
+static int _vgchange_lock_stop(struct cmd_context *cmd, struct volume_group *vg)
+{
+	return lockd_stop_vg(cmd, vg);
+}
+
+static int _vgchange_single(struct cmd_context *cmd, const char *vg_name,
+			    struct volume_group *vg,
+			    struct processing_handle *handle)
+{
+	int ret = ECMD_PROCESSED;
+	unsigned i;
+	activation_change_t activate;
+
+	static const struct {
+		int arg;
+		int (*fn)(struct cmd_context *cmd, struct volume_group *vg);
+	} _vgchange_args[] = {
+		{ logicalvolume_ARG, &_vgchange_logicalvolume },
+		{ maxphysicalvolumes_ARG, &_vgchange_physicalvolumes },
+		{ resizeable_ARG, &_vgchange_resizeable },
+		{ deltag_ARG, &_vgchange_deltag },
+		{ addtag_ARG, &_vgchange_addtag },
+		{ physicalextentsize_ARG, &_vgchange_pesize },
+		{ uuid_ARG, &_vgchange_uuid },
+		{ alloc_ARG, &_vgchange_alloc },
+		{ vgmetadatacopies_ARG, &_vgchange_metadata_copies },
+		{ metadataprofile_ARG, &_vgchange_profile },
+		{ profile_ARG, &_vgchange_profile },
+		{ detachprofile_ARG, &_vgchange_profile },
+	};
+
+	if (vg_is_exported(vg)) {
+		log_error("Volume group \"%s\" is exported", vg_name);
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * FIXME: DEFAULT_BACKGROUND_POLLING should be "unspecified".
+	 * If --poll is explicitly provided use it; otherwise polling
+	 * should only be started if the LV is not already active. So:
+	 * 1) change the activation code to say if the LV was actually activated
+	 * 2) make polling of an LV tightly coupled with LV activation
+	 *
+	 * Do not initiate any polling if --sysinit option is used.
+	 */
+	init_background_polling(arg_is_set(cmd, sysinit_ARG) ? 0 :
+						arg_int_value(cmd, poll_ARG,
+						DEFAULT_BACKGROUND_POLLING));
+
+	for (i = 0; i < DM_ARRAY_SIZE(_vgchange_args); ++i) {
+		if (arg_is_set(cmd, _vgchange_args[i].arg)) {
+			if (!archive(vg))
+				return_ECMD_FAILED;
+			if (!_vgchange_args[i].fn(cmd, vg))
+				return_ECMD_FAILED;
+		}
+	}
+
+	if (vg_is_archived(vg)) {
+		if (!vg_write(vg) || !vg_commit(vg))
+			return_ECMD_FAILED;
+
+		backup(vg);
+
+		log_print_unless_silent("Volume group \"%s\" successfully changed", vg->name);
+	}
+
+	if (arg_is_set(cmd, activate_ARG)) {
+		activate = (activation_change_t) arg_uint_value(cmd, activate_ARG, 0);
+		if (!vgchange_activate(cmd, vg, activate))
+			return_ECMD_FAILED;
+	} else if (arg_is_set(cmd, refresh_ARG)) {
+		/* refreshes the visible LVs (which starts polling) */
+		if (!_vgchange_refresh(cmd, vg))
+			return_ECMD_FAILED;
+	} else {
+		/* -ay* will have already done monitoring changes */
+		if (arg_is_set(cmd, monitor_ARG) &&
+		    !_vgchange_monitoring(cmd, vg))
+			return_ECMD_FAILED;
+
+		/* When explicitelly specified --poll */
+		if (arg_is_set(cmd, poll_ARG) &&
+		    !vgchange_background_polling(cmd, vg))
+			return_ECMD_FAILED;
+	}
+
+	return ret;
+}
+
+int vgchange(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	uint32_t flags = 0;
+	int ret;
+
+	int noupdate =
+		arg_is_set(cmd, activate_ARG) ||
+		arg_is_set(cmd, monitor_ARG) ||
+		arg_is_set(cmd, poll_ARG) ||
+		arg_is_set(cmd, refresh_ARG);
+
+	int update_partial_safe =
+		arg_is_set(cmd, deltag_ARG) ||
+		arg_is_set(cmd, addtag_ARG) ||
+		arg_is_set(cmd, metadataprofile_ARG) ||
+		arg_is_set(cmd, profile_ARG) ||
+		arg_is_set(cmd, detachprofile_ARG);
+
+	int update_partial_unsafe =
+		arg_is_set(cmd, logicalvolume_ARG) ||
+		arg_is_set(cmd, maxphysicalvolumes_ARG) ||
+		arg_is_set(cmd, resizeable_ARG) ||
+		arg_is_set(cmd, uuid_ARG) ||
+		arg_is_set(cmd, physicalextentsize_ARG) ||
+		arg_is_set(cmd, alloc_ARG) ||
+		arg_is_set(cmd, vgmetadatacopies_ARG);
+
+	int update = update_partial_safe || update_partial_unsafe;
+
+	if (!update && !noupdate) {
+		log_error("Need one or more command options.");
+		return EINVALID_CMD_LINE;
+	}
+
+	if ((arg_is_set(cmd, profile_ARG) || arg_is_set(cmd, metadataprofile_ARG)) &&
+	     arg_is_set(cmd, detachprofile_ARG)) {
+		log_error("Only one of --metadataprofile and --detachprofile permitted.");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, activate_ARG) && arg_is_set(cmd, refresh_ARG)) {
+		log_error("Only one of -a and --refresh permitted.");
+		return EINVALID_CMD_LINE;
+	}
+
+	if ((arg_is_set(cmd, ignorelockingfailure_ARG) ||
+	     arg_is_set(cmd, sysinit_ARG)) && update) {
+		log_error("Only -a permitted with --ignorelockingfailure and --sysinit");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, activate_ARG) &&
+	    (arg_is_set(cmd, monitor_ARG) || arg_is_set(cmd, poll_ARG))) {
+		if (!is_change_activating((activation_change_t) arg_uint_value(cmd, activate_ARG, 0))) {
+			log_error("Only -ay* allowed with --monitor or --poll.");
+			return EINVALID_CMD_LINE;
+		}
+	}
+
+	if (arg_is_set(cmd, poll_ARG) && arg_is_set(cmd, sysinit_ARG)) {
+		log_error("Only one of --poll and --sysinit permitted.");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, activate_ARG) &&
+	    arg_is_set(cmd, autobackup_ARG)) {
+		log_error("-A option not necessary with -a option");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, maxphysicalvolumes_ARG) &&
+	    arg_sign_value(cmd, maxphysicalvolumes_ARG, SIGN_NONE) == SIGN_MINUS) {
+		log_error("MaxPhysicalVolumes may not be negative");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, physicalextentsize_ARG) &&
+	    arg_sign_value(cmd, physicalextentsize_ARG, SIGN_NONE) == SIGN_MINUS) {
+		log_error("Physical extent size may not be negative");
+		return EINVALID_CMD_LINE;
+	}
+
+	if (arg_is_set(cmd, clustered_ARG) && !argc && !arg_is_set(cmd, yes_ARG) &&
+	    (yes_no_prompt("Change clustered property of all volumes groups? [y/n]: ") == 'n')) {
+		log_error("No volume groups changed.");
+		return ECMD_FAILED;
+	}
+
+	if (!update || !update_partial_unsafe)
+		cmd->handles_missing_pvs = 1;
+
+	/*
+	 * Include foreign VGs that contain active LVs.
+	 * That shouldn't happen in general, but if it does by some
+	 * mistake, then we want to allow those LVs to be deactivated.
+	 */
+	if (arg_is_set(cmd, activate_ARG))
+		cmd->include_active_foreign_vgs = 1;
+
+	/* The default vg lock mode is ex, but these options only need sh. */
+	if ((cmd->command->command_enum == vgchange_activate_CMD) ||
+	    (cmd->command->command_enum == vgchange_refresh_CMD)) {
+		cmd->lockd_vg_default_sh = 1;
+		/* Allow deactivating if locks fail. */
+		if (is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
+			cmd->lockd_vg_enforce_sh = 1;
+	}
+
+	if (update || arg_is_set(cmd, activate_ARG))
+		flags |= READ_FOR_UPDATE;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, flags, 0, handle, &_vgchange_single);
+
+	destroy_processing_handle(cmd, handle);
+	return ret;
+}
+
+static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
 {
 	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
+	const char *lockopt = arg_str_value(cmd, lockopt_ARG, NULL);
 	struct lv_list *lvl;
 	struct logical_volume *lv;
 	int lv_lock_count = 0;
 
-	/*
-	 * This is a special/forced exception to change the lock type to none.
-	 * It's needed for recovery cases and skips the normal steps of undoing
-	 * the current lock type.  It's a way to forcibly get access to a VG
-	 * when the normal locking mechanisms are not working.
-	 *
-	 * It ignores: the current lvm locking config, lvmlockd, the state of
-	 * the vg on other hosts, etc.  It is meant to just remove any locking
-	 * related metadata from the VG (cluster/lock_type flags, lock_type,
-	 * lock_args).
-	 *
-	 * This can be necessary when manually recovering from certain failures.
-	 * e.g. when a pv is lost containing the lvmlock lv (holding sanlock
-	 * leases), the vg lock_type needs to be changed to none, and then
-	 * back to sanlock, which recreates the lvmlock lv and leases.
-	 */
-	if (!strcmp(lock_type, "none") && arg_is_set(cmd, force_ARG)) {
-		if (yes_no_prompt("Forcibly change VG %s lock type to none? [y/n]: ", vg->name) == 'n') {
-			log_error("VG lock type not changed.");
-			return 0;
-		}
-
+	/* Special recovery case. */
+	if (lockopt && !strcmp(lock_type, "none") && !strcmp(lockopt, "force")) {
 		vg->status &= ~CLUSTERED;
 		vg->lock_type = "none";
 		vg->lock_args = NULL;
@@ -572,7 +836,7 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 			vg->lock_type = "none";
 	}
 
-	if (!strcmp(vg->lock_type, lock_type)) {
+	if (lock_type && !strcmp(vg->lock_type, lock_type)) {
 		log_warn("New lock type %s matches the current lock type %s.",
 			 lock_type, vg->lock_type);
 		return 1;
@@ -584,22 +848,6 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 		log_error("First change lock type to \"none\", then to \"%s\".",
 			  lock_type);
 		return 0;
-	}
-
-	/*
-	 * When lvm is currently using clvm, this function is just an alternative
-	 * to vgchange -c{y,n}, and can:
-	 * - change none to clvm
-	 * - change clvm to none
-	 * - it CANNOT change to or from a lockd type
-	 */
-	if (locking_is_clustered()) {
-		if (is_lockd_type(lock_type)) {
-			log_error("Changing to lock type %s requires lvmlockd.", lock_type);
-			return 0;
-		}
-
-		return _vgchange_clustered(cmd, vg);
 	}
 
 	/*
@@ -616,14 +864,6 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 		log_error("Changing VG %s lock type not allowed with active LVs",
 			  vg->name);
 		return 0;
-	}
-
-	/* none to clvm */
-	if (!strcmp(vg->lock_type, "none") && !strcmp(lock_type, "clvm")) {
-		log_warn("New clvm lock type will not be usable with lvmlockd.");
-		vg->status |= CLUSTERED;
-		vg->lock_type = "clvm"; /* this is optional */
-		return 1;
 	}
 
 	/* clvm to none */
@@ -653,15 +893,6 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 
 		dm_list_iterate_items(lvl, &vg->lvs)
 			lvl->lv->lock_args = NULL;
-	}
-
-	/* ... to clvm */
-	if (!strcmp(lock_type, "clvm")) {
-		log_warn("New clvm lock type will not be usable with lvmlockd.");
-		vg->status |= CLUSTERED;
-		vg->lock_type = "clvm"; /* this is optional */
-		vg->system_id = NULL;
-		return 1;
 	}
 
 	/* ... to lockd type */
@@ -742,279 +973,125 @@ static int _vgchange_locktype(struct cmd_context *cmd,
 	return 0;
 }
 
-/*
- * This function will not be called unless the local host is allowed to use the
- * VG.  Either the VG has no system_id, or the VG and host have matching
- * system_ids, or the host has the VG's current system_id in its
- * extra_system_ids list.  This function is not allowed to change the system_id
- * of a foreign VG (VG owned by another host).
- */
-static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg)
+static int _vgchange_locktype_single(struct cmd_context *cmd, const char *vg_name,
+			             struct volume_group *vg,
+			             struct processing_handle *handle)
 {
-	const char *system_id;
-	const char *system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL);
-
-	/* FIXME Merge with vg_set_system_id() */
-	if (systemid_on_pvs(vg)) {
-		log_error("Metadata format %s does not support this type of system ID.",
-			  vg->fid->fmt->name);
-		return 0;
-	}
-
-	if (!(system_id = system_id_from_string(cmd, system_id_arg_str))) {
-		log_error("Unable to set system ID.");
-		return 0;
-	}
-
-	if (!strcmp(vg->system_id, system_id)) {
-		log_error("Volume Group system ID is already \"%s\".", vg->system_id);
-		return 0;
-	}
-
-	if (!*system_id && cmd->system_id && strcmp(system_id, cmd->system_id)) {
-		log_warn("WARNING: Removing the system ID allows unsafe access from other hosts.");
-
-		if (!arg_is_set(cmd, yes_ARG) &&
-		    yes_no_prompt("Remove system ID %s from volume group %s? [y/n]: ",
-				  vg->system_id, vg->name) == 'n') {
-			log_error("System ID of volume group %s not changed.", vg->name);
-			return 0;
-		}
-	}
-
-	if (*system_id && (!cmd->system_id || strcmp(system_id, cmd->system_id))) {
-		if (lvs_in_vg_activated(vg)) {
-			log_error("Logical Volumes in VG %s must be deactivated before system ID can be changed.",
-				  vg->name);
-			return 0;
-		}
-
-		if (cmd->system_id)
-			log_warn("WARNING: Requested system ID %s does not match local system ID %s.",
-				 system_id, cmd->system_id ? : "");
-		else
-			log_warn("WARNING: No local system ID is set.");
-		log_warn("WARNING: Volume group %s might become inaccessible from this machine.",
-			 vg->name);
-
-		if (!arg_is_set(cmd, yes_ARG) &&
-		    yes_no_prompt("Set foreign system ID %s on volume group %s? [y/n]: ",
-				  system_id, vg->name) == 'n') {
-			log_error("Volume group %s system ID not changed.", vg->name);
-			return 0;
-		}
-	}
-
-	log_verbose("Changing system ID for VG %s from \"%s\" to \"%s\".",
-		    vg->name, vg->system_id, system_id);
-
-	vg->system_id = system_id;
-	
-	if (vg->lvm1_system_id)
-		*vg->lvm1_system_id = '\0';
-
-	return 1;
-}
-
-static int _passes_lock_start_filter(struct cmd_context *cmd,
-				     struct volume_group *vg,
-				     const int cfg_id)
-{
-	const struct dm_config_node *cn;
-	const struct dm_config_value *cv;
-	const char *str;
-
-	/* undefined list means no restrictions, all vg names pass */
-
-	cn = find_config_tree_array(cmd, cfg_id, NULL);
-	if (!cn)
-		return 1;
-
-	/* with a defined list, the vg name must be included to pass */
-
-	for (cv = cn->v; cv; cv = cv->next) {
-		if (cv->type == DM_CFG_EMPTY_ARRAY)
-			break;
-		if (cv->type != DM_CFG_STRING) {
-			log_error("Ignoring invalid string in lock_start list");
-			continue;
-		}
-		str = cv->v.str;
-		if (!*str) {
-			log_error("Ignoring empty string in config file");
-			continue;
-		}
-
-		/* ignoring tags for now */
-
-		if (!strcmp(str, vg->name))
-			return 1;
-	}
-
-	return 0;
-}
-
-static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg,
-				struct vgchange_params *vp)
-{
-	const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
-	int auto_opt = 0;
-	int r;
-
-	if (!is_lockd_type(vg->lock_type))
-		return 1;
-
-	if (arg_is_set(cmd, force_ARG))
-		goto do_start;
-
-	/*
-	 * Recognize both "auto" and "autonowait" options.
-	 * Any waiting is done at the end of vgchange.
-	 */
-	if (start_opt && !strncmp(start_opt, "auto", 4))
-		auto_opt = 1;
-
-	if (!_passes_lock_start_filter(cmd, vg, activation_lock_start_list_CFG)) {
-		log_verbose("Not starting %s since it does not pass lock_start_list", vg->name);
-		return 1;
-	}
-
-	if (auto_opt && !_passes_lock_start_filter(cmd, vg, activation_auto_lock_start_list_CFG)) {
-		log_verbose("Not starting %s since it does not pass auto_lock_start_list", vg->name);
-		return 1;
-	}
-
-do_start:
-	r = lockd_start_vg(cmd, vg, 0);
-
-	if (r)
-		vp->lock_start_count++;
-	if (!strcmp(vg->lock_type, "sanlock"))
-		vp->lock_start_sanlock = 1;
-
-	return r;
-}
-
-static int _vgchange_lock_stop(struct cmd_context *cmd, struct volume_group *vg)
-{
-	return lockd_stop_vg(cmd, vg);
-}
-
-static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
-			   struct volume_group *vg,
-			   struct processing_handle *handle)
-{
-	struct vgchange_params *vp = (struct vgchange_params *)handle->custom_handle;
-	int ret = ECMD_PROCESSED;
-	unsigned i;
-	struct lv_list *lvl;
-
-	static const struct {
-		int arg;
-		int (*fn)(struct cmd_context *cmd, struct volume_group *vg);
-	} _vgchange_args[] = {
-		{ logicalvolume_ARG, &_vgchange_logicalvolume },
-		{ maxphysicalvolumes_ARG, &_vgchange_physicalvolumes },
-		{ resizeable_ARG, &_vgchange_resizeable },
-		{ deltag_ARG, &_vgchange_deltag },
-		{ addtag_ARG, &_vgchange_addtag },
-		{ physicalextentsize_ARG, &_vgchange_pesize },
-		{ uuid_ARG, &_vgchange_uuid },
-		{ alloc_ARG, &_vgchange_alloc },
-		{ clustered_ARG, &_vgchange_clustered },
-		{ vgmetadatacopies_ARG, &_vgchange_metadata_copies },
-		{ metadataprofile_ARG, &_vgchange_profile },
-		{ profile_ARG, &_vgchange_profile },
-		{ detachprofile_ARG, &_vgchange_profile },
-		{ locktype_ARG, &_vgchange_locktype },
-		{ systemid_ARG, &_vgchange_system_id },
-	};
-
-	if (vg_is_exported(vg) &&
-	    !(arg_is_set(cmd, lockstop_ARG) || arg_is_set(cmd, lockstart_ARG))) {
+	if (vg_is_exported(vg)) {
 		log_error("Volume group \"%s\" is exported", vg_name);
 		return ECMD_FAILED;
 	}
 
+	if (!archive(vg))
+		return_ECMD_FAILED;
+
+	if (!_vgchange_locktype(cmd, vg))
+		return_ECMD_FAILED;
+
+	if (!vg_write(vg) || !vg_commit(vg))
+		return_ECMD_FAILED;
+
+	backup(vg);
+
 	/*
-	 * FIXME: DEFAULT_BACKGROUND_POLLING should be "unspecified".
-	 * If --poll is explicitly provided use it; otherwise polling
-	 * should only be started if the LV is not already active. So:
-	 * 1) change the activation code to say if the LV was actually activated
-	 * 2) make polling of an LV tightly coupled with LV activation
-	 *
-	 * Do not initiate any polling if --sysinit option is used.
+	 * When init_vg_sanlock is called for vgcreate, the lockspace remains
+	 * started and lvmlock remains active, but when called for
+	 * vgchange --locktype sanlock, the lockspace is not started so the
+	 * lvmlock LV should be deactivated at the end.  vg_write writes the
+	 * new leases to lvmlock, so we need to wait until after vg_write to
+	 * deactivate it.
 	 */
-	init_background_polling(arg_is_set(cmd, sysinit_ARG) ? 0 :
-						arg_int_value(cmd, poll_ARG,
-						DEFAULT_BACKGROUND_POLLING));
+	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock") &&
+	    (cmd->command->command_enum == vgchange_locktype_CMD))
+		deactivate_lv(cmd, vg->sanlock_lv);
 
-	for (i = 0; i < DM_ARRAY_SIZE(_vgchange_args); ++i) {
-		if (arg_is_set(cmd, _vgchange_args[i].arg)) {
-			if (!archive(vg))
-				return_ECMD_FAILED;
-			if (!_vgchange_args[i].fn(cmd, vg))
-				return_ECMD_FAILED;
+	log_print_unless_silent("Volume group \"%s\" successfully changed", vg->name);
+
+	return ECMD_PROCESSED;
+}
+
+int vgchange_locktype_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
+	const char *lockopt = arg_str_value(cmd, lockopt_ARG, NULL);
+	int ret;
+
+	/*
+	 * vgchange --locktype none --lockopt force VG
+	 *
+	 * This is a special/forced exception to change the lock type to none.
+	 * It's needed for recovery cases and skips the normal steps of undoing
+	 * the current lock type.  It's a way to forcibly get access to a VG
+	 * when the normal locking mechanisms are not working.
+	 *
+	 * It ignores: the current lvm locking config, lvmlockd, the state of
+	 * the vg on other hosts, etc.  It is meant to just remove any locking
+	 * related metadata from the VG (cluster/lock_type flags, lock_type,
+	 * lock_args).
+	 *
+	 * This can be necessary when manually recovering from certain failures.
+	 * e.g. when a pv is lost containing the lvmlock lv (holding sanlock
+	 * leases), the vg lock_type needs to be changed to none, and then
+	 * back to sanlock, which recreates the lvmlock lv and leases.
+	 *
+	 * Set lockd_gl_disable, lockd_vg_disable, lockd_lv_disable to
+	 * disable locking.  lockd_gl(), lockd_vg() and lockd_lv() will
+	 * just return success when they see the disable flag set.
+	 */
+	if (lockopt && !strcmp(lockopt, "force")) {
+		if (lock_type && strcmp(lock_type, "none")) {
+			log_error("Lock type can only be forced to \"none\" for recovery.");
+			return 0;
 		}
+
+		if (!arg_is_set(cmd, yes_ARG) &&
+		     yes_no_prompt("Forcibly change VG lock type to none? [y/n]: ") == 'n') {
+			log_error("VG lock type not changed.");
+			return 0;
+		}
+
+		cmd->lockd_gl_disable = 1;
+		cmd->lockd_vg_disable = 1;
+		cmd->lockd_lv_disable = 1;
+		cmd->handles_missing_pvs = 1;
+		cmd->force_access_clustered = 1;
+		goto process;
 	}
 
-	if (vg_is_archived(vg)) {
-		if (!vg_write(vg) || !vg_commit(vg))
-			return_ECMD_FAILED;
-
-		backup(vg);
-
-		log_print_unless_silent("Volume group \"%s\" successfully changed", vg->name);
-
-		/* FIXME: fix clvmd bug and take DLM lock for non clustered VGs. */
-		if (arg_is_set(cmd, clustered_ARG) &&
-		    vg_is_clustered(vg) && /* just switched to clustered */
-		    locking_is_clustered() &&
-		    locking_supports_remote_queries())
-			dm_list_iterate_items(lvl, &vg->lvs) {
-				if ((lv_lock_holder(lvl->lv) != lvl->lv) ||
-				    !lv_is_active(lvl->lv))
-					continue;
-
-				if (!activate_lv_excl_local(cmd, lvl->lv) ||
-				    !lv_is_active_exclusive_locally(lvl->lv)) {
-					log_error("Can't reactive logical volume %s, "
-						  "please fix manually.",
-						  display_lvname(lvl->lv));
-					ret = ECMD_FAILED;
-				}
-
-				if (lv_is_mirror(lvl->lv))
-					/* Give hint for clustered mirroring */
-					log_print_unless_silent("For clustered mirroring of %s "
-								"deactivation and activation is needed.",
-								display_lvname(lvl->lv));
-			}
+	if (!lvmlockd_use()) {
+		log_error("Using lock type requires lvmlockd.");
+		return 0;
 	}
 
-	if (arg_is_set(cmd, activate_ARG)) {
-		if (!vgchange_activate(cmd, vg, (activation_change_t)
-				       arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
-			return_ECMD_FAILED;
+	/*
+	 * This is a special case where taking the global lock is
+	 * not needed to protect global state, because the change is
+	 * only to an existing VG.  But, taking the global lock ex is
+	 * helpful in this case to trigger a global cache validation
+	 * on other hosts, to cause them to see the new system_id or
+	 * lock_type.
+	 */
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return 0;
+
+process:
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
 	}
 
-	if (arg_is_set(cmd, refresh_ARG)) {
-		/* refreshes the visible LVs (which starts polling) */
-		if (!_vgchange_refresh(cmd, vg))
-			return_ECMD_FAILED;
-	}
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE, 0, handle, &_vgchange_locktype_single);
 
-	if (!arg_is_set(cmd, activate_ARG) &&
-	    !arg_is_set(cmd, refresh_ARG) &&
-	    arg_is_set(cmd, monitor_ARG)) {
-		/* -ay* will have already done monitoring changes */
-		if (!_vgchange_monitoring(cmd, vg))
-			return_ECMD_FAILED;
-	}
+	destroy_processing_handle(cmd, handle);
+	return ret;
+}
 
-	if (!arg_is_set(cmd, refresh_ARG) &&
-	    !vgchange_background_polling(cmd, vg))
-			return_ECMD_FAILED;
+static int _vgchange_lock_start_stop_single(struct cmd_context *cmd, const char *vg_name,
+					    struct volume_group *vg,
+					    struct processing_handle *handle)
+{
+	struct vgchange_params *vp = (struct vgchange_params *)handle->custom_handle;
 
 	if (arg_is_set(cmd, lockstart_ARG)) {
 		if (!_vgchange_lock_start(cmd, vg, vp))
@@ -1024,38 +1101,23 @@ static int vgchange_single(struct cmd_context *cmd, const char *vg_name,
 			return_ECMD_FAILED;
 	}
 
-        return ret;
+	return ECMD_PROCESSED;
 }
 
-/*
- * vgchange can do different things that require different
- * locking, so look at each of those things here.
- *
- * Set up overrides for the default VG locking for various special cases.
- * The VG lock will be acquired in process_each_vg.
- *
- * Acquire the gl lock according to which kind of vgchange command this is.
- */
-
-static int _lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
+int vgchange_lock_start_stop_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
-	/* The default vg lock mode is ex, but these options only need sh. */
+	struct processing_handle *handle;
+	struct vgchange_params vp = { 0 };
+	int ret;
 
-	if (!lvmlockd_use() && arg_is_set(cmd, locktype_ARG)) {
-		log_error("Using lock type requires lvmlockd.");
-		return 0;
-	}
-
-	if (!lvmlockd_use() && (arg_is_set(cmd, lockstart_ARG) || arg_is_set(cmd, lockstop_ARG))) {
+	if (!lvmlockd_use()) {
 		log_error("Using lock start and lock stop requires lvmlockd.");
 		return 0;
 	}
 
-	if (arg_is_set(cmd, activate_ARG) || arg_is_set(cmd, refresh_ARG)) {
-		cmd->lockd_vg_default_sh = 1;
-		/* Allow deactivating if locks fail. */
-		if (is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
-			cmd->lockd_vg_enforce_sh = 1;
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
 	}
 
 	if (arg_is_set(cmd, lockstop_ARG))
@@ -1078,169 +1140,11 @@ static int _lockd_vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 		/* Disable the lockd_gl in process_each_vg. */
 		cmd->lockd_gl_disable = 1;
-		return 1;
-	}
-
-	/*
-	 * Changing system_id or lock_type must only be done on explicitly
-	 * named vgs.
-	 */
-
-	if (arg_is_set(cmd, systemid_ARG) || arg_is_set(cmd, locktype_ARG))
-		cmd->command->flags &= ~ALL_VGS_IS_DEFAULT;
-
-	if (arg_is_set(cmd, systemid_ARG) || arg_is_set(cmd, locktype_ARG)) {
-		/*
-		 * This is a special case where taking the global lock is
-		 * not needed to protect global state, because the change is
-		 * only to an existing VG.  But, taking the global lock ex is
-		 * helpful in this case to trigger a global cache validation
-		 * on other hosts, to cause them to see the new system_id or
-		 * lock_type.
-		 */
-		if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
-			return 0;
-	}
-
-	return 1;
-}
-
-int vgchange(struct cmd_context *cmd, int argc, char **argv)
-{
-	struct processing_handle *handle;
-	struct vgchange_params vp = { 0 };
-	uint32_t flags = 0;
-	int ret;
-
-	int noupdate =
-		arg_is_set(cmd, activate_ARG) ||
-		arg_is_set(cmd, lockstart_ARG) ||
-		arg_is_set(cmd, lockstop_ARG) ||
-		arg_is_set(cmd, monitor_ARG) ||
-		arg_is_set(cmd, poll_ARG) ||
-		arg_is_set(cmd, refresh_ARG);
-
-	int update_partial_safe =
-		arg_is_set(cmd, deltag_ARG) ||
-		arg_is_set(cmd, addtag_ARG) ||
-		arg_is_set(cmd, metadataprofile_ARG) ||
-		arg_is_set(cmd, profile_ARG) ||
-		arg_is_set(cmd, detachprofile_ARG);
-
-	int update_partial_unsafe =
-		arg_is_set(cmd, logicalvolume_ARG) ||
-		arg_is_set(cmd, maxphysicalvolumes_ARG) ||
-		arg_is_set(cmd, resizeable_ARG) ||
-		arg_is_set(cmd, uuid_ARG) ||
-		arg_is_set(cmd, physicalextentsize_ARG) ||
-		arg_is_set(cmd, clustered_ARG) ||
-		arg_is_set(cmd, alloc_ARG) ||
-		arg_is_set(cmd, vgmetadatacopies_ARG) ||
-		arg_is_set(cmd, locktype_ARG) ||
-		arg_is_set(cmd, systemid_ARG);
-
-	int update = update_partial_safe || update_partial_unsafe;
-
-	if (!update && !noupdate) {
-		log_error("Need one or more command options.");
-		return EINVALID_CMD_LINE;
-	}
-
-	if ((arg_is_set(cmd, profile_ARG) || arg_is_set(cmd, metadataprofile_ARG)) &&
-	     arg_is_set(cmd, detachprofile_ARG)) {
-		log_error("Only one of --metadataprofile and --detachprofile permitted.");
-		return EINVALID_CMD_LINE;
-	}
-
-	if (arg_is_set(cmd, activate_ARG) && arg_is_set(cmd, refresh_ARG)) {
-		log_error("Only one of -a and --refresh permitted.");
-		return EINVALID_CMD_LINE;
-	}
-
-	if ((arg_is_set(cmd, ignorelockingfailure_ARG) ||
-	     arg_is_set(cmd, sysinit_ARG)) && update) {
-		log_error("Only -a permitted with --ignorelockingfailure and --sysinit");
-		return EINVALID_CMD_LINE;
-	}
-
-	if (arg_is_set(cmd, activate_ARG) &&
-	    (arg_is_set(cmd, monitor_ARG) || arg_is_set(cmd, poll_ARG))) {
-		if (!is_change_activating((activation_change_t) arg_uint_value(cmd, activate_ARG, 0))) {
-			log_error("Only -ay* allowed with --monitor or --poll.");
-			return EINVALID_CMD_LINE;
-		}
-	}
-
-	if (arg_is_set(cmd, poll_ARG) && arg_is_set(cmd, sysinit_ARG)) {
-		log_error("Only one of --poll and --sysinit permitted.");
-		return EINVALID_CMD_LINE;
-	}
-
-	if (arg_is_set(cmd, activate_ARG) &&
-	    arg_is_set(cmd, autobackup_ARG)) {
-		log_error("-A option not necessary with -a option");
-		return EINVALID_CMD_LINE;
-	}
-
-	if (arg_is_set(cmd, maxphysicalvolumes_ARG) &&
-	    arg_sign_value(cmd, maxphysicalvolumes_ARG, SIGN_NONE) == SIGN_MINUS) {
-		log_error("MaxPhysicalVolumes may not be negative");
-		return EINVALID_CMD_LINE;
-	}
-
-	if (arg_is_set(cmd, physicalextentsize_ARG) &&
-	    arg_sign_value(cmd, physicalextentsize_ARG, SIGN_NONE) == SIGN_MINUS) {
-		log_error("Physical extent size may not be negative");
-		return EINVALID_CMD_LINE;
-	}
-
-	/*
-	 * If --sysinit -aay is used and at the same time lvmetad is used,
-	 * we want to rely on autoactivation to take place. Also, we
-	 * need to take special care here as lvmetad service does
-	 * not neet to be running at this moment yet - it could be
-	 * just too early during system initialization time.
-	 */
-	if (arg_is_set(cmd, sysinit_ARG) && (arg_uint_value(cmd, activate_ARG, 0) == CHANGE_AAY)) {
-		if (lvmetad_used()) {
-			log_warn("WARNING: lvmetad is active, skipping direct activation during sysinit");
-			return ECMD_PROCESSED;
-		}
-	}
-
-	if (arg_is_set(cmd, clustered_ARG) && !argc && !arg_is_set(cmd, yes_ARG) &&
-	    (yes_no_prompt("Change clustered property of all volumes groups? [y/n]: ") == 'n')) {
-		log_error("No volume groups changed.");
-		return ECMD_FAILED;
-	}
-
-	if (!update || !update_partial_unsafe)
-		cmd->handles_missing_pvs = 1;
-
-	/*
-	 * Include foreign VGs that contain active LVs.
-	 * That shouldn't happen in general, but if it does by some
-	 * mistake, then we want to allow those LVs to be deactivated.
-	 */
-	if (arg_is_set(cmd, activate_ARG))
-		cmd->include_active_foreign_vgs = 1;
-
-	if (!_lockd_vgchange(cmd, argc, argv))
-		return_ECMD_FAILED;
-
-	if (update)
-		flags |= READ_FOR_UPDATE;
-	if (arg_is_set(cmd, lockstart_ARG) || arg_is_set(cmd, lockstop_ARG))
-		flags |= READ_ALLOW_EXPORTED;
-
-	if (!(handle = init_processing_handle(cmd, NULL))) {
-		log_error("Failed to initialize processing handle.");
-		return ECMD_FAILED;
 	}
 
 	handle->custom_handle = &vp;
 
-	ret = process_each_vg(cmd, argc, argv, NULL, NULL, flags, 0, handle, &vgchange_single);
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_ALLOW_EXPORTED, 0, handle, &_vgchange_lock_start_stop_single);
 
 	/* Wait for lock-start ops that were initiated in vgchange_lockstart. */
 
@@ -1264,3 +1168,56 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	destroy_processing_handle(cmd, handle);
 	return ret;
 }
+
+static int _vgchange_systemid_single(struct cmd_context *cmd, const char *vg_name,
+			             struct volume_group *vg,
+			             struct processing_handle *handle)
+{
+	if (vg_is_exported(vg)) {
+		log_error("Volume group \"%s\" is exported", vg_name);
+		return ECMD_FAILED;
+	}
+
+	if (!archive(vg))
+		return_ECMD_FAILED;
+
+	if (!_vgchange_system_id(cmd, vg))
+		return_ECMD_FAILED;
+
+	if (!vg_write(vg) || !vg_commit(vg))
+		return_ECMD_FAILED;
+
+	backup(vg);
+
+	log_print_unless_silent("Volume group \"%s\" successfully changed", vg->name);
+
+	return ECMD_PROCESSED;
+}
+
+int vgchange_systemid_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	int ret;
+
+	/*
+	 * This is a special case where taking the global lock is
+	 * not needed to protect global state, because the change is
+	 * only to an existing VG.  But, taking the global lock ex is
+	 * helpful in this case to trigger a global cache validation
+	 * on other hosts, to cause them to see the new system_id or
+	 * lock_type.
+	 */
+	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+		return 0;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE, 0, handle, &_vgchange_systemid_single);
+
+	destroy_processing_handle(cmd, handle);
+	return ret;
+}
+

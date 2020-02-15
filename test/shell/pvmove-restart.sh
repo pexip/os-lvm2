@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2013-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,19 +12,17 @@
 
 # Check pvmove behavior when it's progress and machine is rebooted
 
-SKIP_WITH_LVMLOCKD=1
-
 . lib/inittest
 
 aux prepare_pvs 3 60
 
-vgcreate -s 128k $vg "$dev1" "$dev2"
+vgcreate $SHARED -s 128k $vg "$dev1" "$dev2"
 pvcreate --metadatacopies 0 "$dev3"
 vgextend $vg "$dev3"
 
 # Slowdown writes
 # (FIXME: generates interesting race when not used)
-aux delay_dev "$dev3" 0 800 $(get first_extent_sector "$dev3"):
+aux delay_dev "$dev3" 0 800 "$(get first_extent_sector "$dev3"):"
 test -e HAVE_DM_DELAY || skip
 
 for mode in "--atomic" ""
@@ -54,7 +53,7 @@ j=0
 for i in $lv1 pvmove0 pvmove0_mimage_0 pvmove0_mimage_1 ; do
 	while dmsetup status "$vg-$i"; do
 		dmsetup remove "$vg-$i" || {
-			j=$(($j + 1))
+			j=$(( j + 1 ))
 			test $j -le 100 || die "Cannot take down devices."
 			sleep .1;
 		}
@@ -73,7 +72,7 @@ if test -e LOCAL_CLVMD ; then
 	# as clvmd starts to abort on internal errors on various
 	# errors, based on the fact pvmove is killed -9
 	# Restart clvmd
-	kill $(< LOCAL_CLVMD)
+	kill "$(< LOCAL_CLVMD)"
 	for i in $(seq 1 100) ; do
 		test $i -eq 100 && die "Shutdown of clvmd is too slow."
 		pgrep clvmd || break
@@ -81,8 +80,6 @@ if test -e LOCAL_CLVMD ; then
 	done # wait for the pid removal
 	aux prepare_clvmd
 fi
-
-aux notify_lvmetad "$dev1" "$dev2" "$dev3"
 
 # Only PVs should be left in table...
 dmsetup table
@@ -93,7 +90,7 @@ LVM_TEST_TAG="kill_me_$PREFIX" vgchange --config 'activation{polling_interval=10
 aux wait_pvmove_lv_ready "$vg-pvmove0"
 dmsetup table
 
-pvmove --abort
+pvmove --abort "$dev1"
 
 lvs -a -o+devices $vg
 

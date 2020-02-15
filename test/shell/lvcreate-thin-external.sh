@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright (C) 2013-2014 Red Hat, Inc. All rights reserved.
 #
@@ -12,7 +12,7 @@
 
 # Test creation of thin snapshots using external origin
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
@@ -28,8 +28,9 @@ which fsck || skip
 aux have_thin 1 3 0 || skip
 
 aux prepare_pvs 2 64
+get_devs
 
-vgcreate $vg -s 64K $(cat DEVICES)
+vgcreate $SHARED -s 64K "$vg" "${DEVICES[@]}"
 
 # Newer thin-pool target (>= 1.13) supports unaligned external origin
 # But this test is written to test and expect older behavior

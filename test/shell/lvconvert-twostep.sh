@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2010 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 
 . lib/inittest
 
@@ -22,11 +23,6 @@ grep "two steps" errs
 lvconvert -m 2 $vg/mirror "$dev3"
 lvconvert --mirrorlog core $vg/mirror
 not lvconvert -m 1 --mirrorlog disk $vg/mirror "$dev3" 2>&1 | tee errs
-grep "two steps" errs
-
-test -e LOCAL_CLVMD && exit 0
-# FIXME  mirrored unsupported in cluster
-not lvconvert -m 1 --mirrorlog mirrored $vg/mirror "$dev3" "$dev4" 2>&1 | tee errs
 grep "two steps" errs
 
 vgremove -ff $vg

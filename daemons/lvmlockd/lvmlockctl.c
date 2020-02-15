@@ -8,9 +8,9 @@
  * of the GNU Lesser General Public License v.2.1.
  */
 
-#include "tool.h"
+#include "tools/tool.h"
 
-#include "lvmlockd-client.h"
+#include "daemons/lvmlockd/lvmlockd-client.h"
 
 #include <stddef.h>
 #include <getopt.h>
@@ -24,7 +24,7 @@
 static int quit = 0;
 static int info = 0;
 static int dump = 0;
-static int wait_opt = 0;
+static int wait_opt = 1;
 static int force_opt = 0;
 static int kill_vg = 0;
 static int drop_vg = 0;
@@ -379,7 +379,7 @@ static int setup_dump_socket(void)
 	rv = bind(s, (struct sockaddr *) &dump_addr, dump_addrlen);
 	if (rv < 0) {
 		rv = -errno;
-		if (!close(s))
+		if (close(s))
 			log_error("failed to close dump socket");
 		return rv;
 	}
