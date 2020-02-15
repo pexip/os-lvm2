@@ -29,7 +29,7 @@ Vcs-Git: git://anonscm.debian.org/pkg-lvm/lvm2.git
 Vcs-Browser: https://anonscm.debian.org/cgit/pkg-lvm/lvm2.git/
 X-Python-Version: >= 2.7
 X-Python3-Version: >= 3.4
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
 
 Package: lvm2
 Architecture: linux-any
