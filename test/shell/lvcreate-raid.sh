@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2011-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,13 +10,13 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 lv_devices() {
-	test $3 -eq $(get lv_devices $1/$2 | wc -w)
+	test "$3" -eq "$(get lv_devices "$1/$2" | wc -w)"
 }
 
 ########################################################
@@ -27,7 +28,9 @@ RAID4=""
 aux have_raid4 && RAID4=raid4
 
 aux prepare_pvs 6 20  # 6 devices for RAID10 (2-mirror,3-stripe) test
-vgcreate -s 512k $vg $(cat DEVICES)
+get_devs
+
+vgcreate $SHARED -s 512k "$vg" "${DEVICES[@]}"
 
 ###########################################
 # Create, wait for sync, remove tests
@@ -120,7 +123,7 @@ EAT_SIZE=$(get lv_field $vg/eat_space size)
 lvcreate --type raid1 -m 1 -l 100%FREE -an -Zn -n raid1 $vg "$dev1" "$dev2"
 check lv_field $vg/raid1 size "9.50m"
 # Ensure image size is the same as the RAID1 size
-check lv_field $vg/raid1 size $(get lv_field $vg/raid1_rimage_0 size -a)
+check lv_field $vg/raid1 size "$(get lv_field $vg/raid1_rimage_0 size -a)"
 # Amount remaining in dev2 should equal the amount taken by 'lv' in dev1
 check pv_field "$dev2" pv_free "$EAT_SIZE"
 lvremove -ff $vg/raid1

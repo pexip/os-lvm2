@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,6 @@
 
 # Exercise usage of stacked cache volume using raid volume
 
-SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -38,7 +38,7 @@ lvcreate --type raid1 -m 1 --nosync -l 2 -n $lv1 $vg
 lvcreate --type raid1 -m 1 --nosync -l 2 -n ${lv1}_cachepool $vg
 #should lvs -a $vg/${lv1}_cdata_rimage_0  # ensure images are properly renamed
 lvconvert --yes --type cache --cachemode writeback --cachepool $vg/${lv1}_cachepool $vg/$lv1 2>&1 | tee out
-grep "WARNING: Data redundancy is lost" out
+grep "WARNING: Data redundancy could be lost" out
 check lv_exists $vg/${lv1}_corig_rimage_0        # ensure images are properly renamed
 dmsetup table ${vg}-$lv1 | grep cache   # ensure it is loaded in kernel
 lvremove -f $vg
@@ -46,8 +46,9 @@ lvremove -f $vg
 
 lvcreate -n corigin -m 1 --type raid1 --nosync -l 10 $vg
 lvcreate -n cpool --type cache $vg/corigin --cachemode writeback -l 10 2>&1 | tee out
-grep "WARNING: Data redundancy is lost" out
-lvconvert --splitmirrors 1 --name split $vg/corigin "$dev1"
+grep "WARNING: Data redundancy could be lost" out
+not lvconvert --splitmirrors 1 --name split $vg/corigin "$dev1"
+lvconvert --yes --splitmirrors 1 --name split $vg/corigin "$dev1"
 
 lvremove -f $vg
 
@@ -65,8 +66,8 @@ aux wait_for_sync $vg cpool_cmeta
 lvchange --syncaction repair $vg/cpool_cdata
 aux wait_for_sync $vg cpool_cdata
 
-lvconvert --repair -y $vg/cpool_cmeta
-lvconvert --repair -y $vg/cpool_cdata
+lvconvert -y --repair $vg/cpool_cmeta
+lvconvert -y --repair $vg/cpool_cdata
 
 # do not allow reserved names for *new* LVs
 not lvconvert --splitmirrors 1 --name split_cmeta $vg/cpool_cmeta "$dev1"
@@ -75,27 +76,29 @@ not lvconvert --splitmirrors 1 --name split_cdata $vg/cpool_cdata "$dev1"
 # but allow manipulating existing LVs with reserved names
 aux wait_for_sync $vg cpool_cmeta
 aux wait_for_sync $vg cpool_cdata
-lvconvert --splitmirrors 1 --name split_meta $vg/cpool_cmeta "$dev1"
-lvconvert --splitmirrors 1 --name split_data $vg/cpool_cdata "$dev1"
+lvconvert --yes --splitmirrors 1 --name split_meta $vg/cpool_cmeta "$dev1"
+lvconvert --yes --splitmirrors 1 --name split_data $vg/cpool_cdata "$dev1"
+not lvconvert --splitmirrors 1 --name split_data $vg/cpool_cdata "$dev1"
 
 lvremove -f $vg
 
 
 # Test up/down raid conversion of cache pool data and metadata
 lvcreate --type cache-pool $vg/cpool -l 10
-lvcreate -n corigin -H $vg/cpool -l 20
+lvcreate -H -n corigin --cachepool $vg/cpool -l 20 $vg
 
-lvconvert -m+1 --type raid1 $vg/cpool_cmeta
+lvconvert -y -m +1 --type raid1 $vg/cpool_cmeta
 check lv_field $vg/cpool_cmeta layout "raid,raid1"
 check lv_field $vg/cpool_cmeta role "private,cache,pool,metadata"
 
-lvconvert -m+1 --type raid1 $vg/cpool_cdata
+lvconvert -y -m +1 --type raid1 $vg/cpool_cdata
 check lv_field $vg/cpool_cdata layout "raid,raid1"
 check lv_field $vg/cpool_cdata role "private,cache,pool,data"
 
-lvconvert -m-1  $vg/cpool_cmeta
+not lvconvert -m -1  $vg/cpool_cmeta
+lvconvert -y -m -1  $vg/cpool_cmeta
 check lv_field $vg/cpool_cmeta layout "linear"
-lvconvert -m-1  $vg/cpool_cdata
+lvconvert -y -m -1  $vg/cpool_cdata
 check lv_field $vg/cpool_cdata layout "linear"
 
 lvremove -f $vg

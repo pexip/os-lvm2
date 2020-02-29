@@ -16,7 +16,7 @@
 #ifndef LIB_DMCOMMON_H
 #define LIB_DMCOMMON_H
 
-#include "libdevmapper.h"
+#include "libdm/libdevmapper.h"
 
 #define DM_DEFAULT_NAME_MANGLING_MODE_ENV_VAR_NAME "DM_DEFAULT_NAME_MANGLING_MODE"
 
@@ -52,5 +52,7 @@ void inc_suspended(void);
 void dec_suspended(void);
 
 int parse_thin_pool_status(const char *params, struct dm_status_thin_pool *s);
+
+int get_uname_version(unsigned *major, unsigned *minor, unsigned *release);
 
 #endif

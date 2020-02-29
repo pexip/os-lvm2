@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014-2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -22,9 +23,9 @@ aux prepare_pvs 6 16
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 # create $VGS with assorted tags
-vgcreate $vg1 --vgmetadatacopies 2 --addtag "vg_tag3" --addtag "vg_tag2" -s 4m "$dev1" "$dev2" "$dev3"
-vgcreate $vg2 --addtag "vg_tag2" -s 4m "$dev4" "$dev5"
-vgcreate $vg3 --addtag "vg_tag1" -s 4m "$dev6"
+vgcreate $SHARED $vg1 --vgmetadatacopies 2 --addtag "vg_tag3" --addtag "vg_tag2" -s 4m "$dev1" "$dev2" "$dev3"
+vgcreate $SHARED $vg2 --addtag "vg_tag2" -s 4m "$dev4" "$dev5"
+vgcreate $SHARED $vg3 --addtag "vg_tag1" -s 4m "$dev6"
 
 # add PV assorted tags
 pvchange --addtag "pv_tag3" --addtag "pv_tag1" --addtag "pv_tag2" "$dev1"
@@ -62,7 +63,7 @@ sel() {
 
 	# the number of lines on output must match
 	test "$items_found" -eq $# || {
-		echo "  >>> NUMBER OF ITEMS EXPECTED: $# ($@)"
+		echo "  >>> NUMBER OF ITEMS EXPECTED: $#" "$@"
 		echo "  >>> NUMBER OF ITEMS FOUND: $items_found ($(< $OUT_LOG_FILE))"
 		return 1
 	}
@@ -218,3 +219,5 @@ sel lv '(lv_name=vol1 || lv_name=vol2) && lv_size < 8m' vol2
 sel lv '(lv_name=vol1 && lv_size=8m) && vg_tags=vg_tag2' vol1
 # negation of clause grouped by ( )
 sel lv '!(lv_name=vol1 || lv_name=vol2)' abc xyz orig snap
+
+vgremove -ff $vg1 $vg2 $vg3

@@ -52,7 +52,7 @@ static int _pvresize_single(struct cmd_context *cmd,
 		cmd->lockd_gl_disable = 1;
 	}
 
-	if (!pv_resize_single(cmd, vg, pv, params->new_size))
+	if (!pv_resize_single(cmd, vg, pv, params->new_size, arg_is_set(cmd, yes_ARG)))
 		return_ECMD_FAILED;
 
 	params->done++;
@@ -72,13 +72,13 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
-	if (arg_sign_value(cmd, physicalvolumesize_ARG, SIGN_NONE) == SIGN_MINUS) {
+	if (arg_sign_value(cmd, setphysicalvolumesize_ARG, SIGN_NONE) == SIGN_MINUS) {
 		log_error("Physical volume size may not be negative");
 		ret = EINVALID_CMD_LINE;
 		goto out;
 	}
 
-	params.new_size = arg_uint64_value(cmd, physicalvolumesize_ARG,
+	params.new_size = arg_uint64_value(cmd, setphysicalvolumesize_ARG,
 					   UINT64_C(0));
 
 	params.done = 0;
@@ -96,7 +96,7 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 
 	ret = process_each_pv(cmd, argc, argv, NULL, 0, READ_FOR_UPDATE | READ_ALLOW_EXPORTED, handle, _pvresize_single);
 
-	log_print_unless_silent("%d physical volume(s) resized / %d physical volume(s) "
+	log_print_unless_silent("%d physical volume(s) resized or updated / %d physical volume(s) "
 				"not resized", params.done, params.total - params.done);
 out:
 	destroy_processing_handle(cmd, handle);

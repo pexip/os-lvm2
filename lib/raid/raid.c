@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2011-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,17 +12,22 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "segtype.h"
-#include "display.h"
-#include "text_export.h"
-#include "config.h"
-#include "str_list.h"
-#include "targets.h"
-#include "lvm-string.h"
-#include "activate.h"
-#include "metadata.h"
-#include "lv_alloc.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/metadata/segtype.h"
+#include "lib/display/display.h"
+#include "lib/format_text/text_export.h"
+#include "lib/config/config.h"
+#include "lib/datastruct/str_list.h"
+#include "lib/activate/targets.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/activate/activate.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/lv_alloc.h"
+
+static int _raid_target_present(struct cmd_context *cmd,
+				const struct lv_segment *seg __attribute__((unused)),
+				unsigned *attributes);
 
 static void _raid_display(const struct lv_segment *seg)
 {
@@ -87,13 +92,13 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 		}
 
 		/* Metadata device comes first. */
-		if (!seg_is_raid0(seg)) {
-			if (!(lv = find_lv(seg->lv->vg, cv->v.str))) {
-				log_error("Couldn't find volume '%s' for segment '%s'.",
-					  cv->v.str ? : "NULL", seg_name);
-				return 0;
-			}
+		if (!(lv = find_lv(seg->lv->vg, cv->v.str))) {
+			log_error("Couldn't find volume '%s' for segment '%s'.",
+				  cv->v.str ? : "NULL", seg_name);
+			return 0;
+		}
 
+		if (strstr(lv->name, "_rmeta_")) {
 			if (!set_lv_segment_area_lv(seg, s, lv, 0, RAID_META))
 				return_0;
 			cv = cv->next;
@@ -137,19 +142,29 @@ static int _raid_text_import(struct lv_segment *seg,
 	} raid_attr_import[] = {
 		{ "region_size",	&seg->region_size },
 		{ "stripe_size",	&seg->stripe_size },
+		{ "data_copies",	&seg->data_copies },
 		{ "writebehind",	&seg->writebehind },
 		{ "min_recovery_rate",	&seg->min_recovery_rate },
 		{ "max_recovery_rate",	&seg->max_recovery_rate },
+		{ "data_offset",	&seg->data_offset },
 	}, *aip = raid_attr_import;
 	unsigned i;
 
 	for (i = 0; i < DM_ARRAY_SIZE(raid_attr_import); i++, aip++) {
 		if (dm_config_has_node(sn, aip->name)) {
 			if (!dm_config_get_uint32(sn, aip->name, aip->var)) {
+				if (!strcmp(aip->name, "data_copies") ||
+				    !strcmp(aip->name, "data_offset")) {
+					*aip->var = 0;
+					continue;
+				}
 				log_error("Couldn't read '%s' for segment %s of logical volume %s.",
 					  aip->name, dm_config_parent_name(sn), seg->lv->name);
 				return 0;
 			}
+
+			if (!strcmp(aip->name, "data_offset") && !*aip->var)
+				*aip->var = 1;
 		}
 	}
 
@@ -165,9 +180,11 @@ static int _raid_text_import(struct lv_segment *seg,
 		return 0;
 	}
 
+	if (seg->data_copies < 2)
+		seg->data_copies = lv_raid_data_copies(seg->segtype, seg->area_count);
+
 	if (seg_is_any_raid0(seg))
 		seg->area_len /= seg->area_count;
-	seg->status |= RAID;
 
 	return 1;
 }
@@ -184,18 +201,33 @@ static int _raid_text_export_raid0(const struct lv_segment *seg, struct formatte
 
 static int _raid_text_export_raid(const struct lv_segment *seg, struct formatter *f)
 {
-	outf(f, "device_count = %u", seg->area_count);
+	int raid0 = seg_is_any_raid0(seg);
+
+	if (raid0)
+		outfc(f, (seg->area_count == 1) ? "# linear" : NULL,
+		      "stripe_count = %u", seg->area_count);
+
+	else {
+		outf(f, "device_count = %u", seg->area_count);
+		if (seg_is_any_raid10(seg) && seg->data_copies > 0)
+			outf(f, "data_copies = %" PRIu32, seg->data_copies);
+		if (seg->region_size)
+			outf(f, "region_size = %" PRIu32, seg->region_size);
+	}
 
 	if (seg->stripe_size)
 		outf(f, "stripe_size = %" PRIu32, seg->stripe_size);
-	if (seg->region_size)
-		outf(f, "region_size = %" PRIu32, seg->region_size);
-	if (seg->writebehind)
-		outf(f, "writebehind = %" PRIu32, seg->writebehind);
-	if (seg->min_recovery_rate)
-		outf(f, "min_recovery_rate = %" PRIu32, seg->min_recovery_rate);
-	if (seg->max_recovery_rate)
-		outf(f, "max_recovery_rate = %" PRIu32, seg->max_recovery_rate);
+
+	if (!raid0) {
+		if (seg_is_raid1(seg) && seg->writebehind)
+			outf(f, "writebehind = %" PRIu32, seg->writebehind);
+		if (seg->min_recovery_rate)
+			outf(f, "min_recovery_rate = %" PRIu32, seg->min_recovery_rate);
+		if (seg->max_recovery_rate)
+			outf(f, "max_recovery_rate = %" PRIu32, seg->max_recovery_rate);
+		if (seg->data_offset)
+			outf(f, "data_offset = %" PRIu32, seg->data_offset == 1 ? 0 : seg->data_offset);
+	}
 
 	return out_areas(f, seg, "raid");
 }
@@ -217,14 +249,22 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				 struct dm_tree_node *node, uint64_t len,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
+	int delta_disks = 0, delta_disks_minus = 0, delta_disks_plus = 0, data_offset = 0;
 	uint32_t s;
 	uint64_t flags = 0;
-	uint64_t rebuilds = 0;
-	uint64_t writemostly = 0;
-	struct dm_tree_node_raid_params params;
-	int raid0 = seg_is_any_raid0(seg);
+	uint64_t rebuilds[RAID_BITMAP_SIZE] = { 0 };
+	uint64_t writemostly[RAID_BITMAP_SIZE] = { 0 };
+	struct dm_tree_node_raid_params_v2 params = { 0 };
+	unsigned attrs;
 
-	memset(&params, 0, sizeof(params));
+	if (seg_is_raid4(seg)) {
+		if (!_raid_target_present(cmd, NULL, &attrs) ||
+		    !(attrs & RAID_FEATURE_RAID4)) {
+			log_error("RAID target does not support RAID4 for LV %s.",
+				  display_lvname(seg->lv));
+			return 0;
+		}
+	}
 
 	if (!seg->area_count) {
 		log_error(INTERNAL_ERROR "_raid_add_target_line called "
@@ -233,64 +273,85 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	}
 
 	/*
-	 * 64 device restriction imposed by kernel as well.  It is
-	 * not strictly a userspace limitation.
+	 * 253 device restriction imposed by kernel due to MD and dm-raid bitfield limitation in superblock.
+	 * It is not strictly a userspace limitation.
 	 */
-	if (seg->area_count > 64) {
-		log_error("Unable to handle more than 64 devices in a "
-			  "single RAID array");
+	if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
+		log_error("Unable to handle more than %u devices in a "
+			  "single RAID array", DEFAULT_RAID_MAX_IMAGES);
 		return 0;
 	}
 
-	if (!raid0) {
+	if (!seg_is_any_raid0(seg)) {
 		if (!seg->region_size) {
-			log_error("Missing region size for mirror segment.");
+			log_error("Missing region size for raid segment in %s.",
+				  seg_lv(seg, 0)->name);
 			return 0;
 		}
 
-		for (s = 0; s < seg->area_count; s++)
-			if (seg_lv(seg, s)->status & LV_REBUILD)
-				rebuilds |= 1ULL << s;
+		for (s = 0; s < seg->area_count; s++) {
+			uint64_t status = seg_lv(seg, s)->status;
 
-		for (s = 0; s < seg->area_count; s++)
-			if (seg_lv(seg, s)->status & LV_WRITEMOSTLY)
-				writemostly |= 1ULL << s;
+			if (status & LV_REBUILD)
+				rebuilds[s/64] |= 1ULL << (s%64);
+
+			if (status & LV_RESHAPE_DELTA_DISKS_PLUS) {
+				delta_disks++;
+				delta_disks_plus++;
+			} else if (status & LV_RESHAPE_DELTA_DISKS_MINUS) {
+				delta_disks--;
+				delta_disks_minus++;
+			}
+
+			if (delta_disks_plus && delta_disks_minus) {
+				log_error(INTERNAL_ERROR "Invalid request for delta disks minus and delta disks plus!");
+				return 0;
+			}
+
+			if (status & LV_WRITEMOSTLY)
+				writemostly[s/64] |= 1ULL << (s%64);
+		}
+
+		data_offset = seg->data_offset;
 
 		if (mirror_in_sync())
 			flags = DM_NOSYNC;
 	}
 
 	params.raid_type = lvseg_name(seg);
-	params.stripe_size = seg->stripe_size;
-	params.flags = flags;
 
-	if (raid0) {
-		params.mirrors = 1;
-		params.stripes = seg->area_count;
-	} else if (seg->segtype->parity_devs) {
+	if (seg->segtype->parity_devs) {
 		/* RAID 4/5/6 */
 		params.mirrors = 1;
 		params.stripes = seg->area_count - seg->segtype->parity_devs;
-	} else if (seg_is_raid10(seg)) {
-		/* RAID 10 only supports 2 mirrors now */
-		params.mirrors = 2;
-		params.stripes = seg->area_count / 2;
+	} else if (seg_is_any_raid0(seg)) {
+		params.mirrors = 1;
+		params.stripes = seg->area_count;
+	} else if (seg_is_any_raid10(seg)) {
+		params.data_copies = seg->data_copies;
+		params.stripes = seg->area_count;
 	} else {
 		/* RAID 1 */
-		params.mirrors = seg->area_count;
+		params.mirrors = seg->data_copies;
 		params.stripes = 1;
 		params.writebehind = seg->writebehind;
+		memcpy(params.writemostly, writemostly, sizeof(params.writemostly));
 	}
 
-	if (!raid0) {
+	/* RAID 0 doesn't have a bitmap, thus no region_size, rebuilds etc. */
+	if (!seg_is_any_raid0(seg)) {
 		params.region_size = seg->region_size;
-		params.rebuilds = rebuilds;
-		params.writemostly = writemostly;
+		memcpy(params.rebuilds, rebuilds, sizeof(params.rebuilds));
 		params.min_recovery_rate = seg->min_recovery_rate;
 		params.max_recovery_rate = seg->max_recovery_rate;
+		params.delta_disks = delta_disks;
+		params.data_offset = data_offset;
 	}
 
-	if (!dm_tree_node_add_raid_target_with_params(node, len, &params))
+	params.stripe_size = seg->stripe_size;
+	params.flags = flags;
+
+	if (!dm_tree_node_add_raid_target_with_params_v2(node, len, &params))
 		return_0;
 
 	return add_areas_line(dm, seg, node, 0u, seg->area_count);
@@ -303,7 +364,8 @@ static int _raid_target_status_compatible(const char *type)
 
 static void _raid_destroy(struct segment_type *segtype)
 {
-	dm_free((void *) segtype);
+	free((void *) segtype->dso);
+	free(segtype);
 }
 
 #ifdef DEVMAPPER_SUPPORT
@@ -315,36 +377,21 @@ static int _raid_target_percent(void **target_state,
 				uint64_t *total_numerator,
 				uint64_t *total_denominator)
 {
-	int i;
-	uint64_t numerator, denominator;
-	char *pos = params;
-	/*
-	 * Status line:
-	 *    <raid_type> <#devs> <status_chars> <synced>/<total>
-	 * Example:
-	 *    raid1 2 AA 1024000/1024000
-	 */
-	for (i = 0; i < 3; i++) {
-		pos = strstr(pos, " ");
-		if (pos)
-			pos++;
-		else
-			break;
-	}
-	if (!pos || (sscanf(pos, FMTu64 "/" FMTu64 "%n", &numerator, &denominator, &i) != 2) ||
-	    !denominator) {
-		log_error("Failed to parse %s status fraction: %s",
-			  (seg) ? seg->segtype->name : "segment", params);
-		return 0;
-	}
+	struct dm_status_raid *sr;
 
-	*total_numerator += numerator;
-	*total_denominator += denominator;
+	if (!dm_get_status_raid(mem, params, &sr))
+		return_0;
+
+	*total_numerator += sr->insync_regions;
+	*total_denominator += sr->total_regions;
 
 	if (seg)
-		seg->extents_copied = (uint64_t) seg->area_len * dm_make_percent(numerator, denominator) / DM_PERCENT_100;
+		seg->extents_copied = (uint64_t) seg->area_len
+			* dm_make_percent(sr->insync_regions , sr->total_regions) / DM_PERCENT_100;
 
-	*percent = dm_make_percent(numerator, denominator);
+	*percent = dm_make_percent(sr->insync_regions, sr->total_regions);
+
+	dm_pool_free(mem, sr);
 
 	return 1;
 }
@@ -405,19 +452,34 @@ out:
 	return r;
 }
 
+/* Define raid feature based on the tuple(major, minor, patchlevel) of raid target */
+struct raid_feature {
+	uint32_t maj;
+	uint32_t min;
+	uint32_t patchlevel;
+	unsigned raid_feature;
+	const char *feature;
+};
+
+/* Return true if tuple(@maj, @min, @patchlevel) is greater/equal to @*feature members */
+static int _check_feature(const struct raid_feature *feature, uint32_t maj, uint32_t min, uint32_t patchlevel)
+{
+	return (maj > feature->maj) ||
+	       (maj == feature->maj && min > feature->min) ||
+	       (maj == feature->maj && min == feature->min && patchlevel >= feature->patchlevel);
+}
+
 static int _raid_target_present(struct cmd_context *cmd,
 				const struct lv_segment *seg __attribute__((unused)),
 				unsigned *attributes)
 {
 	/* List of features with their kernel target version */
-	static const struct feature {
-		uint32_t maj;
-		uint32_t min;
-		unsigned raid_feature;
-		const char *feature;
-	} _features[] = {
-		{ 1, 3, RAID_FEATURE_RAID10, SEG_TYPE_NAME_RAID10 },
-		{ 1, 7, RAID_FEATURE_RAID0, SEG_TYPE_NAME_RAID0 },
+	const struct raid_feature _features[] = {
+		{ 1, 3, 0, RAID_FEATURE_RAID10, SEG_TYPE_NAME_RAID10 },
+		{ 1, 7, 0, RAID_FEATURE_RAID0, SEG_TYPE_NAME_RAID0 },
+		{ 1, 9, 0, RAID_FEATURE_SHRINK, "shrinking" },
+		{ 1, 9, 0, RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD, "rebuild+emptymeta" },
+		{ 1, 12, 0, RAID_FEATURE_RESHAPE, "reshaping" },
 	};
 
 	static int _raid_checked = 0;
@@ -439,13 +501,19 @@ static int _raid_target_present(struct cmd_context *cmd,
 			return_0;
 
 		for (i = 0; i < DM_ARRAY_SIZE(_features); ++i)
-			if ((maj > _features[i].maj) ||
-			    (maj == _features[i].maj && min >= _features[i].min))
+			if (_check_feature(_features + i, maj, min, patchlevel))
 				_raid_attrs |= _features[i].raid_feature;
 			else
 				log_very_verbose("Target raid does not support %s.",
 						 _features[i].feature);
 
+		/*
+		 * Seperate check for proper raid4 mapping supported
+		 *
+		 * If we get more of these range checks, avoid them
+		 * altogether by enhancing 'struct raid_feature'
+		 * and _check_feature() to handle them.
+		 */
 		if (!(maj == 1 && (min == 8 || (min == 9 && patchlevel == 0))))
 			_raid_attrs |= RAID_FEATURE_RAID4;
 		else
@@ -472,26 +540,16 @@ static int _raid_modules_needed(struct dm_pool *mem,
 }
 
 #  ifdef DMEVENTD
-static const char *_get_raid_dso_path(struct cmd_context *cmd)
+static int _raid_target_monitored(struct lv_segment *seg, int *pending, int *monitored)
 {
-	const char *config_str = find_config_tree_str(cmd, dmeventd_raid_library_CFG, NULL);
-	return get_monitor_dso_path(cmd, config_str);
-}
-
-static int _raid_target_monitored(struct lv_segment *seg, int *pending)
-{
-	struct cmd_context *cmd = seg->lv->vg->cmd;
-	const char *dso_path = _get_raid_dso_path(cmd);
-
-	return target_registered_with_dmeventd(cmd, dso_path, seg->lv, pending);
+	return target_registered_with_dmeventd(seg->lv->vg->cmd, seg->segtype->dso,
+					       seg->lv, pending, monitored);
 }
 
 static int _raid_set_events(struct lv_segment *seg, int evmask, int set)
 {
-	struct cmd_context *cmd = seg->lv->vg->cmd;
-	const char *dso_path = _get_raid_dso_path(cmd);
-
-	return target_register_events(cmd, dso_path, seg->lv, evmask, set, 0);
+	return target_register_events(seg->lv->vg->cmd, seg->segtype->dso,
+				      seg->lv, evmask, set, 0);
 }
 
 static int _raid_target_monitor_events(struct lv_segment *seg, int events)
@@ -536,23 +594,31 @@ static const struct raid_type {
 	{ SEG_TYPE_NAME_RAID0_META, 0, SEG_RAID0_META | SEG_AREAS_STRIPED },
 	{ SEG_TYPE_NAME_RAID1,      0, SEG_RAID1 | SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID10,     0, SEG_RAID10 | SEG_AREAS_MIRRORED },
+	{ SEG_TYPE_NAME_RAID10_NEAR,0, SEG_RAID10_NEAR | SEG_AREAS_MIRRORED },
 	{ SEG_TYPE_NAME_RAID4,      1, SEG_RAID4 },
 	{ SEG_TYPE_NAME_RAID5,      1, SEG_RAID5 },
+	{ SEG_TYPE_NAME_RAID5_N,    1, SEG_RAID5_N },
 	{ SEG_TYPE_NAME_RAID5_LA,   1, SEG_RAID5_LA },
 	{ SEG_TYPE_NAME_RAID5_LS,   1, SEG_RAID5_LS },
 	{ SEG_TYPE_NAME_RAID5_RA,   1, SEG_RAID5_RA },
 	{ SEG_TYPE_NAME_RAID5_RS,   1, SEG_RAID5_RS },
 	{ SEG_TYPE_NAME_RAID6,      2, SEG_RAID6 },
+	{ SEG_TYPE_NAME_RAID6_N_6,  2, SEG_RAID6_N_6 },
 	{ SEG_TYPE_NAME_RAID6_NC,   2, SEG_RAID6_NC },
 	{ SEG_TYPE_NAME_RAID6_NR,   2, SEG_RAID6_NR },
-	{ SEG_TYPE_NAME_RAID6_ZR,   2, SEG_RAID6_ZR }
+	{ SEG_TYPE_NAME_RAID6_ZR,   2, SEG_RAID6_ZR },
+	{ SEG_TYPE_NAME_RAID6_LS_6, 2, SEG_RAID6_LS_6 },
+	{ SEG_TYPE_NAME_RAID6_RS_6, 2, SEG_RAID6_RS_6 },
+	{ SEG_TYPE_NAME_RAID6_LA_6, 2, SEG_RAID6_LA_6 },
+	{ SEG_TYPE_NAME_RAID6_RA_6, 2, SEG_RAID6_RA_6 }
 };
 
 static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,
 					       const struct raid_type *rt,
+					       const char *dso,
 					       uint64_t monitored)
 {
-	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
+	struct segment_type *segtype = zalloc(sizeof(*segtype));
 
 	if (!segtype) {
 		log_error("Failed to allocate memory for %s segtype",
@@ -565,8 +631,11 @@ static struct segment_type *_init_raid_segtype(struct cmd_context *cmd,
 	segtype->flags = SEG_RAID | SEG_ONLY_EXCLUSIVE | rt->extra_flags;
 
 	/* Never monitor raid0 or raid0_meta LVs */
-	if (!segtype_is_any_raid0(segtype))
+	if (!segtype_is_any_raid0(segtype) &&
+	    dso && (dso = strdup(dso))) {
+		segtype->dso = dso;
 		segtype->flags |= monitored;
+	}
 
 	segtype->parity_devs = rt->parity;
 
@@ -584,21 +653,30 @@ int init_multiple_segtypes(struct cmd_context *cmd, struct segtype_library *segl
 #endif
 {
 	struct segment_type *segtype;
+	char *dso = NULL;
 	unsigned i;
 	uint64_t monitored = 0;
+	int r = 1;
 
 #ifdef DEVMAPPER_SUPPORT
 #  ifdef DMEVENTD
-	if (_get_raid_dso_path(cmd))
+	dso = get_monitor_dso_path(cmd, dmeventd_raid_library_CFG);
+
+	if (dso)
 		monitored = SEG_MONITORED;
 #  endif
 #endif
 
 	for (i = 0; i < DM_ARRAY_SIZE(_raid_types); ++i)
-		if ((segtype = _init_raid_segtype(cmd, &_raid_types[i], monitored)) &&
-		    !lvm_register_segtype(seglib, segtype))
+		if ((segtype = _init_raid_segtype(cmd, &_raid_types[i], dso, monitored)) &&
+		    !lvm_register_segtype(seglib, segtype)) {
 			/* segtype is already destroyed */
-			return_0;
+			stack;
+			r = 0;
+			break;
+		}
 
-	return 1;
+	free(dso);
+
+	return r;
 }

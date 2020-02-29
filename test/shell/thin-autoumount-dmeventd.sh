@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2012-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,10 +12,12 @@
 
 # no automatic extensions, just umount
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
+
+. lib/inittest
 
 mntdir="${PREFIX}mnt with space"
 mntusedir="${PREFIX}mntuse"
@@ -29,10 +32,8 @@ cleanup_mounted_and_teardown()
 
 is_lv_opened_()
 {
-	test $(get lv_field "$1" lv_device_open --binary) = "1"
+	test "$(get lv_field "$1" lv_device_open --binary)" = 1
 }
-
-. lib/inittest
 
 #
 # Main
@@ -42,14 +43,36 @@ export MKE2FS_CONFIG="$TESTDIR/lib/mke2fs.conf"
 
 aux have_thin 1 0 0 || skip
 
-aux prepare_dmeventd
+# Simple implementation of umount when lvextend fails
+cat <<- EOF >testcmd.sh
+#!/bin/sh
+
+echo "Data: \$DMEVENTD_THIN_POOL_DATA"
+echo "Metadata: \$DMEVENTD_THIN_POOL_METADATA"
+
+"$TESTDIR/lib/lvextend" --use-policies \$1 || {
+	umount "$mntdir"  || true
+	umount "$mntusedir" || true
+	return 0
+}
+test "\$($TESTDIR/lib/lvs -o selected -S "data_percent>95||metadata_percent>95" --noheadings \$1)" -eq 0 || {
+	umount "$mntdir"  || true
+	umount "$mntusedir" || true
+	return 0
+}
+EOF
+chmod +x testcmd.sh
+# Show prepared script
+cat testcmd.sh
 
 # Use autoextend percent 0 - so extension fails and triggers umount...
 aux lvmconf "activation/thin_pool_autoextend_percent = 0" \
-            "activation/thin_pool_autoextend_threshold = 70"
+	    "activation/thin_pool_autoextend_threshold = 70" \
+	    "dmeventd/thin_command = \"/$PWD/testcmd.sh\""
+
+aux prepare_dmeventd
 
 aux prepare_vg 2
-
 
 lvcreate -L8M -V8M -n $lv1 -T $vg/pool
 lvcreate -V8M -n $lv2 -T $vg/pool
@@ -61,8 +84,8 @@ lvchange --monitor y $vg/pool
 
 mkdir "$mntdir" "$mntusedir"
 trap 'cleanup_mounted_and_teardown' EXIT
-mount "$DM_DEV_DIR/mapper/$vg-$lv1" "$mntdir"
-mount "$DM_DEV_DIR/mapper/$vg-$lv2" "$mntusedir"
+mount "$DM_DEV_DIR/$vg/$lv1" "$mntdir"
+mount "$DM_DEV_DIR/$vg/$lv2" "$mntusedir"
 
 # Check both LVs are opened (~mounted)
 is_lv_opened_ "$vg/$lv1"
@@ -72,18 +95,18 @@ touch "$mntusedir/file$$"
 sync
 
 # Running 'keeper' process sleep holds the block device still in use
-sleep 60 < "$mntusedir/file$$" &
+sleep 60 < "$mntusedir/file$$" >/dev/null 2>&1 &
 PID_SLEEP=$!
 
 lvs -a $vg
 # Fill pool above 95%  (to cause 'forced lazy umount)
 dd if=/dev/zero of="$mntdir/file$$" bs=256K count=20 conv=fdatasync
-sync
+
 lvs -a $vg
 
 # Could loop here for a few secs so dmeventd can do some work
 # In the worst case check only happens every 10 seconds :(
-# With low water mark it should react way faster
+# With low water mark it quickly discovers overflow and umounts $vg/$lv1
 for i in $(seq 1 12) ; do
 	is_lv_opened_ "$vg/$lv1" || break
 	test $i -lt 12 || die "$mntdir should have been unmounted by dmeventd!"

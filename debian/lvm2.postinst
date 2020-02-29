@@ -15,6 +15,11 @@ case "$1" in
             deb-systemd-helper purge lvm2-activation-early.service lvm2-activation.service >/dev/null
             deb-systemd-helper unmask lvm2-activation-early.service lvm2-activation.service >/dev/null
         fi
+        if dpkg --compare-versions "$2" lt "2.03.02-3~"; then
+            deb-systemd-helper purge lvm2-lvmetad.socket >/dev/null
+            deb-systemd-helper unmask lvm2-lvmetad.socket >/dev/null
+            update-rc.d -f lvm2-lvmetad remove
+        fi
     ;;
 esac
 

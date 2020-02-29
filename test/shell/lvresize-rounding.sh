@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2007-2012 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,14 +10,15 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux prepare_pvs 3 22
+get_devs
 
-vgcreate -s 32K $vg $(cat DEVICES)
+vgcreate $SHARED -s 32K "$vg" "${DEVICES[@]}"
 
 lvcreate -an -Zn -l4 -i3 -I64 $vg
 
@@ -53,7 +55,7 @@ check vg_field $vg vg_free_count 2
 lvreduce -f -l50%LV $vg/$lv1
 vgremove -f $vg
 
-vgcreate -s 4M $vg "$dev1" "$dev2" "$dev3"
+vgcreate $SHARED -s 4M $vg "$dev1" "$dev2" "$dev3"
 
 # Expect to play with 15 extents
 check vg_field $vg vg_free_count 15

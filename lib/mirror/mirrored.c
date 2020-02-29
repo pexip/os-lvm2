@@ -13,18 +13,18 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "toolcontext.h"
-#include "metadata.h"
-#include "segtype.h"
-#include "display.h"
-#include "text_export.h"
-#include "text_import.h"
-#include "config.h"
-#include "lvm-string.h"
-#include "targets.h"
-#include "activate.h"
-#include "str_list.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/metadata/segtype.h"
+#include "lib/display/display.h"
+#include "lib/format_text/text_export.h"
+#include "lib/format_text/text_import.h"
+#include "lib/config/config.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/activate/targets.h"
+#include "lib/activate/activate.h"
+#include "lib/datastruct/str_list.h"
 
 #include <sys/utsname.h>
 
@@ -278,12 +278,14 @@ static int _add_log(struct dm_pool *mem, struct lv_segment *seg,
 	char *log_dlid = NULL;
 	uint32_t log_flags = 0;
 
-	/*
-	 * Use clustered mirror log for non-exclusive activation
-	 * in clustered VG.
-	 */
-	if (!laopts->exclusive && vg_is_clustered(seg->lv->vg))
-		clustered = 1;
+	if (seg->lv->vg->lock_type && !strcmp(seg->lv->vg->lock_type, "dlm")) {
+		/*
+		 * If shared lock was used due to -asy, then we set clustered
+		 * to use a clustered mirror log with cmirrod.
+		 */
+		if (seg->lv->vg->cmd->lockd_lv_sh)
+			clustered = 1;
+	}
 
 	if (seg->log_lv) {
 		/* If disk log, use its UUID */
@@ -294,7 +296,7 @@ static int _add_log(struct dm_pool *mem, struct lv_segment *seg,
 		}
 	} else {
 		/* If core log, use mirror's UUID and set DM_CORELOG flag */
-		if (!(log_dlid = build_dm_uuid(mem, seg->lv, NULL))) {
+		if (!(log_dlid = build_dm_uuid(mem, seg->lv, lv_is_pvmove(seg->lv) ? "pvmove" : NULL))) {
 			log_error("Failed to build uuid for mirror LV %s.",
 				  seg->lv->name);
 			return 0;
@@ -305,8 +307,15 @@ static int _add_log(struct dm_pool *mem, struct lv_segment *seg,
 	if (mirror_in_sync() && !(seg->status & PVMOVE))
 		log_flags |= DM_NOSYNC;
 
-	if (_block_on_error_available && !(seg->status & PVMOVE))
-		log_flags |= DM_BLOCK_ON_ERROR;
+	if (_block_on_error_available && !(seg->status & PVMOVE)) {
+		if (dmeventd_monitor_mode() == 0) {
+			log_warn_suppress(seg->lv->vg->cmd->mirror_warn_printed,
+					  "WARNING: Mirror %s without monitoring will not react on failures.",
+					  display_lvname(seg->lv));
+			seg->lv->vg->cmd->mirror_warn_printed = 1; /* Do not print this more then once */
+		} else
+			log_flags |= DM_BLOCK_ON_ERROR;
+	}
 
 	return dm_tree_node_add_mirror_target_log(node, region_size, clustered, log_dlid, area_count, log_flags);
 }
@@ -369,11 +378,12 @@ static int _mirrored_add_target_line(struct dev_manager *dm, struct dm_pool *mem
 		}
 		region_size = seg->region_size;
 
-	} else
-		region_size = adjusted_mirror_region_size(seg->lv->vg->extent_size,
-							  seg->area_len,
-							  mirr_state->default_region_size, 1,
-							  vg_is_clustered(seg->lv->vg));
+	} else if (!(region_size = adjusted_mirror_region_size(cmd,
+							       seg->lv->vg->extent_size,
+							       seg->area_len,
+							       mirr_state->default_region_size, 1,
+							       vg_is_clustered(seg->lv->vg))))
+		return_0;
 
 	if (!dm_tree_node_add_mirror_target(node, len))
 		return_0;
@@ -470,22 +480,17 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 }
 
 #  ifdef DMEVENTD
-static const char *_get_mirror_dso_path(struct cmd_context *cmd)
-{
-	return get_monitor_dso_path(cmd, find_config_tree_str(cmd, dmeventd_mirror_library_CFG, NULL));
-}
-
 /* FIXME Cache this */
-static int _target_registered(struct lv_segment *seg, int *pending)
+static int _target_registered(struct lv_segment *seg, int *pending, int *monitored)
 {
-	return target_registered_with_dmeventd(seg->lv->vg->cmd, _get_mirror_dso_path(seg->lv->vg->cmd),
-					       seg->lv, pending);
+	return target_registered_with_dmeventd(seg->lv->vg->cmd, seg->segtype->dso,
+					       seg->lv, pending, monitored);
 }
 
 /* FIXME This gets run while suspended and performs banned operations. */
 static int _target_set_events(struct lv_segment *seg, int evmask, int set)
 {
-	return target_register_events(seg->lv->vg->cmd, _get_mirror_dso_path(seg->lv->vg->cmd),
+	return target_register_events(seg->lv->vg->cmd, seg->segtype->dso,
 				      seg->lv, evmask, set, 0);
 }
 
@@ -509,12 +514,6 @@ static int _mirrored_modules_needed(struct dm_pool *mem,
 	    !list_segment_modules(mem, first_seg(seg->log_lv), modules))
 		return_0;
 
-	if (vg_is_clustered(seg->lv->vg) &&
-	    !str_list_add(mem, modules, MODULE_NAME_CLUSTERED_MIRROR)) {
-		log_error("cluster log string list allocation failed");
-		return 0;
-	}
-
 	if (!str_list_add(mem, modules, MODULE_NAME_MIRROR)) {
 		log_error("mirror string list allocation failed");
 		return 0;
@@ -526,7 +525,8 @@ static int _mirrored_modules_needed(struct dm_pool *mem,
 
 static void _mirrored_destroy(struct segment_type *segtype)
 {
-	dm_free(segtype);
+	free((void *) segtype->dso);
+	free(segtype);
 }
 
 static struct segtype_handler _mirrored_ops = {
@@ -556,7 +556,7 @@ struct segment_type *init_segtype(struct cmd_context *cmd);
 struct segment_type *init_segtype(struct cmd_context *cmd)
 #endif
 {
-	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
+	struct segment_type *segtype = zalloc(sizeof(*segtype));
 
 	if (!segtype)
 		return_NULL;
@@ -567,7 +567,9 @@ struct segment_type *init_segtype(struct cmd_context *cmd)
 
 #ifdef DEVMAPPER_SUPPORT
 #  ifdef DMEVENTD
-	if (_get_mirror_dso_path(cmd))
+	segtype->dso = get_monitor_dso_path(cmd, dmeventd_mirror_library_CFG);
+
+	if (segtype->dso)
 		segtype->flags |= SEG_MONITORED;
 #  endif	/* DMEVENTD */
 #endif

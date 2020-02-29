@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2013 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -15,6 +16,7 @@ SKIP_WITH_LVMPOLLD=1
 . lib/inittest
 
 aux prepare_pvs 5
+get_devs
 
 vgcreate $vg1 "$dev1"
 vgcreate $vg2 "$dev3" "$dev4" "$dev5"
@@ -24,7 +26,7 @@ UUID1=$(get vg_field $vg1 uuid)
 aux disable_dev "$dev1"
 pvscan
 # dev1 is missing
-fail pvs $(cat DEVICES)
+fail pvs "${DEVICES[@]}"
 
 # create a new vg1 on dev2,
 # so dev1 and dev2 have different VGs with the same name

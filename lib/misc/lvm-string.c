@@ -13,10 +13,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "lvm-string.h"
-#include "metadata-exported.h"
-#include "display.h"
+#include "lib/misc/lib.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/metadata/metadata-exported.h"
+#include "lib/display/display.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -150,22 +150,42 @@ static const char *_lvname_has_reserved_prefix(const char *lvname)
 	return NULL;
 }
 
-static const char *_lvname_has_reserved_string(const char *lvname)
+static const char *_lvname_has_reserved_component_string(const char *lvname)
 {
 	static const char _strings[][12] = {
+		/* Suffixes for compoment LVs */
 		"_cdata",
 		"_cmeta",
 		"_corig",
 		"_mimage",
 		"_mlog",
-		"_pmspare",
 		"_rimage",
 		"_rmeta",
 		"_tdata",
 		"_tmeta",
+		"_vdata"
+	};
+	unsigned i;
+
+	for (i = 0; i < DM_ARRAY_SIZE(_strings); ++i)
+		if (strstr(lvname, _strings[i]))
+			return _strings[i];
+
+	return NULL;
+}
+
+static const char *_lvname_has_reserved_string(const char *lvname)
+{
+	static const char _strings[][12] = {
+		/* Additional suffixes for non-compoment LVs */
+		"_pmspare",
 		"_vorigin"
 	};
 	unsigned i;
+	const char *cs;
+
+	if ((cs = _lvname_has_reserved_component_string(lvname)))
+		return cs;
 
 	for (i = 0; i < DM_ARRAY_SIZE(_strings); ++i)
 		if (strstr(lvname, _strings[i]))
@@ -208,6 +228,11 @@ int is_reserved_lvname(const char *name)
 		_lvname_has_reserved_string(name)) ? 1 : 0;
 }
 
+int is_component_lvname(const char *name)
+{
+	return (_lvname_has_reserved_component_string(name)) ? 1 : 0;
+}
+
 char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 		    const char *layer)
 {
@@ -234,6 +259,8 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 			lv_is_thin_pool(lv) ? "pool" :
 			lv_is_thin_pool_data(lv) ? "tdata" :
 			lv_is_thin_pool_metadata(lv) ? "tmeta" :
+			lv_is_vdo_pool(lv) ? "vpool" :
+			lv_is_vdo_pool_data(lv) ? "vdata" :
 			NULL;
 	}
 

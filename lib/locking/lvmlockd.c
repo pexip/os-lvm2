@@ -8,19 +8,17 @@
  * of the GNU Lesser General Public License v.2.1.
  */
 
-#include "lib.h"
-#include "toolcontext.h"
-#include "metadata.h"
-#include "segtype.h"
-#include "activate.h"
-#include "lvmetad.h"
-#include "lvmlockd.h"
-#include "lvmcache.h"
-#include "lvmlockd-client.h"
+#include "lib/misc/lib.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/segtype.h"
+#include "lib/activate/activate.h"
+#include "lib/locking/lvmlockd.h"
+#include "lib/cache/lvmcache.h"
+#include "daemons/lvmlockd/lvmlockd-client.h"
 
 static daemon_handle _lvmlockd;
 static const char *_lvmlockd_socket = NULL;
-static struct cmd_context *_lvmlockd_cmd = NULL;
 static int _use_lvmlockd = 0;         /* is 1 if command is configured to use lvmlockd */
 static int _lvmlockd_connected = 0;   /* is 1 if command is connected to lvmlockd */
 static int _lvmlockd_init_failed = 0; /* used to suppress further warnings */
@@ -69,8 +67,6 @@ void lvmlockd_init(struct cmd_context *cmd)
 	} else {
 		_lvmlockd_init_failed = 0;
 	}
-
-	_lvmlockd_cmd = cmd;
 }
 
 void lvmlockd_connect(void)
@@ -103,7 +99,6 @@ void lvmlockd_disconnect(void)
 	if (_lvmlockd_connected)
 		daemon_close(_lvmlockd);
 	_lvmlockd_connected = 0;
-	_lvmlockd_cmd = NULL;
 }
 
 /* Translate the result strings from lvmlockd to bit flags. */
@@ -114,6 +109,9 @@ static void _flags_str_to_lockd_flags(const char *flags_str, uint32_t *lockd_fla
 
 	if (strstr(flags_str, "NO_GL_LS"))
 		*lockd_flags |= LD_RF_NO_GL_LS;
+
+	if (strstr(flags_str, "NO_LM"))
+		*lockd_flags |= LD_RF_NO_LM;
 
 	if (strstr(flags_str, "DUP_GL_LS"))
 		*lockd_flags |= LD_RF_DUP_GL_LS;
@@ -134,7 +132,7 @@ static void _flags_str_to_lockd_flags(const char *flags_str, uint32_t *lockd_fla
  * will not return.  daemon_reply_int reverts to this
  * value if it finds no result value.
  */
-#define NO_LOCKD_RESULT -1000
+#define NO_LOCKD_RESULT (-1000)
 
 static int _lockd_result(daemon_reply reply, int *result, uint32_t *lockd_flags)
 {
@@ -318,14 +316,18 @@ static int _lockd_request(struct cmd_context *cmd,
  * Eventually add an option to specify which pv the lvmlock lv should be placed on.
  */
 
+#define ONE_MB_IN_BYTES 1048576
+
 static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
-			      const char *lock_lv_name, int extend_mb)
+			      const char *lock_lv_name, int num_mb)
 {
+	uint32_t lv_size_bytes;
+	uint32_t extent_bytes;
+	uint32_t total_extents;
 	struct logical_volume *lv;
 	struct lvcreate_params lp = {
 		.activate = CHANGE_ALY,
 		.alloc = ALLOC_INHERIT,
-		.extents = (extend_mb * 1024 * 1024) / (vg->extent_size * SECTOR_SIZE),
 		.major = -1,
 		.minor = -1,
 		.permission = LVM_READ | LVM_WRITE,
@@ -336,6 +338,13 @@ static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 		.lv_name = dm_pool_strdup(cmd->mem, lock_lv_name),
 		.zero = 1,
 	};
+
+	lv_size_bytes = num_mb * ONE_MB_IN_BYTES;  /* size of sanlock LV in bytes */
+	extent_bytes = vg->extent_size * SECTOR_SIZE; /* size of one extent in bytes */
+	total_extents = lv_size_bytes / extent_bytes; /* number of extents in sanlock LV */
+	lp.extents = total_extents;
+
+	log_debug("Creating lvmlock LV for sanlock with size %um %ub %u extents", num_mb, lv_size_bytes, lp.extents);
 
 	dm_list_init(&lp.tags);
 
@@ -365,21 +374,83 @@ static int _remove_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 
 static int _extend_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg, int extend_mb)
 {
+	struct device *dev;
+	char path[PATH_MAX];
+	uint64_t old_size_bytes;
+	uint64_t new_size_bytes;
+	uint32_t extend_bytes;
+	uint32_t extend_sectors;
+	uint32_t new_size_sectors;
 	struct logical_volume *lv = vg->sanlock_lv;
 	struct lvresize_params lp = {
 		.sign = SIGN_NONE,
-		.size = lv->size + ((extend_mb * 1024 * 1024) / SECTOR_SIZE),
+		.size = 0,
 		.percent = PERCENT_NONE,
 		.resize = LV_EXTEND,
 		.force = 1,
 	};
+	uint64_t i;
+
+	extend_bytes = extend_mb * ONE_MB_IN_BYTES;
+	extend_sectors = extend_bytes / SECTOR_SIZE;
+	new_size_sectors = lv->size + extend_sectors;
+	old_size_bytes = lv->size * SECTOR_SIZE;
+
+	log_debug("Extend sanlock LV from %llus (%llu bytes) to %us (%u bytes)",
+		  (unsigned long long)lv->size,
+		  (unsigned long long)old_size_bytes,
+		  (uint32_t)new_size_sectors,
+		  (uint32_t)(new_size_sectors * SECTOR_SIZE));
+
+	lp.size = new_size_sectors;
 
 	if (!lv_resize(lv, &lp, &vg->pvs)) {
-		log_error("Extend LV %s to size %s failed.",
+		log_error("Extend sanlock LV %s to size %s failed.",
 			  display_lvname(lv), display_size(cmd, lp.size));
 		return 0;
 	}
 
+	if (!lv_refresh_suspend_resume(lv)) {
+		log_error("Failed to refresh sanlock LV %s after extend.", display_lvname(lv));
+		return 0;
+	}
+
+	new_size_bytes = lv->size * SECTOR_SIZE;
+
+	if (dm_snprintf(path, sizeof(path), "%s/mapper/%s-%s", lv->vg->cmd->dev_dir,
+			lv->vg->name, lv->name) < 0) {
+		log_error("Extend sanlock LV %s name too long - extended size not zeroed.",
+			  display_lvname(lv));
+		return 0;
+	}
+
+	log_debug("Extend sanlock LV zeroing %u bytes from offset %llu to %llu",
+		  (uint32_t)(new_size_bytes - old_size_bytes),
+		  (unsigned long long)old_size_bytes,
+		  (unsigned long long)new_size_bytes);
+
+	log_print("Zeroing %u MiB on extended internal lvmlock LV...", extend_mb);
+
+	if (!(dev = dev_cache_get(cmd, path, NULL))) {
+		log_error("Extend sanlock LV %s cannot find device.", display_lvname(lv));
+		return 0;
+	}
+
+	if (!label_scan_open(dev)) {
+		log_error("Extend sanlock LV %s cannot open device.", display_lvname(lv));
+		return 0;
+	}
+
+	for (i = 0; i < extend_mb; i++) {
+		if (!dev_write_zeros(dev, old_size_bytes + (i * ONE_MB_IN_BYTES), ONE_MB_IN_BYTES)) {
+			log_error("Extend sanlock LV %s cannot zero device at " FMTu64 ".",
+				  display_lvname(lv), (old_size_bytes + i * ONE_MB_IN_BYTES));
+			label_scan_invalidate(dev);
+			return 0;
+		}
+	}
+
+	label_scan_invalidate(dev);
 	return 1;
 }
 
@@ -514,6 +585,9 @@ static int _init_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)
 	case -EPROTONOSUPPORT:
 		log_error("VG %s init failed: lock manager dlm is not supported by lvmlockd", vg->name);
 		break;
+	case -EEXIST:
+		log_error("VG %s init failed: a lockspace with the same name exists", vg->name);
+		break;
 	default:
 		log_error("VG %s init failed: %d", vg->name, result);
 	}
@@ -554,7 +628,11 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 	const char *reply_str;
 	const char *vg_lock_args = NULL;
 	const char *opts = NULL;
-	int extend_mb;
+	struct pv_list *pvl;
+	struct device *sector_dev;
+	uint32_t sector_size = 0;
+	unsigned int phys_block_size, block_size;
+	int num_mb;
 	int result;
 	int ret;
 
@@ -564,13 +642,38 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 		return 0;
 
 	/*
-	 * Automatic extension of the sanlock lv is disabled by
-	 * setting sanlock_lv_extend to 0.  Zero won't work as
-	 * an initial size, so in this case, use the default as
-	 * the initial size.
+	 * We need the sector size to know what size to create the LV,
+	 * but we're not sure what PV the LV will be allocated from, so
+	 * just get the sector size of the first PV.
 	 */
-	if (!(extend_mb = find_config_tree_int(cmd, global_sanlock_lv_extend_CFG, NULL)))
-		extend_mb = DEFAULT_SANLOCK_LV_EXTEND_MB;
+
+	dm_list_iterate_items(pvl, &vg->pvs) {
+		if (!dev_get_block_size(pvl->pv->dev, &phys_block_size, &block_size))
+			continue;
+
+		if (!sector_size) {
+			sector_size = phys_block_size;
+			sector_dev = pvl->pv->dev;
+		} else if (sector_size != phys_block_size) {
+			log_warn("Inconsistent sector sizes for %s and %s.",
+				 dev_name(pvl->pv->dev), dev_name(sector_dev));
+			return 1;
+		}
+	}
+
+	if ((sector_size != 512) && (sector_size != 4096)) {
+		log_error("Unknown sector size.");
+		return 1;
+	}
+
+	log_debug("Using sector size %u for sanlock LV", sector_size);
+
+	/* Base starting size of sanlock LV is 256MB/1GB for 512/4K sectors */
+	if (sector_size == 512)
+		num_mb = 256;
+	else if (sector_size == 4096)
+		num_mb = 1024;
+
 
 	/*
 	 * Creating the sanlock LV writes the VG containing the new lvmlock
@@ -582,14 +685,16 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 	 * be large enough to hold leases for all existing lvs needing locks.
 	 * One sanlock lease uses 1MB/8MB for 512/4K sector size devices, so
 	 * increase the initial size by 1MB/8MB for each existing lv.
-	 * FIXME: we don't know what sector size the pv will have, so we
-	 * multiply by 8 (MB) unnecessarily when the sector size is 512.
 	 */
 
-	if (lv_lock_count)
-		extend_mb += (lv_lock_count * 8);
+	if (lv_lock_count) {
+		if (sector_size == 512)
+			num_mb += lv_lock_count;
+		else if (sector_size == 4096)
+			num_mb += 8 * lv_lock_count;
+	}
 
-	if (!_create_sanlock_lv(cmd, vg, LOCKD_SANLOCK_LV_NAME, extend_mb)) {
+	if (!_create_sanlock_lv(cmd, vg, LOCKD_SANLOCK_LV_NAME, num_mb)) {
 		log_error("Failed to create internal lv.");
 		return 0;
 	}
@@ -624,6 +729,10 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 	case -EARGS:
 		log_error("VG %s init failed: invalid parameters for sanlock", vg->name);
 		break;
+	case -EDEVOPEN:
+		log_error("VG %s init failed: sanlock cannot open device /dev/mapper/%s-%s", vg->name, vg->name, LOCKD_SANLOCK_LV_NAME);
+		log_error("Check that sanlock has permission to access disks.");
+		break;
 	case -EMANAGER:
 		log_error("VG %s init failed: lock manager sanlock is not running", vg->name);
 		break;
@@ -632,6 +741,9 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 		break;
 	case -EMSGSIZE:
 		log_error("VG %s init failed: no disk space for leases", vg->name);
+		break;
+	case -EEXIST:
+		log_error("VG %s init failed: a lockspace with the same name exists", vg->name);
 		break;
 	default:
 		log_error("VG %s init failed: %d", vg->name, result);
@@ -976,7 +1088,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_i
 
 	memset(uuid, 0, sizeof(uuid));
 
-	if (!is_lockd_type(vg->lock_type))
+	if (!vg_is_shared(vg))
 		return 1;
 
 	if (!_use_lvmlockd) {
@@ -1067,7 +1179,7 @@ int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!is_lockd_type(vg->lock_type))
+	if (!vg_is_shared(vg))
 		return 1;
 	if (!_use_lvmlockd)
 		return 0;
@@ -1280,7 +1392,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 		 *    lvmlockd to return NO_GL_LS/NO_LOCKSPACES.
 		 *
 		 * 2. No sanlock VGs are seen in lvmcache after the disk
-		 *    scan performed in lvmetad_validate_global_cache().
+		 *    scan performed.
 		 *
 		 * If both of those are true, we go ahead and create this new
 		 * VG which will have the global lock enabled.  However, this
@@ -1303,11 +1415,6 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 		if ((lockd_flags & LD_RF_NO_GL_LS) &&
 		    (lockd_flags & LD_RF_NO_LOCKSPACES) &&
 		    !strcmp(vg_lock_type, "sanlock")) {
-			lvmetad_validate_global_cache(cmd, 1);
-			/*
-			 * lvmcache holds provisional VG lock_type info because
-			 * lvmetad_validate_global_cache did a disk scan.
-			 */
 			if (lvmcache_contains_lock_type_sanlock(cmd)) {
 				/* FIXME: we could check that all are started, and then check that none have gl enabled. */
 				log_error("Global lock failed: start existing sanlock VGs to access global lock.");
@@ -1322,6 +1429,9 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 			log_error("Global lock failed: check that VG holding global lock exists and is started.");
 		else
 			log_error("Global lock failed: check that global lockspace is started.");
+
+		if (lockd_flags & LD_RF_NO_LM)
+			log_error("Start a lock manager, lvmlockd did not find one running.");
 		return 0;
 	}
 
@@ -1343,8 +1453,6 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 
 	/* --shared with vgcreate does not mean include_shared_vgs */
 	cmd->include_shared_vgs = 0;
-
-	lvmetad_validate_global_cache(cmd, 1);
 
 	return 1;
 }
@@ -1391,17 +1499,6 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
  * will continue running for a long time while not needing the global lock,
  * e.g. commands that poll to report progress.
  *
- * Acquiring the global lock also updates the local lvmetad cache if
- * necessary.  lockd_gl() first acquires the lock via lvmlockd, then
- * before returning to the caller, it checks that the global information
- * (e.g. VG namespace, set of orphans) is up to date in lvmetad.  If
- * not, it scans disks and updates the lvmetad cache before returning
- * to the caller.  It does this checking using a version number associated
- * with the global lock.  The version number is incremented each time
- * a change is made to the state associated with the global lock, and
- * if the local version number is lower than the version number in the
- * lock, then the local lvmetad state must be updated.
- *
  * There are two cases where the global lock can be taken in shared mode,
  * and then later converted to ex.  pvchange and pvresize use process_each_pv
  * which does lockd_gl("sh") to get the list of VGs.  Later, in the "_single"
@@ -1444,7 +1541,6 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	const char *mode = NULL;
 	const char *opts = NULL;
 	uint32_t lockd_flags;
-	int force_cache_update = 0;
 	int retries = 0;
 	int result;
 
@@ -1489,7 +1585,6 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 		/* We can continue reading if a shared lock fails. */
 		if (!strcmp(mode, "sh")) {
 			log_warn("Reading without shared global lock.");
-			force_cache_update = 1;
 			goto allow;
 		}
 
@@ -1506,6 +1601,16 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 		}
 	}
 
+	if (result == -EALREADY) {
+		/*
+		 * This should generally not happen because commands should be coded
+		 * to avoid reacquiring the global lock.  If there is a case that's
+		 * missed which causes the command to request the gl when it's already
+		 * held, it's not a problem, so let it go.
+		 */
+		log_debug("lockd global mode %s already held.", mode);
+		return 1;
+	}
 
 	if (!strcmp(mode, "un"))
 		return 1;
@@ -1525,6 +1630,9 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	 * access to lease storage.
 	 */
 
+	if (result == -ENOLS && (lockd_flags & LD_RF_NO_LM))
+		log_error("Start a lock manager, lvmlockd did not find one running.");
+
 	if (result == -ENOLS ||
 	    result == -ESTARTING ||
 	    result == -EVGKILLED ||
@@ -1543,6 +1651,7 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 				log_error("Global lock failed: storage failed for sanlock leases");
 			else
 				log_error("Global lock failed: error %d", result);
+
 			return 0;
 		}
 
@@ -1554,26 +1663,22 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 
 		if (result == -ESTARTING) {
 			log_warn("Skipping global lock: lockspace is starting");
-			force_cache_update = 1;
 			goto allow;
 		}
 
 		if (result == -ELOCKIO || result == -EVGKILLED) {
 			log_warn("Skipping global lock: storage %s for sanlock leases",
 				  result == -ELOCKIO ? "errors" : "failed");
-			force_cache_update = 1;
 			goto allow;
 		}
 
 		if ((lockd_flags & LD_RF_NO_GL_LS) && (lockd_flags & LD_RF_WARN_GL_REMOVED)) {
 			log_warn("Skipping global lock: VG with global lock was removed");
-			force_cache_update = 1;
 			goto allow;
 		}
 
 		if ((lockd_flags & LD_RF_NO_GL_LS) || (lockd_flags & LD_RF_NO_LOCKSPACES)) {
 			log_warn("Skipping global lock: lockspace not found or started");
-			force_cache_update = 1;
 			goto allow;
 		}
 
@@ -1608,7 +1713,6 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	}
 
  allow:
-	lvmetad_validate_global_cache(cmd, force_cache_update);
 	return 1;
 }
 
@@ -1627,9 +1731,7 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
  * assessed in combination with vg->lock_type.
  *
  * The VG lock protects the VG metadata on disk from concurrent access
- * among hosts.  The VG lock also ensures that the local lvmetad cache
- * contains the latest version of the VG metadata from disk.  (Since
- * another host may have changed the VG since it was last read.)
+ * among hosts.
  *
  * The VG lock must be acquired before the VG is read, i.e. before vg_read().
  * The result from lockd_vg() is saved in the "lockd_state" variable, and
@@ -1639,13 +1741,6 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
  * looking at lockd_state.  If vg_read() sees that the VG is a local VG,
  * i.e. lock_type is not sanlock or dlm, then no lock is required, and it
  * ignores lockd_state (which would indicate no lock was found.)
- *
- * When acquiring the VG lock, lvmlockd checks if the local cached copy
- * of the VG metadata in lvmetad is up to date.  If not, it invalidates
- * the VG cached in lvmetad.  This would happen if another host changed
- * the VG since it was last read.  When lvm commands read the VG from
- * lvmetad, they will check if the metadata is invalid, and if so they
- * will reread it from disk, and update the copy in lvmetad.
  */
 
 int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
@@ -1664,24 +1759,6 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	 * know if this is a local VG or lockd VG.
 	 */
 	*lockd_state = 0;
-
-	/*
-	 * Use of lockd_vg_rescan.
-	 *
-	 * This is the VG equivalent of using lvmetad_validate_global_cache()
-	 * for the global lock (after failing to acquire the global lock).  If
-	 * we fail to acquire the VG lock from lvmlockd, then the lvmlockd
-	 * mechanism has been missed that would have updated the cached lvmetad
-	 * copy of the VG.  So, set lockd_vg_rescan to tell the VG reading code
-	 * to treat the lvmetad copy as if the invalid flag had been returned.
-	 * i.e. If a lockd VG is read without a lock, ignore the lvmetad copy
-	 * and read it from disk since we don't know if the cache is stale.
-	 *
-	 * Because lvmlockd requests return an error for local VGs, this will
-	 * be set for local VGs, but it ends up being ignored once the VG is
-	 * read and found to be a local VG.
-	 */
-	cmd->lockd_vg_rescan = 0;
 
 	if (!is_real_vg(vg_name))
 		return 1;
@@ -1751,7 +1828,6 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	 */
 	if (!_use_lvmlockd) {
 		*lockd_state |= LDST_FAIL_REQUEST;
-		cmd->lockd_vg_rescan = 1;
 		return 1;
 	}
 
@@ -1768,7 +1844,6 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 		 * this error for local VGs, but we do care for lockd VGs.
 		 */
 		*lockd_state |= LDST_FAIL_REQUEST;
-		cmd->lockd_vg_rescan = 1;
 		return 1;
 	}
 
@@ -1787,15 +1862,12 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 		break;
 	case -ENOLS:
 		*lockd_state |= LDST_FAIL_NOLS;
-		cmd->lockd_vg_rescan = 1;
 		break;
 	case -ESTARTING:
 		*lockd_state |= LDST_FAIL_STARTING;
-		cmd->lockd_vg_rescan = 1;
 		break;
 	default:
 		*lockd_state |= LDST_FAIL_OTHER;
-		cmd->lockd_vg_rescan = 1;
 	}
 
 	/*
@@ -1859,6 +1931,23 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	}
 
 	/*
+	 * The lock is held by another host, and retries have been unsuccessful.
+	 */
+	if (result == -EAGAIN) {
+		if (!strcmp(mode, "un")) {
+			ret = 1;
+			goto out;
+		} else if (!strcmp(mode, "sh")) {
+			log_warn("VG %s lock skipped: held by other host.", vg_name);
+			ret = 1;
+			goto out;
+		} else {
+			log_error("VG %s lock failed: held by other host.", vg_name);
+			ret = 0;
+			goto out;
+		}
+	}
+	/*
 	 * No lockspace for the VG was found.  It may be a local
 	 * VG that lvmlockd doesn't keep track of, or it may be
 	 * a lockd VG that lvmlockd doesn't yet know about (it hasn't
@@ -1918,7 +2007,7 @@ int lockd_vg_update(struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!is_lockd_type(vg->lock_type))
+	if (!vg_is_shared(vg))
 		return 1;
 	if (!_use_lvmlockd)
 		return 0;
@@ -1992,6 +2081,15 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
+	/*
+	 * This is a hack for mirror LVs which need to know at a very low level
+	 * which lock mode the LV is being activated with so that it can pick
+	 * a mirror log type during activation.  Do not use this for anything
+	 * else.
+	 */
+	if (mode && !strcmp(mode, "sh"))
+		cmd->lockd_lv_sh = 1;
+
 	if (!mode)
 		mode = "ex";
 
@@ -2024,8 +2122,9 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 
 	if (result == -EEXIST) {
 		/*
-		 * This happens if lvchange tries to modify the LV with an ex
-		 * LV lock when the LV is already active with a sh LV lock.
+		 * This happens if a command like lvchange tries to modify the
+		 * LV with an ex LV lock when the LV is already active with a
+		 * sh LV lock.
 		 */
 		log_error("LV is already locked with incompatible mode: %s/%s", vg->name, lv_name);
 		return 0;
@@ -2068,7 +2167,7 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 			  const char *def_mode, uint32_t flags)
 {
-	struct logical_volume *pool_lv;
+	struct logical_volume *pool_lv = NULL;
 
 	if (lv_is_thin_volume(lv)) {
 		struct lv_segment *pool_seg = first_seg(lv);
@@ -2076,6 +2175,15 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 
 	} else if (lv_is_thin_pool(lv)) {
 		pool_lv = lv;
+
+	} else if (lv_is_thin_pool_data(lv)) {
+		/* FIXME: there should be a function to get pool lv from data lv. */
+		pool_lv = lv_parent(lv);
+
+	} else if (lv_is_thin_pool_metadata(lv)) {
+		struct lv_segment *pool_seg = get_only_segment_using_this_lv(lv);
+		if (pool_seg)
+			pool_lv = pool_seg->lv;
 
 	} else {
 		/* This should not happen AFAIK. */
@@ -2106,6 +2214,31 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 }
 
 /*
+ * Only the combination of dlm + corosync + cmirrord allows
+ * mirror LVs to be activated in shared mode on multiple nodes.
+ */
+static int _lockd_lv_mirror(struct cmd_context *cmd, struct logical_volume *lv,
+			    const char *def_mode, uint32_t flags)
+{
+	if (!strcmp(lv->vg->lock_type, "sanlock"))
+		flags |= LDLV_MODE_NO_SH;
+
+	else if (!strcmp(lv->vg->lock_type, "dlm") && def_mode && !strcmp(def_mode, "sh")) {
+#ifdef CMIRRORD_PIDFILE
+		if (!cmirrord_is_running()) {
+			log_error("cmirrord must be running to activate an LV in shared mode.");
+			return 0;
+		}
+#else
+		flags |= LDLV_MODE_NO_SH;
+#endif
+	}
+
+	return lockd_lv_name(cmd, lv->vg, lv->name, &lv->lvid.id[1],
+			     lv->lock_args, def_mode, flags);
+}
+
+/*
  * If the VG has no lock_type, then this function can return immediately.
  * The LV itself may have no lock (NULL lv->lock_args), but the lock request
  * may be directed to another lock, e.g. the pool LV lock in _lockd_lv_thin.
@@ -2131,7 +2264,7 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	     const char *def_mode, uint32_t flags)
 {
-	if (!is_lockd_type(lv->vg->lock_type))
+	if (!vg_is_shared(lv->vg))
 		return 1;
 
 	if (!_use_lvmlockd) {
@@ -2158,12 +2291,14 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	 */
 	if (lv_is_external_origin(lv) ||
 	    lv_is_thin_type(lv) ||
-	    lv_is_mirror_type(lv) ||
 	    lv_is_raid_type(lv) ||
 	    lv_is_cache_type(lv)) {
 		flags |= LDLV_MODE_NO_SH;
 	}
 
+	if (lv_is_mirror_type(lv))
+		return _lockd_lv_mirror(cmd, lv, def_mode, flags);
+	       
 	return lockd_lv_name(cmd, lv->vg, lv->name, &lv->lvid.id[1],
 			     lv->lock_args, def_mode, flags);
 }
@@ -2298,10 +2433,6 @@ int lockd_init_lv_args(struct cmd_context *cmd, struct volume_group *vg,
  * an LV with no lock_args will do nothing (unless the LV type causes the lock
  * request to be directed to another LV with a lock, e.g. to the thin pool LV
  * for thin LVs.)
- *
- * Current limitations:
- * - cache-type LV's in a lockd VG must be created with lvconvert.
- * - creating a thin pool and thin lv in one command is not allowed.
  */
 
 int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logical_volume *lv,
@@ -2330,9 +2461,15 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logic
 		/* needs_lock_init is set for LVs that need a lockd lock. */
 		return 1;
 
-	} else if (seg_is_cache(lp) || seg_is_cache_pool(lp)) {
-		log_error("Use lvconvert for cache with lock type %s", vg->lock_type);
-		return 0;
+	} else if (seg_is_cache_pool(lp)) {
+		/*
+		 * A cache pool does not use a lockd lock because it cannot be
+		 * used by itself.  When a cache pool is attached to an actual
+		 * LV, the lockd lock for that LV covers the LV and the cache
+		 * pool attached to it.
+		 */
+		lv->lock_args = NULL;
+		return 1;
 
 	} else if (!seg_is_thin_volume(lp) && lp->snapshot) {
 		struct logical_volume *origin_lv;
@@ -2386,6 +2523,9 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logic
 			/*
 			 * Creating a thin pool and a thin lv in it.  We could
 			 * probably make this work.
+			 *
+			 * This should not happen because the command defs are
+			 * checked and excluded for shared VGs early in lvcreate.
 			 */
 			log_error("Create thin pool and thin LV separately with lock type %s",
 				  vg->lock_type);
@@ -2457,7 +2597,7 @@ int lockd_rename_vg_before(struct cmd_context *cmd, struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!is_lockd_type(vg->lock_type))
+	if (!vg_is_shared(vg))
 		return 1;
 	if (!_use_lvmlockd)
 		return 0;
@@ -2521,7 +2661,7 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 	int result;
 	int ret;
 
-	if (!is_lockd_type(vg->lock_type))
+	if (!vg_is_shared(vg))
 		return 1;
 	if (!_use_lvmlockd)
 		return 0;
@@ -2651,7 +2791,7 @@ int lockd_lv_uses_lock(struct logical_volume *lv)
 	if (lv_is_cow(lv))
 		return 0;
 
-	if (lv->status & SNAPSHOT)
+	if (lv_is_snapshot(lv))
 		return 0;
 
 	/* FIXME: lv_is_virtual_origin ? */

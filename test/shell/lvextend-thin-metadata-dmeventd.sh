@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014-2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -61,8 +62,9 @@ aux have_thin 1 10 0 || skip
 aux prepare_dmeventd
 
 aux prepare_pvs 3 256
+get_devs
 
-vgcreate -s 1M $vg $(cat DEVICES)
+vgcreate -s 1M "$vg" "${DEVICES[@]}"
 
 # Testing dmeventd does NOT autoresize when default threshold 100% is left
 lvcreate -L200M -V50M -n thin -T $vg/pool
@@ -73,7 +75,7 @@ lvcreate -L32M -n $lv3 $vg
 lvchange -an $vg/thin $vg/thin2 $vg/pool
 
 # Filling 2M metadata volume
-# (Test for less then 25% free space in metadata)
+# (Test for less than 25% free space in metadata)
 fake_metadata_ 400 2 >data
 "$LVM_TEST_THIN_RESTORE_CMD" -i data -o "$DM_DEV_DIR/mapper/$vg-$lv1"
 
@@ -87,8 +89,10 @@ fail lvcreate -V20 $vg/pool
 lvchange -an $vg/pool
 
 # Consume more then (100% - 4MiB) out of 32MiB metadata volume  (>87.5%)
-# (Test for less then 4MiB free space in metadata, which is less then 25%)
-fake_metadata_ 7400 2 >data
+# (Test for less than 4MiB free space in metadata, which is less than 25%)
+DATA=7200  # Newer version of thin-pool have hidden reserve, so use lower value
+aux target_at_least dm-thin-pool 1 20 0 || DATA=7400
+fake_metadata_ "$DATA" 2 >data
 "$LVM_TEST_THIN_RESTORE_CMD" -i data -o "$DM_DEV_DIR/mapper/$vg-$lv2"
 # Swap volume with restored fake metadata
 lvconvert -y --chunksize 64k --thinpool $vg/pool --poolmetadata $vg/$lv2
@@ -169,7 +173,9 @@ wait_for_change_ $pre
 lvchange -an $vg
 
 #
-fake_metadata_ 350 2 >data
+DATA=300  # Newer version of thin-pool have hidden reserve, so use lower value
+aux target_at_least dm-thin-pool 1 20 0 || DATA=350
+fake_metadata_ $DATA 2 >data
 lvchange -ay $vg/$lv1
 "$LVM_TEST_THIN_RESTORE_CMD" -i data -o "$DM_DEV_DIR/mapper/$vg-$lv1"
 

@@ -16,6 +16,8 @@ srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 top_builddir = @top_builddir@
 
+SUBDIRS=dm-tools
+
 SOURCES =\
 	datastruct/bitset.c \
 	datastruct/hash.c \
@@ -52,16 +54,19 @@ CFLOW_LIST_TARGET = libdevmapper.cflow
 EXPORTED_HEADER = $(srcdir)/libdevmapper.h
 EXPORTED_FN_PREFIX = dm
 
-include $(top_builddir)/make.tmpl
+include $(top_builddir)/libdm/make.tmpl
 
-CFLAGS += $(UDEV_CFLAGS) $(VALGRIND_CFLAGS)
+PROGS_CFLAGS = $(UDEV_CFLAGS)
 
-LIBS += $(SELINUX_LIBS) $(UDEV_LIBS) $(PTHREAD_LIBS) $(M_LIBS)
+LIBS += $(SELINUX_LIBS) $(UDEV_LIBS) $(PTHREAD_LIBS) $(RT_LIBS) $(M_LIBS)
 
 device-mapper: all
 
+dm-tools.device-mapper: $(TARGETS)
+
 libdevmapper.$(LIB_SUFFIX) libdevmapper.$(LIB_SUFFIX).$(LIB_VERSION): $(LIB_SHARED)
-	$(LN_S) -f $< $@
+	@echo "    [LN] $<"
+	$(Q) $(LN_S) -f $< $@
 
 .PHONY: install_dynamic install_static install_include \
 	install_ioctl install_ioctl_static \
@@ -82,7 +87,8 @@ install: $(INSTALL_TYPE) install_include
 install_device-mapper: install
 
 install_include: $(srcdir)/libdevmapper.h
-	$(INSTALL_DATA) -D $< $(includedir)/$(<F)
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_DATA) -D $< $(includedir)/$(<F)
 
 install_dynamic: install_@interface@
 
@@ -91,10 +97,12 @@ install_static: install_@interface@_static
 install_ioctl: install_lib_shared
 
 install_pkgconfig: libdevmapper.pc
-	$(INSTALL_DATA) -D $< $(pkgconfigdir)/devmapper.pc
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_DATA) -D $< $(pkgconfigdir)/devmapper.pc
 
 install_ioctl_static: $(LIB_STATIC)
-	$(INSTALL_DATA) -D $< $(usrlibdir)/$(<F)
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_DATA) -D $< $(usrlibdir)/$(<F)
 
 CLEAN_TARGETS += ioctl/libdevmapper.a
-DISTCLEAN_TARGETS += libdevmapper.pc
+DISTCLEAN_TARGETS += libdevmapper.pc make.tmpl

@@ -16,10 +16,10 @@
 #ifndef _LVM_TEXT_LAYOUT_H
 #define _LVM_TEXT_LAYOUT_H
 
-#include "config.h"
-#include "metadata.h"
-#include "lvmcache.h"
-#include "uuid.h"
+#include "lib/config/config.h"
+#include "lib/metadata/metadata.h"
+#include "lib/cache/lvmcache.h"
+#include "lib/uuid/uuid.h"
 
 /* disk_locn and data_area_list are defined in format-text.h */
 
@@ -81,11 +81,9 @@ struct mda_header {
 } __attribute__ ((packed));
 
 struct mda_header *raw_read_mda_header(const struct format_type *fmt,
-				       struct device_area *dev_area);
+				       struct device_area *dev_area, int primary_mda);
 
 struct mda_lists {
-	struct dm_list dirs;
-	struct dm_list raws;
 	struct metadata_area_ops *file_ops;
 	struct metadata_area_ops *raw_ops;
 };
@@ -102,8 +100,9 @@ struct mda_context {
 #define MDA_HEADER_SIZE 512
 #define LVM2_LABEL "LVM2 001"
 #define MDA_SIZE_MIN (8 * (unsigned) lvm_getpagesize())
+#define MDA_ORIGINAL_ALIGNMENT 512	/* Original alignment used for start of VG metadata content */
 
-int vgname_from_mda(const struct format_type *fmt, struct mda_header *mdah,
+int read_metadata_location_summary(const struct format_type *fmt, struct mda_header *mdah, int primary_mda, 
 		    struct device_area *dev_area, struct lvmcache_vgsummary *vgsummary,
 		    uint64_t *mda_free_sectors);
 

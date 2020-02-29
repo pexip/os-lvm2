@@ -13,13 +13,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "metadata.h"
-#include "segtype.h"
-#include "locking.h"
-#include "toolcontext.h"
-#include "lv_alloc.h"
-#include "activate.h"
+#include "lib/misc/lib.h"
+#include "lib/metadata/metadata.h"
+#include "lib/metadata/segtype.h"
+#include "lib/locking/locking.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/metadata/lv_alloc.h"
+#include "lib/activate/activate.h"
 
 #define SNAPSHOT_MIN_CHUNKS	3       /* Minimum number of chunks in snapshot */
 
@@ -121,7 +121,7 @@ int lv_is_visible(const struct logical_volume *lv)
 	if (lv_is_historical(lv))
 		return 1;
 
-	if (lv->status & SNAPSHOT)
+	if (lv_is_snapshot(lv))
 		return 0;
 
 	if (lv_is_cow(lv)) {
@@ -238,8 +238,8 @@ static struct lv_segment *_alloc_snapshot_seg(struct logical_volume *lv)
 		return NULL;
 	}
 
-	if (!(seg = alloc_lv_segment(segtype, lv, 0, lv->le_count, 0, 0,
-				     NULL, 0, lv->le_count, 0, 0, 0, NULL))) {
+	if (!(seg = alloc_lv_segment(segtype, lv, 0, lv->le_count, 0, 0, 0,
+				     NULL, 0, lv->le_count, 0, 0, 0, 0, NULL))) {
 		log_error("Couldn't allocate new snapshot segment.");
 		return NULL;
 	}
@@ -332,17 +332,6 @@ int vg_remove_snapshot(struct logical_volume *cow)
 	cow->snapshot = NULL;
 	lv_set_visible(cow);
 
-	/* format1 must do the change in one step, with the commit last. */
-	if (!(origin->vg->fid->fmt->features & FMT_MDAS)) {
-		/* Get the lock for COW volume */
-		if (is_origin_active && !activate_lv(cow->vg->cmd, cow)) {
-			log_error("Unable to activate logical volume \"%s\"",
-				  cow->name);
-			return 0;
-		}
-		return 1;
-	}
-
 	if (!vg_write(origin->vg))
 		return_0;
 
@@ -382,6 +371,44 @@ int vg_remove_snapshot(struct logical_volume *cow)
 			log_error("Failed to activate %s.", cow->name);
 			return 0;
 		}
+	}
+
+	return 1;
+}
+
+/* Check if given LV is usable as snapshot origin LV */
+int validate_snapshot_origin(const struct logical_volume *origin_lv)
+{
+	const char *err = NULL; /* For error string */
+
+	if (lv_is_cow(origin_lv))
+		err = "snapshots";
+	else if (lv_is_locked(origin_lv))
+		err = "locked volumes";
+	else if (lv_is_pvmove(origin_lv))
+		err = "pvmoved volumes";
+	else if (!lv_is_visible(origin_lv))
+		err = "hidden volumes";
+	else if (lv_is_merging_origin(origin_lv))
+		err = "an origin that has a merging snapshot";
+	else if (lv_is_cache_type(origin_lv) && !lv_is_cache(origin_lv))
+		err = "cache type volumes";
+	else if (lv_is_thin_type(origin_lv) && !lv_is_thin_volume(origin_lv))
+		err = "thin pool type volumes";
+	else if (lv_is_mirror_type(origin_lv)) {
+		if (!lv_is_mirror(origin_lv))
+			err = "mirror subvolumes";
+		else {
+			log_warn("WARNING: Snapshots of mirrors can deadlock under rare device failures.");
+			log_warn("WARNING: Consider using the raid1 mirror type to avoid this.");
+			log_warn("WARNING: See global/mirror_segtype_default in lvm.conf.");
+		}
+	} else if (lv_is_raid_type(origin_lv) && !lv_is_raid(origin_lv))
+		err = "raid subvolumes";
+
+	if (err) {
+		log_error("Snapshots of %s are not supported.", err);
+		return 0;
 	}
 
 	return 1;

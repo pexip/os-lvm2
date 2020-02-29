@@ -10,9 +10,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#define _REENTRANT
-
-#include "tool.h"
+#include "tools/tool.h"
 
 #include "daemon-server.h"
 #include "daemon-log.h"
@@ -24,7 +22,7 @@ struct backend {
 	void (*log)(log_state *s, void **state, int type, const char *message);
 };
 
-static void log_syslog(log_state *s, void **state, int type, const char *message)
+static void _log_syslog(log_state *s, void **state, int type, const char *message)
 {
 	int prio;
 
@@ -44,7 +42,7 @@ static void log_syslog(log_state *s, void **state, int type, const char *message
 	syslog(prio, "%s", message);
 }
 
-static void log_stderr(log_state *s, void **state, int type, const char *message)
+static void _log_stderr(log_state *s, void **state, int type, const char *message)
 {
 	const char *prefix;
 
@@ -60,8 +58,8 @@ static void log_stderr(log_state *s, void **state, int type, const char *message
 }
 
 struct backend backend[] = {
-	{ DAEMON_LOG_OUTLET_SYSLOG, log_syslog },
-	{ DAEMON_LOG_OUTLET_STDERR, log_stderr },
+	{ DAEMON_LOG_OUTLET_SYSLOG, _log_syslog },
+	{ DAEMON_LOG_OUTLET_STDERR, _log_stderr },
 	{ 0, 0 }
 };
 
@@ -91,7 +89,7 @@ void daemon_logf(log_state *s, int type, const char *fmt, ...) {
 	va_start(ap, fmt);
 	if (dm_vasprintf(&buf, fmt, ap) >= 0) {
 		daemon_log(s, type, buf);
-		dm_free(buf);
+		free(buf);
 	} /* else return_0 */
 	va_end(ap);
 }
@@ -127,7 +125,7 @@ void daemon_log_multi(log_state *s, int type, const char *prefix, const char *ms
 	if (!_type_interesting(s, type))
 		return;
 
-	buf = dm_strdup(msg);
+	buf = strdup(msg);
 	pos = buf;
 
 	if (!buf)
@@ -140,7 +138,7 @@ void daemon_log_multi(log_state *s, int type, const char *prefix, const char *ms
 		_log_line(pos, &b);
 		pos = next ? next + 1 : 0;
 	}
-	dm_free(buf);
+	free(buf);
 }
 
 void daemon_log_enable(log_state *s, int outlet, int type, int enable)
@@ -184,7 +182,7 @@ int daemon_log_parse(log_state *s, int outlet, const char *types, int enable)
 	if (!types || !types[0])
 		return 1;
 
-	if (!(buf = dm_strdup(types)))
+	if (!(buf = strdup(types)))
 		return 0;
 
 	pos = buf;
@@ -193,13 +191,13 @@ int daemon_log_parse(log_state *s, int outlet, const char *types, int enable)
 		if (next)
 			*next = 0;
 		if (!_parse_one(s, outlet, pos, enable)) {
-			dm_free(buf);
+			free(buf);
 			return 0;
 		}
 		pos = next ? next + 1 : 0;
 	}
 
-	dm_free(buf);
+	free(buf);
 
 	return 1;
 }

@@ -13,16 +13,16 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "lvm-signal.h"
-#include "memlock.h"
+#include "lib/misc/lib.h"
+#include "lib/misc/lvm-signal.h"
+#include "lib/mm/memlock.h"
 
 #include <signal.h>
 
 static sigset_t _oldset;
 static int _signals_blocked = 0;
 static volatile sig_atomic_t _sigint_caught = 0;
-static volatile sig_atomic_t _handler_installed;
+static volatile sig_atomic_t _handler_installed = 0;
 
 /* Support 3 level nesting, increase if needed more */
 #define MAX_SIGINTS 3
@@ -67,7 +67,7 @@ void sigint_allow(void)
 	 * Do not overwrite the backed-up handler data -
 	 * just increase nesting count.
 	 */
-	if (++_handler_installed >= MAX_SIGINTS)
+	if (++_handler_installed > MAX_SIGINTS)
 		return;
 
 	/* Grab old sigaction for SIGINT: shall not fail. */
@@ -85,7 +85,7 @@ void sigint_allow(void)
 	if (sigprocmask(0, NULL, &sigs))
 		log_sys_debug("sigprocmask", "");
 
-	if ((_oldmasked[_handler_installed] = sigismember(&sigs, SIGINT))) {
+	if ((_oldmasked[_handler_installed - 1] = sigismember(&sigs, SIGINT))) {
 		sigdelset(&sigs, SIGINT);
 		if (sigprocmask(SIG_SETMASK, &sigs, NULL))
 			log_sys_debug("sigprocmask", "SIG_SETMASK");

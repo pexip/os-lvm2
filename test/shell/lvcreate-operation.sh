@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # 'Exercise some lvcreate diagnostics'
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -23,27 +24,16 @@ cleanup_lvs() {
 }
 
 aux prepare_pvs 2
+get_devs
+
 aux pvcreate --metadatacopies 0 "$dev1"
-aux vgcreate $vg $(cat DEVICES)
+aux vgcreate $SHARED "$vg" "${DEVICES[@]}"
 
 # ---
 # Create snapshots of LVs on --metadatacopies 0 PV (bz450651)
 lvcreate -aey -n$lv1 -l4 $vg "$dev1"
 lvcreate -n$lv2 -l4 -s $vg/$lv1
 lvcreate -n$lv3 -l4 --permission r -s $vg/$lv1
-cleanup_lvs
-
-# Skip the rest for cluster
-test -e LOCAL_CLVMD && exit 0
-
-# ---
-# Create mirror on two devices with mirrored log using --alloc anywhere
-lvcreate --type mirror -m 1 -l4 -n $lv1 --mirrorlog mirrored $vg --alloc anywhere "$dev1" "$dev2"
-cleanup_lvs
-
-# --
-# Create mirror on one dev with mirrored log using --alloc anywhere, should fail
-not lvcreate --type mirror -m 1 -l4 -n $lv1 --mirrorlog mirrored $vg --alloc anywhere "$dev1"
 cleanup_lvs
 
 vgremove -ff $vg

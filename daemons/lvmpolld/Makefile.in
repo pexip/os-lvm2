@@ -27,21 +27,19 @@ CFLOW_TARGET = lvmpolld
 
 include $(top_builddir)/make.tmpl
 
+CFLAGS += $(EXTRA_EXEC_CFLAGS)
 INCLUDES += -I$(top_srcdir)/libdaemon/server
-LVMLIBS = -ldaemonserver $(LVMINTERNAL_LIBS) -ldevmapper
-
-LIBS += $(PTHREAD_LIBS)
-
-LDFLAGS += -L$(top_builddir)/libdaemon/server $(DAEMON_LDFLAGS)
-CLDFLAGS += -L$(top_builddir)/libdaemon/server
-CFLAGS += $(DAEMON_CFLAGS)
+LDFLAGS += -L$(top_builddir)/libdaemon/server $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS)
+LIBS += $(DAEMON_LIBS) -ldaemonserver $(PTHREAD_LIBS)
 
 lvmpolld: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 		    $(top_builddir)/libdaemon/server/libdaemonserver.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(LVMLIBS) $(LIBS)
+	@echo "    [CC] $@"
+	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(INTERNAL_LIBS) $(LIBS)
 
 install_lvmpolld: lvmpolld
-	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
 
 install_lvm2: install_lvmpolld
 

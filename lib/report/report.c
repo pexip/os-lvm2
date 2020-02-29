@@ -13,17 +13,17 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "metadata.h"
-#include "report.h"
-#include "toolcontext.h"
-#include "lvm-string.h"
-#include "display.h"
-#include "activate.h"
-#include "segtype.h"
-#include "lvmcache.h"
-#include "device-types.h"
-#include "str_list.h"
+#include "lib/misc/lib.h"
+#include "lib/metadata/metadata.h"
+#include "lib/report/report.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/display/display.h"
+#include "lib/activate/activate.h"
+#include "lib/metadata/segtype.h"
+#include "lib/cache/lvmcache.h"
+#include "lib/device/device-types.h"
+#include "lib/datastruct/str_list.h"
 
 #include <stddef.h> /* offsetof() */
 #include <float.h> /* DBL_MAX */
@@ -38,8 +38,7 @@ struct lvm_report_object {
 	struct label *label;
 };
 
-static uint32_t log_seqnum = 1;
-
+static uint32_t _log_seqnum = 1;
 
 /*
  *  Enum for field_num index to use in per-field reserved value definition.
@@ -54,6 +53,7 @@ enum {
 
 static const uint64_t _zero64 = UINT64_C(0);
 static const uint64_t _one64 = UINT64_C(1);
+static const uint64_t _two64 = UINT64_C(2);
 static const char _str_zero[] = "0";
 static const char _str_one[] = "1";
 static const char _str_no[] = "no";
@@ -161,7 +161,7 @@ struct time_prop {
 	time_id_t granularity;
 };
 
-#define ADD_TIME_PROP(id, flags, granularity) [id] = {id, flags, granularity},
+#define ADD_TIME_PROP(id, flags, granularity) [(id)] = {(id), (flags), (granularity)},
 
 static const struct time_prop _time_props[] = {
 	ADD_TIME_PROP(TIME_NULL,                    0,							TIME_NULL)
@@ -227,7 +227,7 @@ struct time_reg {
 	uint32_t reg_flags;
 };
 
-#define TIME_PROP(id) (_time_props + id)
+#define TIME_PROP(id) (_time_props + (id))
 
 static const struct time_reg _time_reg[] = {
 	/*
@@ -731,7 +731,9 @@ static int _check_time_items(struct time_info *info)
 			if (label_date) {
 				log_error("Ambiguous date specification found at \"%s\".", ti->s);
 				return 0;
-			} else if (_is_time_label_date(ti->prop->id))
+			}
+
+			if (_is_time_label_date(ti->prop->id))
 				label_date = 1;
 		}
 
@@ -748,7 +750,9 @@ static int _check_time_items(struct time_info *info)
 			if (label_time) {
 				log_error("Ambiguous time specification found at \"%s\".", ti->s);
 				return 0;
-			} else if (_is_time_label_time(ti->prop->id))
+			}
+
+			if (_is_time_label_time(ti->prop->id))
 				label_time = 1;
 		}
 	}
@@ -893,7 +897,12 @@ static int _translate_time_items(struct dm_report *rh, struct time_info *info,
 		id = ti->prop->id;
 
 		if (_is_time_num(id)) {
+			errno = 0;
 			num = strtol(ti->s, &end, 10);
+			if (errno) {
+				log_error("_translate_time_items: invalid time.");
+				return 0;
+			}
 			switch (id) {
 				case TIME_NUM_MULTIPLIER_NEGATIVE:
 					multiplier = -num;
@@ -1007,7 +1016,7 @@ static int _translate_time_items(struct dm_report *rh, struct time_info *info,
 	dm_pool_free(info->mem, info->ti_list);
 	info->ti_list = NULL;
 
-	if (dm_snprintf(buf, sizeof(buf), "@%ld:@%ld", t1, t2) == -1) {
+	if (dm_snprintf(buf, sizeof(buf), "@" FMTd64 ":@" FMTd64, (int64_t)t1, (int64_t)t2) == -1) {
 		log_error("_translate_time_items: dm_snprintf failed");
 		return 0;
 	}
@@ -1062,10 +1071,10 @@ static void *_lv_time_handler_get_dynamic_value(struct dm_report *rh,
 						struct dm_pool *mem,
 						const char *data_in)
 {
-	time_t t1, t2;
+	int64_t t1, t2;
 	time_t *result;
 
-	if (sscanf(data_in, "@%ld:@%ld", &t1, &t2) != 2) {
+	if (sscanf(data_in, "@" FMTd64 ":@" FMTd64, &t1, &t2) != 2) {
 		log_error("Failed to get value for parsed time specification.");
 		return NULL;
 	}
@@ -1075,16 +1084,16 @@ static void *_lv_time_handler_get_dynamic_value(struct dm_report *rh,
 		return NULL;
 	}
 
-	result[0] = t1;
-	result[1] = t2;
+	result[0] = (time_t) t1; /* Validate range for 32b arch ? */
+	result[1] = (time_t) t2;
 
 	return result;
 }
 
-static int lv_time_handler(struct dm_report *rh, struct dm_pool *mem,
-			   uint32_t field_num,
-			   dm_report_reserved_action_t action,
-			   const void *data_in, const void **data_out)
+static int _lv_time_handler(struct dm_report *rh, struct dm_pool *mem,
+			    uint32_t field_num,
+			    dm_report_reserved_action_t action,
+			    const void *data_in, const void **data_out)
 {
 	*data_out = NULL;
 	if (!data_in)
@@ -1250,9 +1259,9 @@ static int _binary_disp(struct dm_report *rh, struct dm_pool *mem __attribute__(
 	if (cmd->report_binary_values_as_numeric)
 		/* "0"/"1" */
 		return _field_set_value(field, bin_value ? _str_one : _str_zero, bin_value ? &_one64 : &_zero64);
-	else
-		/* blank/"word" */
-		return _field_set_value(field, bin_value ? word : "", bin_value ? &_one64 : &_zero64);
+
+	/* blank/"word" */
+	return _field_set_value(field, bin_value ? word : "", bin_value ? &_one64 : &_zero64);
 }
 
 static int _binary_undef_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -1262,8 +1271,8 @@ static int _binary_undef_disp(struct dm_report *rh, struct dm_pool *mem __attrib
 
 	if (cmd->report_binary_values_as_numeric)
 		return _field_set_value(field, GET_FIRST_RESERVED_NAME(num_undef_64), &GET_TYPE_RESERVED_VALUE(num_undef_64));
-	else
-		return _field_set_value(field, _str_unknown, &GET_TYPE_RESERVED_VALUE(num_undef_64));
+
+	return _field_set_value(field, _str_unknown, &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
 static int _string_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -1537,6 +1546,21 @@ static int _kernel_cache_policy_disp(struct dm_report *rh, struct dm_pool *mem,
 				GET_FIELD_RESERVED_VALUE(cache_policy_undef));
 }
 
+static int _kernelmetadataformat_disp(struct dm_report *rh, struct dm_pool *mem,
+				      struct dm_report_field *field,
+				      const void *data, void *private)
+{
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
+	unsigned format;
+
+	if (lvdm->seg_status.type == SEG_STATUS_CACHE) {
+		format = (lvdm->seg_status.cache->feature_flags & DM_CACHE_FEATURE_METADATA2);
+		return dm_report_field_uint64(rh, field, format ? &_two64 : &_one64);
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
 static int _cache_policy_disp(struct dm_report *rh, struct dm_pool *mem,
 			      struct dm_report_field *field,
 			      const void *data, void *private)
@@ -1756,8 +1780,8 @@ static int _do_loglv_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &mirror_log_lv->lvid.id[1], private);
-	else
-		return _lvname_disp(rh, mem, field, mirror_log_lv, private);
+
+	return _lvname_disp(rh, mem, field, mirror_log_lv, private);
 }
 
 static int _loglv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -1813,8 +1837,8 @@ static int _do_datalv_disp(struct dm_report *rh, struct dm_pool *mem __attribute
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &data_lv->lvid.id[1], private);
-	else
-		return _lvname_disp(rh, mem, field, data_lv, private);
+
+	return _lvname_disp(rh, mem, field, data_lv, private);
 }
 
 static int _datalv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -1844,8 +1868,8 @@ static int _do_metadatalv_disp(struct dm_report *rh, struct dm_pool *mem __attri
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &metadata_lv->lvid.id[1], private);
-	else
-		return _lvname_disp(rh, mem, field, metadata_lv, private);
+
+	return _lvname_disp(rh, mem, field, metadata_lv, private);
 }
 
 static int _metadatalv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -1875,8 +1899,8 @@ static int _do_poollv_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &pool_lv->lvid.id[1], private);
-	else
-		return _lvname_disp(rh, mem, field, pool_lv, private);
+
+	return _lvname_disp(rh, mem, field, pool_lv, private);
 }
 
 static int _poollv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -1932,8 +1956,8 @@ static int _do_origin_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &origin_lv->lvid.id[1], private);
-	else
-		return _lvname_disp(rh, mem, field, origin_lv, private);
+
+	return _lvname_disp(rh, mem, field, origin_lv, private);
 }
 
 static int _origin_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -2225,8 +2249,8 @@ static int _do_convertlv_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &convert_lv->lvid.id[1], private);
-	else
-		return _lvname_disp(rh, mem, field, convert_lv, private);
+
+	return _lvname_disp(rh, mem, field, convert_lv, private);
 }
 
 static int _convertlv_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -2296,6 +2320,22 @@ static int _size64_disp(struct dm_report *rh __attribute__((unused)),
 	return _field_set_value(field, repstr, sortval);
 }
 
+static int _lv_size_disp(struct dm_report *rh, struct dm_pool *mem,
+			 struct dm_report_field *field,
+			 const void *data, void *private)
+{
+	const struct logical_volume *lv = (const struct logical_volume *) data;
+	const struct lv_segment *seg = first_seg(lv);
+	uint64_t size = lv->le_count;
+
+	if (seg && !lv_is_raid_image(lv))
+		size -= seg->reshape_len * (seg->area_count > 2 ? (seg->area_count - seg->segtype->parity_devs) : 1);
+
+	size *= lv->vg->extent_size;
+
+	return _size64_disp(rh, mem, field, &size, private);
+}
+
 static int _uint32_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
 			struct dm_report_field *field,
 			const void *data, void *private __attribute__((unused)))
@@ -2329,9 +2369,9 @@ static int _lvwhenfull_disp(struct dm_report *rh, struct dm_pool *mem,
 		if (lv->status & LV_ERROR_WHEN_FULL)
 			return _field_set_value(field, GET_FIRST_RESERVED_NAME(lv_when_full_error),
 						GET_FIELD_RESERVED_VALUE(lv_when_full_error));
-		else
-			return _field_set_value(field, GET_FIRST_RESERVED_NAME(lv_when_full_queue),
-						GET_FIELD_RESERVED_VALUE(lv_when_full_queue));
+
+		return _field_set_value(field, GET_FIRST_RESERVED_NAME(lv_when_full_queue),
+					GET_FIELD_RESERVED_VALUE(lv_when_full_queue));
 	}
 
 	return _field_set_value(field, GET_FIRST_RESERVED_NAME(lv_when_full_undef),
@@ -2410,6 +2450,197 @@ static int _segstartpe_disp(struct dm_report *rh,
 	const struct lv_segment *seg = (const struct lv_segment *) data;
 
 	return dm_report_field_uint32(rh, field, &seg->le);
+}
+
+/* Hepler: get used stripes = total stripes minux any to remove after reshape */
+static int _get_seg_used_stripes(const struct lv_segment *seg)
+{
+	uint32_t s;
+	uint32_t stripes = seg->area_count;
+
+	for (s = seg->area_count - 1; stripes && s; s--) {
+		if (seg_type(seg, s) == AREA_LV &&
+		    seg_lv(seg, s)->status & LV_REMOVE_AFTER_RESHAPE)
+			stripes--;
+		else
+			break;
+	}
+
+	return stripes;
+}
+
+static int _seg_stripes_disp(struct dm_report *rh, struct dm_pool *mem,
+			     struct dm_report_field *field,
+			     const void *data, void *private)
+{
+	const struct lv_segment *seg = ((const struct lv_segment *) data);
+
+	return dm_report_field_uint32(rh, field, &seg->area_count);
+}
+
+/* Report the number of data stripes, which is less than total stripes (e.g. 2 less for raid6) */
+static int _seg_data_stripes_disp(struct dm_report *rh, struct dm_pool *mem,
+				  struct dm_report_field *field,
+				  const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	uint32_t stripes = _get_seg_used_stripes(seg) - seg->segtype->parity_devs;
+
+	/* FIXME: in case of odd numbers of raid10 stripes */
+	if (seg_is_raid10(seg))
+		stripes /= seg->data_copies;
+
+	return dm_report_field_uint32(rh, field, &stripes);
+}
+
+/* Helper: return the top-level, reshapable raid LV in case @seg belongs to an raid rimage LV */
+static struct logical_volume *_lv_for_raid_image_seg(const struct lv_segment *seg, struct dm_pool *mem)
+{
+	char *lv_name;
+
+	if (seg_is_reshapable_raid(seg))
+		return seg->lv;
+
+	if (seg->lv &&
+	    lv_is_raid_image(seg->lv) && !seg->le &&
+	    (lv_name = dm_pool_strdup(mem, seg->lv->name))) {
+		char *p = strchr(lv_name, '_');
+
+		if (p) {
+			/* Handle duplicated sub LVs */
+			if (strstr(p, "_dup_"))
+				p = strchr(p + 5, '_');
+
+			if (p) {
+				struct lv_list *lvl;
+
+				*p = '\0';
+				if ((lvl = find_lv_in_vg(seg->lv->vg, lv_name)) &&
+				    seg_is_reshapable_raid(first_seg(lvl->lv)))
+					return lvl->lv;
+
+			}
+		}
+	}
+
+	return NULL;
+}
+
+/* Helper: return the top-level raid LV in case it is reshapale for @seg or @seg if it is */
+static const struct lv_segment *_get_reshapable_seg(const struct lv_segment *seg, struct dm_pool *mem)
+{
+	return _lv_for_raid_image_seg(seg, mem) ? seg : NULL;
+}
+
+/* Display segment reshape length in current units */
+static int _seg_reshape_len_disp(struct dm_report *rh, struct dm_pool *mem,
+				    struct dm_report_field *field,
+				    const void *data, void *private)
+{
+	const struct lv_segment *seg = _get_reshapable_seg((const struct lv_segment *) data, mem);
+
+	if (seg) {
+		uint32_t reshape_len = seg->reshape_len * seg->area_count * seg->lv->vg->extent_size;
+
+		return _size32_disp(rh, mem, field, &reshape_len, private);
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+/* Display segment reshape length of in logical extents */
+static int _seg_reshape_len_le_disp(struct dm_report *rh, struct dm_pool *mem,
+				    struct dm_report_field *field,
+				    const void *data, void *private)
+{
+	const struct lv_segment *seg = _get_reshapable_seg((const struct lv_segment *) data, mem);
+
+	if (seg) {
+		uint32_t reshape_len = seg->reshape_len* seg->area_count;
+
+		return dm_report_field_uint32(rh, field, &reshape_len);
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+/* Display segment data copies (e.g. 3 for raid6) */
+static int _seg_data_copies_disp(struct dm_report *rh, struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+
+	if (seg->data_copies)
+		return dm_report_field_uint32(rh, field, &seg->data_copies);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+/* Helper: display segment data offset/new data offset in sectors */
+static int _segdata_offset(struct dm_report *rh, struct dm_pool *mem,
+			   struct dm_report_field *field,
+			   const void *data, void *private, int new_data_offset)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	struct logical_volume *lv;
+
+	if ((lv = _lv_for_raid_image_seg(seg, mem))) {
+		uint64_t data_offset = 0;
+
+		if (lv_raid_data_offset(lv, &data_offset)) {
+			if (new_data_offset && lv_is_raid_image(lv) && !lv_raid_image_in_sync(lv))
+				data_offset = data_offset ? 0 : (uint64_t) seg->reshape_len * lv->vg->extent_size;
+
+			return dm_report_field_uint64(rh, field, &data_offset);
+		}
+
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _seg_data_offset_disp(struct dm_report *rh, struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data, void *private)
+{
+	return _segdata_offset(rh, mem, field, data, private, 0);
+}
+
+static int _seg_new_data_offset_disp(struct dm_report *rh, struct dm_pool *mem,
+				     struct dm_report_field *field,
+				     const void *data, void *private)
+{
+	return _segdata_offset(rh, mem, field, data, private, 1);
+}
+
+static int _seg_parity_chunks_disp(struct dm_report *rh, struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	uint32_t parity_chunks = seg->segtype->parity_devs ?: seg->data_copies - 1;
+
+	if (parity_chunks) {
+		uint32_t s, resilient_sub_lvs = 0;
+
+		for (s = 0; s < seg->area_count; s++) {
+			if (seg_type(seg, s) == AREA_LV) {
+				struct lv_segment *seg1 = first_seg(seg_lv(seg, s));
+
+				if (seg1->segtype->parity_devs ||
+				    seg1->data_copies > 1)
+					resilient_sub_lvs++;
+			}
+		}
+
+		if (resilient_sub_lvs && resilient_sub_lvs == seg->area_count)
+			parity_chunks++;
+
+		return dm_report_field_uint32(rh, field, &parity_chunks);
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
 static int _segsize_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -2511,6 +2742,29 @@ static int _cachemode_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _field_string(rh, field, display_cache_mode(seg));
 }
 
+static int _cachemetadataformat_disp(struct dm_report *rh, struct dm_pool *mem,
+				     struct dm_report_field *field,
+				     const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	const uint64_t *fmt;
+
+	if (seg_is_cache(seg))
+		seg = first_seg(seg->pool_lv);
+
+	if (seg_is_cache_pool(seg)) {
+		switch (seg->cache_metadata_format) {
+		case CACHE_METADATA_FORMAT_1:
+		case CACHE_METADATA_FORMAT_2:
+			fmt = (seg->cache_metadata_format == CACHE_METADATA_FORMAT_2) ? &_two64 : &_one64;
+			return dm_report_field_uint64(rh, field, fmt);
+		default: /* unselected/undefined for all other cases */;
+		}
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
 static int _originsize_disp(struct dm_report *rh, struct dm_pool *mem,
 			    struct dm_report_field *field,
 			    const void *data, void *private)
@@ -2591,7 +2845,7 @@ static int _vgsystemid_disp(struct dm_report *rh, struct dm_pool *mem,
 			    const void *data, void *private)
 {
 	const struct volume_group *vg = (const struct volume_group *) data;
-	const char *repstr = (vg->system_id && *vg->system_id) ? vg->system_id : vg->lvm1_system_id ? : "";
+	const char *repstr = (vg->system_id && *vg->system_id) ? vg->system_id : "";
 
 	return _field_string(rh, field, repstr);
 }
@@ -2601,8 +2855,14 @@ static int _vglocktype_disp(struct dm_report *rh, struct dm_pool *mem,
 			    const void *data, void *private)
 {
 	const struct volume_group *vg = (const struct volume_group *) data;
+	const char *locktype;
 
-	return _field_string(rh, field, vg->lock_type ? : "");
+	if (!vg->lock_type || !strcmp(vg->lock_type, "none"))
+		locktype = "";
+	else
+		locktype = vg->lock_type;
+
+	return _field_string(rh, field, locktype);
 }
 
 static int _vglockargs_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -2833,11 +3093,13 @@ static int _copypercent_disp(struct dm_report *rh,
 	dm_percent_t percent = DM_PERCENT_INVALID;
 
 	/* TODO: just cache passes through lvseg_percent... */
-	if (lv_is_cache(lv) || lv_is_used_cache_pool(lv))
+	if (lv_is_cache(lv) || lv_is_used_cache_pool(lv) ||
+	    (!lv_is_merging_origin(lv) && lv_is_raid(lv) && !seg_is_any_raid0(first_seg(lv))))
 		percent = lvseg_percent_with_info_and_seg_status(lvdm, PERCENT_GET_DIRTY);
-	else if (((lv_is_raid(lv) && !seg_is_any_raid0(first_seg(lv)) &&
-		   lv_raid_percent(lv, &percent)) ||
-		  (lv_is_mirror(lv) &&
+	else if (lv_is_raid(lv) && !seg_is_any_raid0(first_seg(lv)))
+		/* old way for percentage when merging snapshot into raid origin */
+		(void) lv_raid_percent(lv, &percent);
+	else if (((lv_is_mirror(lv) &&
 		   lv_mirror_percent(lv->vg->cmd, lv, 0, &percent, NULL))) &&
 		 (percent != DM_PERCENT_INVALID))
 		percent = copy_percent(lv);
@@ -2936,12 +3198,16 @@ static int _metadatapercent_disp(struct dm_report *rh,
 				 const void *data, void *private)
 {
 	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
-	dm_percent_t percent = DM_PERCENT_INVALID;
+	dm_percent_t percent;
 
-	if (lv_is_thin_pool(lvdm->lv) ||
-	    lv_is_cache(lvdm->lv) ||
-	    lv_is_used_cache_pool(lvdm->lv))
+	switch (lvdm->seg_status.type) {
+	case SEG_STATUS_CACHE:
+	case SEG_STATUS_THIN_POOL:
 		percent = lvseg_percent_with_info_and_seg_status(lvdm, PERCENT_GET_METADATA);
+		break;
+	default:
+                percent = DM_PERCENT_INVALID;
+	}
 
 	return dm_report_field_percent(rh, field, &percent);
 }
@@ -3125,6 +3391,14 @@ static int _vgclustered_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _binary_disp(rh, mem, field, clustered, GET_FIRST_RESERVED_NAME(vg_clustered_y), private);
 }
 
+static int _vgshared_disp(struct dm_report *rh, struct dm_pool *mem,
+			  struct dm_report_field *field,
+			  const void *data, void *private)
+{
+	int shared = (vg_is_shared((const struct volume_group *) data)) != 0;
+	return _binary_disp(rh, mem, field, shared, GET_FIRST_RESERVED_NAME(vg_shared_y), private);
+}
+
 static int _lvlayout_disp(struct dm_report *rh, struct dm_pool *mem,
 				struct dm_report_field *field,
 				const void *data, void *private)
@@ -3291,11 +3565,7 @@ static int _lvactivelocally_disp(struct dm_report *rh, struct dm_pool *mem,
 	if (!activation())
 		return _binary_undef_disp(rh, mem, field, private);
 
-	if (vg_is_clustered(lv->vg)) {
-		lv = lv_lock_holder(lv);
-		active_locally = lv_is_active_locally(lv);
-	} else
-		active_locally = lv_is_active(lv);
+	active_locally = lv_is_active(lv);
 
 	return _binary_disp(rh, mem, field, active_locally, GET_FIRST_RESERVED_NAME(lv_active_locally_y), private);
 }
@@ -3304,38 +3574,12 @@ static int _lvactiveremotely_disp(struct dm_report *rh, struct dm_pool *mem,
 				  struct dm_report_field *field,
 				  const void *data, void *private)
 {
-	const struct logical_volume *lv = (const struct logical_volume *) data;
 	int active_remotely;
 
 	if (!activation())
 		return _binary_undef_disp(rh, mem, field, private);
 
-	if (vg_is_clustered(lv->vg)) {
-		lv = lv_lock_holder(lv);
-		/* FIXME: It seems we have no way to get this info correctly
-		 * 	  with current interface - we'd need to check number
-		 * 	  of responses from the cluster:
-		 * 	    - if number of nodes that responded == 1
-		 * 	    - and LV is active on local node
-		 * 	  ..then we may say that LV is *not* active remotely.
-		 *
-		 * 	  Otherwise ((responses > 1 && LV active locally) ||
-		 * 	  (responses == 1 && LV not active locally)), it's
-		 * 	  active remotely.
-		 *
-		 * 	  We have this info, but hidden underneath the
-		 * 	  locking interface (locking_type.query_resource fn).
-		 *
-		 * 	  For now, let's use 'unknown' for remote status if
-		 * 	  the LV is found active locally until we find a way to
-		 * 	  smuggle the proper information out of the interface.
-		 */
-		if (lv_is_active_locally(lv))
-			return _binary_undef_disp(rh, mem, field, private);
-		else
-			active_remotely = lv_is_active_but_not_locally(lv);
-	} else
-		active_remotely = 0;
+	active_remotely = 0;
 
 	return _binary_disp(rh, mem, field, active_remotely, GET_FIRST_RESERVED_NAME(lv_active_remotely_y), private);
 }
@@ -3350,11 +3594,7 @@ static int _lvactiveexclusively_disp(struct dm_report *rh, struct dm_pool *mem,
 	if (!activation())
 		return _binary_undef_disp(rh, mem, field, private);
 
-	if (vg_is_clustered(lv->vg)) {
-		lv = lv_lock_holder(lv);
-		active_exclusively = lv_is_active_exclusive(lv);
-	} else
-		active_exclusively = lv_is_active(lv);
+	active_exclusively = lv_is_active(lv);
 
 	return _binary_disp(rh, mem, field, active_exclusively, GET_FIRST_RESERVED_NAME(lv_active_exclusively_y), private);
 }
@@ -3363,30 +3603,26 @@ static int _lvmergefailed_disp(struct dm_report *rh, struct dm_pool *mem,
 			       struct dm_report_field *field,
 			       const void *data, void *private)
 {
-	const struct logical_volume *lv = (const struct logical_volume *) data;
-	dm_percent_t snap_percent;
-	int merge_failed;
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
 
-	if (!lv_is_cow(lv) || !lv_snapshot_percent(lv, &snap_percent))
+	if (lvdm->seg_status.type != SEG_STATUS_SNAPSHOT)
 		return _binary_undef_disp(rh, mem, field, private);
 
-	merge_failed = snap_percent == LVM_PERCENT_MERGE_FAILED;
-	return _binary_disp(rh, mem, field, merge_failed, GET_FIRST_RESERVED_NAME(lv_merge_failed_y), private);
+	return _binary_disp(rh, mem, field, lvdm->seg_status.snapshot->merge_failed,
+			    GET_FIRST_RESERVED_NAME(lv_merge_failed_y), private);
 }
 
 static int _lvsnapshotinvalid_disp(struct dm_report *rh, struct dm_pool *mem,
 				   struct dm_report_field *field,
 				   const void *data, void *private)
 {
-	const struct logical_volume *lv = (const struct logical_volume *) data;
-	dm_percent_t snap_percent;
-	int snap_invalid;
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
 
-	if (!lv_is_cow(lv))
+	if (lvdm->seg_status.type != SEG_STATUS_SNAPSHOT)
 		return _binary_undef_disp(rh, mem, field, private);
 
-	snap_invalid = !lv_snapshot_percent(lv, &snap_percent) || snap_percent == DM_PERCENT_INVALID;
-	return _binary_disp(rh, mem, field, snap_invalid, GET_FIRST_RESERVED_NAME(lv_snapshot_invalid_y), private);
+	return _binary_disp(rh, mem, field, lvdm->seg_status.snapshot->invalid,
+			    GET_FIRST_RESERVED_NAME(lv_snapshot_invalid_y), private);
 }
 
 static int _lvsuspended_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -3447,7 +3683,7 @@ static int _thinzero_disp(struct dm_report *rh, struct dm_pool *mem,
 		seg = first_seg(seg->pool_lv);
 
 	if (seg_is_thin_pool(seg))
-		return _binary_disp(rh, mem, field, seg->zero_new_blocks, GET_FIRST_RESERVED_NAME(zero_y), private);
+		return _binary_disp(rh, mem, field, (seg->zero_new_blocks == THIN_ZERO_YES), GET_FIRST_RESERVED_NAME(zero_y), private);
 
 	return _binary_undef_disp(rh, mem, field, private);
 }
@@ -3477,7 +3713,7 @@ static int _lvhealthstatus_disp(struct dm_report *rh, struct dm_pool *mem,
 		if (lvdm->seg_status.type != SEG_STATUS_CACHE)
 			return _field_set_value(field, GET_FIRST_RESERVED_NAME(health_undef),
 						GET_FIELD_RESERVED_VALUE(health_undef));
-		else if (lvdm->seg_status.cache->fail)
+		if (lvdm->seg_status.cache->fail)
 			health = "failed";
 		else if (lvdm->seg_status.cache->read_only)
 			health = "metadata_read_only";
@@ -3485,7 +3721,7 @@ static int _lvhealthstatus_disp(struct dm_report *rh, struct dm_pool *mem,
 		if (lvdm->seg_status.type != SEG_STATUS_THIN_POOL)
 			return _field_set_value(field, GET_FIRST_RESERVED_NAME(health_undef),
 						GET_FIELD_RESERVED_VALUE(health_undef));
-		else if (lvdm->seg_status.thin_pool->fail)
+		if (lvdm->seg_status.thin_pool->fail)
 			health = "failed";
 		else if (lvdm->seg_status.thin_pool->out_of_data_space)
 			health = "out_of_data";
@@ -3566,7 +3802,6 @@ static struct volume_group _dummy_vg = {
 	.fid = &_dummy_fid,
 	.name = "",
 	.system_id = (char *) "",
-	.lvm1_system_id = (char *) "",
 	.pvs = DM_LIST_HEAD_INIT(_dummy_vg.pvs),
 	.lvs = DM_LIST_HEAD_INIT(_dummy_vg.lvs),
 	.historical_lvs = DM_LIST_HEAD_INIT(_dummy_vg.historical_lvs),
@@ -3577,7 +3812,6 @@ static struct volume_group _unknown_vg = {
 	.fid = &_dummy_fid,
 	.name = "[unknown]",
 	.system_id = (char *) "",
-	.lvm1_system_id = (char *) "",
 	.pvs = DM_LIST_HEAD_INIT(_unknown_vg.pvs),
 	.lvs = DM_LIST_HEAD_INIT(_unknown_vg.lvs),
 	.historical_lvs = DM_LIST_HEAD_INIT(_unknown_vg.historical_lvs),
@@ -3667,7 +3901,7 @@ static const struct dm_report_object_type _devtypes_report_types[] = {
 #define STR_LIST DM_REPORT_FIELD_TYPE_STRING_LIST
 #define SNUM DM_REPORT_FIELD_TYPE_NUMBER
 #define FIELD(type, strct, sorttype, head, field, width, func, id, desc, writeable) \
-	{type, sorttype, offsetof(type_ ## strct, field), width ? : sizeof(head) - 1, \
+	{type, sorttype, offsetof(type_ ## strct, field), (width) ? : sizeof(head) - 1, \
 	 #id, head, &_ ## func ## _disp, desc},
 
 typedef struct cmd_log_item type_cmd_log_item;
@@ -3871,7 +4105,7 @@ int report_cmdlog(void *handle, const char *type, const char *context,
 		  const char *object_group_id, const char *msg,
 		  int current_errno, int ret_code)
 {
-	struct cmd_log_item log_item = {log_seqnum++, type, context, object_type_name,
+	struct cmd_log_item log_item = {_log_seqnum++, type, context, object_type_name,
 					object_name ? : "", object_id ? : "",
 					object_group ? : "", object_group_id ? : "",
 					msg ? : "", current_errno, ret_code};
@@ -3884,7 +4118,7 @@ int report_cmdlog(void *handle, const char *type, const char *context,
 
 void report_reset_cmdlog_seqnum(void)
 {
-	log_seqnum = 1;
+	_log_seqnum = 1;
 }
 
 int report_current_object_cmdlog(const char *type, const char *msg, int32_t ret_code)

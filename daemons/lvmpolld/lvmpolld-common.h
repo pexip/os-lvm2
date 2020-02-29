@@ -18,12 +18,10 @@
 #ifndef _LVM_LVMPOLLD_COMMON_H
 #define _LVM_LVMPOLLD_COMMON_H
 
-#define _REENTRANT
-
-#include "tool.h"
+#include "tools/tool.h"
 
 #include "lvmpolld-cmd-utils.h"
-#include "lvmpolld-protocol.h"
+#include "daemons/lvmpolld/lvmpolld-protocol.h"
 
 #include <assert.h>
 #include <errno.h>

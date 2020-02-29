@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,21 +12,18 @@
 
 # ensure there is no data loss during thin-pool resize
 
-SKIP_WITH_LVMLOCKD=1
+
+SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
 
-test -e LOCAL_LVMPOLLD && skip
-
 which md5sum || skip
 
 aux have_thin 1 0 0 || skip
 
-aux prepare_pvs 2 20
-
-vgcreate -s 512K $vg $(< DEVICES)
+aux prepare_vg 2 20
 
 lvcreate -L1M -V2M -n $lv1 -T $vg/pool
 
@@ -64,7 +62,7 @@ diff MD5  MD5-2
 
 
 # Do not want to see Live & Inactive table entry
-echo $(dm_info attr,name) | not grep "LI-.*${PREFIX}" || {
+( dm_info attr,name | not grep "LI-.*${PREFIX}" ) || {
         dmsetup table --inactive | grep ${PREFIX}
 	die "Found device with Inactive table"
 }

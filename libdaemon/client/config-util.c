@@ -12,12 +12,10 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#define _REENTRANT
-
-#include "tool.h"
+#include "tools/tool.h"
 
 #include "daemon-io.h"
-#include "dm-logging.h"
+#include "device_mapper/misc/dm-logging.h"
 
 #include <math.h>  /* fabs() */
 #include <float.h> /* DBL_EPSILON */
@@ -63,12 +61,12 @@ int buffer_append_vf(struct buffer *buf, va_list ap)
 		    !buffer_append(buf, append))
 			goto fail;
 
-		dm_free(append);
+		free(append);
 	}
 
 	return 1;
 fail:
-	dm_free(append);
+	free(append);
 	return 0;
 }
 
@@ -260,7 +258,7 @@ struct dm_config_node *config_make_nodes_v(struct dm_config_tree *cft,
 		key[fmt - next] = '\0';
 		fmt += 2;
 
-		if (!strcmp(fmt, "%d") || !strcmp(fmt, FMTd64)) {
+		if (!strcmp(fmt, FMTd64)) {
 			int64_t value = va_arg(ap, int64_t);
 			if (!(cn = make_int_node(cft, key, value, parent, pre_sib)))
 				return 0;
@@ -304,7 +302,7 @@ struct dm_config_node *config_make_nodes(struct dm_config_tree *cft,
 }
 
 /* Test if the doubles are close enough to be considered equal */
-static int close_enough(double d1, double d2)
+static int _close_enough(double d1, double d2)
 {
 	return fabs(d1 - d2) < DBL_EPSILON;
 }
@@ -320,7 +318,7 @@ int compare_value(struct dm_config_value *a, struct dm_config_value *b)
 
 	switch (a->type) {
 	case DM_CFG_STRING: r = strcmp(a->v.str, b->v.str); break;
-	case DM_CFG_FLOAT: r = close_enough(a->v.f, b->v.f) ? 0 : (a->v.f > b->v.f) ? 1 : -1; break;
+	case DM_CFG_FLOAT: r = _close_enough(a->v.f, b->v.f) ? 0 : (a->v.f > b->v.f) ? 1 : -1; break;
 	case DM_CFG_INT: r = (a->v.i == b->v.i) ? 0 : (a->v.i > b->v.i) ? 1 : -1; break;
 	case DM_CFG_EMPTY_ARRAY: return 0;
 	}
@@ -365,11 +363,11 @@ int buffer_realloc(struct buffer *buf, int needed)
 		alloc = needed;
 
 	buf->allocated += alloc;
-	new = dm_realloc(buf->mem, buf->allocated);
+	new = realloc(buf->mem, buf->allocated);
 	if (new)
 		buf->mem = new;
 	else { /* utter failure */
-		dm_free(buf->mem);
+		free(buf->mem);
 		buf->mem = 0;
 		buf->allocated = buf->used = 0;
 		return 0;
@@ -402,7 +400,7 @@ int buffer_line(const char *line, void *baton)
 
 void buffer_destroy(struct buffer *buf)
 {
-	dm_free(buf->mem);
+	free(buf->mem);
 	buffer_init(buf);
 }
 

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -13,7 +14,6 @@
 # tests functionality of lvs, pvs, vgs, *display tools
 #
 
-SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -33,13 +33,13 @@ pvcreate --metadatacopies 0 "$dev5"
 
 #COMM bz195276 -- pvs doesn't show PVs until a VG is created
 pvs --noheadings "${DEVICES[@]}"
-test $(pvs --noheadings "${DEVICES[@]}" | wc -l) -eq 5
+test "$(pvs --noheadings "${DEVICES[@]}" | wc -l)" -eq 5
 pvdisplay
 
 #COMM pvs with segment attributes works even for orphans
-test $(pvs --noheadings -o seg_all,pv_all,lv_all,vg_all "${DEVICES[@]}" | wc -l) -eq 5
+test "$(pvs --noheadings -o seg_all,pv_all,lv_all,vg_all "${DEVICES[@]}" | wc -l)" -eq 5
 
-vgcreate $vg "${DEVICES[@]}"
+vgcreate $SHARED $vg "${DEVICES[@]}"
 
 check pv_field "$dev1" pv_uuid BADBEE-BAAD-BAAD-BAAD-BAAD-BAAD-BADBEE
 
@@ -59,16 +59,16 @@ check pv_field "$dev2" vg_name $vg
 #COMM lvs displays snapshots (bz171215)
 lvcreate -aey -l4 -n $lv1 $vg
 lvcreate -l4 -s -n $lv2 $vg/$lv1
-test $(lvs --noheadings $vg | wc -l) -eq 2
+test "$(lvs --noheadings $vg | wc -l)" -eq 2
 # should lvs -a display cow && real devices? (it doesn't)
-test $(lvs -a --noheadings $vg | wc -l)  -eq 2
+test "$(lvs -a --noheadings $vg | wc -l)"  -eq 2
 dmsetup ls | grep "$PREFIX" | grep -v "LVMTEST.*pv."
 lvremove -f $vg/$lv2
 
 #COMM lvs -a displays mirror legs and log
 lvcreate -aey -l2 --type mirror -m2 -n $lv3 $vg
-test $(lvs --noheadings $vg | wc -l) -eq 2
-test $(lvs -a --noheadings $vg | wc -l) -eq 6
+test "$(lvs --noheadings $vg | wc -l)" -eq 2
+test "$(lvs -a --noheadings $vg | wc -l)" -eq 6
 dmsetup ls | grep "$PREFIX" | grep -v "LVMTEST.*pv."
 
 # Check we parse /dev/mapper/vg-lv
@@ -201,17 +201,17 @@ vgremove -ff $vg
 # all LVs active - VG considered active
 pvcreate "$dev1" "$dev2" "$dev3"
 
-vgcreate $vg1 "$dev1"
+vgcreate $SHARED $vg1 "$dev1"
 lvcreate -l1 $vg1
 lvcreate -l1 $vg1
 
 # at least one LV active - VG considered active
-vgcreate $vg2 "$dev2"
+vgcreate $SHARED $vg2 "$dev2"
 lvcreate -l1 $vg2
 lvcreate -l1 -an -Zn $vg2
 
 # no LVs active - VG considered inactive
-vgcreate $vg3 "$dev3"
+vgcreate $SHARED $vg3 "$dev3"
 lvcreate -l1 -an -Zn $vg3
 lvcreate -l1 -an -Zn $vg3
 

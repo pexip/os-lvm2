@@ -13,16 +13,27 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "filter.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/filters/filter.h"
 
 #define MSG_SKIPPING "%s: Skipping: Partition table signature found"
 
-static int _passes_partitioned_filter(struct dev_filter *f, struct device *dev)
+static int _passes_partitioned_filter(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
 {
 	struct dev_types *dt = (struct dev_types *) f->private;
+	int ret;
 
-	if (dev_is_partitioned(dt, dev)) {
+	ret = dev_is_partitioned(dt, dev);
+
+	if (ret == -EAGAIN) {
+		/* let pass, call again after scan */
+		log_debug_devs("filter partitioned deferred %s", dev_name(dev));
+		dev->flags |= DEV_FILTER_AFTER_SCAN;
+		return 1;
+	}
+
+	if (ret) {
 		if (dev->ext.src == DEV_EXT_NONE)
 			log_debug_devs(MSG_SKIPPING, dev_name(dev));
 		else
@@ -39,14 +50,14 @@ static void _partitioned_filter_destroy(struct dev_filter *f)
 	if (f->use_count)
 		log_error(INTERNAL_ERROR "Destroying partitioned filter while in use %u times.", f->use_count);
 
-	dm_free(f);
+	free(f);
 }
 
 struct dev_filter *partitioned_filter_create(struct dev_types *dt)
 {
 	struct dev_filter *f;
 
-	if (!(f = dm_zalloc(sizeof(struct dev_filter)))) {
+	if (!(f = zalloc(sizeof(struct dev_filter)))) {
 		log_error("Partitioned filter allocation failed");
 		return NULL;
 	}

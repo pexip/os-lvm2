@@ -1,3 +1,380 @@
+Version 2.03.02 - 18th December 2018
+====================================
+  Fix missing proper initialization of pv_list struct when adding pv.
+  Fix (de)activation of RaidLVs with visible SubLVs.
+  Prohibit mirrored 'mirror' log via lvcreate and lvconvert.
+  Use sync io if async io_setup fails, or use_aio=0 is set in config.
+  Fix more issues reported by coverity scan.
+
+Version 2.03.01 - 31st October 2018
+===================================
+
+Version 2.03.00 - 10th October 2018
+===================================
+  Add hot fix to avoiding locking collision when monitoring thin-pools.
+  Allow raid4 -> linear conversion request.
+  Fix lvconvert striped/raid0/raid0_meta -> raid6 regression.
+  Add 'lvm2-activation-generator:' prefix for kmsg messages logged by generator.
+  Add After=rbdmap.service to {lvm2-activation-net,blk-availability}.service.
+  Reduce max concurrent aios to avoid EMFILE with many devices.
+  Fix lvconvert conversion attempts to linear.
+  Fix lvconvert raid0/raid0_meta -> striped regression.
+  Fix lvconvert --splitmirror for mirror type (2.02.178).
+  Do not pair cache policy and cache metadata format.
+  lvconvert: reject conversions on raid1 LVs with split tracked SubLVs
+  lvconvert: reject conversions on raid1 split tracked SubLVs
+  Add basic creation support for VDO target.
+  Never send any discard ioctl with test mode.
+  Fix thin-pool alloc which needs same PV for data and metadata.
+  Extend list of non-memlocked areas with newly linked libs.
+  Enhance vgcfgrestore to check for active LVs in restored VG.
+  Configure supports --disable-silent-rules for verbose builds.
+  Fix unmonitoring of merging snapshots.
+  Cache can uses metadata format 2 with cleaner policy.
+  Fix check if resized PV can also fit metadata area.
+  Avoid showing internal error in lvs output or pvmoved LVs.
+  Remove clvmd
+  Remove lvmlib (api)
+  Remove lvmetad
+  lvconvert: provide possible layouts between linear and striped/raid
+  Use versionsort to fix archive file expiry beyond 100000 files.
+
+Version 2.02.178-rc1 - 24th May 2018
+====================================
+  Add libaio dependency for build.
+  Remove lvm1 and pool format handling and add filter to ignore them.
+  Move some filter checks to after disks are read.
+  Rework disk scanning and when it is used.
+  Add new io layer and shift code to using it.
+  Fix lvconvert's return code on degraded -m raid1 conversion.
+  --enable-testing switch for ./configure has been removed.
+  --with-snapshots switch for ./configure has been removed.
+  --with-mirrors switch for ./configure has been removed.
+  --with-raid switch for ./configure has been removed.
+  --with-thin switch for ./configure has been removed.
+  --with-cache switch for ./configure has been removed.
+  Include new unit-test framework and unit tests.
+  Extend validation of region_size for mirror segment.
+  Reload whole device stack when reinitilizing mirror log.
+  Mirrors without monitoring are WARNING and not blocking on error.
+  Detect too big region_size with clustered mirrors.
+  Fix evaluation of maximal region size for mirror log.
+  Enhance mirror log size estimation and use smaller size when possible.
+  Fix incorrect mirror log size calculation on 32bit arch.
+  Enhance preloading tree creating.
+  Fix regression on acceptance of any LV on lvconvert.
+  Restore usability of thin LV to be again external origin for another thin.
+  Keep systemd vars on change event in 69-dm-lvm-metad.rules for systemd reload.
+  Write systemd and non-systemd rule in 69-dm-lvm-metad.rules, GOTO active one.
+  Add test for activation/volume_list (Sub)LV remnants.
+  Disallow usage of cache format 2 with mq cache policy.
+  Again accept striped LV as COW LV with lvconvert -s (2.02.169).
+  Fix raid target version testing for supported features.
+  Allow activation of pools when thin/cache_check tool is missing.
+  Remove RaidLV on creation failure when rmeta devices can't be activated.
+  Add prioritized_section() to restore cookie boundaries (2.02.177).
+  Enhance error messages when read error happens.
+  Enhance mirror log initialization for old mirror target.
+  Skip private crypto and stratis devices.
+  Skip frozen raid devices from scanning.
+  Activate RAID SubLVs on read_only_volume_list readwrite.
+  Offer convenience type raid5_n converting to raid10.
+  Automatically avoid reading invalid snapshots during device scan.
+  Ensure COW device is writable even for read-only thick snapshots.
+  Support activation of component LVs in read-only mode.
+  Extend internal library to recognize and work with component LV.
+  Skip duplicate check for active LV when prompting for its removal.
+  Activate correct lock holding LV when it is cached.
+  Do not modify archived metadata when removing striped raid.
+  Fix memleak on error path when obtaining lv_raid_data_offset.
+  Fix compatibility size test of extended external origin.
+  Add external_origin visiting in for_each_sub_lv().
+  Ensure cluster commands drop their device cache before locking VG.
+  Do not report LV as remotely active when it's locally exclusive in cluster.
+  Add deprecate messages for usage of mirrors with mirrorlog.
+  Separate reporting of monitoring status and error status.
+  Improve validation of created strings in vgimportclone.
+  Add missing initialisation of mem pool in systemd generator.
+  Do not reopen output streams for multithreaded users of liblvm.
+  Configure ensures /usr/bin dir is checked for dmpd tools.
+  Restore pvmove support for wide-clustered active volumes (2.02.177).
+  Avoid non-exclusive activation of exclusive segment types.
+  Fix trimming sibling PVs when doing a pvmove of raid subLVs.
+  Preserve exclusive activation during thin snaphost merge.
+  Avoid exceeding array bounds in allocation tag processing.
+  Add --lockopt to common options and add option to skip selected locks.
+
+Version 2.02.177 - 18th December 2017
+=====================================
+  When writing text metadata content, use complete 4096 byte blocks.
+  Change text format metadata alignment from 512 to 4096 bytes.
+  When writing metadata, consistently skip mdas marked as failed.
+  Refactor and adjust text format metadata alignment calculation.
+  Fix python3 path in lvmdbusd to use value detected by configure.
+  Reduce checks for active LVs in vgchange before background polling.
+  Ensure _node_send_message always uses clean status of thin pool.
+  Fix lvmlockd to use pool lock when accessing _tmeta volume.
+  Report expected sanlock_convert errors only when retries fail.
+  Avoid blocking in sanlock_convert on SH to EX lock conversion.
+  Deactivate missing raid LV legs (_rimage_X-missing_Y_Z) on decativation.
+  Skip read-modify-write when entire block is replaced.
+  Categorise I/O with reason annotations in debug messages.
+  Allow extending of raid LVs created with --nosync after a failed repair.
+  Command will lock memory only when suspending volumes.
+  Merge segments when pvmove is finished.
+  Remove label_verify that has never been used.
+  Ensure very large numbers used as arguments are not casted to lower values. 
+  Enhance reading and validation of options stripes and stripes_size.
+  Fix printing of default stripe size when user is not using stripes.
+  Activation code for pvmove automatically discovers holding LVs for resume.
+  Make a pvmove LV locking holder.
+  Do not change critical section counter on resume path without real resume.
+  Enhance activation code to automatically suspend pvmove participants.
+  Prevent conversion of thin volumes to snapshot origin when lvmlockd is used.
+  Correct the steps to change lock type in lvmlockd man page.
+  Retry lock acquisition on recognized sanlock errors.
+  Fix lock manager error codes in lvmlockd.
+  Remove unnecessary single read from lvmdiskscan.
+  Check raid reshape flags in vg_validate().
+  Add support for pvmove of cache and snapshot origins.
+  Avoid using precommitted metadata for suspending pvmove tree.
+  Ehnance pvmove locking.
+  Deactivate activated LVs on error path when pvmove activation fails.
+  Add "io" to log/debug_classes for logging low-level I/O.
+  Eliminate redundant nested VG metadata in VG struct.
+  Avoid importing persistent filter in vgscan/pvscan/vgrename.
+  Fix memleak of string buffer when vgcfgbackup runs in secure mode.
+  Do not print error when clvmd cannot find running clvmd.
+  Prevent start of new merge of snapshot if origin is already being merged.
+  Fix offered type for raid6_n_6 to raid5 conversion (raid5_n).
+  Deactivate sub LVs when removing unused cache-pool.
+  Do not take backup with suspended devices.
+  Avoid RAID4 activation on incompatible kernels under all circumstances.
+  Reject conversion request to striped/raid0 on 2-legged raid4/5.
+
+Version 2.02.176 - 3rd November 2017
+====================================
+  Keep Install section only in lvm2-{lvmetad,lvmpolld}.socket systemd unit.
+  Fix segfault in lvm_pv_remove in liblvm. (2.02.173)
+  Do not allow storing VG metadata with LV without any segment.
+  Fix printed message when thin snapshot was already merged.
+  Remove created spare LV when creation of thin-pool failed.
+  Avoid reading ignored metadata when mda gets used again.
+  Fix detection of moved PVs in vgsplit. (2.02.175)
+  Ignore --stripes/--stripesize on RAID takeover
+  Improve used paths for generated systemd units and init shells.
+  Disallow creation of snapshot of mirror/raid subLV (was never supported).
+  Fix regression in more advanced vgname extraction in lvconvert (2.02.169).
+  Allow lvcreate to be used for caching of _tdata LV.
+  Avoid internal error when resizing cache type _tdata LV (not yet supported).
+  Show original converted names when lvconverting LV to pool volume.
+  Move lib code used only by liblvm into metadata-liblvm.c.
+  Distinguish between device not found and excluded by filter.
+  Monitor external origin LVs.
+  Remove the replicator code, including configure --with-replicators.
+  Allow lvcreate --type mirror to work with 100%FREE.
+  Improve selection of resource name for complex volume activation lock.
+  Avoid cutting first character of resource name for activation lock.
+  Support for encrypted devices in fsadm.
+  Improve thin pool overprovisioning and repair warning messages.
+  Fix incorrect adjustment of region size on striped RaidLVs.
+
+Version 2.02.175 - 6th October 2017
+===================================
+  Use --help with blockdev when checking for --getsize64 support in fsadm.
+  Dump lvmdbusd debug information with SIGUSR1.
+  Fix metadata corruption in vgsplit and vgmerge intermediate states.
+  Add PV_MOVED_VG PV status flag to mark PVs moving between VGs.
+  Fix lvmdbus hang and recognise unknown VG correctly.
+  Improve error messages when command rules fail.
+  Require LV name with pvmove in a shared VG.
+  Allow shared active mirror LVs with lvmlockd, dlm, and cmirrord.
+  Support lvconvert --repair with cache and cachepool volumes.
+  lvconvert --repair respects --poolmetadataspare option.
+  Mark that we don't plan to develop liblvm2app and python bindings any further.
+  Fix thin pool creation in shared VG. (2.02.173)
+
+Version 2.02.174 - 13th September 2017
+======================================
+  Prevent raid1 split with trackchanges in a shared VG.
+  Avoid double unlocking of client & lockspace mutexes in lvmlockd.
+  Fix leaking of file descriptor for non-blocking filebased locking.
+  Fix check for 2nd mda at end of disk fits if using pvcreate --restorefile.
+  Use maximum metadataarea size that fits with pvcreate --restorefile.
+  Always clear cached bootloaderarea when wiping label e.g. in pvcreate.
+  Disallow --bootloaderareasize with pvcreate --restorefile.
+  Fix lvmlockd check for running lock managers during lock adoption.
+  Add --withgeneralpreamble and --withlocalpreamble to lvmconfig.
+  Improve makefiles' linking.
+  Fix some paths in generated makefiles to respected configured settings.
+  Add warning when creating thin-pool with zeroing and chunk size >= 512KiB.
+  Introduce exit code 4 EINIT_FAILED to replace -1 when initialisation fails.
+  Add synchronization points with udev during reshape of raid LVs.
+
+Version 2.02.173 - 20th July 2017
+=================================
+  Add synchronization points with udev during conversion of raid LVs.
+  Improve --size args validation and report more detailed error message.
+  Initialize debugging mutex before any debug message in clvmd.
+  Log error instead of warn when noticing connection problem with lvmetad.
+  Fix memory leak in lvmetad when working with duplicates.
+  Remove restrictions on reshaping open and clustered raid devices.
+  Add incompatible data_offset to raid metadata to fix reshape activation.
+  Accept 'lvm -h' and 'lvm --help' as well as 'lvm help' for help.
+  Suppress error message from accept() on clean lvmetad shutdown.
+  Tidy clvmd client list processing and fix segfaults.
+  Protect clvmd debug log messages with mutex and add client id.
+  Fix shellcheck reported issues for script files.
+
+Version 2.02.172 - 28th June 2017
+=================================
+  Add missing NULL to argv array when spliting cmdline arguments.
+  Add display_percent helper function for printing percent values.
+  lvconvert --repair handles failing raid legs (present but marked 'D'ead).
+  Do not lvdisplay --maps unset settings of cache pool.
+  Fix lvdisplay --maps for cache pool without policy settings.
+  Support aborting of flushing cache LV.
+  Reenable conversion of data and metadata thin-pool volumes to raid.
+  Improve raid status reporting with lvs.
+  No longer necessary to '--force' a repair for RAID1.
+  Linear to RAID1 upconverts now use "recover" sync action, not "resync".
+  Improve lvcreate --cachepool arg validation.
+  Limit maximum size of thin-pool for specific chunk size.
+  Print a warning about in-use PVs with no VG using them.
+  Disable automatic clearing of PVs that look like in-use orphans.
+  Cache format2 flag is now using segment name type field.
+  Support storing status flags via segtype name field.
+  Stop using '--yes' mode when fsadm runs without terminal.
+  Extend validation of filesystems resized by fsadm.
+  Enhance lvconvert automatic settings of possible (raid) LV types.
+  Allow lvchange to change properties on a thin pool data sub LV.
+  Fix lvcreate extent percentage calculation for mirrors.
+  Don't reinstate still-missing devices when correcting inconsistent metadata.
+  Properly handle subshell return codes in fsadm.
+  Disallow cachepool creation with policy cleaner and mode writeback.
+
+Version 2.02.171 - 3rd May 2017
+===============================
+  Fix memory warnings by using mempools for command definition processing.
+  Fix running commands from a script file.
+  Add pvcreate prompt when device size doesn't match setphysicalvolumesize.
+  lvconvert - preserve region size on raid1 image count changes
+  Adjust pvresize/pvcreate messages and prompt if underlying dev size differs.
+  raid - sanely handle insufficient space on takeover.
+  Fix configure --enable-notify-dbus status message.
+  Change configure option name prefix from --enable-lockd to --enable-lvmlockd.
+  lvcreate - raise mirror/raid default regionsize to 2MiB
+  Add missing configurable prefix to configuration file installation directory.
+
+Version 2.02.170 - 13th April 2017
+==================================
+  Introduce global/fsadm_executable to make fsadm path configurable.
+  Look for limited thin pool metadata size when using 16G metadata.
+  Add lvconvert pool creation rule disallowing options with poolmetadata.
+  Fix lvconvert when the same LV is incorrectly reused in options.
+  Fix lvconvert VG name validation in option values.
+  Fix missing lvmlockd LV locks in lvchange and lvconvert.
+  Fix dmeventd setup for lvchange --poll.
+  Fix use of --poll and --monitor with lvchange and vgchange.
+  Disallow lvconvert of hidden LV to a pool.
+  Ignore --partial option when not used for activation.
+  Allow --activationmode option with lvchange --refresh.
+  Better message on lvconvert --regionsize
+  Allow valid lvconvert --regionsize change
+  Add raid10 alias raid10_near
+  Handle insufficient PVs on lvconvert takeover
+  Fix SIGINT blocking to prevent corrupted metadata
+  Fix systemd unit existence check for lvmconf --services --startstopservices.
+  Check and use PATH_MAX buffers when creating vgrename device paths.
+
+Version 2.02.169 - 28th March 2017
+==================================
+  Automatically decide whether '-' in a man page is a hyphen or a minus sign.
+  Add build-time configuration command line to 'lvm version' output.
+  Handle known table line parameter order change in specific raid target vsns.
+  Conditionally reject raid convert to striped/raid0* after reshape.
+  Ensure raid6 upconversion restrictions.
+  Adjust mirror & raid dmeventd plugins for new lvconvert --repair behaviour.
+  Disable lvmetad when lvconvert --repair is run.
+  Remove obsolete lvmchange binary - convert to built-in command.
+  Show more information for cached volumes in lvdisplay [-m].
+  Add option for lvcreate/lvconvert --cachemetadataformat auto|1|2.
+  Support cache segment with configurable metadata format.
+  Add allocation/cache_metadata_format profilable settings.
+  Use function cache_set_params() for both lvcreate and lvconvert.
+  Skip rounding on cache chunk size boudary when create cache LV.
+  Improve cache_set_params support for chunk_size selection.
+  Fix metadata profile allocation/cache_[mode|policy] setting.
+  Fix missing support for using allocation/cache_pool_chunk_size setting.
+  Upstream git moved to https://sourceware.org/git/?p=lvm2
+  Support conversion of raid type, stripesize and number of disks
+  Reject writemostly/writebehind in lvchange during resynchronization.
+  Deactivate active origin first before removal for improved workflow.
+  Fix regression of accepting both --type and -m with lvresize. (2.02.158)
+  Add lvconvert --swapmetadata, new specific way to swap pool metadata LVs.
+  Add lvconvert --startpoll, new specific way to start polling conversions.
+  Add lvconvert --mergethin, new specific way to merge thin snapshots.
+  Add lvconvert --mergemirrors, new specific way to merge split mirrors.
+  Add lvconvert --mergesnapshot, new specific way to combine cow LVs.
+  Split up lvconvert code based on command definitions.
+  Split up lvchange code based on command definitions.
+  Generate help output and man pages from command definitions.
+  Verify all command line items against command definition.
+  Match every command run to one command definition.
+  Specify every allowed command definition/syntax in command-lines.in.
+  Add extra memory page when limiting pthread stack size in clvmd.
+  Support striped/raid0* <-> raid10_near conversions.
+  Support shrinking of RaidLVs.
+  Support region size changes on existing RaidLVs.
+  Avoid parallel usage of cpg_mcast_joined() in clvmd with corosync.
+  Support raid6_{ls,rs,la,ra}_6 segment types and conversions from/to it.
+  Support raid6_n_6 segment type and conversions from/to it.
+  Support raid5_n segment type and conversions from/to it.
+  Support new internal command _dmeventd_thin_command.
+  Introduce new dmeventd/thin_command configurable setting.
+  Use new default units 'r' for displaying sizes.
+  Also unmount mount point on top of MD device if using blkdeactivate -u.
+  Restore check preventing resize of cache type volumes (2.02.158).
+  Add missing udev sync when flushing dirty cache content.
+  vgchange -p accepts only uint32 numbers.
+  Report thin LV date for merged LV when the merge is in progress.
+  Detect if snapshot merge really started before polling for progress.
+  Checking LV for merging origin requires also it has merged snapshot.
+  Extend validation of metadata processing.
+  Enable usage of cached volumes as snapshot origin LV.
+  Fix displayed lv name when splitting snapshot (2.02.146).
+  Warn about command not making metadata backup just once per command.
+  Enable usage of cached volume as thin volume's external origin.
+  Support cache volume activation with -real layer.
+  Improve search of lock-holder for external origin and thin-pool.
+  Support status checking of cache volume used in layer.
+  Avoid shifting by one number of blocks when clearing dirty cache volume.
+  Extend metadata validation of external origin LV use count.
+  Fix dm table when the last user of active external origin is removed.
+  Improve reported lvs status for active external origin volume.
+  Fix table load for splitted RAID LV and require explicit activation.
+  Always active splitted RAID LV exclusively locally.
+  Do not use LV RAID status bit for segment status.
+  Check segtype directly instead of checking RAID in segment status.
+  Reusing exiting code for raid image removal.
+  Fix pvmove leaving -pvmove0 error device in clustered VG.
+  Avoid adding extra '_' at end of raid extracted images or metadata.
+  Optimize another _rmeta clearing code.
+  Fix deactivation of raid orphan devices for clustered VG.
+  Fix lvconvert raid1 to mirror table reload order.
+  Add internal function for separate mirror log preparation.
+  Fix segfault in lvmetad from missing NULL in daemon_reply_simple.
+  Simplify internal _info_run() and use _setup_task_run() for mknod.
+  Better API for internal function _setup_task_run.
+  Avoid using lv_has_target_type() call within lv_info_with_seg_status.
+  Simplify internal lv_info_with_seg_status API.
+  Decide which status is needed in one place for lv_info_with_seg_status.
+  Fix matching of LV segment when checking for it info status.
+  Report log_warn when status cannot be parsed.
+  Test segment type before accessing segment members when checking status.
+  Implement compatible target function for stripe segment.
+  Use status info to report merge failed and snapshot invalid lvs fields.
+
 Version 2.02.168 - 30th November 2016
 =====================================
   Display correct sync_percent on large RaidLVs

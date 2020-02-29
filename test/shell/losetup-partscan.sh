@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2016 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -11,7 +12,7 @@
 
 # Check how lvm2 handles partitions over losetup -P devices
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -23,7 +24,7 @@ aux prepare_loop 1000 -P || skip
 test -f LOOP
 LOOP=$(< LOOP)
 
-echo "1 2" | sfdisk $LOOP
+echo "1 2" | sfdisk "$LOOP"
 
 # wait for links
 aux udev_wait
@@ -35,8 +36,8 @@ test -e "${LOOP}p1"
 aux extend_filter "a|$LOOP|"
 
 # creation should fail for 'partitioned' loop device
-not pvcreate -y $LOOP
-not vgcreate vg $LOOP
+not pvcreate -y "$LOOP"
+not vgcreate $SHARED vg "$LOOP"
 
 aux teardown_devs
 
@@ -46,7 +47,7 @@ test -f LOOP
 LOOP=$(< LOOP)
 
 
-echo "1 2" | sfdisk $LOOP
+echo "1 2" | sfdisk "$LOOP"
 
 # wait for links
 aux udev_wait
@@ -58,6 +59,6 @@ test ! -e "${LOOP}p1"
 aux extend_filter "a|$LOOP|"
 
 # creation should pass for 'non-partitioned' loop device
-pvcreate -y $LOOP
+pvcreate -y "$LOOP"
 
-vgcreate vg $LOOP
+vgcreate $SHARED vg "$LOOP"

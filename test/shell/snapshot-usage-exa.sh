@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -20,9 +21,10 @@ SKIP_WITH_LVMPOLLD=1
 aux can_use_16T || skip
 
 aux prepare_pvs 1
+get_devs
 
 # Prepare large enough backend device
-vgcreate -s 4M $vg $(cat DEVICES)
+vgcreate -s 4M "$vg" "${DEVICES[@]}"
 lvcreate --type snapshot -s -l 100%FREE -n $lv $vg --virtualsize 15P
 aux extend_filter_LVMTEST
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 
 # Copyright (C) 2015-2016 Red Hat, Inc. All rights reserved.
 #
@@ -14,10 +14,12 @@ import dbus
 # noinspection PyUnresolvedReferences
 from dbus.mainloop.glib import DBusGMainLoop
 import unittest
-import time
 import pyudev
 from testlib import *
 import testlib
+from subprocess import Popen, PIPE
+from glob import glob
+import os
 
 g_tmo = 0
 
@@ -35,6 +37,9 @@ pv_device_list = os.getenv('LVM_DBUSD_PV_DEVICE_LIST', None)
 # 1 == Test both fork & exec & lvm shell mode (default)
 # Other == Test just lvm shell mode
 test_shell = os.getenv('LVM_DBUSD_TEST_MODE', 1)
+
+# LVM binary to use
+LVM_EXECUTABLE = os.getenv('LVM_BINARY', '/usr/sbin/lvm')
 
 # Empty options dictionary (EOD)
 EOD = dbus.Dictionary({}, signature=dbus.Signature('sv'))
@@ -65,6 +70,46 @@ def lv_n(suffix=None):
 	return g_prefix + rs(8, s)
 
 
+def _is_testsuite_pv(pv_name):
+	return g_prefix != "" and pv_name[-1].isdigit() and pv_name[:-1].endswith(g_prefix + "pv")
+
+
+def is_nested_pv(pv_name):
+	return pv_name.count('/') == 3 and not _is_testsuite_pv(pv_name)
+
+
+def _root_pv_name(res, pv_name):
+	if not is_nested_pv(pv_name):
+		return pv_name
+	vg_name = pv_name.split('/')[2]
+	for v in res[VG_INT]:
+		if v.Vg.Name == vg_name:
+			pv = ClientProxy(bus, v.Vg.Pvs[0], interfaces=(PV_INT, ))
+			return _root_pv_name(res, pv.Pv.Name)
+
+
+def _prune(res, pv_filter):
+	if pv_filter:
+		pv_lookup = {}
+
+		pv_list = []
+		for p in res[PV_INT]:
+			if _root_pv_name(res, p.Pv.Name) in pv_filter:
+				pv_list.append(p)
+				pv_lookup[p.object_path] = p
+
+		res[PV_INT] = pv_list
+
+		vg_list = []
+		for v in res[VG_INT]:
+			# Only need to validate one of the PVs is in the selection set
+			if v.Vg.Pvs[0] in pv_lookup:
+				vg_list.append(v)
+
+		res[VG_INT] = vg_list
+	return res
+
+
 def get_objects():
 	rc = {
 		MANAGER_INT: [], PV_INT: [], VG_INT: [], LV_INT: [],
@@ -81,16 +126,12 @@ def get_objects():
 
 	for object_path, v in objects.items():
 		proxy = ClientProxy(bus, object_path, v)
-		for interface, prop in v.items():
-			if interface == PV_INT:
-				# If we have a list of PVs to use, lets only use those in
-				# the list
-				# noinspection PyUnresolvedReferences
-				if pv_device_list and not (proxy.Pv.Name in pv_device_list):
-					continue
+		for interface in v.keys():
 			rc[interface].append(proxy)
 
-	return rc, bus
+	# At this point we have a full population of everything, we now need to
+	# prune the PV list and the VG list if we are using a sub selection
+	return _prune(rc, pv_device_list), bus
 
 
 def set_execution(lvmshell, test_result):
@@ -112,6 +153,28 @@ def set_execution(lvmshell, test_result):
 	return rc
 
 
+def call_lvm(command):
+	"""
+	Call lvm executable and return a tuple of exitcode, stdout, stderr
+	:param command:     Command to execute
+	:type command: 		list
+	:returns (exitcode, stdout, stderr)
+	:rtype (int, str, str)
+	"""
+
+	# Prepend the full lvm executable so that we can run different versions
+	# in different locations on the same box
+	command.insert(0, LVM_EXECUTABLE)
+
+	process = Popen(command, stdout=PIPE, stderr=PIPE, close_fds=True,
+					env=os.environ)
+	out = process.communicate()
+
+	stdout_text = bytes(out[0]).decode("utf-8")
+	stderr_text = bytes(out[1]).decode("utf-8")
+	return process.returncode, stdout_text, stderr_text
+
+
 # noinspection PyUnresolvedReferences
 class TestDbusService(unittest.TestCase):
 	def setUp(self):
@@ -126,41 +189,63 @@ class TestDbusService(unittest.TestCase):
 			std_err_print('Expecting a manager object!')
 			sys.exit(1)
 
-		# We will skip the vg device number check if the test user
-		# has specified a PV list
-		if pv_device_list is None:
-			if len(self.objs[VG_INT]) != 0:
-				std_err_print('Expecting no VGs to exist!')
-				sys.exit(1)
+		if len(self.objs[VG_INT]) != 0:
+			std_err_print('Expecting no VGs to exist!')
+			sys.exit(1)
 
 		self.pvs = []
 		for p in self.objs[PV_INT]:
 			self.pvs.append(p.Pv.Name)
+
+	def _recurse_vg_delete(self, vg_proxy, pv_proxy, nested_pv_hash):
+
+		for pv_device_name, t in nested_pv_hash.items():
+			vg_name = str(vg_proxy.Vg.Name)
+			if vg_name in pv_device_name:
+				self._recurse_vg_delete(t[0], t[1], nested_pv_hash)
+				break
+
+		vg_proxy.update()
+
+		self.handle_return(vg_proxy.Vg.Remove(dbus.Int32(g_tmo), EOD))
+		if is_nested_pv(pv_proxy.Pv.Name):
+			rc = self._pv_remove(pv_proxy)
+			self.assertTrue(rc == '/')
 
 	def tearDown(self):
 		# If we get here it means we passed setUp, so lets remove anything
 		# and everything that remains, besides the PVs themselves
 		self.objs, self.bus = get_objects()
 
-		if pv_device_list is None:
-			for v in self.objs[VG_INT]:
-				self.handle_return(
-					v.Vg.Remove(
-						dbus.Int32(g_tmo),
-						EOD))
-		else:
-			for p in self.objs[PV_INT]:
-				# When we remove a VG for a PV it could ripple across multiple
-				# VGs, so update each PV while removing each VG, to ensure
-				# the properties are current and correct.
-				p.update()
+		# The self.objs[PV_INT] list only contains those which we should be
+		# mucking with, lets remove any embedded/nested PVs first, then proceed
+		# to walk the base PVs and remove the VGs
+		nested_pvs = {}
+		non_nested = []
+
+		for p in self.objs[PV_INT]:
+			if is_nested_pv(p.Pv.Name):
 				if p.Pv.Vg != '/':
-					v = ClientProxy(self.bus, p.Pv.Vg, interfaces=(VG_INT, ))
-					self.handle_return(
-						v.Vg.Remove(dbus.Int32(g_tmo), EOD))
+					v = ClientProxy(self.bus, p.Pv.Vg, interfaces=(VG_INT,))
+					nested_pvs[p.Pv.Name] = (v, p)
+				else:
+					# Nested PV with no VG, so just simply remove it!
+					self._pv_remove(p)
+			else:
+				non_nested.append(p)
+
+		for p in non_nested:
+			# When we remove a VG for a PV it could ripple across multiple
+			# PVs, so update each PV while removing each VG, to ensure
+			# the properties are current and correct.
+			p.update()
+			if p.Pv.Vg != '/':
+				v = ClientProxy(self.bus, p.Pv.Vg, interfaces=(VG_INT, ))
+				self._recurse_vg_delete(v, p, nested_pvs)
 
 		# Check to make sure the PVs we had to start exist, else re-create
 		# them
+		self.objs, self.bus = get_objects()
 		if len(self.pvs) != len(self.objs[PV_INT]):
 			for p in self.pvs:
 				found = False
@@ -198,6 +283,9 @@ class TestDbusService(unittest.TestCase):
 			self.objs[MANAGER_INT][0].Manager.PvCreate(
 				dbus.String(device), dbus.Int32(g_tmo), EOD)
 		)
+
+		self._validate_lookup(device, pv_path)
+
 		self.assertTrue(pv_path is not None and len(pv_path) > 0)
 		return pv_path
 
@@ -229,6 +317,7 @@ class TestDbusService(unittest.TestCase):
 				dbus.Int32(g_tmo),
 				EOD))
 
+		self._validate_lookup(vg_name, vg_path)
 		self.assertTrue(vg_path is not None and len(vg_path) > 0)
 		return ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
 
@@ -263,6 +352,9 @@ class TestDbusService(unittest.TestCase):
 
 	def _create_raid5_thin_pool(self, vg=None):
 
+		meta_name = "meta_r5"
+		data_name = "data_r5"
+
 		if not vg:
 			pv_paths = []
 			for pp in self.objs[PV_INT]:
@@ -272,7 +364,7 @@ class TestDbusService(unittest.TestCase):
 
 		lv_meta_path = self.handle_return(
 			vg.LvCreateRaid(
-				dbus.String("meta_r5"),
+				dbus.String(meta_name),
 				dbus.String("raid5"),
 				dbus.UInt64(mib(4)),
 				dbus.UInt32(0),
@@ -280,10 +372,11 @@ class TestDbusService(unittest.TestCase):
 				dbus.Int32(g_tmo),
 				EOD)
 		)
+		self._validate_lookup("%s/%s" % (vg.Name, meta_name), lv_meta_path)
 
 		lv_data_path = self.handle_return(
 			vg.LvCreateRaid(
-				dbus.String("data_r5"),
+				dbus.String(data_name),
 				dbus.String("raid5"),
 				dbus.UInt64(mib(16)),
 				dbus.UInt32(0),
@@ -291,6 +384,8 @@ class TestDbusService(unittest.TestCase):
 				dbus.Int32(g_tmo),
 				EOD)
 		)
+
+		self._validate_lookup("%s/%s" % (vg.Name, data_name), lv_data_path)
 
 		thin_pool_path = self.handle_return(
 			vg.CreateThinPool(
@@ -339,7 +434,13 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(cached_thin_pool_object.ThinPool.MetaDataLv != '/')
 
 	def _lookup(self, lvm_id):
-		return self.objs[MANAGER_INT][0].Manager.LookUpByLvmId(lvm_id)
+		return self.objs[MANAGER_INT][0].\
+			Manager.LookUpByLvmId(dbus.String(lvm_id))
+
+	def _validate_lookup(self, lvm_name, object_path):
+		t = self._lookup(lvm_name)
+		self.assertTrue(
+			object_path == t, "%s != %s for %s" % (object_path, t, lvm_name))
 
 	def test_lookup_by_lvm_id(self):
 		# For the moment lets just lookup what we know about which is PVs
@@ -392,10 +493,8 @@ class TestDbusService(unittest.TestCase):
 	def test_vg_rename(self):
 		vg = self._vg_create().Vg
 
-		mgr = self.objs[MANAGER_INT][0].Manager
-
 		# Do a vg lookup
-		path = mgr.LookUpByLvmId(dbus.String(vg.Name))
+		path = self._lookup(vg.Name)
 
 		vg_name_start = vg.Name
 
@@ -406,7 +505,7 @@ class TestDbusService(unittest.TestCase):
 		for i in range(0, 5):
 			lv_t = self._create_lv(size=mib(4), vg=vg)
 			full_name = "%s/%s" % (vg_name_start, lv_t.LvCommon.Name)
-			lv_path = mgr.LookUpByLvmId(dbus.String(full_name))
+			lv_path = self._lookup(full_name)
 			self.assertTrue(lv_path == lv_t.object_path)
 
 		new_name = 'renamed_' + vg.Name
@@ -417,7 +516,7 @@ class TestDbusService(unittest.TestCase):
 		self._check_consistency()
 
 		# Do a vg lookup
-		path = mgr.LookUpByLvmId(dbus.String(new_name))
+		path = self._lookup(new_name)
 		self.assertTrue(path != '/', "%s" % (path))
 		self.assertTrue(prev_path == path, "%s != %s" % (prev_path, path))
 
@@ -435,14 +534,12 @@ class TestDbusService(unittest.TestCase):
 				lv_proxy.Vg == vg.object_path, "%s != %s" %
 				(lv_proxy.Vg, vg.object_path))
 			full_name = "%s/%s" % (new_name, lv_proxy.Name)
-			lv_path = mgr.LookUpByLvmId(dbus.String(full_name))
+			lv_path = self._lookup(full_name)
 			self.assertTrue(
 				lv_path == lv_proxy.object_path, "%s != %s" %
 				(lv_path, lv_proxy.object_path))
 
 	def _verify_hidden_lookups(self, lv_common_object, vgname):
-		mgr = self.objs[MANAGER_INT][0].Manager
-
 		hidden_lv_paths = lv_common_object.HiddenLvs
 
 		for h in hidden_lv_paths:
@@ -454,7 +551,7 @@ class TestDbusService(unittest.TestCase):
 
 			full_name = "%s/%s" % (vgname, h_lv.Name)
 			# print("Hidden check %s" % (full_name))
-			lookup_path = mgr.LookUpByLvmId(dbus.String(full_name))
+			lookup_path = self._lookup(full_name)
 			self.assertTrue(lookup_path != '/')
 			self.assertTrue(lookup_path == h_lv.object_path)
 
@@ -462,7 +559,7 @@ class TestDbusService(unittest.TestCase):
 			full_name = "%s/%s" % (vgname, h_lv.Name[1:-1])
 			# print("Hidden check %s" % (full_name))
 
-			lookup_path = mgr.LookUpByLvmId(dbus.String(full_name))
+			lookup_path = self._lookup(full_name)
 			self.assertTrue(lookup_path != '/')
 			self.assertTrue(lookup_path == h_lv.object_path)
 
@@ -471,7 +568,6 @@ class TestDbusService(unittest.TestCase):
 		(vg, thin_pool) = self._create_raid5_thin_pool()
 
 		vg_name_start = vg.Name
-		mgr = self.objs[MANAGER_INT][0].Manager
 
 		# noinspection PyTypeChecker
 		self._verify_hidden_lookups(thin_pool.LvCommon, vg_name_start)
@@ -486,11 +582,14 @@ class TestDbusService(unittest.TestCase):
 					dbus.Int32(g_tmo),
 					EOD))
 
+			self._validate_lookup(
+				"%s/%s" % (vg_name_start, lv_name), thin_lv_path)
+
 			self.assertTrue(thin_lv_path != '/')
 
 			full_name = "%s/%s" % (vg_name_start, lv_name)
 
-			lookup_lv_path = mgr.LookUpByLvmId(dbus.String(full_name))
+			lookup_lv_path = self._lookup(full_name)
 			self.assertTrue(
 				thin_lv_path == lookup_lv_path,
 				"%s != %s" % (thin_lv_path, lookup_lv_path))
@@ -518,7 +617,7 @@ class TestDbusService(unittest.TestCase):
 				(lv_proxy.Vg, vg.object_path))
 			full_name = "%s/%s" % (new_name, lv_proxy.Name)
 			# print('Full Name %s' % (full_name))
-			lv_path = mgr.LookUpByLvmId(dbus.String(full_name))
+			lv_path = self._lookup(full_name)
 			self.assertTrue(
 				lv_path == lv_proxy.object_path, "%s != %s" %
 				(lv_path, lv_proxy.object_path))
@@ -543,75 +642,88 @@ class TestDbusService(unittest.TestCase):
 		return lv
 
 	def test_lv_create(self):
+		lv_name = lv_n()
 		vg = self._vg_create().Vg
-		self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreate,
-			(dbus.String(lv_n()), dbus.UInt64(mib(4)),
+			(dbus.String(lv_name), dbus.UInt64(mib(4)),
 			dbus.Array([], signature='(ott)'), dbus.Int32(g_tmo),
 			EOD), vg, LV_BASE_INT)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_job(self):
-
+		lv_name = lv_n()
 		vg = self._vg_create().Vg
 		(object_path, job_path) = vg.LvCreate(
-			dbus.String(lv_n()), dbus.UInt64(mib(4)),
+			dbus.String(lv_name), dbus.UInt64(mib(4)),
 			dbus.Array([], signature='(ott)'), dbus.Int32(0),
 			EOD)
 
 		self.assertTrue(object_path == '/')
 		self.assertTrue(job_path != '/')
 		object_path = self._wait_for_job(job_path)
+
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), object_path)
 		self.assertTrue(object_path != '/')
 
 	def test_lv_create_linear(self):
 
+		lv_name = lv_n()
 		vg = self._vg_create().Vg
-		self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreateLinear,
-			(dbus.String(lv_n()), dbus.UInt64(mib(4)), dbus.Boolean(False),
+			(dbus.String(lv_name), dbus.UInt64(mib(4)), dbus.Boolean(False),
 			dbus.Int32(g_tmo), EOD),
 			vg, LV_BASE_INT)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_striped(self):
+		lv_name = lv_n()
 		pv_paths = []
 		for pp in self.objs[PV_INT]:
 			pv_paths.append(pp.object_path)
 
 		vg = self._vg_create(pv_paths).Vg
-		self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreateStriped,
-			(dbus.String(lv_n()), dbus.UInt64(mib(4)),
+			(dbus.String(lv_name), dbus.UInt64(mib(4)),
 			dbus.UInt32(2), dbus.UInt32(8), dbus.Boolean(False),
 			dbus.Int32(g_tmo), EOD),
 			vg, LV_BASE_INT)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_mirror(self):
+		lv_name = lv_n()
 		pv_paths = []
 		for pp in self.objs[PV_INT]:
 			pv_paths.append(pp.object_path)
 
 		vg = self._vg_create(pv_paths).Vg
-		self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreateMirror,
-			(dbus.String(lv_n()), dbus.UInt64(mib(4)), dbus.UInt32(2),
+			(dbus.String(lv_name), dbus.UInt64(mib(4)), dbus.UInt32(2),
 			dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_raid(self):
+		lv_name = lv_n()
 		pv_paths = []
 		for pp in self.objs[PV_INT]:
 			pv_paths.append(pp.object_path)
 
 		vg = self._vg_create(pv_paths).Vg
-		self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreateRaid,
-			(dbus.String(lv_n()), dbus.String('raid5'), dbus.UInt64(mib(16)),
+			(dbus.String(lv_name), dbus.String('raid5'), dbus.UInt64(mib(16)),
 			dbus.UInt32(2), dbus.UInt32(8), dbus.Int32(g_tmo),
 			EOD),
 			vg,
 			LV_BASE_INT)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
-	def _create_lv(self, thinpool=False, size=None, vg=None):
+	def _create_lv(self, thinpool=False, size=None, vg=None, suffix=None):
 
+		lv_name = lv_n(suffix=suffix)
 		interfaces = list(LV_BASE_INT)
 
 		if thinpool:
@@ -627,11 +739,14 @@ class TestDbusService(unittest.TestCase):
 		if size is None:
 			size = mib(4)
 
-		return self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreateLinear,
-			(dbus.String(lv_n()), dbus.UInt64(size),
+			(dbus.String(lv_name), dbus.UInt64(size),
 			dbus.Boolean(thinpool), dbus.Int32(g_tmo), EOD),
 			vg, interfaces)
+
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
+		return lv
 
 	def test_lv_create_rounding(self):
 		self._create_lv(size=(mib(2) + 13))
@@ -643,7 +758,7 @@ class TestDbusService(unittest.TestCase):
 		# Rename a regular LV
 		lv = self._create_lv()
 
-		path = self.objs[MANAGER_INT][0].Manager.LookUpByLvmId(lv.LvCommon.Name)
+		path = self._lookup(lv.LvCommon.Name)
 		prev_path = path
 
 		new_name = 'renamed_' + lv.LvCommon.Name
@@ -651,8 +766,7 @@ class TestDbusService(unittest.TestCase):
 		self.handle_return(lv.Lv.Rename(dbus.String(new_name),
 										dbus.Int32(g_tmo), EOD))
 
-		path = self.objs[MANAGER_INT][0].Manager.LookUpByLvmId(
-			dbus.String(new_name))
+		path = self._lookup(new_name)
 
 		self._check_consistency()
 		self.assertTrue(prev_path == path, "%s != %s" % (prev_path, path))
@@ -677,26 +791,32 @@ class TestDbusService(unittest.TestCase):
 
 		# This returns a LV with the LV interface, need to get a proxy for
 		# thinpool interface too
-		tp = self._create_lv(True)
+		vg = self._vg_create().Vg
+		tp = self._create_lv(thinpool=True, vg=vg)
+
+		lv_name = lv_n('_thin_lv')
 
 		thin_path = self.handle_return(
 			tp.ThinPool.LvCreate(
-				dbus.String(lv_n('_thin_lv')),
+				dbus.String(lv_name),
 				dbus.UInt64(mib(8)),
 				dbus.Int32(g_tmo),
 				EOD)
 		)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), thin_path)
 
 		lv = ClientProxy(self.bus, thin_path,
 							interfaces=(LV_COMMON_INT, LV_INT))
 
+		re_named = 'rename_test' + lv.LvCommon.Name
 		rc = self.handle_return(
 			lv.Lv.Rename(
-				dbus.String('rename_test' + lv.LvCommon.Name),
+				dbus.String(re_named),
 				dbus.Int32(g_tmo),
 				EOD)
 		)
 
+		self._validate_lookup("%s/%s" % (vg.Name, re_named), thin_path)
 		self.assertTrue(rc == '/')
 		self._check_consistency()
 
@@ -748,18 +868,18 @@ class TestDbusService(unittest.TestCase):
 
 	def test_lv_create_pv_specific(self):
 		vg = self._vg_create().Vg
-
+		lv_name = lv_n()
 		pv = vg.Pvs
-
 		pvp = ClientProxy(self.bus, pv[0], interfaces=(PV_INT,))
 
-		self._test_lv_create(
+		lv = self._test_lv_create(
 			vg.LvCreate, (
-				dbus.String(lv_n()),
+				dbus.String(lv_name),
 				dbus.UInt64(mib(4)),
 				dbus.Array([[pvp.object_path, 0, (pvp.Pv.PeCount - 1)]],
 				signature='(ott)'),
 				dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_resize(self):
 
@@ -907,7 +1027,7 @@ class TestDbusService(unittest.TestCase):
 			vg.Move(
 				dbus.ObjectPath(location),
 				dbus.Struct((0, 0), signature='tt'),
-				dbus.Array([(dst, pv.PeCount / 2, 0), ], '(ott)'),
+				dbus.Array([(dst, pv.PeCount // 2, 0), ], '(ott)'),
 				dbus.Int32(g_tmo),
 				EOD))
 		self.assertEqual(job, '/')
@@ -930,7 +1050,8 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(vg_path == '/')
 		self.assertTrue(vg_job and len(vg_job) > 0)
 
-		self._wait_for_job(vg_job)
+		vg_path = self._wait_for_job(vg_job)
+		self._validate_lookup(vg_name, vg_path)
 
 	def _test_expired_timer(self, num_lvs):
 		rc = False
@@ -945,17 +1066,20 @@ class TestDbusService(unittest.TestCase):
 		vg_proxy = self._vg_create(pv_paths)
 
 		for i in range(0, num_lvs):
-
+			lv_name = lv_n()
 			vg_proxy.update()
 			if vg_proxy.Vg.FreeCount > 0:
-				job = self.handle_return(
+				lv_path = self.handle_return(
 					vg_proxy.Vg.LvCreateLinear(
-						dbus.String(lv_n()),
+						dbus.String(lv_name),
 						dbus.UInt64(mib(4)),
 						dbus.Boolean(False),
 						dbus.Int32(g_tmo),
 						EOD))
-				self.assertTrue(job != '/')
+				self.assertTrue(lv_path != '/')
+				self._validate_lookup(
+					"%s/%s" % (vg_proxy.Vg.Name, lv_name), lv_path)
+
 			else:
 				# We ran out of space, test will probably fail
 				break
@@ -1064,14 +1188,17 @@ class TestDbusService(unittest.TestCase):
 
 	def test_lv_tags(self):
 		vg = self._vg_create().Vg
+		lv_name = lv_n()
 		lv = self._test_lv_create(
 			vg.LvCreateLinear,
-			(dbus.String(lv_n()),
+			(dbus.String(lv_name),
 			dbus.UInt64(mib(4)),
 			dbus.Boolean(False),
 			dbus.Int32(g_tmo),
 			EOD),
 			vg, LV_BASE_INT)
+
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 		t = ['Testing', 'tags']
 
@@ -1148,14 +1275,17 @@ class TestDbusService(unittest.TestCase):
 
 	def test_vg_activate_deactivate(self):
 		vg = self._vg_create().Vg
-		self._test_lv_create(
+		lv_name = lv_n()
+		lv = self._test_lv_create(
 			vg.LvCreateLinear, (
-				dbus.String(lv_n()),
+				dbus.String(lv_name),
 				dbus.UInt64(mib(4)),
 				dbus.Boolean(False),
 				dbus.Int32(g_tmo),
 				EOD),
 			vg, LV_BASE_INT)
+
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 		vg.update()
 
@@ -1190,7 +1320,7 @@ class TestDbusService(unittest.TestCase):
 
 			original_size = pv.SizeBytes
 
-			new_size = original_size / 2
+			new_size = original_size // 2
 
 			self.handle_return(
 				pv.ReSize(
@@ -1324,7 +1454,7 @@ class TestDbusService(unittest.TestCase):
 
 	@staticmethod
 	def _write_some_data(device_path, size):
-		blocks = int(size / 512)
+		blocks = int(size // 512)
 		block = bytearray(512)
 		for i in range(0, 512):
 			block[i] = i % 255
@@ -1351,7 +1481,7 @@ class TestDbusService(unittest.TestCase):
 							interfaces=(LV_COMMON_INT, LV_INT, SNAPSHOT_INT, ))
 
 		# Write some data to snapshot so merge takes some time
-		TestDbusService._write_some_data(ss.LvCommon.Path, ss_size / 2)
+		TestDbusService._write_some_data(ss.LvCommon.Path, ss_size // 2)
 
 		job_path = self.handle_return(
 			ss.Snapshot.Merge(
@@ -1361,14 +1491,18 @@ class TestDbusService(unittest.TestCase):
 
 	def test_snapshot_merge_thin(self):
 		# Create a thin LV, snapshot it and merge it
-		tp = self._create_lv(True)
+		vg = self._vg_create().Vg
+		tp = self._create_lv(thinpool=True, vg=vg)
+		lv_name = lv_n('_thin_lv')
 
 		thin_path = self.handle_return(
 			tp.ThinPool.LvCreate(
-				dbus.String(lv_n('_thin_lv')),
+				dbus.String(lv_name),
 				dbus.UInt64(mib(10)),
 				dbus.Int32(g_tmo),
 				EOD))
+
+		self._validate_lookup("%s/%s" % (vg.Name, lv_name), thin_path)
 
 		lv_p = ClientProxy(self.bus, thin_path,
 							interfaces=(LV_INT, LV_COMMON_INT))
@@ -1512,12 +1646,14 @@ class TestDbusService(unittest.TestCase):
 						EOD))
 
 		# Create a VG and try to create LVs with different bad names
+		vg_name = vg_n()
 		vg_path = self.handle_return(
 			mgr.VgCreate(
-				dbus.String(vg_n()),
+				dbus.String(vg_name),
 				dbus.Array(pv_paths, 'o'),
 				dbus.Int32(g_tmo),
 				EOD))
+		self._validate_lookup(vg_name, vg_path)
 
 		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
 
@@ -1563,13 +1699,16 @@ class TestDbusService(unittest.TestCase):
 	def test_invalid_tags(self):
 		mgr = self.objs[MANAGER_INT][0].Manager
 		pv_paths = [self.objs[PV_INT][0].object_path]
+		vg_name = vg_n()
 
 		vg_path = self.handle_return(
 			mgr.VgCreate(
-				dbus.String(vg_n()),
+				dbus.String(vg_name),
 				dbus.Array(pv_paths, 'o'),
 				dbus.Int32(g_tmo),
 				EOD))
+		self._validate_lookup(vg_name, vg_path)
+
 		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
 
 		for c in self._invalid_tag_characters():
@@ -1591,13 +1730,15 @@ class TestDbusService(unittest.TestCase):
 	def test_tag_names(self):
 		mgr = self.objs[MANAGER_INT][0].Manager
 		pv_paths = [self.objs[PV_INT][0].object_path]
+		vg_name = vg_n()
 
 		vg_path = self.handle_return(
 			mgr.VgCreate(
-				dbus.String(vg_n()),
+				dbus.String(vg_name),
 				dbus.Array(pv_paths, 'o'),
 				dbus.Int32(g_tmo),
 				EOD))
+		self._validate_lookup(vg_name, vg_path)
 		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
 
 		for i in range(1, 64):
@@ -1622,13 +1763,15 @@ class TestDbusService(unittest.TestCase):
 	def test_tag_regression(self):
 		mgr = self.objs[MANAGER_INT][0].Manager
 		pv_paths = [self.objs[PV_INT][0].object_path]
+		vg_name = vg_n()
 
 		vg_path = self.handle_return(
 			mgr.VgCreate(
-				dbus.String(vg_n()),
+				dbus.String(vg_name),
 				dbus.Array(pv_paths, 'o'),
 				dbus.Int32(g_tmo),
 				EOD))
+		self._validate_lookup(vg_name, vg_path)
 		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
 
 		tag = '--h/K.6g0A4FOEatf3+k_nI/Yp&L_u2oy-=j649x:+dUcYWPEo6.IWT0c'
@@ -1644,6 +1787,138 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(
 			tag in vg_proxy.Vg.Tags,
 			"%s not in %s" % (tag, str(vg_proxy.Vg.Tags)))
+
+	def _verify_existence(self, cmd, operation, resource_name):
+		ec, stdout, stderr = call_lvm(cmd)
+		if ec == 0:
+			path = self._lookup(resource_name)
+			self.assertTrue(path != '/')
+		else:
+			std_err_print(
+				"%s failed with stdout= %s, stderr= %s" %
+				(operation, stdout, stderr))
+			self.assertTrue(ec == 0, "%s exit code = %d" % (operation, ec))
+
+	def test_external_vg_create(self):
+		# We need to ensure that if a user creates something outside of lvm
+		# dbus service that things are sequenced correctly so that if a dbus
+		# user calls into the service they will find the same information.
+		vg_name = vg_n()
+
+		# Get all the PV device paths
+		pv_paths = [p.Pv.Name for p in self.objs[PV_INT]]
+
+		cmd = ['vgcreate', vg_name]
+		cmd.extend(pv_paths)
+		self._verify_existence(cmd, cmd[0], vg_name)
+
+	def test_external_lv_create(self):
+		# Lets create a LV outside of service and see if we correctly handle
+		# it's inclusion
+		vg = self._vg_create().Vg
+		lv_name = lv_n()
+		full_name = "%s/%s" % (vg.Name, lv_name)
+
+		cmd = ['lvcreate', '-L4M', '-n', lv_name, vg.Name]
+		self._verify_existence(cmd, cmd[0], full_name)
+
+	def test_external_pv_create(self):
+		# Lets create a PV outside of service and see if we correctly handle
+		# it's inclusion
+		target = self.objs[PV_INT][0]
+
+		# Remove the PV
+		rc = self._pv_remove(target)
+		self.assertTrue(rc == '/')
+		self._check_consistency()
+
+		# Make sure the PV we removed no longer exists
+		self.assertTrue(self._lookup(target.Pv.Name) == '/')
+
+		# Add it back with external command line
+		cmd = ['pvcreate', target.Pv.Name]
+		self._verify_existence(cmd, cmd[0], target.Pv.Name)
+
+	def _create_nested(self, pv_object_path):
+		vg = self._vg_create([pv_object_path])
+		pv = ClientProxy(self.bus, pv_object_path, interfaces=(PV_INT,))
+
+		self.assertEqual(pv.Pv.Vg, vg.object_path)
+		self.assertIn(pv_object_path, vg.Vg.Pvs,
+						"Expecting PV object path in Vg.Pvs")
+
+		lv = self._create_lv(vg=vg.Vg, size=vg.Vg.FreeBytes,
+								suffix="_pv")
+		device_path = '/dev/%s/%s' % (vg.Vg.Name, lv.LvCommon.Name)
+		new_pv_object_path = self._pv_create(device_path)
+
+		vg.update()
+
+		self.assertEqual(lv.LvCommon.Vg, vg.object_path)
+		self.assertIn(lv.object_path, vg.Vg.Lvs,
+						"Expecting LV object path in Vg.Lvs")
+
+		new_pv_proxy = ClientProxy(self.bus,
+									new_pv_object_path,
+									interfaces=(PV_INT, ))
+		self.assertEqual(new_pv_proxy.Pv.Name, device_path)
+
+		return new_pv_object_path
+
+	def test_nesting(self):
+		# check to see if we handle an LV becoming a PV which has it's own
+		# LV
+		#
+		# NOTE: This needs an equivalent of aux extend_filter_LVMTEST
+		# when run from lvm2 testsuite. See dbustest.sh.
+		pv_object_path = self.objs[PV_INT][0].object_path
+
+		if not pv_object_path.startswith("/dev"):
+			std_err_print('Skipping test not running in /dev')
+			return
+
+		for i in range(0, 5):
+			pv_object_path = self._create_nested(pv_object_path)
+
+	def DISABLED_test_pv_symlinks(self):
+		# Lets take one of our test PVs, pvremove it, find a symlink to it
+		# and re-create using the symlink to ensure we return an object
+		# path to it.  Additionally, we will take the symlink and do a lookup
+		# (Manager.LookUpByLvmId) using it and the original device path to
+		# ensure that we can find the PV.
+		symlink = None
+
+		pv = self.objs[PV_INT][0]
+		pv_device_path = pv.Pv.Name
+
+		self._pv_remove(pv)
+
+		# Make sure we no longer find the pv
+		rc = self._lookup(pv_device_path)
+		self.assertEqual(rc, '/')
+
+		# Lets locate a symlink for it
+		devices = glob('/dev/disk/*/*')
+		for d in devices:
+			if pv_device_path == os.path.realpath(d):
+				symlink = d
+				break
+
+		self.assertIsNotNone(symlink, "We expected to find at least 1 symlink!")
+
+		# Make sure symlink look up fails too
+		rc = self._lookup(symlink)
+		self.assertEqual(rc, '/')
+
+		pv_object_path = self._pv_create(symlink)
+		self.assertNotEqual(pv_object_path, '/')
+
+		pv_proxy = ClientProxy(self.bus, pv_object_path, interfaces=(PV_INT, ))
+		self.assertEqual(pv_proxy.Pv.Name, pv_device_path)
+
+		# Lets check symlink lookup
+		self.assertEqual(pv_object_path, self._lookup(symlink))
+		self.assertEqual(pv_object_path, self._lookup(pv_device_path))
 
 
 class AggregateResults(object):

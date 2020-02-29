@@ -1,3 +1,126 @@
+lvm2 (2.03.02-3) unstable; urgency=medium
+
+  * Stop lvm2-lvmetad on upgrade. (closes: #929080)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 21 Jun 2019 12:29:17 +0200
+
+lvm2 (2.03.02-2) unstable; urgency=medium
+
+  * Remove lvm2-lvmetad init script as well. (closes: #917159)
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 03 Feb 2019 14:55:09 +0100
+
+lvm2 (2.03.02-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 29 Dec 2018 17:39:29 +0100
+
+lvm2 (2.03.01-3) unstable; urgency=medium
+
+  * Update installed lvm.conf. (closes: #917164)
+  * Update dependencies of liblvm2-dev.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 29 Dec 2018 12:05:25 +0100
+
+lvm2 (2.03.01-2) unstable; urgency=medium
+
+  * Upload to unstable.
+  * Rewrite copyright file. (closes: #915986)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 21 Dec 2018 20:05:26 +0100
+
+lvm2 (2.03.01-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Build-depend on libaio-dev.
+  * Bump ABI of liblvm2cmd.
+  * Drop not longer shipped liblvm2app.
+  * Drop not longer shipped lvmconf tool.
+  * Drop not longer shipped clvm stuff.
+  * Drop not longer shipped lvmetad.
+  * Disable not really useful cmirrord.
+  * Update symbols.
+  * Install new lvmlockd services.
+  * Update Vcs headers to reference salsa.debian.org.
+  * Set maintainer to team via tracker.debian.org. (closes: #899603)
+  * Purge lvm2-lvmetad.socket unit.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 08 Dec 2018 18:12:40 +0100
+
+lvm2 (2.02.176-4.1) unstable; urgency=high
+
+  * Non-maintainer upload.
+  * Revert uncoordinated addition of udev rules/sync support in udebs
+    which breaks LVM support in debian-installer instead of getting
+    debian-installer and installed systems to agree on device names.
+    (closes: #883361, reopens: #504341)
+
+ -- Cyril Brulebois <kibi@debian.org>  Sun, 03 Dec 2017 02:39:59 +0000
+
+lvm2 (2.02.176-4) unstable; urgency=medium
+
+  * Don't try to add dropped udev rules to initramfs.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 10 Nov 2017 11:38:46 +0100
+
+lvm2 (2.02.176-3) unstable; urgency=medium
+
+  * Actually add newly installed udev rules to initramfs.
+    (closes: #881314)
+  * Make initramfs hooks bail out if udev rules can't be found.
+  * Copy complete lvm config into initramfs.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 10 Nov 2017 08:42:56 +0100
+
+lvm2 (2.02.176-2) unstable; urgency=medium
+
+  * Drop changes for upgrades from before Wheezy.
+  * Drop deprecated python bindings.
+  * Enable udev rules in udeb. (closes: #504341)
+  * Drop some udev rules modifications.
+    - Pull in newer dmsetup for udev rules changes.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 09 Nov 2017 20:42:38 +0100
+
+lvm2 (2.02.176-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop obsolte build-depends on dh-systemd.
+  * Drop extra priorities from packages.
+  * Update Standards-Version to 4.1.1, no changes.
+  * Make lvm2-dbusd depend manually on required modules. (closes: #880543)
+  * Make lvm2 recommend thin-provisioning-tools. (closes: #857142)
+  * Run pvscan as systemd background job.
+  * Don't try to restart special systemd services.
+  * Really use debhelper compat 11.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 04 Nov 2017 13:25:00 +0100
+
+lvm2 (2.02.175-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Enable sanlock support in lvmlockd.
+  * Use debhelper compat 11 for dh_installsystemd.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 01 Nov 2017 19:21:34 +0100
+
+lvm2 (2.02.173-2) unstable; urgency=medium
+
+  * Use dh.
+  * Install all lvm2 config files.
+  * Install and enable blk-availability service.
+  * Add lvm2-dbus package.
+  * Add lvm2-lockd package (dlm only). (closes: #879780)
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 31 Oct 2017 15:04:08 +0100
+
+lvm2 (2.02.173-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 13 Aug 2017 14:17:51 +0200
+
 lvm2 (2.02.168-2pexip1) pexip; urgency=medium
 
   * Migrate to Stretch

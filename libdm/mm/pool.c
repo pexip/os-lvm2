@@ -13,7 +13,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 #include <sys/mman.h>
 #include <pthread.h>
 
@@ -35,9 +35,9 @@ void dm_pools_check_leaks(void);
  * - Only pool-fast is properly handled for now.
  * - Checksum is slower compared to mprotect.
  */
-static size_t pagesize = 0;
-static size_t pagesize_mask = 0;
-#define ALIGN_ON_PAGE(size) (((size) + (pagesize_mask)) & ~(pagesize_mask))
+static size_t _pagesize = 0;
+static size_t _pagesize_mask = 0;
+#define ALIGN_ON_PAGE(size) (((size) + (_pagesize_mask)) & ~(_pagesize_mask))
 #endif
 
 #ifdef DEBUG_POOL
@@ -59,11 +59,13 @@ char *dm_pool_strdup(struct dm_pool *p, const char *str)
 
 char *dm_pool_strndup(struct dm_pool *p, const char *str, size_t n)
 {
+	size_t slen = strlen(str);
+	size_t len = (slen < n) ? slen : n;
 	char *ret = dm_pool_alloc(p, n + 1);
 
 	if (ret) {
-		strncpy(ret, str, n);
-		ret[n] = '\0';
+		ret[len] = '\0';
+		memcpy(ret, str, len);
 	}
 
 	return ret;

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2015 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -25,12 +26,10 @@ SKIP_WITH_LVMPOLLD=1
 # export LVM_TEST_PVS=300
 #
 # make check_local   ~52sec  (U:29s, S:13s)
-# make check_lvmetad ~20sec  (U: 4s, S: 5s)
 #
 # With patch from 2015-03-06:
 #
 # make check_local   ~30sec  (U:10s, S:12s)
-# make check_lvmetad ~20sec  (U: 4s, S: 5s)
 #
 
 # TODO: extend test suite to monitor performance and report regressions...
@@ -39,7 +38,7 @@ SKIP_WITH_LVMPOLLD=1
 LVM_TEST_PVS=${LVM_TEST_PVS:-100}
 
 #aux prepare_devs $LVM_TEST_PVS 8
-#vgcreate $vg $(< DEVICES)
+#vgcreate $SHARED $vg $(< DEVICES)
 
 # prepare_vg is now directly using steps above
 aux prepare_vg $LVM_TEST_PVS
@@ -61,5 +60,5 @@ vgremove -ff $vg
 # TODO Turn this into another test case:
 #
 #for i in $(seq 1 $LVM_TEST_PVS); do
-#	vgcreate ${vg}$i "$DM_DEV_DIR/mapper/${PREFIX}pv$i"
+#	vgcreate $SHARED ${vg}$i "$DM_DEV_DIR/mapper/${PREFIX}pv$i"
 #done

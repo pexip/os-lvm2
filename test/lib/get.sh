@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (C) 2011-2013 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2011-2017 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -28,27 +28,38 @@ trim_() {
 }
 
 pv_field() {
-	local r=$(pvs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	local r
+	r=$(pvs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
 	trim_ "$r"
 }
 
 vg_field() {
-	local r=$(vgs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	local r
+	r=$(vgs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
 	trim_ "$r"
 }
 
 lv_field() {
-	local r=$(lvs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	local r
+	r=$(lvs --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	trim_ "$r"
+}
+
+lv_first_seg_field() {
+	local r
+	r=$(head -1 < <(lvs --config 'log{prefix=""}' --unbuffered --noheadings -o "$2" "${@:3}" "$1"))
 	trim_ "$r"
 }
 
 lvh_field() {
-	local r=$(lvs -H --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	local r
+	r=$(lvs -H --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
 	trim_ "$r"
 }
 
 lva_field() {
-	local r=$(lvs -a --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
+	local r
+	r=$(lvs -a --config 'log{prefix=""}' --noheadings -o "$2" "${@:3}" "$1")
 	trim_ "$r"
 }
 
@@ -57,13 +68,15 @@ lv_devices() {
 }
 
 lv_field_lv_() {
-	lv_field "$1" "$2" -a --unbuffered | sed 's/\[//; s/]//'
+	lv_field "$1" "$2" -a --unbuffered | tr -d []
 }
 
 lv_tree_devices_() {
 	local lv="$1/$2"
-	local type=$(lv_field "$lv" segtype -a --unbuffered | head -n 1)
-	local orig=$(lv_field_lv_ "$lv" origin)
+	local type
+	type=$(lv_first_seg_field "$lv" segtype -a)
+	#local orig
+	#orig=$(lv_field_lv_ "$lv" origin)
 	# FIXME: should we count in also origins ?
 	#test -z "$orig" || lv_tree_devices_ $1 $orig
 	case "$type" in
@@ -71,24 +84,25 @@ lv_tree_devices_() {
 		lv_devices "$lv"
 		;;
 	mirror|raid*)
-		local log=$(lv_field_lv_ "$lv" mirror_log)
+		local log
+		log=$(lv_field_lv_ "$lv" mirror_log)
 		test -z "$log" || lv_tree_devices_ "$1" "$log"
 		for i in $(lv_devices "$lv")
 			do lv_tree_devices_ "$1" "$i"; done
 		;;
 	thin)
-		lv_tree_devices_ "$1" "$(lv_field_lv_ $lv pool_lv)"
+		lv_tree_devices_ "$1" "$(lv_field_lv_ "$lv" pool_lv)"
 		;;
 	thin-pool)
-		lv_tree_devices_ "$1" "$(lv_field_lv_ $lv data_lv)"
-		lv_tree_devices_ "$1" "$(lv_field_lv_ $lv metadata_lv)"
+		lv_tree_devices_ "$1" "$(lv_field_lv_ "$lv" data_lv)"
+		lv_tree_devices_ "$1" "$(lv_field_lv_ "$lv" metadata_lv)"
 		;;
 	cache)
-		lv_tree_devices_ "$1" "$(lv_devices $lv)"
+		lv_tree_devices_ "$1" "$(lv_devices "$lv")"
 		;;
 	cache-pool)
-		lv_tree_devices_ "$1" "$(lv_field_lv_ $lv data_lv)"
-		lv_tree_devices_ "$1" "$(lv_field_lv_ $lv metadata_lv)"
+		lv_tree_devices_ "$1" "$(lv_field_lv_ "$lv" data_lv)"
+		lv_tree_devices_ "$1" "$(lv_field_lv_ "$lv" metadata_lv)"
 		;;
 	esac
 }

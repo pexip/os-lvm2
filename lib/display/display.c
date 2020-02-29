@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -13,14 +13,14 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "metadata.h"
-#include "display.h"
-#include "activate.h"
-#include "toolcontext.h"
-#include "segtype.h"
-#include "defaults.h"
-#include "lvm-signal.h"
+#include "lib/misc/lib.h"
+#include "lib/metadata/metadata.h"
+#include "lib/display/display.h"
+#include "lib/activate/activate.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/metadata/segtype.h"
+#include "lib/config/defaults.h"
+#include "lib/misc/lvm-signal.h"
 
 #include <stdarg.h>
 
@@ -150,6 +150,30 @@ const char *display_lvname(const struct logical_volume *lv)
 	lv->vg->cmd->display_lvname_idx += r + 1;
 
 	return name;
+}
+
+/* Display percentage with (TODO) configurable precision */
+const char *display_percent(struct cmd_context *cmd, dm_percent_t percent)
+{
+	char *buf;
+	int r;
+
+        /* Reusing same  ring buffer we use for displaying LV names */
+	if ((cmd->display_lvname_idx + NAME_LEN) >= sizeof((cmd->display_buffer)))
+		cmd->display_lvname_idx = 0;
+
+	buf = cmd->display_buffer + cmd->display_lvname_idx;
+	/* TODO: Make configurable hardcoded 2 digits */
+	r = dm_snprintf(buf, NAME_LEN, "%.2f", dm_percent_to_round_float(percent, 2));
+
+	if (r < 0) {
+		log_error("Percentage %d does not fit.", percent);
+		return NULL;
+	}
+
+	cmd->display_lvname_idx += r + 1;
+
+	return buf;
 }
 
 /* Size supplied in sectors */
@@ -386,6 +410,8 @@ int lvdisplay_full(struct cmd_context *cmd,
 	dm_percent_t thin_data_percent, thin_metadata_percent;
 	int thin_active = 0;
 	dm_percent_t thin_percent;
+	struct lv_status_cache *cache_status = NULL;
+	struct lv_status_vdo *vdo_status = NULL;
 
 	if (lv_is_historical(lv))
 		return _lvdisplay_historical_full(cmd, lv);
@@ -491,6 +517,40 @@ int lvdisplay_full(struct cmd_context *cmd,
 		seg = first_seg(lv);
 		log_print("LV Pool metadata       %s", seg->metadata_lv->name);
 		log_print("LV Pool data           %s", seg_lv(seg, 0)->name);
+	} else if (lv_is_cache_origin(lv)) {
+		if ((seg = get_only_segment_using_this_lv(lv)))
+			log_print("LV origin of Cache LV  %s", seg->lv->name);
+	} else if (lv_is_cache(lv)) {
+		seg = first_seg(lv);
+		if (inkernel && !lv_cache_status(lv, &cache_status))
+                        return_0;
+		log_print("LV Cache pool name     %s", seg->pool_lv->name);
+		log_print("LV Cache origin name   %s", seg_lv(seg, 0)->name);
+	} else if (lv_is_cache_pool(lv)) {
+		seg = first_seg(lv);
+		log_print("LV Pool metadata       %s", seg->metadata_lv->name);
+		log_print("LV Pool data           %s", seg_lv(seg, 0)->name);
+	} else if (lv_is_vdo_pool(lv)) {
+		seg = first_seg(lv);
+		log_print("LV VDO Pool data       %s", seg_lv(seg, 0)->name);
+		if (inkernel && lv_vdo_pool_status(lv, 0, &vdo_status)) { /* FIXME: flush option? */
+			log_print("LV VDO Pool usage      %s%%",
+				  display_percent(cmd, vdo_status->usage));
+			log_print("LV VDO Pool saving     %s%%",
+				  display_percent(cmd, vdo_status->saving));
+			log_print("LV VDO Operating mode  %s",
+				  get_vdo_operating_mode_name(vdo_status->vdo->operating_mode));
+			log_print("LV VDO Index state     %s",
+				  get_vdo_index_state_name(vdo_status->vdo->index_state));
+			log_print("LV VDO Compression st  %s",
+				  get_vdo_compression_state_name(vdo_status->vdo->compression_state));
+			log_print("LV VDO Used size       %s",
+				  display_size(cmd, vdo_status->vdo->used_blocks * DM_VDO_BLOCK_SIZE));
+			dm_pool_destroy(vdo_status->mem);
+		}
+	} else if (lv_is_vdo(lv)) {
+		seg = first_seg(lv);
+		log_print("LV VDO Pool name       %s", seg_lv(seg, 0)->name);
 	}
 
 	if (inkernel && info.suspended)
@@ -510,17 +570,38 @@ int lvdisplay_full(struct cmd_context *cmd,
 		  display_size(cmd,
 			       snap_seg ? snap_seg->origin->size : lv->size));
 
+	if (cache_status) {
+		log_print("Cache used blocks      %s%%",
+			  display_percent(cmd, cache_status->data_usage));
+		log_print("Cache metadata blocks  %s%%",
+			  display_percent(cmd, cache_status->metadata_usage));
+		log_print("Cache dirty blocks     %s%%",
+			  display_percent(cmd, cache_status->dirty_usage));
+		log_print("Cache read hits/misses " FMTu64 " / " FMTu64,
+			  cache_status->cache->read_hits,
+			  cache_status->cache->read_misses);
+		log_print("Cache wrt hits/misses  " FMTu64 " / " FMTu64,
+			  cache_status->cache->write_hits,
+			  cache_status->cache->write_misses);
+		log_print("Cache demotions        " FMTu64,
+			  cache_status->cache->demotions);
+		log_print("Cache promotions       " FMTu64,
+			  cache_status->cache->promotions);
+
+		dm_pool_destroy(cache_status->mem);
+	}
+
 	if (thin_data_active)
-		log_print("Allocated pool data    %.2f%%",
-			  dm_percent_to_float(thin_data_percent));
+		log_print("Allocated pool data    %s%%",
+			  display_percent(cmd, thin_data_percent));
 
 	if (thin_metadata_active)
-		log_print("Allocated metadata     %.2f%%",
-			  dm_percent_to_float(thin_metadata_percent));
+		log_print("Allocated metadata     %s%%",
+			  display_percent(cmd, thin_metadata_percent));
 
 	if (thin_active)
-		log_print("Mapped size            %.2f%%",
-			  dm_percent_to_float(thin_percent));
+		log_print("Mapped size            %s%%",
+			  display_percent(cmd, thin_percent));
 
 	log_print("Current LE             %u",
 		  snap_seg ? snap_seg->origin->le_count : lv->le_count);
@@ -531,8 +612,8 @@ int lvdisplay_full(struct cmd_context *cmd,
 		log_print("COW-table LE           %u", lv->le_count);
 
 		if (snap_active)
-			log_print("Allocated to snapshot  %.2f%%",
-				  dm_percent_to_float(snap_percent));
+			log_print("Allocated to snapshot  %s%%",
+				  display_percent(cmd, snap_percent));
 
 		log_print("Snapshot chunk size    %s",
 			  display_size(cmd, (uint64_t) snap_seg->chunk_size));
@@ -646,13 +727,10 @@ void vgdisplay_full(const struct volume_group *vg)
 
 	log_print("--- Volume group ---");
 	log_print("VG Name               %s", vg->name);
-	log_print("System ID             %s", (vg->system_id && *vg->system_id) ? vg->system_id : vg->lvm1_system_id ? : "");
+	log_print("System ID             %s", (vg->system_id && *vg->system_id) ? vg->system_id : "");
 	log_print("Format                %s", vg->fid->fmt->name);
-	if (vg->fid->fmt->features & FMT_MDAS) {
-		log_print("Metadata Areas        %d",
-			  vg_mda_count(vg));
-		log_print("Metadata Sequence No  %d", vg->seqno);
-	}
+	log_print("Metadata Areas        %d", vg_mda_count(vg));
+	log_print("Metadata Sequence No  %d", vg->seqno);
 	access_str = vg->status & (LVM_READ | LVM_WRITE);
 	log_print("VG Access             %s%s%s%s",
 		  access_str == (LVM_READ | LVM_WRITE) ? "read/write" : "",

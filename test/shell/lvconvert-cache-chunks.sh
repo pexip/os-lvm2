@@ -1,5 +1,6 @@
-#!/bin/sh
-# Copyright (C) 2016 Red Hat, Inc. All rights reserved.
+#!/usr/bin/env bash
+
+# Copyright (C) 2016-2017 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -12,7 +13,7 @@
 # Exercise number of cache chunks in cache pool
 # Skips creation of real cached device for older cache targets...
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -28,12 +29,14 @@ lvcreate -L1T -n cpool $vg
 lvconvert -y --type cache-pool $vg/cpool
 
 # Check chunk size in sectors is more then 512K
-test $(get lv_field $vg/cpool chunk_size --units s --nosuffix) -gt 1000
+test "$(get lv_field "$vg/cpool" chunk_size --units s --nosuffix)" -gt 1000
 
 lvcreate -L1M -n $lv1 $vg
 
 # Not let pass small chunks when caching origin
-fail lvconvert -H --chunksize 128K --cachepool $vg/cpool $vg/$lv1
+fail lvconvert -y -H --chunksize 128K --cachepool $vg/cpool $vg/$lv1 >out 2>&1
+cat out
+grep "too small chunk size" out
 
 # Thought 2M is valid
 if aux have_cache 1 8 0 ; then

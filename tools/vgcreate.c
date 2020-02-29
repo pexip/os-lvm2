@@ -23,10 +23,8 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	struct vgcreate_params vp_def;
 	struct volume_group *vg;
 	const char *tag;
-	const char *clustered_message = "";
 	char *vg_name;
 	struct arg_value_group_list *current_group;
-	uint32_t rc;
 
 	if (!argc) {
 		log_error("Please provide volume group name and "
@@ -66,17 +64,31 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		return_ECMD_FAILED;
 	cmd->lockd_gl_disable = 1;
 
-	lvmcache_seed_infos_from_lvmetad(cmd);
+	/* Check for old md signatures at the end of devices. */
+	cmd->use_full_md_check = 1;
 
 	/*
 	 * Check if the VG name already exists.  This should be done before
 	 * creating PVs on any of the devices.
+	 *
+	 * When searching if a VG name exists, acquire the VG lock,
+	 * then do the initial label scan which reads all devices and
+	 * populates lvmcache with any VG name it finds.  If the VG name
+	 * we want to use exists, then the label scan will find it,
+	 * and the fmt_from_vgname call (used to check if the name exists)
+	 * will return non-NULL.
 	 */
-	if ((rc = vg_lock_newname(cmd, vp_new.vg_name)) != SUCCESS) {
-		if (rc == FAILED_EXIST)
-			log_error("A volume group called %s already exists.", vp_new.vg_name);
-		else
-			log_error("Can't get lock for %s.", vp_new.vg_name);
+
+	if (!lock_vol(cmd, vp_new.vg_name, LCK_VG_WRITE, NULL)) {
+		log_error("Can't get lock for %s.", vp_new.vg_name);
+		return ECMD_FAILED;
+	}
+
+	lvmcache_label_scan(cmd);
+
+	if (lvmcache_fmt_from_vgname(cmd, vp_new.vg_name, NULL, 0)) {
+		unlock_vg(cmd, NULL, vp_new.vg_name);
+		log_error("A volume group called %s already exists.", vp_new.vg_name);
 		return ECMD_FAILED;
 	}
 
@@ -121,7 +133,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	    !vg_set_max_lv(vg, vp_new.max_lv) ||
 	    !vg_set_max_pv(vg, vp_new.max_pv) ||
 	    !vg_set_alloc_policy(vg, vp_new.alloc) ||
-	    !vg_set_clustered(vg, vp_new.clustered) ||
 	    !vg_set_system_id(vg, vp_new.system_id) ||
 	    !vg_set_mda_copies(vg, vp_new.vgmetadatacopies))
 		goto_bad;
@@ -153,11 +164,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
-	if (vg_is_clustered(vg))
-		clustered_message = "Clustered ";
-	else if (locking_is_clustered())
-		clustered_message = "Non-clustered ";
-
 	if (!archive(vg))
 		goto_bad;
 
@@ -183,8 +189,8 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 
 	backup(vg);
 
-	log_print_unless_silent("%s%colume group \"%s\" successfully created%s%s",
-				clustered_message, *clustered_message ? 'v' : 'V', vg->name,
+	log_print_unless_silent("Volume group \"%s\" successfully created%s%s",
+				vg->name,
 				vg->system_id ? " with system ID " : "", vg->system_id ? : "");
 
 	/*
@@ -193,7 +199,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	 * used after this command completes (otherwise, the VG can only be
 	 * read without locks until the lockspace is done starting.)
 	 */
-	if (is_lockd_type(vg->lock_type)) {
+	if (vg_is_shared(vg)) {
 		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
 
 		if (!lockd_start_vg(cmd, vg, 1)) {

@@ -13,19 +13,20 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "toolcontext.h"
-#include "segtype.h"
-#include "display.h"
-#include "text_export.h"
-#include "text_import.h"
-#include "config.h"
-#include "str_list.h"
-#include "targets.h"
-#include "lvm-string.h"
-#include "activate.h"
-#include "pv_alloc.h"
-#include "metadata.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
+#include "lib/commands/toolcontext.h"
+#include "lib/metadata/segtype.h"
+#include "lib/display/display.h"
+#include "lib/format_text/text_export.h"
+#include "lib/format_text/text_import.h"
+#include "lib/config/config.h"
+#include "lib/datastruct/str_list.h"
+#include "lib/activate/targets.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/activate/activate.h"
+#include "lib/metadata/pv_alloc.h"
+#include "lib/metadata/metadata.h"
 
 static const char *_striped_name(const struct lv_segment *seg)
 {
@@ -159,6 +160,11 @@ static int _striped_merge_segments(struct lv_segment *seg1, struct lv_segment *s
 }
 
 #ifdef DEVMAPPER_SUPPORT
+static int _striped_target_status_compatible(const char *type)
+{
+	return (strcmp(type, TARGET_NAME_LINEAR) == 0);
+}
+
 static int _striped_add_target_line(struct dev_manager *dm,
 				struct dm_pool *mem __attribute__((unused)),
 				struct cmd_context *cmd __attribute__((unused)),
@@ -207,7 +213,7 @@ static int _striped_target_present(struct cmd_context *cmd,
 
 static void _striped_destroy(struct segment_type *segtype)
 {
-	dm_free(segtype);
+	free(segtype);
 }
 
 static struct segtype_handler _striped_ops = {
@@ -218,25 +224,35 @@ static struct segtype_handler _striped_ops = {
 	.text_export = _striped_text_export,
 	.merge_segments = _striped_merge_segments,
 #ifdef DEVMAPPER_SUPPORT
+	.target_status_compatible = _striped_target_status_compatible,
 	.add_target_line = _striped_add_target_line,
 	.target_present = _striped_target_present,
 #endif
 	.destroy = _striped_destroy,
 };
 
-struct segment_type *init_striped_segtype(struct cmd_context *cmd)
+static struct segment_type *_init_segtype(struct cmd_context *cmd, const char *name, uint64_t target)
 {
-	struct segment_type *segtype = dm_zalloc(sizeof(*segtype));
+	struct segment_type *segtype = zalloc(sizeof(*segtype));
 
 	if (!segtype)
 		return_NULL;
 
 	segtype->ops = &_striped_ops;
-	segtype->name = SEG_TYPE_NAME_STRIPED;
-	segtype->flags = SEG_STRIPED_TARGET |
-	    SEG_CAN_SPLIT | SEG_AREAS_STRIPED | SEG_FORMAT1_SUPPORT;
+	segtype->name = name;
+	segtype->flags = target | SEG_CAN_SPLIT | SEG_AREAS_STRIPED;
 
 	log_very_verbose("Initialised segtype: %s", segtype->name);
-
 	return segtype;
+}
+
+struct segment_type *init_striped_segtype(struct cmd_context *cmd)
+{
+	return _init_segtype(cmd, SEG_TYPE_NAME_STRIPED, SEG_STRIPED_TARGET);
+}
+
+
+struct segment_type *init_linear_segtype(struct cmd_context *cmd)
+{
+	return _init_segtype(cmd, SEG_TYPE_NAME_LINEAR, SEG_LINEAR_TARGET);
 }

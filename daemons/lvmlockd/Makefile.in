@@ -15,15 +15,21 @@ srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 top_builddir = @top_builddir@
 
+USE_SD_NOTIFY=yes
+
 SOURCES = lvmlockd-core.c
 
 ifeq ("@BUILD_LOCKDSANLOCK@", "yes")
   SOURCES += lvmlockd-sanlock.c
+  LOCK_LIBS += -lsanlock_client
 endif
 
 ifeq ("@BUILD_LOCKDDLM@", "yes")
   SOURCES += lvmlockd-dlm.c
+  LOCK_LIBS += -ldlm_lt
 endif
+
+SOURCES2 = lvmlockctl.c
 
 TARGETS = lvmlockd lvmlockctl
 
@@ -31,35 +37,33 @@ TARGETS = lvmlockd lvmlockctl
 
 include $(top_builddir)/make.tmpl
 
+CFLAGS += $(EXTRA_EXEC_CFLAGS)
 INCLUDES += -I$(top_srcdir)/libdaemon/server
-LVMLIBS = -ldaemonserver $(LVMINTERNAL_LIBS) -ldevmapper
+LDFLAGS += -L$(top_builddir)/libdaemon/server $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS)
+LIBS += $(RT_LIBS) $(DAEMON_LIBS) $(PTHREAD_LIBS)
 
-LIBS += $(PTHREAD_LIBS)
 
-ifeq ("@BUILD_LOCKDSANLOCK@", "yes")
-  LIBS += -lsanlock_client
+ifeq ($(USE_SD_NOTIFY),yes)
+	CFLAGS += $(shell pkg-config --cflags libsystemd) -DUSE_SD_NOTIFY
+	LIBS += $(shell pkg-config --libs libsystemd)
 endif
-
-ifeq ("@BUILD_LOCKDDLM@", "yes")
-  LIBS += -ldlm_lt
-endif
-
-LDFLAGS += -L$(top_builddir)/libdaemon/server
-CLDFLAGS += -L$(top_builddir)/libdaemon/server
 
 lvmlockd: $(OBJECTS) $(top_builddir)/libdaemon/client/libdaemonclient.a \
 		    $(top_builddir)/libdaemon/server/libdaemonserver.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(LVMLIBS) $(LIBS)
+	@echo "    [CC] $@"
+	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(LOCK_LIBS) -ldaemonserver $(INTERNAL_LIBS) $(LIBS)
 
-lvmlockctl: lvmlockctl.o $(top_builddir)/libdaemon/client/libdaemonclient.a \
-		    $(top_builddir)/libdaemon/server/libdaemonserver.a
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmlockctl.o $(LVMLIBS)
+lvmlockctl: lvmlockctl.o $(top_builddir)/libdaemon/client/libdaemonclient.a
+	@echo "    [CC] $@"
+	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) -o $@ lvmlockctl.o $(INTERNAL_LIBS) $(LIBS)
 
 install_lvmlockd: lvmlockd
-	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
 
 install_lvmlockctl: lvmlockctl
-	$(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
+	@echo "    [INSTALL] $<"
+	$(Q) $(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
 
 install_lvm2: install_lvmlockd install_lvmlockctl
 

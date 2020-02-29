@@ -10,15 +10,14 @@
 
 #define _XOPEN_SOURCE 500  /* pthread */
 #define _ISOC99_SOURCE
-#define _REENTRANT
 
-#include "tool.h"
+#include "tools/tool.h"
 
-#include "daemon-io.h"
+#include "libdaemon/client/daemon-io.h"
 #include "daemon-server.h"
 #include "lvm-version.h"
-#include "lvmetad-client.h"
-#include "lvmlockd-client.h"
+#include "daemons/lvmlockd/lvmlockd-client.h"
+#include "device_mapper/misc/dm-ioctl.h"
 
 /* #include <assert.h> */
 #include <errno.h>
@@ -34,6 +33,10 @@
 #include <sys/socket.h>
 #include <sys/utsname.h>
 #include <sys/un.h>
+
+#ifdef USE_SD_NOTIFY
+#include <systemd/sd-daemon.h>
+#endif
 
 #define EXTERN
 #include "lvmlockd-internal.h"
@@ -142,10 +145,6 @@ static const char *lvmlockd_protocol = "lvmlockd";
 static const int lvmlockd_protocol_version = 1;
 static int daemon_quit;
 static int adopt_opt;
-
-static daemon_handle lvmetad_handle;
-static pthread_mutex_t lvmetad_mutex;
-static int lvmetad_connected;
 
 /*
  * We use a separate socket for dumping daemon info.
@@ -1008,52 +1007,6 @@ static void add_work_action(struct action *act)
 	pthread_mutex_unlock(&worker_mutex);
 }
 
-static daemon_reply send_lvmetad(const char *id, ...)
-{
-	daemon_reply reply;
-	va_list ap;
-	int retries = 0;
-	int err;
-
-	va_start(ap, id);
-
-	/*
-	 * mutex is used because all threads share a single
-	 * lvmetad connection/handle.
-	 */
-	pthread_mutex_lock(&lvmetad_mutex);
-retry:
-	if (!lvmetad_connected) {
-		lvmetad_handle = lvmetad_open(NULL);
-		if (lvmetad_handle.error || lvmetad_handle.socket_fd < 0) {
-			err = lvmetad_handle.error ?: lvmetad_handle.socket_fd;
-			pthread_mutex_unlock(&lvmetad_mutex);
-			log_error("lvmetad_open reconnect error %d", err);
-			memset(&reply, 0, sizeof(reply));
-			reply.error = err;
-			va_end(ap);
-			return reply;
-		} else {
-			log_debug("lvmetad reconnected");
-			lvmetad_connected = 1;
-		}
-	}
-
-	reply = daemon_send_simple_v(lvmetad_handle, id, ap);
-
-	/* lvmetad may have been restarted */
-	if ((reply.error == ECONNRESET) && (retries < 2)) {
-		daemon_close(lvmetad_handle);
-		lvmetad_connected = 0;
-		retries++;
-		goto retry;
-	}
-	pthread_mutex_unlock(&lvmetad_mutex);
-
-	va_end(ap);
-	return reply;
-}
-
 static int res_lock(struct lockspace *ls, struct resource *r, struct action *act, int *retry)
 {
 	struct lock *lk;
@@ -1250,6 +1203,18 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 	}
 
 	/*
+	 * lvmetad is no longer used, but the infrastructure for
+	 * distributed cache validation remains.  The points
+	 * where vg or global cache state would be invalidated
+	 * remain below and log_debug messages point out where
+	 * they would occur.
+	 *
+	 * The comments related to "lvmetad" remain because they
+	 * describe how some other local cache like lvmetad would
+	 * be invalidated here.
+	 */
+
+	/*
 	 * r is vglk: tell lvmetad to set the vg invalid
 	 * flag, and provide the new r_version.  If lvmetad finds
 	 * that its cached vg has seqno less than the value
@@ -1264,44 +1229,22 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 	 * caches, and tell lvmetad to set global invalid to 0.
 	 */
 
+	/*
+	 * lvmetad not running:
+	 * Even if we have not previously found lvmetad running,
+	 * we attempt to connect and invalidate in case it has
+	 * been started while lvmlockd is running.  We don't
+	 * want to allow lvmetad to be used with invalid data if
+	 * it happens to be enabled and started after lvmlockd.
+	 */
+
 	if (inval_meta && (r->type == LD_RT_VG)) {
-		daemon_reply reply;
-		char *uuid;
-
-		log_debug("S %s R %s res_lock set lvmetad vg version %u",
+		log_debug("S %s R %s res_lock invalidate vg state version %u",
 			  ls->name, r->name, new_version);
-	
-		if (!ls->vg_uuid[0] || !strcmp(ls->vg_uuid, "none"))
-			uuid = (char *)"none";
-		else
-			uuid = ls->vg_uuid;
-
-		reply = send_lvmetad("set_vg_info",
-				     "token = %s", "skip",
-				     "uuid = %s", uuid,
-				     "name = %s", ls->vg_name,
-				     "version = " FMTd64, (int64_t)new_version,
-				     NULL);
-
-		if (reply.error || strcmp(daemon_reply_str(reply, "response", ""), "OK"))
-			log_error("set_vg_info in lvmetad failed %d", reply.error);
-		daemon_reply_destroy(reply);
 	}
 
 	if (inval_meta && (r->type == LD_RT_GL)) {
-		daemon_reply reply;
-
-		log_debug("S %s R %s res_lock set lvmetad global invalid",
-			  ls->name, r->name);
-
-		reply = send_lvmetad("set_global_info",
-				     "token = %s", "skip",
-				     "global_invalid = " FMTd64, INT64_C(1),
-				     NULL);
-
-		if (reply.error || strcmp(daemon_reply_str(reply, "response", ""), "OK"))
-			log_error("set_global_info in lvmetad failed %d", reply.error);
-		daemon_reply_destroy(reply);
+		log_debug("S %s R %s res_lock invalidate global state", ls->name, r->name);
 	}
 
 	/*
@@ -1388,12 +1331,11 @@ static int res_convert(struct lockspace *ls, struct resource *r,
 	}
 
 	rv = lm_convert(ls, r, act->mode, act, r_version);
-	if (rv < 0) {
-		log_error("S %s R %s res_convert lm error %d", ls->name, r->name, rv);
-		return rv;
-	}
 
-	log_debug("S %s R %s res_convert lm done", ls->name, r->name);
+	log_debug("S %s R %s res_convert rv %d", ls->name, r->name, rv);
+
+	if (rv < 0)
+		return rv;
 
 	if (lk->mode == LD_LK_EX && act->mode == LD_LK_SH) {
 		r->sh_count = 1;
@@ -2651,10 +2593,16 @@ out_act:
 	ls->drop_vg = drop_vg;
 	if (ls->lm_type == LD_LM_DLM && !strcmp(ls->name, gl_lsname_dlm))
 		global_dlm_lockspace_exists = 0;
-	/* Avoid a name collision of the same lockspace is added again before this thread is cleaned up. */
-	memset(tmp_name, 0, sizeof(tmp_name));
-	snprintf(tmp_name, MAX_NAME, "REM:%s", ls->name);
-	memcpy(ls->name, tmp_name, MAX_NAME);
+
+	/*
+	 * Avoid a name collision of the same lockspace is added again before
+	 * this thread is cleaned up.  We just set ls->name to a "junk" value
+	 * for the short period until the struct is freed.  We could make it
+	 * blank or fill it with garbage, but instead set it to REM:<name>
+	 * to make it easier to follow progress of freeing is via log_debug.
+	 */
+	dm_strncpy(tmp_name, ls->name, sizeof(tmp_name));
+	snprintf(ls->name, sizeof(ls->name), "REM:%s", tmp_name);
 	pthread_mutex_unlock(&lockspaces_mutex);
 
 	/* worker_thread will join this thread, and free the ls */
@@ -3303,7 +3251,6 @@ static int work_init_lv(struct action *act)
 		lm_type = ls->lm_type;
 		memcpy(vg_args, ls->vg_args, MAX_ARGS);
 		free_offset = ls->free_lock_offset;
-		ls->free_lock_offset = 0;
 	}
 	pthread_mutex_unlock(&lockspaces_mutex);
 
@@ -3533,11 +3480,15 @@ static int setup_worker_thread(void)
 
 static void close_worker_thread(void)
 {
+	int perrno;
+
 	pthread_mutex_lock(&worker_mutex);
 	worker_stop = 1;
 	pthread_cond_signal(&worker_cond);
 	pthread_mutex_unlock(&worker_mutex);
-	pthread_join(worker_thread, NULL);
+
+	if ((perrno = pthread_join(worker_thread, NULL)))
+		log_error("pthread_join worker_thread error %d", perrno);
 }
 
 /* client_mutex is locked */
@@ -3666,7 +3617,17 @@ static int client_send_result(struct client *cl, struct action *act)
 			if (!gl_lsname_dlm[0])
 				strcat(result_flags, "NO_GL_LS,");
 		} else {
-			strcat(result_flags, "NO_GL_LS,");
+			int found_lm = 0;
+
+			if (lm_support_dlm() && lm_is_running_dlm())
+				found_lm++;
+			if (lm_support_sanlock() && lm_is_running_sanlock())
+				found_lm++;
+
+			if (!found_lm)
+				strcat(result_flags, "NO_GL_LS,NO_LM");
+			else
+				strcat(result_flags, "NO_GL_LS");
 		}
 	}
 
@@ -3763,7 +3724,8 @@ static int client_send_result(struct client *cl, struct action *act)
 	if (dump_fd >= 0) {
 		/* To avoid deadlock, send data here after the reply. */
 		send_dump_buf(dump_fd, dump_len);
-		close(dump_fd);
+		if (close(dump_fd))
+			log_error("failed to close dump socket %d", dump_fd);
 	}
 
 	return rv;
@@ -3836,8 +3798,9 @@ static int add_lock_action(struct action *act)
 	pthread_mutex_lock(&lockspaces_mutex);
 	if (ls_name[0])
 		ls = find_lockspace_name(ls_name);
-	pthread_mutex_unlock(&lockspaces_mutex);
 	if (!ls) {
+		pthread_mutex_unlock(&lockspaces_mutex);
+
 		if (act->op == LD_OP_UPDATE && act->rt == LD_RT_VG) {
 			log_debug("lockspace \"%s\" not found ignored for vg update", ls_name);
 			return -ENOLS;
@@ -4754,8 +4717,8 @@ static void *client_thread_main(void *arg_in)
 			} else {
 				pthread_mutex_unlock(&cl->mutex);
 			}
-		}
-		pthread_mutex_unlock(&client_mutex);
+		} else
+			pthread_mutex_unlock(&client_mutex);
 	}
 out:
 	return NULL;
@@ -4779,15 +4742,19 @@ static int setup_client_thread(void)
 
 static void close_client_thread(void)
 {
+	int perrno;
+
 	pthread_mutex_lock(&client_mutex);
 	client_stop = 1;
 	pthread_cond_signal(&client_cond);
 	pthread_mutex_unlock(&client_mutex);
-	pthread_join(client_thread, NULL);
+
+	if ((perrno = pthread_join(client_thread, NULL)))
+		log_error("pthread_join client_thread error %d", perrno);
 }
 
 /*
- * Get a list of all VGs with a lockd type (sanlock|dlm) from lvmetad.
+ * Get a list of all VGs with a lockd type (sanlock|dlm).
  * We'll match this list against a list of existing lockspaces that are
  * found in the lock manager.
  *
@@ -4798,6 +4765,9 @@ static void close_client_thread(void)
 
 static int get_lockd_vgs(struct list_head *vg_lockd)
 {
+	/* FIXME: get VGs some other way */
+	return -1;
+#if 0
 	struct list_head update_vgs;
 	daemon_reply reply;
 	struct dm_config_node *cn;
@@ -4907,14 +4877,10 @@ static int get_lockd_vgs(struct list_head *vg_lockd)
 				continue;
 
 			for (lv_cn = md_cn->child; lv_cn; lv_cn = lv_cn->sib) {
-				snprintf(find_str_path, PATH_MAX, "%s/lock_type", lv_cn->key);
-				lock_type = dm_config_find_str(lv_cn, find_str_path, NULL);
-
-				if (!lock_type)
-					continue;
-
 				snprintf(find_str_path, PATH_MAX, "%s/lock_args", lv_cn->key);
 				lock_args = dm_config_find_str(lv_cn, find_str_path, NULL);
+				if (!lock_args)
+					continue;
 
 				snprintf(find_str_path, PATH_MAX, "%s/id", lv_cn->key);
 				lv_uuid = dm_config_find_str(lv_cn, find_str_path, NULL);
@@ -4958,9 +4924,10 @@ out:
 	}
 
 	return rv;
+#endif
 }
 
-static char _dm_uuid[64];
+static char _dm_uuid[DM_UUID_LEN];
 
 static char *get_dm_uuid(char *dm_name)
 {
@@ -5179,20 +5146,17 @@ static void adopt_locks(void)
 	 * Get list of lockspaces from lock managers.
 	 * Get list of VGs from lvmetad with a lockd type.
 	 * Get list of active lockd type LVs from /dev.
-	 *
-	 * ECONNREFUSED means the lock manager is not running.
-	 * This is expected for at least one of them.
 	 */
 
-	if (lm_support_dlm()) {
+	if (lm_support_dlm() && lm_is_running_dlm()) {
 		rv = lm_get_lockspaces_dlm(&ls_found);
-		if ((rv < 0) && (rv != -ECONNREFUSED))
+		if (rv < 0)
 			goto fail;
 	}
 
-	if (lm_support_sanlock()) {
+	if (lm_support_sanlock() && lm_is_running_sanlock()) {
 		rv = lm_get_lockspaces_sanlock(&ls_found);
-		if ((rv < 0) && (rv != -ECONNREFUSED))
+		if (rv < 0)
 			goto fail;
 	}
 
@@ -5235,7 +5199,7 @@ static void adopt_locks(void)
 		gl_use_sanlock = 1;
 
 	list_for_each_entry(ls, &vg_lockd, list) {
-		log_debug("adopt lvmetad vg %s lock_type %s lock_args %s",
+		log_debug("adopt vg %s lock_type %s lock_args %s",
 			  ls->vg_name, lm_str(ls->lm_type), ls->vg_args);
 
 		list_for_each_entry(r, &ls->resources, list)
@@ -5269,7 +5233,7 @@ static void adopt_locks(void)
 	list_for_each_entry_safe(ls1, l1safe, &ls_found, list) {
 
 		/* The dlm global lockspace is special and doesn't match a VG. */
-		if (!strcmp(ls1->name, gl_lsname_dlm)) {
+		if ((ls1->lm_type == LD_LM_DLM) && !strcmp(ls1->name, gl_lsname_dlm)) {
 			list_del(&ls1->list);
 			free(ls1);
 			continue;
@@ -5300,7 +5264,7 @@ static void adopt_locks(void)
 		/*
 		 * LS in ls_found, not in vg_lockd.
 		 * An lvm lockspace found in the lock manager has no
-		 * corresponding VG in lvmetad.  This shouldn't usually
+		 * corresponding VG.  This shouldn't usually
 		 * happen, but it's possible the VG could have been removed
 		 * while the orphaned lockspace from it was still around.
 		 * Report an error and leave the ls in the lm alone.
@@ -5315,7 +5279,7 @@ static void adopt_locks(void)
 
 	/*
 	 * LS in vg_lockd, not in ls_found.
-	 * lockd vgs from lvmetad that do not have an existing lockspace.
+	 * lockd vgs that do not have an existing lockspace.
 	 * This wouldn't be unusual; we just skip the vg.
 	 * But, if the vg has active lvs, then it should have had locks
 	 * and a lockspace.  Should we attempt to join the lockspace and
@@ -5366,8 +5330,6 @@ static void adopt_locks(void)
 		memcpy(act->vg_uuid, ls->vg_uuid, 64);
 		memcpy(act->vg_args, ls->vg_args, MAX_ARGS);
 		act->host_id = ls->host_id;
-
-		/* set act->version from lvmetad data? */
 
 		log_debug("adopt add %s vg lockspace %s", lm_str(act->lm_type), act->vg_name);
 
@@ -5827,12 +5789,9 @@ static int main_loop(daemon_state *ds_arg)
 	setup_worker_thread();
 	setup_restart();
 
-	pthread_mutex_init(&lvmetad_mutex, NULL);
-	lvmetad_handle = lvmetad_open(NULL);
-	if (lvmetad_handle.error || lvmetad_handle.socket_fd < 0)
-		log_error("lvmetad_open error %d", lvmetad_handle.error);
-	else
-		lvmetad_connected = 1;
+#ifdef USE_SD_NOTIFY
+	sd_notify(0, "READY=1");
+#endif
 
 	/*
 	 * Attempt to rejoin lockspaces and adopt locks from a previous
@@ -5955,7 +5914,6 @@ static int main_loop(daemon_state *ds_arg)
 	close_worker_thread();
 	close_client_thread();
 	closelog();
-	daemon_close(lvmetad_handle);
 	return 1; /* libdaemon uses 1 for success */
 }
 

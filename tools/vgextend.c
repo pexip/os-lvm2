@@ -49,7 +49,7 @@ static int _vgextend_restoremissing(struct cmd_context *cmd __attribute__((unuse
 	struct vgextend_params *vp = (struct vgextend_params *) handle->custom_handle;
 	struct pvcreate_params *pp = &vp->pp;
 	int fixed = 0;
-	int i;
+	unsigned i;
 
 	if (!archive(vg))
 		return_0;
@@ -136,12 +136,6 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_is_set(cmd, metadatacopies_ARG)) {
-		log_error("Invalid option --metadatacopies, "
-			  "use --pvmetadatacopies instead.");
-		return EINVALID_CMD_LINE;
-	}
-
 	vg_name = skip_dev_dir(cmd, argv[0], NULL);
 	argc--;
 	argv++;
@@ -159,6 +153,9 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 
 	/* pvcreate within vgextend cannot be forced. */
 	pp->force = 0;
+
+	/* Check for old md signatures at the end of devices. */
+	cmd->use_full_md_check = 1;
 
 	/*
 	 * Needed to change the set of orphan PVs.

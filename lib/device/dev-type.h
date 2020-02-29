@@ -15,13 +15,14 @@
 #ifndef _LVM_DEV_TYPE_H
 #define _LVM_DEV_TYPE_H
 
-#include "device.h"
-#include "display.h"
+#include "lib/device/device.h"
+#include "lib/display/display.h"
+#include "lib/label/label.h"
 
 #define NUMBER_OF_MAJORS 4096
 
 #ifdef __linux__
-#  include "kdev_t.h"
+#  include "libdm/misc/kdev_t.h"
 #else
 #  define MAJOR(x) major((x))
 #  define MINOR(x) minor((x))
@@ -41,6 +42,7 @@ struct dev_types {
 	int drbd_major;
 	int device_mapper_major;
 	int emcpower_major;
+	int vxdmp_major;
 	int power2_major;
 	int dasd_major;
 	int loop_major;
@@ -55,11 +57,15 @@ const char *dev_subsystem_name(struct dev_types *dt, struct device *dev);
 int major_is_scsi_device(struct dev_types *dt, int major);
 
 /* Signature/superblock recognition with position returned where found. */
-int dev_is_md(struct device *dev, uint64_t *sb);
-int dev_is_swap(struct device *dev, uint64_t *signature);
-int dev_is_luks(struct device *dev, uint64_t *signature);
+int dev_is_md(struct device *dev, uint64_t *sb, int full);
+int dev_is_swap(struct device *dev, uint64_t *signature, int full);
+int dev_is_luks(struct device *dev, uint64_t *signature, int full);
 int dasd_is_cdl_formatted(struct device *dev);
 int udev_dev_is_mpath_component(struct device *dev);
+int udev_dev_is_md_component(struct device *dev);
+
+int dev_is_lvm1(struct device *dev, char *buf, int buflen);
+int dev_is_pool(struct device *dev, char *buf, int buflen);
 
 /* Signature wiping. */
 #define TYPE_LVM1_MEMBER	0x001
@@ -71,6 +77,7 @@ int wipe_known_signatures(struct cmd_context *cmd, struct device *dev, const cha
 
 /* Type-specific device properties */
 unsigned long dev_md_stripe_width(struct dev_types *dt, struct device *dev);
+int dev_is_md_with_end_superblock(struct dev_types *dt, struct device *dev);
 
 /* Partitioning */
 int major_max_partitions(struct dev_types *dt, int major);

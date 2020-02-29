@@ -6,7 +6,6 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
-
 from .automatedproperties import AutomatedProperties
 
 from . import utils
@@ -31,6 +30,16 @@ class Manager(AutomatedProperties):
 		return dbus.String('1.0.0')
 
 	@staticmethod
+	def handle_execute(rc, out, err):
+		if rc == 0:
+			cfg.load()
+		else:
+			# Need to work on error handling, need consistent
+			raise dbus.exceptions.DBusException(
+				MANAGER_INTERFACE,
+				'Exit code %s, stderr = %s' % (str(rc), err))
+
+	@staticmethod
 	def _pv_create(device, create_options):
 
 		# Check to see if we are already trying to create a PV for an existing
@@ -38,18 +47,11 @@ class Manager(AutomatedProperties):
 		pv = cfg.om.get_object_path_by_uuid_lvm_id(device, device)
 		if pv:
 			raise dbus.exceptions.DBusException(
-				MANAGER_INTERFACE, "PV Already exists!")
+				MANAGER_INTERFACE, "PV %s Already exists!" % device)
 
 		rc, out, err = cmdhandler.pv_create(create_options, [device])
-		if rc == 0:
-			cfg.load()
-			created_pv = cfg.om.get_object_path_by_lvm_id(device)
-		else:
-			raise dbus.exceptions.DBusException(
-				MANAGER_INTERFACE,
-				'Exit code %s, stderr = %s' % (str(rc), err))
-
-		return created_pv
+		Manager.handle_execute(rc, out, err)
+		return cfg.om.get_object_path_by_lvm_id(device)
 
 	@dbus.service.method(
 		dbus_interface=MANAGER_INTERFACE,
@@ -76,14 +78,8 @@ class Manager(AutomatedProperties):
 					MANAGER_INTERFACE, 'object path = %s not found' % p)
 
 		rc, out, err = cmdhandler.vg_create(create_options, pv_devices, name)
-
-		if rc == 0:
-			cfg.load()
-			return cfg.om.get_object_path_by_lvm_id(name)
-		else:
-			raise dbus.exceptions.DBusException(
-				MANAGER_INTERFACE,
-				'Exit code %s, stderr = %s' % (str(rc), err))
+		Manager.handle_execute(rc, out, err)
+		return cfg.om.get_object_path_by_lvm_id(name)
 
 	@dbus.service.method(
 		dbus_interface=MANAGER_INTERFACE,
@@ -136,10 +132,27 @@ class Manager(AutomatedProperties):
 		cfg.worker_q.put(r)
 
 	@dbus.service.method(
+		dbus_interface=MANAGER_INTERFACE)
+	def FlightRecorderDump(self):
+		"""
+		Dump the flight recorder to syslog
+		"""
+		cfg.blackbox.dump()
+
+	@staticmethod
+	def _lookup_by_lvm_id(key):
+		p = cfg.om.get_object_path_by_uuid_lvm_id(key, key)
+		if not p:
+			p = '/'
+		utils.log_debug('LookUpByLvmId: key = %s, result = %s' % (key, p))
+		return p
+
+	@dbus.service.method(
 		dbus_interface=MANAGER_INTERFACE,
 		in_signature='s',
-		out_signature='o')
-	def LookUpByLvmId(self, key):
+		out_signature='o',
+		async_callbacks=('cb', 'cbe'))
+	def LookUpByLvmId(self, key, cb, cbe):
 		"""
 		Given a lvm id in one of the forms:
 
@@ -153,10 +166,8 @@ class Manager(AutomatedProperties):
 		:param key: The lookup value
 		:return: Return the object path.  If object not found you will get '/'
 		"""
-		p = cfg.om.get_object_path_by_uuid_lvm_id(key, key)
-		if p:
-			return p
-		return '/'
+		r = RequestEntry(-1, Manager._lookup_by_lvm_id, (key,), cb, cbe, False)
+		cfg.worker_q.put(r)
 
 	@staticmethod
 	def _use_lvm_shell(yes_no):
@@ -172,25 +183,33 @@ class Manager(AutomatedProperties):
 		:param yes_no:
 		:param cb:	dbus python call back parameter, not client visible
 		:param cbe:	dbus python error call back parameter, not client visible
-		:return: Nothing
+		:return: Boolean
 		"""
 		r = RequestEntry(-1, Manager._use_lvm_shell, (yes_no,), cb, cbe, False)
 		cfg.worker_q.put(r)
+
+	@staticmethod
+	def _external_event(command):
+		utils.log_debug("Processing _external_event= %s" % command,
+							'bg_black', 'fg_orange')
+		cfg.load()
 
 	@dbus.service.method(
 		dbus_interface=MANAGER_INTERFACE,
 		in_signature='s', out_signature='i')
 	def ExternalEvent(self, command):
-
+		utils.log_debug("ExternalEvent %s" % command)
 		# If a user didn't explicitly specify udev, we will turn it off now.
 		if not cfg.args.use_udev:
 			if udevwatch.remove():
 				utils.log_debug("ExternalEvent received, disabling "
 								"udev monitoring")
 				# We are dependent on external events now to stay current!
-				cfg.ee = True
-		utils.log_debug("ExternalEvent %s" % command)
-		cfg.event()
+				cfg.got_external_event = True
+
+		r = RequestEntry(
+			-1, Manager._external_event, (command,), None, None, False)
+		cfg.worker_q.put(r)
 		return dbus.Int32(0)
 
 	@staticmethod
@@ -200,15 +219,8 @@ class Manager(AutomatedProperties):
 			activate, cache, device_path,
 			major_minor, scan_options)
 
-		if rc == 0:
-			# This could potentially change the state quite a bit, so lets
-			# update everything to be safe
-			cfg.load()
-			return '/'
-		else:
-			raise dbus.exceptions.DBusException(
-				MANAGER_INTERFACE,
-				'Exit code %s, stderr = %s' % (str(rc), err))
+		Manager.handle_execute(rc, out, err)
+		return '/'
 
 	@dbus.service.method(
 		dbus_interface=MANAGER_INTERFACE,

@@ -1,5 +1,6 @@
-#!/bin/sh
-# Copyright (C) 2012 Red Hat, Inc. All rights reserved.
+#!/usr/bin/env bash
+
+# Copyright (C) 2012,2017 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -9,19 +10,21 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
 aux have_raid 1 3 0 || skip
 
-levels="5 6"
-aux have_raid4 && levels="4 5 6"
+levels="5 6 10"
+aux have_raid4 && levels="4 $levels"
+aux have_raid 1 7 0 && levels="0 0_meta $levels"
 
-aux prepare_pvs 6 80
+aux prepare_pvs 6
+get_devs
 
-vgcreate -s 256K $vg $(cat DEVICES)
+vgcreate $SHARED -s 256K "$vg" "${DEVICES[@]}"
 
 for deactivate in true false; do
 
@@ -39,9 +42,10 @@ for deactivate in true false; do
 
 	#check raid_images_contiguous $vg $lv1
 
-# Extend and reduce 3-striped RAID 4/5/6
+# Extend and reduce 3-striped RAID 4/5/6/10
 	for i in $levels ; do
 		lvcreate --type raid$i -i 3 -l 3 -n $lv2 $vg
+		check lv_field $vg/$lv2 "seg_size" "768.00k"
 
 		test $deactivate && {
 			aux wait_for_sync $vg $lv2
@@ -49,10 +53,12 @@ for deactivate in true false; do
 		}
 
 		lvresize -l +3 $vg/$lv2
+		check lv_field $vg/$lv2 "seg_size" "1.50m"
 
 		#check raid_images_contiguous $vg $lv1
 
 		should lvresize -y -l -3 $vg/$lv2
+		should check lv_field $vg/$lv2 "seg_size" "768.00k"
 
 		#check raid_images_contiguous $vg $lv1
 

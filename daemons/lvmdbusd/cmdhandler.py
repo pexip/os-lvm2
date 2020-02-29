@@ -16,7 +16,7 @@ import traceback
 import os
 
 from lvmdbusd import cfg
-from lvmdbusd.utils import pv_dest_ranges, log_debug, log_error
+from lvmdbusd.utils import pv_dest_ranges, log_debug, log_error, add_no_notify
 from lvmdbusd.lvm_shell_proxy import LVMShellProxy
 
 try:
@@ -37,6 +37,7 @@ cmd_lock = threading.RLock()
 class LvmExecutionMeta(object):
 
 	def __init__(self, start, ended, cmd, ec, stdout_txt, stderr_txt):
+		self.lock = threading.RLock()
 		self.start = start
 		self.ended = ended
 		self.cmd = cmd
@@ -45,12 +46,13 @@ class LvmExecutionMeta(object):
 		self.stderr_txt = stderr_txt
 
 	def __str__(self):
-		return "EC= %d for %s\n" \
-			"STARTED: %f, ENDED: %f\n" \
-			"STDOUT=%s\n" \
-			"STDERR=%s\n" % \
-			(self.ec, str(self.cmd), self.start, self.ended, self.stdout_txt,
-			self.stderr_txt)
+		with self.lock:
+			return "EC= %d for %s\n" \
+				"STARTED: %f, ENDED: %f\n" \
+				"STDOUT=%s\n" \
+				"STDERR=%s\n" % \
+				(self.ec, str(self.cmd), self.start, self.ended, self.stdout_txt,
+				self.stderr_txt)
 
 
 class LvmFlightRecorder(object):
@@ -65,7 +67,7 @@ class LvmFlightRecorder(object):
 		with cmd_lock:
 			if len(self.queue):
 				log_error("LVM dbus flight recorder START")
-				for c in self.queue:
+				for c in reversed(self.queue):
 					log_error(str(c))
 				log_error("LVM dbus flight recorder END")
 
@@ -93,6 +95,7 @@ def call_lvm(command, debug=False):
 	# Prepend the full lvm executable so that we can run different versions
 	# in different locations on the same box
 	command.insert(0, cfg.LVM_CMD)
+	command = add_no_notify(command)
 
 	process = Popen(command, stdout=PIPE, stderr=PIPE, close_fds=True,
 					env=os.environ)
@@ -278,7 +281,7 @@ def vg_lv_create(vg_name, create_options, name, size_bytes, pv_dests):
 	cmd = ['lvcreate']
 	cmd.extend(options_to_cli_args(create_options))
 	cmd.extend(['--size', str(size_bytes) + 'B'])
-	cmd.extend(['--name', name, vg_name])
+	cmd.extend(['--name', name, vg_name, '--yes'])
 	pv_dest_ranges(cmd, pv_dests)
 	return call(cmd)
 
@@ -295,7 +298,7 @@ def vg_lv_snapshot(vg_name, snapshot_options, name, size_bytes):
 	return call(cmd)
 
 
-def vg_lv_create_linear(vg_name, create_options, name, size_bytes, thin_pool):
+def _vg_lv_create_common_cmd(create_options, size_bytes, thin_pool):
 	cmd = ['lvcreate']
 	cmd.extend(options_to_cli_args(create_options))
 
@@ -303,20 +306,20 @@ def vg_lv_create_linear(vg_name, create_options, name, size_bytes, thin_pool):
 		cmd.extend(['--size', str(size_bytes) + 'B'])
 	else:
 		cmd.extend(['--thin', '--size', str(size_bytes) + 'B'])
+
+	cmd.extend(['--yes'])
+	return cmd
+
+
+def vg_lv_create_linear(vg_name, create_options, name, size_bytes, thin_pool):
+	cmd = _vg_lv_create_common_cmd(create_options, size_bytes, thin_pool)
 	cmd.extend(['--name', name, vg_name])
 	return call(cmd)
 
 
 def vg_lv_create_striped(vg_name, create_options, name, size_bytes,
 							num_stripes, stripe_size_kb, thin_pool):
-	cmd = ['lvcreate']
-	cmd.extend(options_to_cli_args(create_options))
-
-	if not thin_pool:
-		cmd.extend(['--size', str(size_bytes) + 'B'])
-	else:
-		cmd.extend(['--thin', '--size', str(size_bytes) + 'B'])
-
+	cmd = _vg_lv_create_common_cmd(create_options, size_bytes, thin_pool)
 	cmd.extend(['--stripes', str(num_stripes)])
 
 	if stripe_size_kb != 0:
@@ -341,7 +344,7 @@ def _vg_lv_create_raid(vg_name, create_options, name, raid_type, size_bytes,
 	if stripe_size_kb != 0:
 		cmd.extend(['--stripesize', str(stripe_size_kb)])
 
-	cmd.extend(['--name', name, vg_name])
+	cmd.extend(['--name', name, vg_name, '--yes'])
 	return call(cmd)
 
 
@@ -362,7 +365,7 @@ def vg_lv_create_mirror(
 	cmd.extend(['--type', 'mirror'])
 	cmd.extend(['--mirrors', str(num_copies)])
 	cmd.extend(['--size', str(size_bytes) + 'B'])
-	cmd.extend(['--name', name, vg_name])
+	cmd.extend(['--name', name, vg_name, '--yes'])
 	return call(cmd)
 
 
@@ -416,7 +419,7 @@ def lv_lv_create(lv_full_name, create_options, name, size_bytes):
 	cmd = ['lvcreate']
 	cmd.extend(options_to_cli_args(create_options))
 	cmd.extend(['--virtualsize', str(size_bytes) + 'B', '-T'])
-	cmd.extend(['--name', name, lv_full_name])
+	cmd.extend(['--name', name, lv_full_name, '--yes'])
 	return call(cmd)
 
 
@@ -552,7 +555,7 @@ def pv_resize(device, size_bytes, create_options):
 	cmd.extend(options_to_cli_args(create_options))
 
 	if size_bytes != 0:
-		cmd.extend(['--setphysicalvolumesize', str(size_bytes) + 'B'])
+		cmd.extend(['--yes', '--setphysicalvolumesize', str(size_bytes) + 'B'])
 
 	cmd.extend([device])
 	return call(cmd)
@@ -617,10 +620,10 @@ def vg_reduce(vg_name, missing, pv_devices, reduce_options):
 	cmd = ['vgreduce']
 	cmd.extend(options_to_cli_args(reduce_options))
 
-	if len(pv_devices) == 0:
-		cmd.append('--all')
 	if missing:
 		cmd.append('--removemissing')
+	elif len(pv_devices) == 0:
+		cmd.append('--all')
 
 	cmd.append(vg_name)
 	cmd.extend(pv_devices)

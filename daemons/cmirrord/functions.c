@@ -11,6 +11,7 @@
  */
 #include "logging.h"
 #include "functions.h"
+#include "base/memory/zalloc.h"
 
 #include <sys/sysmacros.h>
 #include <dirent.h>
@@ -377,7 +378,7 @@ static int _clog_ctr(char *uuid, uint64_t luid,
 	uint32_t block_on_error = 0;
 
 	int disk_log;
-	char disk_path[128];
+	char disk_path[PATH_MAX];
 	int unlink_path = 0;
 	long page_size;
 	int pages;
@@ -435,7 +436,7 @@ static int _clog_ctr(char *uuid, uint64_t luid,
 			block_on_error = 1;
 	}
 
-	lc = dm_zalloc(sizeof(*lc));
+	lc = zalloc(sizeof(*lc));
 	if (!lc) {
 		LOG_ERROR("Unable to allocate cluster log context");
 		r = -ENOMEM;
@@ -451,15 +452,19 @@ static int _clog_ctr(char *uuid, uint64_t luid,
 	lc->skip_bit_warning = region_count;
 	lc->disk_fd = -1;
 	lc->log_dev_failed = 0;
-	strncpy(lc->uuid, uuid, DM_UUID_LEN);
+	if (!dm_strncpy(lc->uuid, uuid, DM_UUID_LEN)) {
+		LOG_ERROR("Cannot use too long UUID %s.", uuid);
+		r = -EINVAL;
+		goto fail;
+	}
 	lc->luid = luid;
 
 	if (get_log(lc->uuid, lc->luid) ||
 	    get_pending_log(lc->uuid, lc->luid)) {
 		LOG_ERROR("[%s/%" PRIu64 "u] Log already exists, unable to create.",
 			  SHORT_UUID(lc->uuid), lc->luid);
-		dm_free(lc);
-		return -EINVAL;
+		r = -EINVAL;
+		goto fail;
 	}
 
 	dm_list_init(&lc->mark_list);
@@ -528,9 +533,9 @@ fail:
 			LOG_ERROR("Close device error, %s: %s",
 				  disk_path, strerror(errno));
 		free(lc->disk_buffer);
-		dm_free(lc->sync_bits);
-		dm_free(lc->clean_bits);
-		dm_free(lc);
+		free(lc->sync_bits);
+		free(lc->clean_bits);
+		free(lc);
 	}
 	return r;
 }
@@ -655,9 +660,9 @@ static int clog_dtr(struct dm_ulog_request *rq)
 			  strerror(errno));
 	if (lc->disk_buffer)
 		free(lc->disk_buffer);
-	dm_free(lc->clean_bits);
-	dm_free(lc->sync_bits);
-	dm_free(lc);
+	free(lc->clean_bits);
+	free(lc->sync_bits);
+	free(lc);
 
 	return 0;
 }

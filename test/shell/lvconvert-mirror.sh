@@ -1,5 +1,6 @@
-#!/bin/sh
-# Copyright (C) 2010-2015 Red Hat, Inc. All rights reserved.
+#!/usr/bin/env bash
+
+# Copyright (C) 2010-2018 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -9,21 +10,20 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
 
-# disable lvmetad logging as it bogs down test systems
-export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
-aux prepare_pvs 5 20
+aux prepare_pvs 5
+get_devs
+
 # proper DEVRANGE needs to be set according to extent size
 DEVRANGE="0-32"
-vgcreate -s 32k $vg $(cat DEVICES)
+vgcreate $SHARED -s 32k "$vg" "${DEVICES[@]}"
 
 # convert from linear to 2-way mirror ("mirror" default type)
 lvcreate -aey -l2 -n $lv1 $vg "$dev1"
-lvconvert -i1 -m+1 $vg/$lv1 "$dev2" "$dev3:0-1" \
+lvconvert -i1 -m+1 -R32k $vg/$lv1 "$dev2" "$dev3:0-1" \
 	--config 'global { mirror_segtype_default = "mirror" }'
 lvs --noheadings -o attr $vg/$lv1 | grep '^[[:space:]]*m'
 lvremove -ff $vg
@@ -75,55 +75,6 @@ lvcreate -aey -l2 -n $lv1 $vg "$dev1"
 not lvconvert -m+1 --mirrorlog core $vg/$lv1 "$dev1"
 lvremove -ff $vg
 
-# Start w/ 3-way mirror
-# Test pulling primary image before mirror in-sync (should fail)
-# Test pulling primary image after mirror in-sync (should work)
-# Test that the correct devices remain in the mirror
-offset=$(get first_extent_sector "$dev2")
-offset=$(( offset + 2 ))
-# put 1 single slowing delayed sector
-# update in case  mirror ever gets faster and allows parallel read
-aux delay_dev "$dev2" 0 2000 ${offset}:1
-lvcreate -aey -l5 -Zn -Wn --type mirror --regionsize 16K -m2 -n $lv1 $vg "$dev1" "$dev2" "$dev4" "$dev3:$DEVRANGE"
-# FIXME: add a new explicit option to define the polling behavior
-# done here with 'lvconvert vg/lv'.  That option can specify
-# that the command succeeds even if the LV doesn't need polling.
-should not lvconvert -m-1 $vg/$lv1 "$dev1"
-aux enable_dev "$dev2"
-should lvconvert $vg/$lv1 # wait
-lvconvert -m2 $vg/$lv1 "$dev1" "$dev2" "$dev4" "$dev3:0" # If the above "should" failed...
-
-aux wait_for_sync $vg $lv1
-lvconvert -m-1 $vg/$lv1 "$dev1"
-check mirror_images_on $lv1 "$dev2" "$dev4"
-lvconvert -m-1 $vg/$lv1 "$dev2"
-check linear $vg $lv1
-check lv_on $vg $lv1 "$dev4"
-lvremove -ff $vg
-
-# FIXME: lots of unneeded extents here for log - it needs to be at least region_size in size
-# No parallel lvconverts on a single LV please
-
-lvcreate -aey -Zn -Wn -l8 --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:0-8"
-check mirror $vg $lv1
-check mirror_legs $vg $lv1 2
-
-offset=$(get first_extent_sector "$dev4")
-offset=$(( offset + 2 ))
-aux delay_dev "$dev4" 0 2000 ${offset}:
-LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -b $vg/$lv1 "$dev4"
-
-# Next convert should fail b/c we can't have 2 at once
-should not lvconvert -m+1 $vg/$lv1 "$dev5"
-aux enable_dev "$dev4"
-should lvconvert $vg/$lv1 # wait
-lvconvert -m2 $vg/$lv1 # In case the above "should" actually failed
-
-check mirror $vg $lv1 "$dev3"
-check mirror_no_temporaries $vg $lv1
-check mirror_legs $vg $lv1 3
-lvremove -ff $vg
-
 # add 1 mirror to core log mirror, but
 #  implicitly keep log as 'core'
 lvcreate -aey -l2 --type mirror -m1 --mirrorlog core -n $lv1 $vg "$dev1" "$dev2"
@@ -159,7 +110,7 @@ lvcreate -aey -l2 --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:$DEVRANGE
 lvchange -an $vg/$lv1
 lvconvert -m+1 $vg/$lv1 "$dev4"
 lvchange -aey $vg/$lv1
-should lvconvert $vg/$lv1 # wait
+lvconvert $vg/$lv1 # wait
 check mirror $vg $lv1 "$dev3"
 check mirror_no_temporaries $vg $lv1
 lvremove -ff $vg
@@ -171,7 +122,7 @@ lvremove -ff $vg
 lvcreate -aey -l2 --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:$DEVRANGE"
 LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -b $vg/$lv1 "$dev4"
 lvconvert -m-1 $vg/$lv1 "$dev4"
-should lvconvert $vg/$lv1 # wait
+lvconvert $vg/$lv1 # wait
 
 check mirror $vg $lv1 "$dev3"
 check mirror_no_temporaries $vg $lv1
@@ -182,7 +133,7 @@ lvremove -ff $vg
 lvcreate -aey -l2 --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:$DEVRANGE"
 LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+2 -b $vg/$lv1 "$dev4" "$dev5"
 lvconvert -m-1 $vg/$lv1 "$dev4"
-should lvconvert $vg/$lv1 # wait
+lvconvert $vg/$lv1 # wait
 
 check mirror $vg $lv1 "$dev3"
 check mirror_no_temporaries $vg $lv1
@@ -195,9 +146,9 @@ LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -b $vg/$lv1 "$dev4"
 # FIXME: Extra wait here for mirror upconvert synchronization
 # otherwise we may fail her on parallel upconvert and downconvert
 # lvconvert-mirror-updown.sh tests this errornous case separately
-should lvconvert $vg/$lv1
+lvconvert $vg/$lv1
 lvconvert -m-1 $vg/$lv1 "$dev2"
-should lvconvert $vg/$lv1
+lvconvert $vg/$lv1
 
 check mirror $vg $lv1 "$dev3"
 check mirror_no_temporaries $vg $lv1
@@ -210,9 +161,24 @@ LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -b $vg/$lv1 "$dev4"
 # FIXME: Extra wait here for mirror upconvert synchronization
 # otherwise we may fail her on parallel upconvert and downconvert
 # lvconvert-mirror-updown.sh tests this errornous case separately
-should lvconvert $vg/$lv1
+lvconvert $vg/$lv1
 lvconvert -m-1 $vg/$lv1 "$dev2"
-should lvconvert $vg/$lv1
+lvconvert $vg/$lv1
+
+check mirror $vg $lv1 "$dev3"
+check mirror_no_temporaries $vg $lv1
+check mirror_legs $vg $lv1 2
+lvremove -ff $vg
+
+# Check the same with new --startpool lvconvert command option
+lvcreate -aey -l2 --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:$DEVRANGE"
+LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -b $vg/$lv1 "$dev4"
+# FIXME: Extra wait here for mirror upconvert synchronization
+# otherwise we may fail her on parallel upconvert and downconvert
+# lvconvert-mirror-updown.sh tests this errornous case separately
+lvconvert $vg/$lv1
+lvconvert -m-1 $vg/$lv1 "$dev2"
+lvconvert $vg/$lv1
 
 check mirror $vg $lv1 "$dev3"
 check mirror_no_temporaries $vg $lv1
@@ -220,13 +186,6 @@ check mirror_legs $vg $lv1 2
 lvremove -ff $vg
 
 # ---------------------------------------------------------------------
-
-# "rhbz440405: lvconvert -m0 incorrectly fails if all PEs allocated"
-lvcreate -aey -l$(pvs --noheadings -ope_count "$dev1") --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:$DEVRANGE"
-aux wait_for_sync $vg $lv1
-lvconvert -m0 $vg/$lv1 "$dev1"
-check linear $vg $lv1
-lvremove -ff $vg
 
 # "rhbz264241: lvm mirror doesn't lose it's "M" --nosync attribute
 # after being down and the up converted"
@@ -238,9 +197,10 @@ lvremove -ff $vg
 
 # lvconvert from linear (on multiple PVs) to mirror
 lvcreate -aey -l 8 -n $lv1 $vg "$dev1:0-3" "$dev2:0-3"
-lvconvert --type mirror -vvvv -m1 $vg/$lv1
+lvconvert --type mirror -m1 $vg/$lv1
 
-should check mirror $vg $lv1
+# FIXME: lvm should be able to make legs redundant
+#should check mirror $vg $lv1
 check mirror_legs $vg $lv1 2
 lvremove -ff $vg
 
@@ -268,7 +228,9 @@ lvremove -ff $vg
 
 # simple mirrored stripe
 lvcreate -aey -i2 -l10 -n $lv1 $vg
-lvconvert --type mirror -m1 -i1 $vg/$lv1
+# FIXME: ATM reduce LV still must be bigger then region size!
+#        LVM should do a better job here
+lvconvert --type mirror -m1 -i1 --regionsize 16k $vg/$lv1
 lvreduce -f -l1 $vg/$lv1
 lvextend -f -l10 $vg/$lv1
 lvremove -ff $vg/$lv1
@@ -278,15 +240,10 @@ lvcreate -aey -l15 -n $lv1 $vg
 not lvconvert --type mirror -m1 --corelog --stripes 2 $vg/$lv1
 lvremove -ff $vg
 
-test -e LOCAL_CLVMD && exit 0
 
-# FIXME - cases which needs to be fixed to work in cluster
-# Linear to mirror with mirrored log using --alloc anywhere
-lvcreate -aey -l2 -n $lv1 $vg "$dev1"
-lvconvert --type mirror -m +1 --mirrorlog mirrored --alloc anywhere $vg/$lv1 "$dev1" "$dev2"
-should check mirror $vg $lv1
-lvremove -ff $vg
-
+if test -e LOCAL_CLVMD; then
+: # FIXME - cases which needs to be fixed to work in cluster
+else
 # Should not be able to add images to --nosync mirror
 # but should be able to after 'lvchange --resync'
 lvcreate -aey --type mirror -m 1 -l1 -n $lv1 $vg --nosync
@@ -331,6 +288,70 @@ lvremove -ff $vg
 lvcreate -l2 -n $lv1 $vg
 lvconvert --type mirror -i1 -m1 $vg/$lv1 | tee out
 grep -e "$vg/$lv1: Converted:" out || die "Missing sync info in foreground mode"
+lvremove -ff $vg
+fi
+
+
+#########################################################################
+# Start w/ 3-way mirror
+# Test that the correct devices remain in the mirror
+# Make $dev2 & $dev4  zero backend device so large mirrors can be user
+# without consuming any real space. Clearly such mirrors can't be read back
+# but tests here are validating possibilies of those conversions
+#
+# Test pulling primary image before mirror in-sync (should fail)
+# Test pulling primary image after mirror in-sync (should work)
+#
+aux zero_dev "$dev2" $(get first_extent_sector "$dev2"):
+aux zero_dev "$dev4" $(get first_extent_sector "$dev4"):
+
+SHOULD=
+aux throttle_dm_mirror || SHOULD=should
+
+# Use large enough mirror that takes time to sychronize with small regionsize
+lvcreate -aey -L20 -Zn -Wn --type mirror --regionsize 16k -m2 -n $lv1 $vg "$dev1" "$dev2" "$dev4" "$dev3:$DEVRANGE"
+$SHOULD not lvconvert -m-1 $vg/$lv1 "$dev1" 2>&1 | tee out
+aux restore_dm_mirror
+grep "not in-sync" out
+
+lvconvert $vg/$lv1 # wait
+
+lvconvert -m-1 $vg/$lv1 "$dev1"
+check mirror_images_on $vg $lv1 "$dev2" "$dev4"
+lvconvert -m-1 $vg/$lv1 "$dev2"
+check linear $vg $lv1
+check lv_on $vg $lv1 "$dev4"
+lvremove -ff $vg
+
+
+aux throttle_dm_mirror || :
+# No parallel lvconverts on a single LV please
+# Use big enough mirror size and small regionsize to run on all test machines succesfully
+lvcreate -aey -Zn -Wn -L20 --type mirror --regionsize 16k -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:0-8"
+check mirror $vg $lv1
+check mirror_legs $vg $lv1 2
+
+LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -m+1 -b $vg/$lv1 "$dev4"
+# ATM upconversion should be running
+
+# Next convert should fail b/c we can't have 2 at once
+$SHOULD not lvconvert -m+1 $vg/$lv1 "$dev5"  2>&1 | tee out
+aux restore_dm_mirror
+grep "is already being converted" out
+
+lvconvert $vg/$lv1 # wait
+check mirror $vg $lv1 "$dev3"
+check mirror_no_temporaries $vg $lv1
+check mirror_legs $vg $lv1 3
+lvremove -ff $vg
+
+
+# "rhbz440405: lvconvert -m0 incorrectly fails if all PEs allocated"
+lvcreate -aey -l "$(get pv_field "$dev1" pe_count)" --type mirror -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:$DEVRANGE"
+lvs -a -o+seg_pe_ranges $vg
+aux wait_for_sync $vg $lv1
+lvconvert -m0 $vg/$lv1 "$dev1"
+check linear $vg $lv1
 lvremove -ff $vg
 
 vgremove -ff $vg

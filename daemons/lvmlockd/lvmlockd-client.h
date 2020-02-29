@@ -11,7 +11,7 @@
 #ifndef _LVM_LVMLOCKD_CLIENT_H
 #define _LVM_LVMLOCKD_CLIENT_H
 
-#include "daemon-client.h"
+#include "libdaemon/client/daemon-client.h"
 
 #define LVMLOCKD_SOCKET DEFAULT_RUN_DIR "/lvmlockd.socket"
 
@@ -48,5 +48,7 @@ static inline void lvmlockd_close(daemon_handle h)
 #define EVGKILLED 217 /* sanlock lost access to leases and VG is killed. */
 #define ELOCKIO   218 /* sanlock io errors during lock op, may be transient. */
 #define EREMOVED  219
+#define EDEVOPEN  220 /* sanlock failed to open lvmlock LV */
+#define ELMERR    221
 
 #endif	/* _LVM_LVMLOCKD_CLIENT_H */

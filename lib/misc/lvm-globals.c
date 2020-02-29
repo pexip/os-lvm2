@@ -13,30 +13,28 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "device.h"
-#include "memlock.h"
-#include "lvm-string.h"
-#include "defaults.h"
-#include "metadata-exported.h"
+#include "lib/misc/lib.h"
+#include "lib/device/device.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/config/defaults.h"
+#include "lib/metadata/metadata-exported.h"
 
 #include <stdarg.h>
 
 static int _verbose_level = VERBOSE_BASE_LEVEL;
 static int _silent = 0;
 static int _test = 0;
+static int _use_aio = 0;
 static int _md_filtering = 0;
 static int _internal_filtering = 0;
 static int _fwraid_filtering = 0;
 static int _pvmove = 0;
-static int _full_scan_done = 0;	/* Restrict to one full scan during each cmd */
 static int _obtain_device_list_from_udev = DEFAULT_OBTAIN_DEVICE_LIST_FROM_UDEV;
 static enum dev_ext_e _external_device_info_source = DEV_EXT_NONE;
 static int _trust_cache = 0; /* Don't scan when incomplete VGs encountered */
 static int _debug_level = 0;
 static int _debug_classes_logged = 0;
 static int _log_cmd_name = 0;
-static int _ignorelockingfailure = 0;
 static int _security_level = SECURITY_LEVEL;
 static char _cmd_name[30] = "";
 static int _mirror_in_sync = 0;
@@ -52,10 +50,7 @@ static int _udev_checking = 1;
 static int _retry_deactivation = DEFAULT_RETRY_DEACTIVATION;
 static int _activation_checks = 0;
 static char _sysfs_dir_path[PATH_MAX] = "";
-static int _dev_disable_after_error_count = DEFAULT_DISABLE_AFTER_ERROR_COUNT;
 static uint64_t _pv_min_size = (DEFAULT_PV_MIN_SIZE_KB * 1024L >> SECTOR_SHIFT);
-static int _detect_internal_vg_cache_corruption =
-	DEFAULT_DETECT_INTERNAL_VG_CACHE_CORRUPTION;
 static const char *_unknown_device_name = DEFAULT_UNKNOWN_DEVICE_NAME;
 
 void init_verbose(int level)
@@ -73,6 +68,11 @@ void init_test(int level)
 	if (!_test && level)
 		log_warn("TEST MODE: Metadata will NOT be updated and volumes will not be (de)activated.");
 	_test = level;
+}
+
+void init_use_aio(int useaio)
+{
+	_use_aio = useaio;
 }
 
 void init_md_filtering(int level)
@@ -95,11 +95,6 @@ void init_pvmove(int level)
 	_pvmove = level;
 }
 
-void init_full_scan_done(int level)
-{
-	_full_scan_done = level;
-}
-
 void init_obtain_device_list_from_udev(int device_list_from_udev)
 {
 	_obtain_device_list_from_udev = device_list_from_udev;
@@ -113,11 +108,6 @@ void init_external_device_info_source(enum dev_ext_e src)
 void init_trust_cache(int trustcache)
 {
 	_trust_cache = trustcache;
-}
-
-void init_ignorelockingfailure(int level)
-{
-	_ignorelockingfailure = level;
 }
 
 void init_security_level(int level)
@@ -188,25 +178,14 @@ void init_activation_checks(int checks)
 		log_debug_activation("LVM activation checks disabled");
 }
 
-void init_dev_disable_after_error_count(int value)
-{
-	_dev_disable_after_error_count = value;
-}
-
 void init_pv_min_size(uint64_t sectors)
 {
 	_pv_min_size = sectors;
 }
 
-void init_detect_internal_vg_cache_corruption(int detect)
-{
-	_detect_internal_vg_cache_corruption = detect;
-}
-
 void set_cmd_name(const char *cmd)
 {
-	strncpy(_cmd_name, cmd, sizeof(_cmd_name) - 1);
-	_cmd_name[sizeof(_cmd_name) - 1] = '\0';
+	(void) dm_strncpy(_cmd_name, cmd, sizeof(_cmd_name));
 }
 
 const char *get_cmd_name(void)
@@ -216,8 +195,7 @@ const char *get_cmd_name(void)
 
 void set_sysfs_dir_path(const char *path)
 {
-	strncpy(_sysfs_dir_path, path, sizeof(_sysfs_dir_path) - 1);
-	_sysfs_dir_path[sizeof(_sysfs_dir_path) - 1] = '\0';
+	(void) dm_strncpy(_sysfs_dir_path, path, sizeof(_sysfs_dir_path));
 }
 
 const char *log_command_name(void)
@@ -243,6 +221,11 @@ int test_mode(void)
 	return _test;
 }
 
+int use_aio(void)
+{
+	return _use_aio;
+}
+
 int md_filtering(void)
 {
 	return _md_filtering;
@@ -263,11 +246,6 @@ int pvmove_mode(void)
 	return _pvmove;
 }
 
-int full_scan_done(void)
-{
-	return _full_scan_done;
-}
-
 int obtain_device_list_from_udev(void)
 {
 	return _obtain_device_list_from_udev;
@@ -286,11 +264,6 @@ int trust_cache(void)
 int background_polling(void)
 {
 	return _background_polling;
-}
-
-int ignorelockingfailure(void)
-{
-	return _ignorelockingfailure;
 }
 
 int security_level(void)
@@ -377,19 +350,9 @@ const char *sysfs_dir_path(void)
 	return _sysfs_dir_path;
 }
 
-int dev_disable_after_error_count(void)
-{
-	return _dev_disable_after_error_count;
-}
-
 uint64_t pv_min_size(void)
 {
 	return _pv_min_size;
-}
-
-int detect_internal_vg_cache_corruption(void)
-{
-	return _detect_internal_vg_cache_corruption;
 }
 
 const char *unknown_device_name(void)

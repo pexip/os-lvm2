@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2013 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -42,6 +43,10 @@ run_writemostly_check() {
 
 	printf "#\n#\n#\n# %s/%s (%s): run_writemostly_check\n#\n#\n#\n" \
 		$vg $lv $segtype
+
+	# I've seen this sync fail.  when it does, it looks like sync
+	# thread has not been started... haven't repo'ed yet.
+	aux wait_for_sync $vg $lv
 
 	# No writemostly flag should be there yet.
 	check lv_attr_bit health $vg/${lv}_rimage_0 "-"
@@ -126,8 +131,9 @@ run_writemostly_check() {
 	check lv_field $vg/$lv raid_write_behind "512"
 
 	# Converting to linear should clear flags and writebehind
-	lvconvert -m 0 $vg/$lv $d1
-	lvconvert --type raid1 -m 1 $vg/$lv $d1
+	not lvconvert -m 0 $vg/$lv $d1
+	lvconvert -y -m 0 $vg/$lv $d1
+	lvconvert -y --type raid1 -m 1 $vg/$lv $d1
 	check lv_field $vg/$lv raid_write_behind ""
 	check lv_attr_bit health $vg/${lv}_rimage_0 "-"
 	check lv_attr_bit health $vg/${lv}_rimage_1 "-"
@@ -143,21 +149,21 @@ run_syncaction_check() {
 	local lv=${2}${THIN_POSTFIX}
 
 	printf "#\n#\n#\n# %s/%s (%s): run_syncaction_check\n#\n#\n#\n" \
-		$vg $lv $(get lv_field $vg/$lv segtype -a)
+		$vg $lv "$(get lv_field "$vg/$lv" segtype -a)"
 	aux wait_for_sync $vg $lv
 
 	device=$(get lv_devices $vg/${lv}_rimage_1)
 
 	size=$(get lv_field $vg/${lv}_rimage_1 size -a --units 1k)
-	size=$((${size%\.00k} / 2))
+	size=$(( ${size%\.00k} / 2 ))
 
 	tmp=$(get pv_field "$device" mda_size --units 1k)
 	seek=${tmp%\.00k} # Jump over MDA
 
 	tmp=$(get lv_field $vg/${lv}_rmeta_1 size -a --units 1k)
-	seek=$(($seek + ${tmp%\.00k}))  # Jump over RAID metadata image
+	seek=$(( seek + ${tmp%\.00k} ))  # Jump over RAID metadata image
 
-	seek=$(($seek + $size)) # Jump halfway through the RAID image
+	seek=$(( seek + size )) # Jump halfway through the RAID image
 
 	check lv_attr_bit health $vg/$lv "-"
 	check lv_field $vg/$lv raid_mismatch_count "0"
@@ -166,19 +172,20 @@ run_syncaction_check() {
 	dd if=/dev/urandom of="$device" bs=1k count=$size seek=$seek
 	sync
 
+	# Cycle the LV so we don't grab stripe cache buffers instead
+	#  of reading disk.  This can happen with RAID 4/5/6.  You
+	#  may think this is bad because those buffers could prevent
+	#  us from seeing bad disk blocks, however, the stripe cache
+	#  is not long lived.  (RAID1/10 are immediately checked.)
+	lvchange -an $vg/$lv
+	lvchange -ay $vg/$lv
+
 	# "check" should find discrepancies but not change them
 	# 'lvs' should show results
 	lvchange --syncaction check $vg/$lv
 	aux wait_for_sync $vg $lv
-        # FIXME: this needs kernel fix in md-raid
-        # currently let just this test to cause 'warning'
-	if ! get lv_field $vg/$lv lv_attr -a | grep '.*m.$'; then
-		dmsetup status | grep $vg
-		# false
-	fi
-        # FIXME: with fixed kernel this should not fail
-        # add 'wrapper' detecting kernel for this
-	should not check lv_field $vg/$lv raid_mismatch_count "0"
+	check lv_attr_bit health $vg/$lv "m"
+	not check lv_field $vg/$lv raid_mismatch_count "0"
 
 	# "repair" will fix discrepancies
 	lvchange --syncaction repair $vg/$lv
@@ -201,7 +208,7 @@ run_refresh_check() {
 	local lv=${2}${THIN_POSTFIX}
 
 	printf "#\n#\n#\n# %s/%s (%s): run_refresh_check\n#\n#\n#\n" \
-		$vg $lv $(get lv_field $vg/$lv segtype -a)
+		$vg $lv "$(get lv_field $vg/$lv segtype -a)"
 
 	aux wait_for_sync $vg $lv
 
@@ -247,7 +254,7 @@ run_recovery_rate_check() {
 	local lv=${2}${THIN_POSTFIX}
 
 	printf "#\n#\n#\n# %s/%s (%s): run_recovery_rate_check\n#\n#\n#\n" \
-		 $vg $lv $(get lv_field $vg/$lv segtype -a)
+		 $vg $lv "$(get lv_field $vg/$lv segtype -a)"
 	lvchange --minrecoveryrate 50 $vg/$lv
 	lvchange --maxrecoveryrate 100 $vg/$lv
 
@@ -259,21 +266,21 @@ run_recovery_rate_check() {
 run_checks() {
 	THIN_POSTFIX=""
 
-	if [ -z $3 ]; then
+	if [ -z "$3" ]; then
 		printf "#\n#\n# run_checks: Too few arguments\n#\n#\n"
 		return 1
-	elif [ '-' == $3 ]; then
+	elif [ '-' = "$3" ]; then
 		printf "#\n#\n# run_checks: Simple check\n#\n#\n"
 
 		run_writemostly_check $1 $2
 		run_syncaction_check $1 $2
 		run_refresh_check $1 $2
 		run_recovery_rate_check $1 $2
-	elif [ 'thinpool_data' == $3 ]; then
+	elif [ "thinpool_data" = "$3" ]; then
 		printf "#\n#\n# run_checks: RAID as thinpool data\n#\n#\n"
 
 # Hey, specifying devices for thin allocation doesn't work
-#		lvconvert --thinpool $1/$2 "$dev6"
+#		lvconvert -y --thinpool $1/$2 "$dev6"
 		lvcreate -aey -L 2M -n ${2}_meta $1 "$dev6"
 		lvconvert --thinpool $1/$2 --poolmetadata ${2}_meta
 		lvcreate -T $1/$2 -V 1 -n thinlv
@@ -283,12 +290,12 @@ run_checks() {
 		run_syncaction_check $1 $2
 		run_refresh_check $1 $2
 		run_recovery_rate_check $1 $2
-	elif [ 'thinpool_meta' == $3 ]; then
+	elif [ "thinpool_meta" = "$3" ]; then
 		printf "#\n#\n# run_checks: RAID as thinpool metadata\n#\n#\n"
 
 		lvrename $1/$2 ${2}_meta
 		lvcreate -aey -L 2M -n $2 $1 "$dev6"
-		lvconvert --thinpool $1/$2 --poolmetadata ${2}_meta
+		lvconvert -y --thinpool $1/$2 --poolmetadata ${2}_meta
 		lvcreate -T $1/$2 -V 1 -n thinlv
 		THIN_POSTFIX="_tmeta"
 
@@ -296,7 +303,7 @@ run_checks() {
 		run_syncaction_check $1 $2
 		run_refresh_check $1 $2
 		run_recovery_rate_check $1 $2
-	elif [ 'snapshot' == $3 ]; then
+	elif [ "snapshot" = "$3" ]; then
 		printf "#\n#\n# run_checks: RAID under snapshot\n#\n#\n"
 		lvcreate -aey -s $1/$2 -l 4 -n snap "$dev6"
 
@@ -329,7 +336,7 @@ TEST_TYPES="- snapshot"
 # thinpool works EX in cluster
 # but they don't work together in a cluster yet
 #  (nor does thinpool+mirror work in a cluster yet)
-test ! -e LOCAL_CLVMD -a aux have_thin 1 8 0 && TEST_TYPE="$TEST_TYPES thinpool_data thinpool_meta"
+test ! -e LOCAL_CLVMD && aux have_thin 1 8 0 && TEST_TYPE="$TEST_TYPES thinpool_data thinpool_meta"
 
 # Implicit test for 'raid1' only
 if test "${TEST_RAID:-raid1}" = raid1 ; then

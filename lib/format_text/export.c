@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2009 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -13,16 +13,17 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
+#include "base/memory/zalloc.h"
+#include "lib/misc/lib.h"
 #include "import-export.h"
-#include "metadata.h"
-#include "display.h"
-#include "lvm-string.h"
-#include "segtype.h"
-#include "text_export.h"
 #include "lvm-version.h"
-#include "toolcontext.h"
-#include "config-util.h"
+#include "lib/metadata/metadata.h"
+#include "lib/display/display.h"
+#include "lib/misc/lvm-string.h"
+#include "lib/metadata/segtype.h"
+#include "lib/format_text/text_export.h"
+#include "lib/commands/toolcontext.h"
+#include "libdaemon/client/config-util.h"
 
 #include <stdarg.h>
 #include <time.h>
@@ -42,7 +43,7 @@ typedef int (*nl_fn) (struct formatter * f);
 #define _out_with_comment(f, buffer, fmt, ap) \
 	do { \
 		va_start(ap, fmt); \
-		r = f->out_with_comment(f, buffer, fmt, ap); \
+		r = (f)->out_with_comment((f), (buffer), (fmt), ap); \
 		va_end(ap); \
 	} while (r == -1)
 
@@ -121,9 +122,9 @@ static int _extend_buffer(struct formatter *f)
 {
 	char *newbuf;
 
-	log_debug_metadata("Doubling metadata output buffer to %" PRIu32,
+	log_debug_metadata("Doubling metadata output buffer to " FMTu32,
 			   f->data.buf.size * 2);
-	if (!(newbuf = dm_realloc(f->data.buf.start,
+	if (!(newbuf = realloc(f->data.buf.start,
 				   f->data.buf.size * 2))) {
 		log_error("Buffer reallocation failed.");
 		return 0;
@@ -350,7 +351,7 @@ static int _print_header(struct cmd_context *cmd, struct formatter *f,
 	     _utsname.version, _utsname.machine);
 	if (cmd->system_id && *cmd->system_id)
 		outf(f, "creation_host_system_id = \"%s\"", cmd->system_id);
-	outf(f, "creation_time = %lu\t# %s", t, ctime(&t));
+	outf(f, "creation_time = " FMTu64 "\t# %s", (uint64_t)t, ctime(&t));
 
 	return 1;
 }
@@ -358,11 +359,12 @@ static int _print_header(struct cmd_context *cmd, struct formatter *f,
 static int _print_flag_config(struct formatter *f, uint64_t status, int type)
 {
 	char buffer[4096];
-	if (!print_flags(status, type | STATUS_FLAG, buffer, sizeof(buffer)))
+
+	if (!print_flags(buffer, sizeof(buffer), type, STATUS_FLAG, status))
 		return_0;
 	outf(f, "status = %s", buffer);
 
-	if (!print_flags(status, type, buffer, sizeof(buffer)))
+	if (!print_flags(buffer, sizeof(buffer), type, COMPATIBLE_FLAG, status))
 		return_0;
 	outf(f, "flags = %s", buffer);
 
@@ -382,7 +384,7 @@ static char *_alloc_printed_str_list(struct dm_list *list)
 	/* '[' + ']' + '\0' */
 	size += 3;
 
-	if (!(buffer = buf = dm_malloc(size))) {
+	if (!(buffer = buf = malloc(size))) {
 		log_error("Could not allocate memory for string list buffer.");
 		return NULL;
 	}
@@ -407,7 +409,7 @@ static char *_alloc_printed_str_list(struct dm_list *list)
 	return buffer;
 
 bad:
-	dm_free(buffer);
+	free(buffer);
 	return_NULL;
 }
 
@@ -420,10 +422,10 @@ static int _out_list(struct formatter *f, struct dm_list *list,
 		if (!(buffer = _alloc_printed_str_list(list)))
 			return_0;
 		if (!out_text(f, "%s = %s", list_name, buffer)) {
-			dm_free(buffer);
+			free(buffer);
 			return_0;
 		}
-		dm_free(buffer);
+		free(buffer);
 	}
 
 	return 1;
@@ -466,8 +468,6 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
  
 	if (vg->system_id && *vg->system_id)
 		outf(f, "system_id = \"%s\"", vg->system_id);
-	else if (vg->lvm1_system_id && *vg->lvm1_system_id)
-		outf(f, "system_id = \"%s\"", vg->lvm1_system_id);
 
 	if (vg->lock_type) {
 		outf(f, "lock_type = \"%s\"", vg->lock_type);
@@ -501,7 +501,13 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
  */
 static const char *_get_pv_name_from_uuid(struct formatter *f, char *uuid)
 {
-	return dm_hash_lookup(f->pv_names, uuid);
+	const char *pv_name = dm_hash_lookup(f->pv_names, uuid);
+
+	if (!pv_name)
+		log_error(INTERNAL_ERROR "PV name for uuid %s missing from text metadata export hash table.",
+			  uuid);
+
+	return pv_name;
 }
 
 static const char *_get_pv_name(struct formatter *f, struct physical_volume *pv)
@@ -554,15 +560,15 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 		if (!_out_list(f, &pv->tags, "tags"))
 			return_0;
 
-		outsize(f, pv->size, "dev_size = %" PRIu64, pv->size);
+		outsize(f, pv->size, "dev_size = " FMTu64, pv->size);
 
-		outf(f, "pe_start = %" PRIu64, pv->pe_start);
+		outf(f, "pe_start = " FMTu64, pv->pe_start);
 		outsize(f, vg->extent_size * (uint64_t) pv->pe_count,
 			"pe_count = %u", pv->pe_count);
 
 		if (pv->ba_start && pv->ba_size) {
-			outf(f, "ba_start = %" PRIu64, pv->ba_start);
-			outsize(f, pv->ba_size, "ba_size = %" PRIu64, pv->ba_size);
+			outf(f, "ba_start = " FMTu64, pv->ba_start);
+			outsize(f, pv->ba_size, "ba_size = " FMTu64, pv->ba_size);
 		}
 
 		_dec_indent(f);
@@ -577,15 +583,23 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 static int _print_segment(struct formatter *f, struct volume_group *vg,
 			  int count, struct lv_segment *seg)
 {
+	char buffer[2048];
+
+	if (!print_segtype_lvflags(buffer, sizeof(buffer), seg->lv->status))
+		return_0;
+
 	outf(f, "segment%u {", count);
 	_inc_indent(f);
 
 	outf(f, "start_extent = %u", seg->le);
 	outsize(f, (uint64_t) seg->len * vg->extent_size,
 		"extent_count = %u", seg->len);
-
 	outnl(f);
-	outf(f, "type = \"%s\"", seg->segtype->name);
+	if (seg->reshape_len)
+		outsize(f, (uint64_t) seg->reshape_len * vg->extent_size,
+			"reshape_count = %u", seg->reshape_len);
+
+	outf(f, "type = \"%s%s\"", seg->segtype->name, buffer);
 
 	if (!_out_list(f, &seg->tags, "tags"))
 		return_0;
@@ -605,6 +619,7 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 {
 	const char *name;
 	unsigned int s;
+	struct physical_volume *pv;
 
 	outnl(f);
 
@@ -614,7 +629,13 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 	for (s = 0; s < seg->area_count; s++) {
 		switch (seg_type(seg, s)) {
 		case AREA_PV:
-			if (!(name = _get_pv_name(f, seg_pv(seg, s))))
+			if (!(pv = seg_pv(seg, s))) {
+				log_error(INTERNAL_ERROR "Missing PV for area " FMTu32 " of %s segment of LV %s.",
+					  s, type, display_lvname(seg->lv));
+				return 0;
+			}
+				
+			if (!(name = _get_pv_name(f, pv)))
 				return_0;
 
 			outf(f, "\"%s\", %u%s", name,
@@ -623,7 +644,7 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 			break;
 		case AREA_LV:
 			/* FIXME This helper code should be target-independent! Check for metadata LV property. */
-			if (!(seg->status & RAID)) {
+			if (!seg_is_raid(seg)) {
 				outf(f, "\"%s\", %u%s",
 				     seg_lv(seg, s)->name,
 				     seg_le(seg, s),
@@ -648,6 +669,8 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 
 			break;
 		case AREA_UNASSIGNED:
+			log_error(INTERNAL_ERROR "Invalid type for area " FMTu32 " of %s segment of LV %s.",
+				  s, type, display_lvname(seg->lv));
 			return 0;
 		}
 	}
@@ -670,7 +693,7 @@ static int _print_timestamp(struct formatter *f,
 			      "%Y-%m-%d %T %z", local_tm))
 			buf[0] = 0;
 
-		outfc(f, buf, "%s = %" PRIu64, name, (uint64_t) ts);
+		outfc(f, buf, "%s = " FMTu64, name, (uint64_t) ts);
 	}
 
 	return 1;
@@ -813,7 +836,7 @@ static int _alloc_printed_indirect_descendants(struct dm_list *indirect_glvs, ch
 	/* '[' + ']' + '\0' */
 	buf_size += 3;
 
-	if (!(*buffer = dm_malloc(buf_size))) {
+	if (!(*buffer = malloc(buf_size))) {
 		log_error("Could not allocate memory for ancestor list buffer.");
 		return 0;
 	}
@@ -841,7 +864,7 @@ static int _alloc_printed_indirect_descendants(struct dm_list *indirect_glvs, ch
 	return 1;
 bad:
 	if (*buffer) {
-		dm_free(*buffer);
+		free(*buffer);
 		*buffer = NULL;
 	}
 	return 0;
@@ -886,8 +909,8 @@ static int _print_historical_lv(struct formatter *f, struct historical_logical_v
 
 	r = 1;
 out:
-	if (descendants_buffer)
-		dm_free(descendants_buffer);
+	free(descendants_buffer);
+
 	return r;
 }
 
@@ -1012,7 +1035,7 @@ int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp)
 
 	_init();
 
-	if (!(f = dm_zalloc(sizeof(*f))))
+	if (!(f = zalloc(sizeof(*f))))
 		return_0;
 
 	f->data.fp = fp;
@@ -1024,7 +1047,7 @@ int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp)
 	r = _text_vg_export(f, vg, desc);
 	if (r)
 		r = !ferror(f->data.fp);
-	dm_free(f);
+	free(f);
 	return r;
 }
 
@@ -1036,11 +1059,11 @@ size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf)
 
 	_init();
 
-	if (!(f = dm_zalloc(sizeof(*f))))
+	if (!(f = zalloc(sizeof(*f))))
 		return_0;
 
 	f->data.buf.size = 65536;	/* Initial metadata limit */
-	if (!(f->data.buf.start = dm_malloc(f->data.buf.size))) {
+	if (!(f->data.buf.start = malloc(f->data.buf.size))) {
 		log_error("text_export buffer allocation failed");
 		goto out;
 	}
@@ -1051,7 +1074,7 @@ size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf)
 	f->nl = &_nl_raw;
 
 	if (!_text_vg_export(f, vg, desc)) {
-		dm_free(f->data.buf.start);
+		free(f->data.buf.start);
 		goto_out;
 	}
 
@@ -1059,7 +1082,7 @@ size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf)
 	*buf = f->data.buf.start;
 
       out:
-	dm_free(f);
+	free(f);
 	return r;
 }
 
@@ -1080,11 +1103,11 @@ struct dm_config_tree *export_vg_to_config_tree(struct volume_group *vg)
 
 	if (!(vg_cft = config_tree_from_string_without_dup_node_check(buf))) {
 		log_error("Error parsing metadata for VG %s.", vg->name);
-		dm_free(buf);
+		free(buf);
 		return_NULL;
 	}
 
-	dm_free(buf);
+	free(buf);
 	return vg_cft;
 }
 

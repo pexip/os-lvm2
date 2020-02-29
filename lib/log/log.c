@@ -13,12 +13,12 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "lib.h"
-#include "device.h"
-#include "memlock.h"
-#include "defaults.h"
-#include "report.h"
-#include "lvm-file.h"
+#include "lib/misc/lib.h"
+#include "lib/device/device.h"
+#include "lib/mm/memlock.h"
+#include "lib/config/defaults.h"
+#include "lib/report/report.h"
+#include "lib/misc/lvm-file.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -123,13 +123,13 @@ static int _set_custom_log_stream(struct log_stream_item *stream_item, int custo
 		goto out;
 	}
 
-	if (!(stream_item->buffer = dm_malloc(LOG_STREAM_BUFFER_SIZE))) {
+	if (!(stream_item->buffer = malloc(LOG_STREAM_BUFFER_SIZE))) {
 		log_error("Failed to allocate buffer for stream on file "
 			  "descriptor %d.", (int) custom_fd);
 	} else {
 		if (setvbuf(final_stream, stream_item->buffer, _IOLBF, LOG_STREAM_BUFFER_SIZE)) {
 			log_sys_error("setvbuf", "");
-			dm_free(stream_item->buffer);
+			free(stream_item->buffer);
 			stream_item->buffer = NULL;
 		}
 	}
@@ -342,7 +342,7 @@ void release_log_memory(void)
 	if (!_log_direct)
 		return;
 
-	dm_free((char *) _log_dev_alias.str);
+	free((char *) _log_dev_alias.str);
 	_log_dev_alias.str = "activate_log file";
 }
 
@@ -375,8 +375,9 @@ void fin_syslog(void)
 
 void init_msg_prefix(const char *prefix)
 {
-	strncpy(_msg_prefix, prefix, sizeof(_msg_prefix) - 1);
-	_msg_prefix[sizeof(_msg_prefix) - 1] = '\0';
+	if (prefix)
+		/* Cut away too long prefix */
+		(void) dm_strncpy(_msg_prefix, prefix, sizeof(_msg_prefix));
 }
 
 void init_indent(int indent)
@@ -395,7 +396,7 @@ void reset_lvm_errno(int store_errmsg)
 	_lvm_errno = 0;
 
 	if (_lvm_errmsg) {
-		dm_free(_lvm_errmsg);
+		free(_lvm_errmsg);
 		_lvm_errmsg = NULL;
 		_lvm_errmsg_size = _lvm_errmsg_len = 0;
 	}
@@ -541,7 +542,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 		msglen = strlen(message);
 		if ((_lvm_errmsg_len + msglen + 1) >= _lvm_errmsg_size) {
 			_lvm_errmsg_size = 2 * (_lvm_errmsg_len + msglen + 1);
-			if ((newbuf = dm_realloc(_lvm_errmsg,
+			if ((newbuf = realloc(_lvm_errmsg,
 						 _lvm_errmsg_size)))
 				_lvm_errmsg = newbuf;
 			else
@@ -594,7 +595,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
       log_it:
 	if (!logged_via_report && ((verbose_level() >= level) && !_log_suppress)) {
 		if (verbose_level() > _LOG_DEBUG) {
-			(void) dm_snprintf(buf, sizeof(buf), "#%s:%d ",
+			(void) dm_snprintf(buf, sizeof(buf), "#%s:%-5d ",
 					   file, line);
 		} else
 			buf[0] = '\0';
@@ -639,18 +640,23 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 	}
 
 	if (_log_to_file && (_log_while_suspended || !critical_section())) {
-		fprintf(_log_file, "%s:%d %s%s", file, line, log_command_name(),
+		fprintf(_log_file, "%s:%-5d %s%s", file, line, log_command_name(),
 			_msg_prefix);
 
 		va_copy(ap, orig_ap);
 		vfprintf(_log_file, trformat, ap);
 		va_end(ap);
 
+		if (_log_file_max_lines && ++_log_file_lines >= _log_file_max_lines) {
+			fprintf(_log_file, "\n%s:%-5d %sAborting. Command has reached limit "
+				"for logged lines (LVM_LOG_FILE_MAX_LINES=" FMTu64 ").",
+				file, line, _msg_prefix,
+				_log_file_max_lines);
+			fatal_internal_error = 1;
+		}
+
 		fputc('\n', _log_file);
 		fflush(_log_file);
-
-		if (_log_file_max_lines && ++_log_file_lines >= _log_file_max_lines)
-			fatal_internal_error = 1;
 	}
 
 	if (_syslog && (_log_while_suspended || !critical_section())) {
@@ -668,7 +674,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 		memset(&buf, ' ', sizeof(buf));
 		bufused = 0;
 		if ((n = dm_snprintf(buf, sizeof(buf),
-				      "%s:%d %s%s", file, line, log_command_name(),
+				      "%s:%-5d %s%s", file, line, log_command_name(),
 				      _msg_prefix)) == -1)
 			goto done;
 
@@ -689,7 +695,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 		buf[bufused] = '\n';
 		buf[sizeof(buf) - 1] = '\n';
 		/* FIXME real size bufused */
-		dev_append(&_log_dev, sizeof(buf), buf);
+		dev_append(&_log_dev, sizeof(buf), DEV_IO_LOG, buf);
 		_already_logging = 0;
 	}
 }

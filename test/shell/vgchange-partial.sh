@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 # Copyright (C) 2012 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -39,9 +40,6 @@ not vgchange -u $vg
 
 # physicalextentsize_ARG
 not vgchange -s 2M $vg
-
-# clustered_ARG
-not vgchange -c y $vg
 
 # alloc_ARG
 not vgchange --alloc anywhere $vg

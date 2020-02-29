@@ -15,9 +15,9 @@
 
 #include "tools.h"
 
-static int vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
-			    struct volume_group *vg,
-			    struct processing_handle *handle __attribute__((unused)))
+static int _vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
+			     struct volume_group *vg,
+			     struct processing_handle *handle __attribute__((unused)))
 {
 	if (arg_is_set(cmd, activevolumegroups_ARG) && !lvs_in_vg_activated(vg))
 		return ECMD_PROCESSED;
@@ -38,7 +38,7 @@ static int vgdisplay_single(struct cmd_context *cmd, const char *vg_name,
 		vgdisplay_extents(vg);
 
 		process_each_lv_in_vg(cmd, vg, NULL, NULL, 0, NULL,
-				      (process_single_lv_fn_t)lvdisplay_full);
+				      NULL, (process_single_lv_fn_t)lvdisplay_full);
 
 		log_print("--- Physical volumes ---");
 		process_each_pv_in_vg(cmd, vg, NULL,
@@ -60,13 +60,16 @@ int vgdisplay(struct cmd_context *cmd, int argc, char **argv)
 			return EINVALID_CMD_LINE;
 		}
 		return vgs(cmd, argc, argv);
-	} else if (arg_is_set(cmd, aligned_ARG) ||
-		   arg_is_set(cmd, binary_ARG) ||
-		   arg_is_set(cmd, noheadings_ARG) ||
-		   arg_is_set(cmd, options_ARG) ||
-		   arg_is_set(cmd, separator_ARG) ||
-		   arg_is_set(cmd, sort_ARG) || arg_is_set(cmd, unbuffered_ARG)) {
-		log_error("Incompatible options selected");
+	}
+
+	if (arg_is_set(cmd, aligned_ARG) ||
+	    arg_is_set(cmd, binary_ARG) ||
+	    arg_is_set(cmd, noheadings_ARG) ||
+	    arg_is_set(cmd, options_ARG) ||
+	    arg_is_set(cmd, separator_ARG) ||
+	    arg_is_set(cmd, sort_ARG) ||
+	    arg_is_set(cmd, unbuffered_ARG)) {
+		log_error("Incompatible options selected.");
 		return EINVALID_CMD_LINE;
 	}
 
@@ -90,7 +93,7 @@ int vgdisplay(struct cmd_context *cmd, int argc, char **argv)
 **********/
 
 	return process_each_vg(cmd, argc, argv, NULL, NULL, 0, 0, NULL,
-			       vgdisplay_single);
+			       _vgdisplay_single);
 
 /******** FIXME Need to count number processed
 	  Add this to process_each_vg if arg_is_set(cmd,activevolumegroups_ARG) ?

@@ -13,7 +13,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dmlib.h"
+#include "libdm/misc/dmlib.h"
 
 #include <ctype.h>
 
@@ -76,6 +76,13 @@ static int _test_word(uint32_t test, int bit)
 	return (tb ? ffs(tb) + bit - 1 : -1);
 }
 
+static int _test_word_rev(uint32_t test, int bit)
+{
+	uint32_t tb = test << (DM_BITS_PER_INT - 1 - bit);
+
+	return (tb ? bit - clz(tb) : -1);
+}
+
 int dm_bit_get_next(dm_bitset_t bs, int last_bit)
 {
 	int bit, word;
@@ -101,15 +108,45 @@ int dm_bit_get_next(dm_bitset_t bs, int last_bit)
 	return -1;
 }
 
+int dm_bit_get_prev(dm_bitset_t bs, int last_bit)
+{
+	int bit, word;
+	uint32_t test;
+
+	last_bit--;		/* otherwise we'll return the same bit again */
+
+	/*
+	 * bs[0] holds number of bits
+	 */
+	while (last_bit >= 0) {
+		word = last_bit >> INT_SHIFT;
+		test = bs[word + 1];
+		bit = last_bit & (DM_BITS_PER_INT - 1);
+
+		if ((bit = _test_word_rev(test, bit)) >= 0)
+			return (word * DM_BITS_PER_INT) + bit;
+
+		last_bit = (last_bit & ~(DM_BITS_PER_INT - 1)) - 1;
+	}
+
+	return -1;
+}
+
 int dm_bit_get_first(dm_bitset_t bs)
 {
 	return dm_bit_get_next(bs, -1);
 }
 
+int dm_bit_get_last(dm_bitset_t bs)
+{
+	return dm_bit_get_prev(bs, bs[0] + 1);
+}
+
 /*
  * Based on the Linux kernel __bitmap_parselist from lib/bitmap.c
  */
-dm_bitset_t dm_bitset_parse_list(const char *str, struct dm_pool *mem)
+dm_bitset_t dm_bitset_parse_list(const char *str, struct dm_pool *mem,
+				 size_t min_num_bits)
 {
 	unsigned a, b;
 	int c, old_c, totaldigits, ndigits, nmaskbits;
@@ -185,6 +222,9 @@ scan:
 	} while (len && c == ',');
 
 	if (!mask) {
+		if (min_num_bits && (nmaskbits < min_num_bits))
+			nmaskbits = min_num_bits;
+
 		if (!(mask = dm_bitset_create(mem, nmaskbits)))
 			goto_bad;
 		str = start;
@@ -201,3 +241,19 @@ bad:
 	}
 	return NULL;
 }
+
+#if defined(__GNUC__)
+/*
+ * Maintain backward compatibility with older versions that did not
+ * accept a 'min_num_bits' argument to dm_bitset_parse_list().
+ */
+dm_bitset_t dm_bitset_parse_list_v1_02_129(const char *str, struct dm_pool *mem);
+dm_bitset_t dm_bitset_parse_list_v1_02_129(const char *str, struct dm_pool *mem)
+{
+	return dm_bitset_parse_list(str, mem, 0);
+}
+DM_EXPORT_SYMBOL(dm_bitset_parse_list, 1_02_129);
+
+#else /* if defined(__GNUC__) */
+
+#endif

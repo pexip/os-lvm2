@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2014 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -14,7 +15,7 @@
 # Full CLI uses  --type
 # Shorthand CLI uses -H | --cache
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -25,6 +26,7 @@ aux have_cache 1 3 0 || skip
 aux prepare_vg 5 80000
 
 aux lvmconf 'global/cache_disabled_features = [ "policy_smq" ]'
+
 
 #######################
 # Cache_Pool creation #
@@ -56,11 +58,17 @@ fail lvcreate -l 1 --cachepool pool8 $vg
 
 # no size specified
 invalid lvcreate --cachepool pool $vg 2>&1 | tee err
-grep "specify either size or extents" err
+#grep "specify either size or extents" err
+grep "No command with matching syntax recognised" err
 
 # Check nothing has been created yet
 check vg_field $vg lv_count 0
 
+# Checks that argument passed with --cachepool is really a cache-pool
+lvcreate -an -l 1 -n $lv1 $vg
+# Hint: nice way to 'tee' only stderr.log so we can check it's log_error()
+fail lvcreate -L10 --cachepool $vg/$lv1 2> >(tee -a stderr.log >&2)
+grep "not a cache pool" stderr.log
 
 # With --type cache-pool we are clear which segtype has to be created
 lvcreate -l 1 --type cache-pool $vg/pool1
@@ -243,6 +251,8 @@ fail lvcreate --type cache-pool -l1 --chunksize 1G $vg/cpool3
 
 lvcreate --type cache-pool -L10 $vg/cpool4
 fail lvcreate -H -L10 --chunksize 16M $vg/cpool4
+
+lvdisplay --maps $vg
 
 lvremove -f $vg
 

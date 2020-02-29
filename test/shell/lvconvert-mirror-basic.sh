@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2010-2012 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,10 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
 
-# disable lvmetad logging as it bogs down test systems
-export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
 
 . lib/inittest
 
@@ -43,28 +41,27 @@ log_name_to_count() {
 
 test_lvconvert() {
 	local start_count=$1
-	local start_count_p1=$(($start_count + 1))
+	local start_count_p1=$(( start_count + 1 ))
 	local start_log_type=$2
 	local finish_count=$3
-	local finish_count_p1=$(($finish_count + 1))
+	local finish_count_p1=$(( finish_count + 1 ))
 	local finish_log_type=$4
-	local dev_array=( "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" )
 	local start_log_count
 	local finish_log_count
 	local max_log_count
 	local alloc=""
-	local active=true
+	local active="-aey"
 	local i
 
-	test "$5" = "active" && active=false
+	test "$5" = "active" && active="-an"
 	#test $finish_count -gt $start_count && up=true
 
 	# Do we have enough devices for the mirror images?
-	test $start_count_p1 -gt ${#dev_array[@]} && \
+	test $start_count_p1 -gt ${#DEVICES[@]} && \
 		die "Action requires too many devices"
 
 	# Do we have enough devices for the mirror images?
-	test $finish_count_p1 -gt ${#dev_array[@]} && \
+	test $finish_count_p1 -gt ${#DEVICES[@]} && \
 		die "Action requires too many devices"
 
 	start_log_count=$(log_name_to_count $start_log_type)
@@ -77,23 +74,22 @@ test_lvconvert() {
 
 	if [ $start_count -gt 0 ]; then
 		# Are there extra devices for the log or do we overlap
-		if [ $(($start_count_p1 + $start_log_count)) -gt ${#dev_array[@]} ]; then
+		if [ $(( start_count_p1 + start_log_count )) -gt ${#DEVICES[@]} ]; then
 			alloc="--alloc anywhere"
 		fi
 
-		lvcreate -aey -l2 --type mirror -m $start_count --mirrorlog $start_log_type \
+		lvcreate "$active" -Zn -l2 --type mirror -m $start_count --mirrorlog $start_log_type \
 			-n $lv1 $vg $alloc
 		check mirror_legs $vg $lv1 $start_count_p1
 		# FIXME: check mirror log
 	else
-		lvcreate -aey -l2 -n $lv1 $vg
+		lvcreate "$active" -Zn -l2 -n $lv1 $vg
 	fi
 
 	lvs -a -o name,copy_percent,devices $vg
-	test $active || lvchange -an $vg/$lv1
 
 	# Are there extra devices for the log or do we overlap
-	if [ $(($finish_count_p1 + $finish_log_count)) -gt ${#dev_array[@]} ]; then
+	if [ $(( finish_count_p1 +  finish_log_count )) -gt ${#DEVICES[@]} ]; then
 		alloc="--alloc anywhere"
 	fi
 
@@ -108,7 +104,7 @@ test_lvconvert() {
 	lvconvert --type mirror -m $finish_count $mirrorlog $finish_log_type \
 		$vg/$lv1 $alloc
 
-	test $active || lvchange -aey $vg/$lv1
+	test "$active" = "-an" || lvchange "$active" $vg/$lv1
 
 	check mirror_no_temporaries $vg $lv1
 	if [ "$finish_count_p1" -eq 1 ]; then
@@ -123,18 +119,14 @@ test_lvconvert() {
 	fi
 }
 
-aux prepare_pvs 5 5
-vgcreate -s 32k $vg $(cat DEVICES)
-
-MIRRORED="mirrored"
-# FIXME: Cluster is not supporting exlusive activation of mirrored log
-test -e LOCAL_CLVMD && MIRRORED=
+aux prepare_vg 5 5
+get_devs
 
 test_many() {
 	i=$1
 	for j in $(seq 0 3); do
-		for k in core disk $MIRRORED; do
-			for l in core disk $MIRRORED; do
+		for k in core disk; do
+			for l in core disk; do
 				if test "$i" -eq "$j" && test "$k" = "$l"; then continue; fi
 				: ----------------------------------------------------
 				: "Testing mirror conversion -m$i/$k -> -m$j/$l"

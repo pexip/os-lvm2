@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2008-2013 Red Hat, Inc. All rights reserved.
 # Copyright (C) 2007 NEC Corporation
 #
@@ -14,9 +15,6 @@ test_description="ensure that pvmove works with basic options"
 
 SKIP_WITH_LVMLOCKD=1
 
-# disable lvmetad logging as it bogs down test systems
-export LVM_TEST_LVMETAD_DEBUG_OPTS=${LVM_TEST_LVMETAD_DEBUG_OPTS-}
-
 . lib/inittest
 
 which md5sum || skip
@@ -25,22 +23,22 @@ which md5sum || skip
 # Utilities
 
 create_vg_() {
-	vgcreate -c n -s 128k $vg $(cat DEVICES)
+	vgcreate -s 128k "$vg" "${DEVICES[@]}"
 }
 
 # ---------------------------------------------------------------------
 # Common environment setup/cleanup for each sub testcases
 prepare_lvs_() {
-	lvcreate -l2 -n $lv1 $vg "$dev1"
+	lvcreate -aey -l2 -n $lv1 $vg "$dev1"
 	check lv_on $vg $lv1 "$dev1"
-	lvcreate -l9 -i3 -n $lv2 $vg "$dev2" "$dev3" "$dev4"
+	lvcreate -aey -l9 -i3 -n $lv2 $vg "$dev2" "$dev3" "$dev4"
 	check lv_on $vg $lv2 "$dev2" "$dev3" "$dev4"
 	lvextend -l+2 $vg/$lv1 "$dev2"
 	check lv_on $vg $lv1 "$dev1" "$dev2"
 	lvextend -l+2 $vg/$lv1 "$dev3"
 	lvextend -l+2 $vg/$lv1 "$dev1"
 	check lv_on $vg $lv1 "$dev1" "$dev2" "$dev3"
-	lvcreate -l1 -n $lv3 $vg "$dev2"
+	lvcreate -aey -l1 -n $lv3 $vg "$dev2"
 	check lv_on $vg $lv3 "$dev2"
 	aux mkdev_md5sum $vg $lv1
 	aux mkdev_md5sum $vg $lv2
@@ -56,7 +54,7 @@ prepare_lvs_() {
 # original content should be preserved
 restore_lvs_() {
 	vgcfgrestore -f bak-$$ $vg
-	vgchange -ay $vg
+	vgchange -aey $vg
 }
 
 lvs_not_changed_() {
@@ -83,6 +81,8 @@ check_and_cleanup_lvs_() {
 # Initialize PVs and VGs
 
 aux prepare_pvs 5 5
+get_devs
+
 create_vg_
 
 for mode in "--atomic" ""
@@ -342,17 +342,17 @@ check_and_cleanup_lvs_
 
 #COMM "pvmove out of --metadatacopies 0 PV (bz252150)"
 vgremove -ff $vg
-pvcreate $(cat DEVICES)
+pvcreate "${DEVICES[@]}"
 pvcreate --metadatacopies 0 "$dev1" "$dev2"
 create_vg_
-lvcreate -l4 -n $lv1 $vg "$dev1"
+lvcreate -aey -l4 -n $lv1 $vg "$dev1"
 pvmove $mode "$dev1"
 
 #COMM "pvmove fails activating mirror, properly restores state before pvmove"
 dmsetup create $vg-pvmove0 --notable
 not pvmove $mode -i 1 "$dev2"
 dmsetup info --noheadings -c -o suspended $vg-$lv1
-test $(dmsetup info --noheadings -c -o suspended $vg-$lv1) = "Active"
+test "$(dmsetup info --noheadings -c -o suspended "$vg-$lv1")" = "Active"
 if dmsetup info $vg-pvmove0_mimage_0 > /dev/null; then
         dmsetup remove $vg-pvmove0 $vg-pvmove0_mimage_0 $vg-pvmove0_mimage_1
 else

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # Copyright (C) 2013 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
+
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -21,18 +22,13 @@ dd if=/dev/urandom bs=512 seek=2 count=32 of="$dev2"
 
 # TODO: aux lvmconf "global/locking_type = 4"
 
-vgscan 2>&1 | tee vgscan.out
+vgscan 2>&1 | tee vgscan.out || true
 
-if test -e LOCAL_LVMETAD; then
-    not grep "Inconsistent metadata found for VG $vg" vgscan.out
-else
-    grep "Inconsistent metadata found for VG $vg" vgscan.out
-fi
+grep "Failed" vgscan.out
 
 dd if=/dev/urandom bs=512 seek=2 count=32 of="$dev2"
-aux notify_lvmetad "$dev2"
 
-vgck $vg 2>&1 | tee vgck.out
+vgck $vg 2>&1 | tee vgck.out || true
 grep Incorrect vgck.out
 
 vgremove -ff $vg
