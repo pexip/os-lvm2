@@ -1,3 +1,9 @@
+lvm2 (2.03.02-3pexip1) pexip; urgency=medium
+
+  * Migrate to Buster
+
+ -- Vincent Sanders <vince@pexip.com>  Tue, 03 Mar 2020 17:01:22 +0000
+
 lvm2 (2.03.02-3) unstable; urgency=medium
 
   * Stop lvm2-lvmetad on upgrade. (closes: #929080)
