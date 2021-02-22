@@ -119,6 +119,9 @@ static struct cmd_data _cmd_data_v4[] = {
 #ifdef DM_DEV_ARM_POLL
 	{"armpoll",	DM_DEV_ARM_POLL,	{4, 36, 0}},
 #endif
+#ifdef DM_GET_TARGET_VERSION
+	{"target-version", DM_GET_TARGET_VERSION, {4, 41, 0}},
+#endif
 };
 /* *INDENT-ON* */
 
@@ -202,7 +205,7 @@ static int _get_proc_number(const char *file, const char *name,
 	}
 
 	while (getline(&line, &len, fl) != -1) {
-		if (sscanf(line, "%d %255s\n", &num, &nm[0]) == 2) {
+		if (sscanf(line, "%u %255s\n", &num, &nm[0]) == 2) {
 			if (!strcmp(name, nm)) {
 				if (number) {
 					*number = num;
@@ -800,6 +803,11 @@ int dm_task_suppress_identical_reload(struct dm_task *dmt)
 {
 	dmt->suppress_identical_reload = 1;
 	return 1;
+}
+
+void dm_task_skip_reload_params_compare(struct dm_task *dmt)
+{
+	dmt->skip_reload_params_compare = 1;
 }
 
 int dm_task_set_add_node(struct dm_task *dmt, dm_add_node_t add_node)
@@ -1572,11 +1580,29 @@ static int _reload_with_suppression_v4(struct dm_task *dmt)
 		len = strlen(t2->params);
 		while (len-- > 0 && t2->params[len] == ' ')
 			t2->params[len] = '\0';
-		if ((t1->start != t2->start) ||
-		    (t1->length != t2->length) ||
-		    (strcmp(t1->type, t2->type)) ||
-		    (strcmp(t1->params, t2->params)))
+
+		if (t1->start != t2->start) {
+			log_debug("reload %u:%u start diff", task->major, task->minor);
 			goto no_match;
+		}
+		if (t1->length != t2->length) {
+			log_debug("reload %u:%u length diff", task->major, task->minor);
+			goto no_match;
+		}
+		if (strcmp(t1->type, t2->type)) {
+			log_debug("reload %u:%u type diff %s %s", task->major, task->minor, t1->type, t2->type);
+			goto no_match;
+		}
+		if (strcmp(t1->params, t2->params)) {
+			if (dmt->skip_reload_params_compare)
+				log_debug("reload %u:%u skip params ignore %s %s",
+					  task->major, task->minor, t1->params, t2->params);
+			else {
+				log_debug("reload %u:%u params diff", task->major, task->minor);
+				goto no_match;
+			}
+		}
+
 		t1 = t1->next;
 		t2 = t2->next;
 	}

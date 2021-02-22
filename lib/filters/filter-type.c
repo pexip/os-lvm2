@@ -17,15 +17,18 @@
 #include "lib/misc/lib.h"
 #include "lib/filters/filter.h"
 
-static int _passes_lvm_type_device_filter(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
+static int _passes_lvm_type_device_filter(struct cmd_context *cmd, struct dev_filter *f, struct device *dev, const char *use_filter_name)
 {
 	struct dev_types *dt = (struct dev_types *) f->private;
 	const char *name = dev_name(dev);
+
+	dev->filtered_flags &= ~DEV_FILTERED_DEVTYPE;
 
 	/* Is this a recognised device type? */
 	if (!dt->dev_type_array[MAJOR(dev->dev)].max_partitions) {
 		log_debug_devs("%s: Skipping: Unrecognised LVM device type %"
 			       PRIu64, name, (uint64_t) MAJOR(dev->dev));
+		dev->filtered_flags |= DEV_FILTERED_DEVTYPE;
 		return 0;
 	}
 
@@ -53,6 +56,7 @@ struct dev_filter *lvm_type_filter_create(struct dev_types *dt)
 	f->destroy = _lvm_type_filter_destroy;
 	f->use_count = 0;
 	f->private = dt;
+	f->name = "type";
 
 	log_debug_devs("LVM type filter initialised.");
 

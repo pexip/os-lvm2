@@ -37,6 +37,8 @@ enum {
 	SEG_SNAPSHOT_MERGE,
 	SEG_STRIPED,
 	SEG_ZERO,
+	SEG_WRITECACHE,
+	SEG_INTEGRITY,
 	SEG_THIN_POOL,
 	SEG_THIN,
 	SEG_VDO,
@@ -76,6 +78,8 @@ static const struct {
 	{ SEG_SNAPSHOT_MERGE, "snapshot-merge" },
 	{ SEG_STRIPED, "striped" },
 	{ SEG_ZERO, "zero"},
+	{ SEG_WRITECACHE, "writecache"},
+	{ SEG_INTEGRITY, "integrity"},
 	{ SEG_THIN_POOL, "thin-pool"},
 	{ SEG_THIN, "thin"},
 	{ SEG_VDO, "vdo" },
@@ -189,6 +193,11 @@ struct load_segment {
 	uint32_t min_recovery_rate;	/* raid kB/sec/disk */
 	uint32_t data_copies;		/* raid10 data_copies */
 
+	uint64_t metadata_start;	/* Cache */
+	uint64_t metadata_len;		/* Cache */
+	uint64_t data_start;		/* Cache */
+	uint64_t data_len;		/* Cache */
+
 	struct dm_tree_node *metadata;	/* Thin_pool + Cache */
 	struct dm_tree_node *pool;	/* Thin_pool, Thin */
 	struct dm_tree_node *external;	/* Thin */
@@ -196,6 +205,7 @@ struct load_segment {
 	uint64_t transaction_id;	/* Thin_pool */
 	uint64_t low_water_mark;	/* Thin_pool */
 	uint32_t data_block_size;       /* Thin_pool + cache */
+	uint32_t migration_threshold;   /* Cache */
 	unsigned skip_block_zeroing;	/* Thin_pool */
 	unsigned ignore_discard;	/* Thin_pool target vsn 1.1 */
 	unsigned no_discard_passdown;	/* Thin_pool target vsn 1.1 */
@@ -207,6 +217,17 @@ struct load_segment {
 	struct dm_tree_node *vdo_data;  /* VDO */
 	struct dm_vdo_target_params vdo_params; /* VDO */
 	const char *vdo_name;           /* VDO - device name is ALSO passed as table arg */
+	uint64_t vdo_data_size;		/* VDO - size of data storage device */
+
+	struct dm_tree_node *writecache_node;		/* writecache */
+	int writecache_pmem;				/* writecache, 1 if pmem, 0 if ssd */
+	uint32_t writecache_block_size;			/* writecache, in bytes */
+	struct writecache_settings writecache_settings;	/* writecache */
+
+	uint64_t integrity_data_sectors;		/* integrity (provided_data_sectors) */
+	struct dm_tree_node *integrity_meta_node;	/* integrity */
+	struct integrity_settings integrity_settings;	/* integrity */
+	int integrity_recalculate;			/* integrity */
 };
 
 /* Per-device properties */
@@ -252,6 +273,16 @@ struct load_properties {
 	 * they shall not be resumed before their commit.
 	 */
 	unsigned delay_resume_if_extended;
+
+	/*
+	 * When comparing table lines to decide if a reload is
+	 * needed, ignore any differences betwen the lvm device
+	 * params and the kernel-reported device params.
+	 * dm-integrity reports many internal parameters on the
+	 * table line when lvm does not explicitly set them,
+	 * causing lvm and the kernel to have differing params.
+	 */
+	unsigned skip_reload_params_compare;
 
 	/*
 	 * Call node_send_messages(), set to 2 if there are messages
@@ -1558,8 +1589,37 @@ static int _thin_pool_node_message(struct dm_tree_node *dnode, struct thin_messa
 	}
 
 	if (!_node_message(dnode->info.major, dnode->info.minor,
-			   tm->expected_errno, buf))
-		return_0;
+			   tm->expected_errno, buf)) {
+		switch (m->type) {
+		case DM_THIN_MESSAGE_CREATE_SNAP:
+		case DM_THIN_MESSAGE_CREATE_THIN:
+			if (errno == EEXIST) {
+				/*
+				 * ATM errno from ioctl() is preserved through code error path chain
+				 * If this would ever change, another way need to be used to
+				 * obtain result from failed DM message
+				 */
+				log_error("Thin pool %s already contain thin device with device_id %u.",
+					  _node_name(dnode), m->u.m_create_snap.device_id);
+				/*
+				 * TODO:
+				 *
+				 * Give some useful advice how to solve this problem,
+				 * until lvconvert --repair can handle this automatically
+				 */
+				log_error("Manual intervention may be required to remove device dev_id=%u in thin pool metadata.",
+					  m->u.m_create_snap.device_id);
+				log_error("Optionally new thin volume with device_id=%u can be manually added into a volume group.",
+					  m->u.m_create_snap.device_id);
+				log_warn("WARNING: When uncertain how to do this, contact support!");
+				return 0;
+			}
+			/* fall through */
+		default:
+			return_0;
+		}
+
+	}
 
 	return 1;
 }
@@ -1605,6 +1665,15 @@ static int _thin_pool_node_send_messages(struct dm_tree_node *dnode,
 
 	if (!have_messages || !send)
 		return 1; /* transaction_id is matching */
+
+	if (stp.fail || stp.read_only || stp.needs_check) {
+		log_error("Cannot send messages to thin pool %s%s%s%s.",
+			  _node_name(dnode),
+			  stp.fail ? " in failed state" : "",
+			  stp.read_only ? " with read only metadata" : "",
+			  stp.needs_check ? " which needs check first" : "");
+		return 0;
+	}
 
 	dm_list_iterate_items(tmsg, &seg->thin_messages) {
 		if (!(_thin_pool_node_message(dnode, tmsg)))
@@ -2067,7 +2136,7 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 	return r;
 }
 
-static int _create_node(struct dm_tree_node *dnode)
+static int _create_node(struct dm_tree_node *dnode, struct dm_tree_node *parent)
 {
 	int r = 0;
 	struct dm_task *dmt;
@@ -2116,36 +2185,13 @@ static int _create_node(struct dm_tree_node *dnode)
 				  "Unable to get DM task info for %s.",
 				  dnode->name);
 	}
+
+	if (r)
+		dm_list_add_h(&parent->activated, &dnode->activated_list);
 out:
 	dm_task_destroy(dmt);
 
 	return r;
-}
-
-/*
- * _remove_node
- *
- * This function is only used to remove a DM device that has failed
- * to load any table.
- */
-static int _remove_node(struct dm_tree_node *dnode)
-{
-	if (!dnode->info.exists)
-		return 1;
-
-	if (dnode->info.live_table || dnode->info.inactive_table) {
-		log_error(INTERNAL_ERROR
-			  "_remove_node called on device with loaded table(s).");
-		return 0;
-	}
-
-	if (!_deactivate_node(dnode->name, dnode->info.major, dnode->info.minor,
-			      &dnode->dtree->cookie, dnode->udev_flags, 0)) {
-		log_error("Failed to clean-up device with no table: %s.",
-			  _node_name(dnode));
-		return 0;
-	}
-	return 1;
 }
 
 static int _build_dev_string(char *devbuf, size_t bufsize, struct dm_tree_node *node)
@@ -2549,7 +2595,7 @@ static int _cache_emit_segment_line(struct dm_task *dmt,
 				    char *params, size_t paramsize)
 {
 	int pos = 0;
-	/* unsigned feature_count; */
+	unsigned feature_count;
 	char data[DM_FORMAT_DEV_BUFSIZE];
 	char metadata[DM_FORMAT_DEV_BUFSIZE];
 	char origin[DM_FORMAT_DEV_BUFSIZE];
@@ -2574,29 +2620,209 @@ static int _cache_emit_segment_line(struct dm_task *dmt,
 	EMIT_PARAMS(pos, " %u", seg->data_block_size);
 
 	/* Features */
-	/* feature_count = hweight32(seg->flags); */
-	/* EMIT_PARAMS(pos, " %u", feature_count); */
+
+	feature_count = 1; /* One of passthrough|writeback|writethrough is always set. */
+
 	if (seg->flags & DM_CACHE_FEATURE_METADATA2)
-		EMIT_PARAMS(pos, " 2 metadata2 ");
-	else
-		EMIT_PARAMS(pos, " 1 ");
+		feature_count++;
+
+	EMIT_PARAMS(pos, " %u", feature_count);
+
+	if (seg->flags & DM_CACHE_FEATURE_METADATA2)
+		EMIT_PARAMS(pos, " metadata2");
 
 	if (seg->flags & DM_CACHE_FEATURE_PASSTHROUGH)
-		EMIT_PARAMS(pos, "passthrough");
+		EMIT_PARAMS(pos, " passthrough");
         else if (seg->flags & DM_CACHE_FEATURE_WRITEBACK)
-		EMIT_PARAMS(pos, "writeback");
+		EMIT_PARAMS(pos, " writeback");
 	else
-		EMIT_PARAMS(pos, "writethrough");
+		EMIT_PARAMS(pos, " writethrough");
 
 	/* Cache Policy */
 	name = seg->policy_name ? : "default";
 
 	EMIT_PARAMS(pos, " %s", name);
 
-	EMIT_PARAMS(pos, " %u", seg->policy_argc * 2);
+	/* Do not pass migration_threshold 2048 which is default */
+	EMIT_PARAMS(pos, " %u", (seg->policy_argc + (seg->migration_threshold != 2048) ? 1 : 0) * 2);
+	if (seg->migration_threshold != 2048)
+		    EMIT_PARAMS(pos, " migration_threshold %u", seg->migration_threshold);
 	if (seg->policy_settings)
 		for (cn = seg->policy_settings->child; cn; cn = cn->sib)
-			EMIT_PARAMS(pos, " %s %" PRIu64, cn->key, cn->v->v.i);
+			if (cn->v) /* Skip deleted entry */
+				EMIT_PARAMS(pos, " %s %" PRIu64, cn->key, cn->v->v.i);
+
+	return 1;
+}
+
+static int _writecache_emit_segment_line(struct dm_task *dmt,
+				    struct load_segment *seg,
+				    char *params, size_t paramsize)
+{
+	int pos = 0;
+	int count = 0;
+	uint32_t block_size;
+	char origin_dev[DM_FORMAT_DEV_BUFSIZE];
+	char cache_dev[DM_FORMAT_DEV_BUFSIZE];
+
+	if (!_build_dev_string(origin_dev, sizeof(origin_dev), seg->origin))
+		return_0;
+
+	if (!_build_dev_string(cache_dev, sizeof(cache_dev), seg->writecache_node))
+		return_0;
+
+	if (seg->writecache_settings.high_watermark_set)
+		count += 2;
+	if (seg->writecache_settings.low_watermark_set)
+		count += 2;
+	if (seg->writecache_settings.writeback_jobs_set)
+		count += 2;
+	if (seg->writecache_settings.autocommit_blocks_set)
+		count += 2;
+	if (seg->writecache_settings.autocommit_time_set)
+		count += 2;
+	if (seg->writecache_settings.fua_set)
+		count += 1;
+	if (seg->writecache_settings.nofua_set)
+		count += 1;
+	if (seg->writecache_settings.cleaner_set && seg->writecache_settings.cleaner)
+		count += 1;
+	if (seg->writecache_settings.max_age_set)
+		count += 2;
+	if (seg->writecache_settings.new_key)
+		count += 2;
+
+	if (!(block_size = seg->writecache_block_size))
+		block_size = 4096;
+
+	EMIT_PARAMS(pos, "%s %s %s %u %d",
+		    seg->writecache_pmem ? "p" : "s",
+		    origin_dev, cache_dev, block_size, count);
+
+	if (seg->writecache_settings.high_watermark_set) {
+		EMIT_PARAMS(pos, " high_watermark %llu",
+			(unsigned long long)seg->writecache_settings.high_watermark);
+	}
+
+	if (seg->writecache_settings.low_watermark_set) {
+		EMIT_PARAMS(pos, " low_watermark %llu",
+			(unsigned long long)seg->writecache_settings.low_watermark);
+	}
+
+	if (seg->writecache_settings.writeback_jobs_set) {
+		EMIT_PARAMS(pos, " writeback_jobs %llu",
+			(unsigned long long)seg->writecache_settings.writeback_jobs);
+	}
+
+	if (seg->writecache_settings.autocommit_blocks_set) {
+		EMIT_PARAMS(pos, " autocommit_blocks %llu",
+			(unsigned long long)seg->writecache_settings.autocommit_blocks);
+	}
+
+	if (seg->writecache_settings.autocommit_time_set) {
+		EMIT_PARAMS(pos, " autocommit_time %llu",
+			(unsigned long long)seg->writecache_settings.autocommit_time);
+	}
+
+	if (seg->writecache_settings.fua_set) {
+		EMIT_PARAMS(pos, " fua");
+	}
+
+	if (seg->writecache_settings.nofua_set) {
+		EMIT_PARAMS(pos, " nofua");
+	}
+
+	if (seg->writecache_settings.cleaner_set && seg->writecache_settings.cleaner) {
+		EMIT_PARAMS(pos, " cleaner");
+	}
+
+	if (seg->writecache_settings.max_age_set) {
+		EMIT_PARAMS(pos, " max_age %u", seg->writecache_settings.max_age);
+	}
+
+	if (seg->writecache_settings.new_key) {
+		EMIT_PARAMS(pos, " %s %s",
+			seg->writecache_settings.new_key,
+			seg->writecache_settings.new_val);
+	}
+
+	return 1;
+}
+
+static int _integrity_emit_segment_line(struct dm_task *dmt,
+				    struct load_segment *seg,
+				    char *params, size_t paramsize)
+{
+	struct integrity_settings *set = &seg->integrity_settings;
+	int pos = 0;
+	int count;
+	char origin_dev[DM_FORMAT_DEV_BUFSIZE];
+	char meta_dev[DM_FORMAT_DEV_BUFSIZE];
+
+	if (!_build_dev_string(origin_dev, sizeof(origin_dev), seg->origin))
+		return_0;
+
+	if (seg->integrity_meta_node &&
+	    !_build_dev_string(meta_dev, sizeof(meta_dev), seg->integrity_meta_node))
+		return_0;
+
+	count = 3; /* block_size, internal_hash, fix_padding options are always passed */
+
+	if (seg->integrity_meta_node)
+		count++;
+
+	if (seg->integrity_recalculate)
+		count++;
+
+	if (set->journal_sectors_set)
+		count++;
+	if (set->interleave_sectors_set)
+		count++;
+	if (set->buffer_sectors_set)
+		count++;
+	if (set->journal_watermark_set)
+		count++;
+	if (set->commit_time_set)
+		count++;
+	if (set->bitmap_flush_interval_set)
+		count++;
+	if (set->sectors_per_bit_set)
+		count++;
+
+	EMIT_PARAMS(pos, "%s 0 %u %s %d fix_padding block_size:%u internal_hash:%s",
+		    origin_dev,
+		    set->tag_size,
+		    set->mode,
+		    count,
+		    set->block_size,
+		    set->internal_hash);
+
+	if (seg->integrity_meta_node)
+		EMIT_PARAMS(pos, " meta_device:%s", meta_dev);
+
+	if (seg->integrity_recalculate)
+		EMIT_PARAMS(pos, " recalculate");
+
+	if (set->journal_sectors_set)
+		EMIT_PARAMS(pos, " journal_sectors:%u", set->journal_sectors);
+
+	if (set->interleave_sectors_set)
+		EMIT_PARAMS(pos, " ineterleave_sectors:%u", set->interleave_sectors);
+
+	if (set->buffer_sectors_set)
+		EMIT_PARAMS(pos, " buffer_sectors:%u", set->buffer_sectors);
+
+	if (set->journal_watermark_set)
+		EMIT_PARAMS(pos, " journal_watermark:%u", set->journal_watermark);
+
+	if (set->commit_time_set)
+		EMIT_PARAMS(pos, " commit_time:%u", set->commit_time);
+
+	if (set->bitmap_flush_interval_set)
+		EMIT_PARAMS(pos, " bitmap_flush_interval:%u", set->bitmap_flush_interval);
+
+	if (set->sectors_per_bit_set)
+		EMIT_PARAMS(pos, " sectors_per_bit:%llu", (unsigned long long)set->sectors_per_bit);
 
 	return 1;
 }
@@ -2647,17 +2873,18 @@ static int _vdo_emit_segment_line(struct dm_task *dmt,
 		return 0;
 	}
 
-	EMIT_PARAMS(pos, "%s %u %s " FMTu64 " " FMTu64 " %u on %s %s "
-		    "ack=%u,bio=%u,bioRotationInterval=%u,cpu=%u,hash=%u,logical=%u,physical=%u",
+	EMIT_PARAMS(pos, "V2 %s " FMTu64 " %u " FMTu64 " %u %s %s %s "
+		    "maxDiscard %u ack %u bio %u bioRotationInterval %u cpu %u hash %u logical %u physical %u",
 		    data_dev,
-		    (seg->vdo_params.emulate_512_sectors == 0) ? 4096 : 512,
-		    seg->vdo_params.use_read_cache ? "enabled" : "disabled",
-		    seg->vdo_params.read_cache_size_mb * UINT64_C(256),		// 1MiB -> 4KiB units
+		    seg->vdo_data_size / 8, // this parameter is in 4K units
+		    seg->vdo_params.minimum_io_size * UINT32_C(512), //  sector to byte units
 		    seg->vdo_params.block_map_cache_size_mb * UINT64_C(256),	// 1MiB -> 4KiB units
-		    seg->vdo_params.block_map_period,
+		    seg->vdo_params.block_map_era_length,
+		    seg->vdo_params.use_metadata_hints ? "on" : "off" ,
 		    (seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_SYNC) ? "sync" :
 			(seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_ASYNC) ? "async" : "auto", // policy
 		    seg->vdo_name,
+		    seg->vdo_params.max_discard,
 		    seg->vdo_params.ack_threads,
 		    seg->vdo_params.bio_threads,
 		    seg->vdo_params.bio_rotation,
@@ -2780,6 +3007,14 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 		if (!_cache_emit_segment_line(dmt, seg, params, paramsize))
 			return_0;
 		break;
+	case SEG_WRITECACHE:
+		if (!_writecache_emit_segment_line(dmt, seg, params, paramsize))
+			return_0;
+		break;
+	case SEG_INTEGRITY:
+		if (!_integrity_emit_segment_line(dmt, seg, params, paramsize))
+			return_0;
+		break;
 	}
 
 	switch(seg->type) {
@@ -2791,6 +3026,8 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_THIN_POOL:
 	case SEG_THIN:
 	case SEG_CACHE:
+	case SEG_WRITECACHE:
+	case SEG_INTEGRITY:
 		break;
 	case SEG_CRYPT:
 	case SEG_LINEAR:
@@ -2895,6 +3132,9 @@ static int _load_node(struct dm_tree_node *dnode)
 	if (!dm_task_suppress_identical_reload(dmt))
 		log_warn("WARNING: Failed to suppress reload of identical tables.");
 
+	if (dnode->props.skip_reload_params_compare)
+		dm_task_skip_reload_params_compare(dmt);
+
 	if ((r = dm_task_run(dmt))) {
 		r = dm_task_get_info(dmt, &dnode->info);
 		if (r && !dnode->info.inactive_table)
@@ -2913,8 +3153,8 @@ static int _load_node(struct dm_tree_node *dnode)
 			if (!existing_table_size && dnode->props.delay_resume_if_new)
 				dnode->props.size_changed = 0;
 
-			log_debug_activation("Table size changed from %" PRIu64 " to %"
-					     PRIu64 " for %s.%s", existing_table_size,
+			log_debug_activation("Table size changed from %" PRIu64 " to %" PRIu64 " for %s.%s",
+					     existing_table_size,
 					     seg_start, _node_name(dnode),
 					     dnode->props.size_changed ? "" : " (Ignoring.)");
 
@@ -2966,6 +3206,16 @@ static int _dm_tree_revert_activated(struct dm_tree_node *parent)
 	return 1;
 }
 
+static int _dm_tree_wait_and_revert_activated(struct dm_tree_node *dnode)
+{
+	if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
+		stack;
+
+	dm_tree_set_cookie(dnode, 0);
+
+	return _dm_tree_revert_activated(dnode);
+}
+
 int dm_tree_preload_children(struct dm_tree_node *dnode,
 			     const char *uuid_prefix,
 			     size_t uuid_prefix_len)
@@ -2995,7 +3245,7 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 				return_0;
 
 		/* FIXME Cope if name exists with no uuid? */
-		if (!child->info.exists && !(node_created = _create_node(child)))
+		if (!child->info.exists && !(node_created = _create_node(child, dnode)))
 			return_0;
 
 		/* Propagate delayed resume from exteded child node */
@@ -3005,28 +3255,22 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 		if (!child->info.inactive_table &&
 		    child->props.segment_count &&
 		    !_load_node(child)) {
+			stack;
 			/*
-			 * If the table load does not succeed, we remove the
-			 * device in the kernel that would otherwise have an
-			 * empty table.  This makes the create + load of the
-			 * device atomic.  However, if other dependencies have
-			 * already been created and loaded; this code is
-			 * insufficient to remove those - only the node
-			 * encountering the table load failure is removed.
+			 * If the table load fails, try to device in the kernel
+			 * together with other created and preloaded devices.
 			 */
-			if (node_created) {
-				if (!_remove_node(child))
-					return_0;
-				if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
-					stack;
-				dm_tree_set_cookie(dnode, 0);
-				(void) _dm_tree_revert_activated(child);
-			}
-			return_0;
+			if (!_dm_tree_wait_and_revert_activated(dnode))
+				stack;
+			r = 0;
+			continue;
 		}
 
 		/* No resume for a device without parents or with unchanged or smaller size */
-		if (!dm_tree_node_num_children(child, 1) || (child->props.size_changed <= 0))
+		if (!dm_tree_node_num_children(child, 1))
+			continue;
+
+		if (child->props.size_changed <= 0)
 			continue;
 
 		if (!child->info.inactive_table && !child->info.suspended)
@@ -3037,28 +3281,19 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 				  &child->info, &child->dtree->cookie, child->udev_flags,
 				  child->info.suspended)) {
 			log_error("Unable to resume %s.", _node_name(child));
-			/* If the device was not previously active, we might as well remove this node. */
-			if (!child->info.live_table &&
-			    !_deactivate_node(child->name, child->info.major, child->info.minor,
-					      &child->dtree->cookie, child->udev_flags, 0))
-				log_error("Unable to deactivate %s.", _node_name(child));
+			if (!_dm_tree_wait_and_revert_activated(dnode))
+				stack;
 			r = 0;
-			/* Each child is handled independently */
 			continue;
 		}
 
 		if (node_created) {
-			/* Collect newly introduced devices for revert */
-			dm_list_add_h(&dnode->activated, &child->activated_list);
-
 			/* When creating new node also check transaction_id. */
 			if (child->props.send_messages &&
 			    !_node_send_messages(child, uuid_prefix, uuid_prefix_len, 0)) {
 				stack;
-				if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
+				if (!_dm_tree_wait_and_revert_activated(dnode))
 					stack;
-				dm_tree_set_cookie(dnode, 0);
-				(void) _dm_tree_revert_activated(dnode);
 				r = 0;
 				continue;
 			}
@@ -3474,6 +3709,10 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				  const char *origin_uuid,
 				  const char *policy_name,
 				  const struct dm_config_node *policy_settings,
+				  uint64_t metadata_start,
+				  uint64_t metadata_len,
+				  uint64_t data_start,
+				  uint64_t data_len,
 				  uint32_t data_block_size)
 {
 	struct dm_config_node *cn;
@@ -3549,9 +3788,14 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 	if (!_link_tree_nodes(node, seg->origin))
 		return_0;
 
+	seg->metadata_start = metadata_start;
+	seg->metadata_len = metadata_len;
+	seg->data_start = data_start;
+	seg->data_len = data_len;
 	seg->data_block_size = data_block_size;
 	seg->flags = feature_flags;
 	seg->policy_name = policy_name;
+	seg->migration_threshold = 2048; /* Default migration threshold 1MiB */
 
 	/* FIXME: better validation missing */
 	if (policy_settings) {
@@ -3564,9 +3808,99 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				log_error("Cache policy parameter %s is without integer value.", cn->key);
 				return 0;
 			}
-			seg->policy_argc++;
+			if (strcmp(cn->key, "migration_threshold") == 0) {
+				seg->migration_threshold = cn->v->v.i;
+				cn->v = NULL; /* skip this entry */
+			} else
+				seg->policy_argc++;
 		}
 	}
+
+	/* Always some throughput available for cache to proceed */
+	if (seg->migration_threshold < data_block_size * 8)
+		seg->migration_threshold = data_block_size * 8;
+
+	return 1;
+}
+
+int dm_tree_node_add_writecache_target(struct dm_tree_node *node,
+				  uint64_t size,
+				  const char *origin_uuid,
+				  const char *cache_uuid,
+				  int pmem,
+				  uint32_t writecache_block_size,
+				  struct writecache_settings *settings)
+{
+	struct load_segment *seg;
+
+	if (!(seg = _add_segment(node, SEG_WRITECACHE, size)))
+		return_0;
+
+	seg->writecache_pmem = pmem;
+	seg->writecache_block_size = writecache_block_size;
+
+	if (!(seg->writecache_node = dm_tree_find_node_by_uuid(node->dtree, cache_uuid))) {
+		log_error("Missing writecache's cache uuid %s.", cache_uuid);
+		return 0;
+	}
+	if (!_link_tree_nodes(node, seg->writecache_node))
+		return_0;
+
+	if (!(seg->origin = dm_tree_find_node_by_uuid(node->dtree, origin_uuid))) {
+		log_error("Missing writecache's origin uuid %s.", origin_uuid);
+		return 0;
+	}
+	if (!_link_tree_nodes(node, seg->origin))
+		return_0;
+
+	memcpy(&seg->writecache_settings, settings, sizeof(struct writecache_settings));
+
+	if (settings->new_key && settings->new_val) {
+		seg->writecache_settings.new_key = dm_pool_strdup(node->dtree->mem, settings->new_key);
+		seg->writecache_settings.new_val = dm_pool_strdup(node->dtree->mem, settings->new_val);
+	}
+
+	return 1;
+}
+
+int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
+				  uint64_t size,
+				  const char *origin_uuid,
+				  const char *meta_uuid,
+				  struct integrity_settings *settings,
+				  int recalculate)
+{
+	struct load_segment *seg;
+
+	if (!(seg = _add_segment(node, SEG_INTEGRITY, size)))
+		return_0;
+
+	if (!meta_uuid) {
+		log_error("No integrity meta uuid.");
+		return 0;
+	}
+
+	if (!(seg->integrity_meta_node = dm_tree_find_node_by_uuid(node->dtree, meta_uuid))) {
+		log_error("Missing integrity's meta uuid %s.", meta_uuid);
+		return 0;
+	}
+
+	if (!_link_tree_nodes(node, seg->integrity_meta_node))
+		return_0;
+
+	if (!(seg->origin = dm_tree_find_node_by_uuid(node->dtree, origin_uuid))) {
+		log_error("Missing integrity's origin uuid %s.", origin_uuid);
+		return 0;
+	}
+
+	if (!_link_tree_nodes(node, seg->origin))
+		return_0;
+
+	memcpy(&seg->integrity_settings, settings, sizeof(struct integrity_settings));
+
+	seg->integrity_recalculate = recalculate;
+
+	node->props.skip_reload_params_compare = 1;
 
 	return 1;
 }
@@ -4027,13 +4361,15 @@ int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
 
 	return dm_tree_node_add_cache_target(node, size, feature_flags & _mask,
 					     metadata_uuid, data_uuid, origin_uuid,
-					     policy_name, policy_settings, data_block_size);
+					     policy_name, policy_settings, 0, 0, 0, 0, data_block_size);
 }
 #endif
 
 int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
 				uint64_t size,
+				const char *vdo_pool_name,
 				const char *data_uuid,
+				uint64_t data_size,
 				const struct dm_vdo_target_params *vtp)
 {
 	struct load_segment *seg;
@@ -4053,7 +4389,8 @@ int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
 		return_0;
 
 	seg->vdo_params = *vtp;
-	seg->vdo_name = node->name;
+	seg->vdo_name = vdo_pool_name;
+	seg->vdo_data_size = data_size;
 
 	node->props.send_messages = 2;
 

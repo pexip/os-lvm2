@@ -406,10 +406,12 @@ int lvdisplay_full(struct cmd_context *cmd,
 	struct lv_segment *seg = NULL;
 	int lvm1compat;
 	dm_percent_t snap_percent;
-	int thin_data_active = 0, thin_metadata_active = 0;
-	dm_percent_t thin_data_percent, thin_metadata_percent;
+	int thin_pool_active = 0;
+	dm_percent_t thin_data_percent = 0, thin_metadata_percent = 0;
 	int thin_active = 0;
-	dm_percent_t thin_percent;
+	dm_percent_t thin_percent = 0;
+	struct lv_status_thin *thin_status = NULL;
+	struct lv_status_thin_pool *thin_pool_status = NULL;
 	struct lv_status_cache *cache_status = NULL;
 	struct lv_status_vdo *vdo_status = NULL;
 
@@ -503,15 +505,18 @@ int lvdisplay_full(struct cmd_context *cmd,
 		if (seg->merge_lv)
 			log_print("LV merging to          %s",
 				  seg->merge_lv->name);
-		if (inkernel)
-			thin_active = lv_thin_percent(lv, 0, &thin_percent);
+		if (inkernel && (thin_active = lv_thin_status(lv, 0, &thin_status))) {
+			thin_percent = thin_status->usage;
+			dm_pool_destroy(thin_status->mem);
+		}
 		if (lv_is_merging_origin(lv))
 			log_print("LV merged with         %s",
 				  find_snapshot(lv)->lv->name);
 	} else if (lv_is_thin_pool(lv)) {
-		if (lv_info(cmd, lv, 1, &info, 1, 1) && info.exists) {
-			thin_data_active = lv_thin_pool_percent(lv, 0, &thin_data_percent);
-			thin_metadata_active = lv_thin_pool_percent(lv, 1, &thin_metadata_percent);
+		if ((thin_pool_active = lv_thin_pool_status(lv, 0, &thin_pool_status))) {
+			thin_data_percent = thin_pool_status->data_usage;
+			thin_metadata_percent = thin_pool_status->metadata_usage;
+			dm_pool_destroy(thin_pool_status->mem);
 		}
 		/* FIXME: display thin_pool targets transid for activated LV as well */
 		seg = first_seg(lv);
@@ -522,10 +527,10 @@ int lvdisplay_full(struct cmd_context *cmd,
 			log_print("LV origin of Cache LV  %s", seg->lv->name);
 	} else if (lv_is_cache(lv)) {
 		seg = first_seg(lv);
-		if (inkernel && !lv_cache_status(lv, &cache_status))
-                        return_0;
-		log_print("LV Cache pool name     %s", seg->pool_lv->name);
-		log_print("LV Cache origin name   %s", seg_lv(seg, 0)->name);
+		if (inkernel && lv_cache_status(lv, &cache_status)) {
+			log_print("LV Cache pool name     %s", seg->pool_lv->name);
+			log_print("LV Cache origin name   %s", seg_lv(seg, 0)->name);
+		}
 	} else if (lv_is_cache_pool(lv)) {
 		seg = first_seg(lv);
 		log_print("LV Pool metadata       %s", seg->metadata_lv->name);
@@ -533,7 +538,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 	} else if (lv_is_vdo_pool(lv)) {
 		seg = first_seg(lv);
 		log_print("LV VDO Pool data       %s", seg_lv(seg, 0)->name);
-		if (inkernel && lv_vdo_pool_status(lv, 0, &vdo_status)) { /* FIXME: flush option? */
+		if (lv_vdo_pool_status(lv, 0, &vdo_status)) { /* FIXME: flush option? */
 			log_print("LV VDO Pool usage      %s%%",
 				  display_percent(cmd, vdo_status->usage));
 			log_print("LV VDO Pool saving     %s%%",
@@ -591,13 +596,12 @@ int lvdisplay_full(struct cmd_context *cmd,
 		dm_pool_destroy(cache_status->mem);
 	}
 
-	if (thin_data_active)
+	if (thin_pool_active) {
 		log_print("Allocated pool data    %s%%",
 			  display_percent(cmd, thin_data_percent));
-
-	if (thin_metadata_active)
 		log_print("Allocated metadata     %s%%",
 			  display_percent(cmd, thin_metadata_percent));
+	}
 
 	if (thin_active)
 		log_print("Mapped size            %s%%",

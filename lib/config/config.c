@@ -24,6 +24,7 @@
 #include "lib/misc/lvm-file.h"
 #include "lib/mm/memlock.h"
 #include "lib/label/label.h"
+#include "lib/metadata/metadata.h"
 
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -502,10 +503,10 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 {
 	char *fb, *fe;
 	int r = 0;
-	int use_mmap = 1;
-	off_t mmap_offset = 0;
+	int sz, use_plain_read = 1;
 	char *buf = NULL;
 	struct config_source *cs = dm_config_get_custom(cft);
+	size_t rsize;
 
 	if (!_is_file_based_config_source(cs->type)) {
 		log_error(INTERNAL_ERROR "config_file_read_fd: expected file, special file "
@@ -514,26 +515,28 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 		return 0;
 	}
 
-	/* Only use mmap with regular files */
+	/* Only use plain read with regular files */
 	if (!(dev->flags & DEV_REGULAR) || size2)
-		use_mmap = 0;
+		use_plain_read = 0;
 
-	if (use_mmap) {
-		mmap_offset = offset % lvm_getpagesize();
-		/* memory map the file */
-		fb = mmap((caddr_t) 0, size + mmap_offset, PROT_READ,
-			  MAP_PRIVATE, dev_fd(dev), offset - mmap_offset);
-		if (fb == (caddr_t) (-1)) {
-			log_sys_error("mmap", dev_name(dev));
-			goto out;
+	if (!(buf = malloc(size + size2))) {
+		log_error("Failed to allocate circular buffer.");
+		return 0;
+	}
+
+	if (use_plain_read) {
+		/* Note: also used for lvm.conf to read all settings */
+		for (rsize = 0; rsize < size; rsize += sz) {
+			do {
+				sz = read(dev_fd(dev), buf + rsize, size - rsize);
+			} while ((sz < 0) && ((errno == EINTR) || (errno == EAGAIN)));
+
+			if (sz < 0) {
+				log_sys_error("read", dev_name(dev));
+				goto out;
+			}
 		}
-		fb = fb + mmap_offset;
 	} else {
-		if (!(buf = malloc(size + size2))) {
-			log_error("Failed to allocate circular buffer.");
-			return 0;
-		}
-
 		if (!dev_read_bytes(dev, offset, size, buf))
 			goto out;
 
@@ -541,9 +544,9 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 			if (!dev_read_bytes(dev, offset2, size2, buf + size))
 				goto out;
 		}
-
-		fb = buf;
 	}
+
+	fb = buf;
 
 	/*
 	 * The checksum passed in is the checksum from the mda_header
@@ -572,15 +575,7 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 	r = 1;
 
       out:
-	if (!use_mmap)
-		free(buf);
-	else {
-		/* unmap the file */
-		if (munmap(fb - mmap_offset, size + mmap_offset)) {
-			log_sys_error("munmap", dev_name(dev));
-			r = 0;
-		}
-	}
+	free(buf);
 
 	return r;
 }
@@ -2331,6 +2326,11 @@ int load_pending_profiles(struct cmd_context *cmd)
 	}
 
 	return r;
+}
+
+int get_default_metadata_pvmetadatasize_CFG(struct cmd_context *cmd, struct profile *profile)
+{
+	return get_default_pvmetadatasize_sectors();
 }
 
 const char *get_default_devices_cache_dir_CFG(struct cmd_context *cmd, struct profile *profile)

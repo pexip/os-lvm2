@@ -47,23 +47,33 @@ static int _cache_out_line(const char *line, void *_f)
 static void _cache_display(const struct lv_segment *seg)
 {
 	const struct dm_config_node *n;
-	const struct lv_segment *pool_seg =
-		seg_is_cache_pool(seg) ? seg : first_seg(seg->pool_lv);
+	const struct lv_segment *setting_seg = NULL;
+
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+	else
+		return;
 
 	log_print("  Chunk size\t\t%s",
-		  display_size(seg->lv->vg->cmd, pool_seg->chunk_size));
+		  display_size(seg->lv->vg->cmd, setting_seg->chunk_size));
 
-	if (pool_seg->cache_metadata_format != CACHE_METADATA_FORMAT_UNSELECTED)
-		log_print("  Metadata format\t%u", pool_seg->cache_metadata_format);
+	if (setting_seg->cache_metadata_format != CACHE_METADATA_FORMAT_UNSELECTED)
+		log_print("  Metadata format\t%u", setting_seg->cache_metadata_format);
 
-	if (pool_seg->cache_mode != CACHE_MODE_UNSELECTED)
-		log_print("  Mode\t\t%s", get_cache_mode_name(pool_seg));
+	if (setting_seg->cache_mode != CACHE_MODE_UNSELECTED)
+		log_print("  Mode\t\t%s", get_cache_mode_name(setting_seg));
 
-	if (pool_seg->policy_name)
-		log_print("  Policy\t\t%s", pool_seg->policy_name);
+	if (setting_seg->policy_name)
+		log_print("  Policy\t\t%s", setting_seg->policy_name);
 
-	if (pool_seg->policy_settings &&
-	    (n = pool_seg->policy_settings->child))
+	if (setting_seg->policy_settings &&
+	    (n = setting_seg->policy_settings->child))
 		dm_config_write_node(n, _cache_out_line, NULL);
 
 	log_print(" ");
@@ -99,32 +109,16 @@ static void _fix_missing_defaults(struct lv_segment *cpool_seg)
 	}
 }
 
-static int _cache_pool_text_import(struct lv_segment *seg,
-				   const struct dm_config_node *sn,
-				   struct dm_hash_table *pv_hash __attribute__((unused)))
+static int _settings_text_import(struct lv_segment *seg,
+				 const struct dm_config_node *sn)
 {
-	struct logical_volume *data_lv, *meta_lv;
 	const char *str = NULL;
 	struct dm_pool *mem = seg->lv->vg->vgmem;
 
-	if (!dm_config_has_node(sn, "data"))
-		return SEG_LOG_ERROR("Cache data not specified in");
-	if (!(str = dm_config_find_str(sn, "data", NULL)))
-		return SEG_LOG_ERROR("Cache data must be a string in");
-	if (!(data_lv = find_lv(seg->lv->vg, str)))
-		return SEG_LOG_ERROR("Unknown logical volume %s specified for "
-				     "cache data in", str);
-
-	if (!dm_config_has_node(sn, "metadata"))
-		return SEG_LOG_ERROR("Cache metadata not specified in");
-	if (!(str = dm_config_find_str(sn, "metadata", NULL)))
-		return SEG_LOG_ERROR("Cache metadata must be a string in");
-	if (!(meta_lv = find_lv(seg->lv->vg, str)))
-		return SEG_LOG_ERROR("Unknown logical volume %s specified for "
-				     "cache metadata in", str);
-
-	if (!dm_config_get_uint32(sn, "chunk_size", &seg->chunk_size))
-		return SEG_LOG_ERROR("Couldn't read cache chunk_size in");
+	if (dm_config_has_node(sn, "chunk_size")) {
+		if (!dm_config_get_uint32(sn, "chunk_size", &seg->chunk_size))
+			return SEG_LOG_ERROR("Couldn't read cache chunk_size in");
+	}
 
 	/*
 	 * Read in features:
@@ -144,16 +138,6 @@ static int _cache_pool_text_import(struct lv_segment *seg,
 			return SEG_LOG_ERROR("policy must be a string in");
 		if (!(seg->policy_name = dm_pool_strdup(mem, str)))
 			return SEG_LOG_ERROR("Failed to duplicate policy in");
-	}
-
-	if (dm_config_has_node(sn, "metadata_format")) {
-		if (!dm_config_get_uint32(sn, "metadata_format", &seg->cache_metadata_format) ||
-		    ((seg->cache_metadata_format != CACHE_METADATA_FORMAT_1) &&
-		     (seg->cache_metadata_format != CACHE_METADATA_FORMAT_2)))
-			return SEG_LOG_ERROR("Unknown cache metadata format %u number in",
-					     seg->cache_metadata_format);
-		if (seg->cache_metadata_format == CACHE_METADATA_FORMAT_2)
-			seg->lv->status |= LV_METADATA_FORMAT;
 	}
 
 	/*
@@ -184,6 +168,75 @@ static int _cache_pool_text_import(struct lv_segment *seg,
 			return_0;
 	}
 
+	return 1;
+}
+
+static int _settings_text_export(const struct lv_segment *seg,
+				 struct formatter *f)
+{
+	if (seg->chunk_size)
+		outf(f, "chunk_size = %" PRIu32, seg->chunk_size);
+
+	if (seg->cache_mode != CACHE_MODE_UNSELECTED) {
+		const char *cache_mode;
+		if (!(cache_mode = cache_mode_num_to_str(seg->cache_mode)))
+			return_0;
+		outf(f, "cache_mode = \"%s\"", cache_mode);
+	}
+
+	if (seg->policy_name) {
+		outf(f, "policy = \"%s\"", seg->policy_name);
+
+		if (seg->policy_settings) {
+			if (strcmp(seg->policy_settings->key, "policy_settings")) {
+				log_error(INTERNAL_ERROR "Incorrect policy_settings tree, %s.",
+					  seg->policy_settings->key);
+				return 0;
+			}
+			if (seg->policy_settings->child)
+				out_config_node(f, seg->policy_settings);
+		}
+	}
+
+	return 1;
+}
+
+static int _cache_pool_text_import(struct lv_segment *seg,
+				   const struct dm_config_node *sn,
+				   struct dm_hash_table *pv_hash __attribute__((unused)))
+{
+	struct logical_volume *data_lv, *meta_lv;
+	const char *str = NULL;
+
+	if (!dm_config_has_node(sn, "data"))
+		return SEG_LOG_ERROR("Cache data not specified in");
+	if (!(str = dm_config_find_str(sn, "data", NULL)))
+		return SEG_LOG_ERROR("Cache data must be a string in");
+	if (!(data_lv = find_lv(seg->lv->vg, str)))
+		return SEG_LOG_ERROR("Unknown logical volume %s specified for "
+				     "cache data in", str);
+
+	if (!dm_config_has_node(sn, "metadata"))
+		return SEG_LOG_ERROR("Cache metadata not specified in");
+	if (!(str = dm_config_find_str(sn, "metadata", NULL)))
+		return SEG_LOG_ERROR("Cache metadata must be a string in");
+	if (!(meta_lv = find_lv(seg->lv->vg, str)))
+		return SEG_LOG_ERROR("Unknown logical volume %s specified for "
+				     "cache metadata in", str);
+
+	if (dm_config_has_node(sn, "metadata_format")) {
+		if (!dm_config_get_uint32(sn, "metadata_format", &seg->cache_metadata_format) ||
+		    ((seg->cache_metadata_format != CACHE_METADATA_FORMAT_1) &&
+		     (seg->cache_metadata_format != CACHE_METADATA_FORMAT_2)))
+			return SEG_LOG_ERROR("Unknown cache metadata format %u number in",
+					     seg->cache_metadata_format);
+		if (seg->cache_metadata_format == CACHE_METADATA_FORMAT_2)
+			seg->lv->status |= LV_METADATA_FORMAT;
+	}
+
+	if (!_settings_text_import(seg, sn))
+		return_0;
+
 	if (!attach_pool_data_lv(seg, data_lv))
 		return_0;
 	if (!attach_pool_metadata_lv(seg, meta_lv))
@@ -207,11 +260,8 @@ static int _cache_pool_text_import_area_count(const struct dm_config_node *sn,
 static int _cache_pool_text_export(const struct lv_segment *seg,
 				   struct formatter *f)
 {
-	const char *cache_mode;
-
 	outf(f, "data = \"%s\"", seg_lv(seg, 0)->name);
 	outf(f, "metadata = \"%s\"", seg->metadata_lv->name);
-	outf(f, "chunk_size = %" PRIu32, seg->chunk_size);
 
 	switch (seg->cache_metadata_format) {
 	case CACHE_METADATA_FORMAT_UNSELECTED:
@@ -237,25 +287,9 @@ static int _cache_pool_text_export(const struct lv_segment *seg,
 	 * but not worth to break backward compatibility, by shifting
 	 * content to cache segment
 	 */
-	if (seg->cache_mode != CACHE_MODE_UNSELECTED) {
-		if (!(cache_mode = get_cache_mode_name(seg)))
-			return_0;
-		outf(f, "cache_mode = \"%s\"", cache_mode);
-	}
 
-	if (seg->policy_name) {
-		outf(f, "policy = \"%s\"", seg->policy_name);
-
-		if (seg->policy_settings) {
-			if (strcmp(seg->policy_settings->key, "policy_settings")) {
-				log_error(INTERNAL_ERROR "Incorrect policy_settings tree, %s.",
-					  seg->policy_settings->key);
-				return 0;
-			}
-			if (seg->policy_settings->child)
-				out_config_node(f, seg->policy_settings);
-		}
-	}
+	if (!_settings_text_export(seg, f))
+		return_0;
 
 	return 1;
 }
@@ -443,6 +477,7 @@ static int _cache_text_import(struct lv_segment *seg,
 {
 	struct logical_volume *pool_lv, *origin_lv;
 	const char *name;
+	const char *uuid;
 
 	if (!dm_config_has_node(sn, "cache_pool"))
 		return SEG_LOG_ERROR("cache_pool not specified in");
@@ -469,12 +504,56 @@ static int _cache_text_import(struct lv_segment *seg,
 
 	seg->lv->status |= strstr(seg->lv->name, "_corig") ? LV_PENDING_DELETE : 0;
 
-	if (!attach_pool_lv(seg, pool_lv, NULL, NULL, NULL))
+	if (!_settings_text_import(seg, sn))
 		return_0;
 
-	/* load order is unknown, could be cache origin or pool LV, so check for both */
-	if (!dm_list_empty(&pool_lv->segments))
-		_fix_missing_defaults(first_seg(pool_lv));
+	if (dm_config_has_node(sn, "metadata_format")) {
+		if (!dm_config_get_uint32(sn, "metadata_format", &seg->cache_metadata_format))
+			return SEG_LOG_ERROR("Couldn't read cache metadata_format in");
+		if (seg->cache_metadata_format != CACHE_METADATA_FORMAT_2)
+			return SEG_LOG_ERROR("Unknown cache metadata format %u number in",
+					     seg->cache_metadata_format);
+	}
+
+	if (dm_config_has_node(sn, "metadata_start")) {
+		if (!dm_config_get_uint64(sn, "metadata_start", &seg->metadata_start))
+			return SEG_LOG_ERROR("Couldn't read metadata_start in");
+		if (!dm_config_get_uint64(sn, "metadata_len", &seg->metadata_len))
+			return SEG_LOG_ERROR("Couldn't read metadata_len in");
+		if (!dm_config_get_uint64(sn, "data_start", &seg->data_start))
+			return SEG_LOG_ERROR("Couldn't read data_start in");
+		if (!dm_config_get_uint64(sn, "data_len", &seg->data_len))
+			return SEG_LOG_ERROR("Couldn't read data_len in");
+
+		/* Will use CVOL ID, when metadata_id is not provided */
+		if (dm_config_has_node(sn, "metadata_id")) {
+			if (!(seg->metadata_id = dm_pool_alloc(seg->lv->vg->vgmem, sizeof(*seg->metadata_id))))
+				return SEG_LOG_ERROR("Couldn't allocate metadata_id in");
+			if (!dm_config_get_str(sn, "metadata_id", &uuid))
+				return SEG_LOG_ERROR("Couldn't read metadata_id in");
+			if (!id_read_format(seg->metadata_id, uuid))
+				return SEG_LOG_ERROR("Couldn't format metadata_id in");
+		}
+
+		/* Will use CVOL ID, when data_id is not provided */
+		if (dm_config_has_node(sn, "data_id")) {
+			if (!(seg->data_id = dm_pool_alloc(seg->lv->vg->vgmem, sizeof(*seg->data_id))))
+				return SEG_LOG_ERROR("Couldn't allocate data_id in");
+			if (!dm_config_get_str(sn, "data_id", &uuid))
+				return SEG_LOG_ERROR("Couldn't read data_id in");
+			if (!id_read_format(seg->data_id, uuid))
+				return SEG_LOG_ERROR("Couldn't format data_id in");
+		}
+		pool_lv->status |= LV_CACHE_VOL; /* Mark as cachevol LV */
+	} else {
+		/* Do not call this when LV is cache_vol. */
+		/* load order is unknown, could be cache origin or pool LV, so check for both */
+		if (!dm_list_empty(&pool_lv->segments))
+			_fix_missing_defaults(first_seg(pool_lv));
+	}
+
+	if (!attach_pool_lv(seg, pool_lv, NULL, NULL, NULL))
+		return_0;
 
 	return 1;
 }
@@ -489,6 +568,8 @@ static int _cache_text_import_area_count(const struct dm_config_node *sn,
 
 static int _cache_text_export(const struct lv_segment *seg, struct formatter *f)
 {
+	char buffer[40];
+
 	if (!seg_lv(seg, 0))
 		return_0;
 
@@ -497,6 +578,30 @@ static int _cache_text_export(const struct lv_segment *seg, struct formatter *f)
 
 	if (seg->cleaner_policy)
 		outf(f, "cleaner = 1");
+
+	if (lv_is_cache_vol(seg->pool_lv)) {
+		outf(f, "metadata_format = " FMTu32, seg->cache_metadata_format);
+
+		if (!_settings_text_export(seg, f))
+			return_0;
+
+		outf(f, "metadata_start = " FMTu64, seg->metadata_start);
+		outf(f, "metadata_len = " FMTu64, seg->metadata_len);
+		outf(f, "data_start = " FMTu64, seg->data_start);
+		outf(f, "data_len = " FMTu64, seg->data_len);
+
+		if (seg->metadata_id) {
+			if (!id_write_format(seg->metadata_id, buffer, sizeof(buffer)))
+				return_0;
+			outf(f, "metadata_id = \"%s\"", buffer);
+		}
+
+		if (seg->data_id) {
+			if (!id_write_format(seg->data_id, buffer, sizeof(buffer)))
+				return_0;
+			outf(f, "data_id = \"%s\"", buffer);
+		}
+	}
 
 	return 1;
 }
@@ -512,6 +617,9 @@ static int _cache_add_target_line(struct dev_manager *dm,
 				 uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
 	struct lv_segment *cache_pool_seg;
+	struct lv_segment *setting_seg;
+	union lvid metadata_lvid;
+	union lvid data_lvid;
 	char *metadata_uuid, *data_uuid, *origin_uuid;
 	uint64_t feature_flags = 0;
 	unsigned attr;
@@ -521,15 +629,23 @@ static int _cache_add_target_line(struct dev_manager *dm,
 		return 0;
 	}
 
+	log_debug("cache_add_target_line lv %s pool %s", seg->lv->name, seg->pool_lv->name);
+
 	cache_pool_seg = first_seg(seg->pool_lv);
+
+	if (lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+	else
+		setting_seg = cache_pool_seg;
+
 	if (seg->cleaner_policy)
 		/* With cleaner policy always pass writethrough */
 		feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
 	else
-		switch (cache_pool_seg->cache_mode) {
+		switch (setting_seg->cache_mode) {
 		default:
 			log_error(INTERNAL_ERROR "LV %s has unknown cache mode %d.",
-				  display_lvname(seg->lv), cache_pool_seg->cache_mode);
+				  display_lvname(seg->lv), setting_seg->cache_mode);
 			/* Fall through */
 		case CACHE_MODE_WRITETHROUGH:
 			feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
@@ -542,7 +658,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			break;
 		}
 
-	switch (cache_pool_seg->cache_metadata_format) {
+	switch (setting_seg->cache_metadata_format) {
 	case CACHE_METADATA_FORMAT_1: break;
 	case CACHE_METADATA_FORMAT_2:
 		if (!_target_present(cmd, NULL, &attr))
@@ -550,7 +666,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 
 		if (!(attr & CACHE_FEATURE_METADATA2)) {
 			log_error("LV %s has metadata format %u unsuported by kernel.",
-				  display_lvname(seg->lv), cache_pool_seg->cache_metadata_format);
+				  display_lvname(seg->lv), setting_seg->cache_metadata_format);
 			return 0;
 		}
 		feature_flags |= DM_CACHE_FEATURE_METADATA2;
@@ -558,18 +674,49 @@ static int _cache_add_target_line(struct dev_manager *dm,
 		break;
 	default:
 		log_error(INTERNAL_ERROR "LV %s has unknown metadata format %u.",
-			  display_lvname(seg->lv), cache_pool_seg->cache_metadata_format);
+			  display_lvname(seg->lv), setting_seg->cache_metadata_format);
 		return 0;
 	}
 
-	if (!(metadata_uuid = build_dm_uuid(mem, cache_pool_seg->metadata_lv, NULL)))
-		return_0;
-
-	if (!(data_uuid = build_dm_uuid(mem, seg_lv(cache_pool_seg, 0), NULL)))
-		return_0;
-
 	if (!(origin_uuid = build_dm_uuid(mem, seg_lv(seg, 0), NULL)))
 		return_0;
+
+	if (!lv_is_cache_vol(seg->pool_lv)) {
+		/* We don't use start/len when using separate data/meta devices. */
+		if (seg->metadata_len || seg->data_len) {
+			log_error(INTERNAL_ERROR "LV %s using unsupported ranges with cache pool.",
+				 display_lvname(seg->lv));
+			return 0;
+		}
+
+		if (!(metadata_uuid = build_dm_uuid(mem, cache_pool_seg->metadata_lv, NULL)))
+			return_0;
+
+		if (!(data_uuid = build_dm_uuid(mem, seg_lv(cache_pool_seg, 0), NULL)))
+			return_0;
+	} else {
+		if (!seg->metadata_len || !seg->data_len || (seg->metadata_start == seg->data_start)) {
+			log_error(INTERNAL_ERROR "LV %s has invalid ranges metadata %llu %llu data %llu %llu.",
+				 display_lvname(seg->lv),
+				 (unsigned long long)seg->metadata_start,
+				 (unsigned long long)seg->metadata_len,
+				 (unsigned long long)seg->data_start,
+				 (unsigned long long)seg->data_len);
+			return 0;
+		}
+
+		memset(&metadata_lvid, 0, sizeof(metadata_lvid));
+		memset(&data_lvid, 0, sizeof(data_lvid));
+		memcpy(&metadata_lvid.id[0], &seg->lv->vg->id, sizeof(struct id));
+		memcpy(&metadata_lvid.id[1], (seg->metadata_id) ? : &seg->pool_lv->lvid.id[1], sizeof(struct id));
+		memcpy(&data_lvid.id[0], &seg->lv->vg->id, sizeof(struct id));
+		memcpy(&data_lvid.id[1], (seg->data_id) ? : &seg->pool_lv->lvid.id[1], sizeof(struct id));
+
+		if (!(metadata_uuid = dm_build_dm_uuid(mem, UUID_PREFIX, (const char *)&metadata_lvid.s, "cmeta")))
+			return_0;
+		if (!(data_uuid = dm_build_dm_uuid(mem, UUID_PREFIX, (const char *)&data_lvid.s, "cdata")))
+			return_0;
+	}
 
 	if (!dm_tree_node_add_cache_target(node, len,
 					   feature_flags,
@@ -579,8 +726,12 @@ static int _cache_add_target_line(struct dev_manager *dm,
 					   seg->cleaner_policy ? "cleaner" :
 						   /* undefined policy name -> likely an old "mq" */
 						   cache_pool_seg->policy_name ? : "mq",
-					   seg->cleaner_policy ? NULL : cache_pool_seg->policy_settings,
-					   cache_pool_seg->chunk_size))
+					   seg->cleaner_policy ? NULL : setting_seg->policy_settings,
+					   seg->metadata_start,
+					   seg->metadata_len,
+					   seg->data_start,
+					   seg->data_len,
+					   setting_seg->chunk_size))
 		return_0;
 
 	return 1;

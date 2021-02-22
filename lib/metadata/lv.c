@@ -245,6 +245,11 @@ char *lvseg_kernel_discards_dup_with_info_and_seg_status(struct dm_pool *mem, co
 			return 0;
 		}
 		s = get_pool_discards_name(d);
+	} else if (lvdm->seg_status.type == SEG_STATUS_CACHE) {
+		if (lvdm->seg_status.cache->feature_flags &
+		    DM_CACHE_FEATURE_NO_DISCARD_PASSDOWN) {
+			s = "nopassdown";
+		}
 	}
 
 	if (!(ret = dm_pool_strdup(mem, s))) {
@@ -333,6 +338,8 @@ uint64_t lvseg_chunksize(const struct lv_segment *seg)
 
 	if (lv_is_cow(seg->lv))
 		size = (uint64_t) find_snapshot(seg->lv)->chunk_size;
+	else if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		size = (uint64_t) seg->chunk_size;
 	else if (seg_is_pool(seg))
 		size = (uint64_t) seg->chunk_size;
 	else if (seg_is_cache(seg))
@@ -378,6 +385,17 @@ dm_percent_t lvseg_percent_with_info_and_seg_status(const struct lv_with_info_an
 	 *   Esentially rework  _target_percent API for segtype.
 	 */
 	switch (s->type) {
+	case SEG_STATUS_INTEGRITY:
+		if (type != PERCENT_GET_DIRTY)
+			p = DM_PERCENT_INVALID;
+		else if (!s->integrity->recalc_sector)
+			p = DM_PERCENT_INVALID;
+		else if (s->integrity->recalc_sector == s->integrity->provided_data_sectors)
+			p = DM_PERCENT_100;
+		else
+			p = dm_make_percent(s->integrity->recalc_sector,
+					    s->integrity->provided_data_sectors);
+		break;
 	case SEG_STATUS_CACHE:
 		if (s->cache->fail || s->cache->error)
 			p = DM_PERCENT_INVALID;
@@ -396,6 +414,14 @@ dm_percent_t lvseg_percent_with_info_and_seg_status(const struct lv_with_info_an
 				p = dm_make_percent(s->cache->used_blocks,
 						    s->cache->total_blocks);
 			}
+		}
+		break;
+	case SEG_STATUS_WRITECACHE:
+		if (type != PERCENT_GET_DATA)
+			p = DM_PERCENT_INVALID;
+		else {
+			uint64_t used = s->writecache->total_blocks - s->writecache->free_blocks;
+			p = dm_make_percent(used, s->writecache->total_blocks);
 		}
 		break;
 	case SEG_STATUS_RAID:
@@ -576,6 +602,10 @@ struct logical_volume *lv_origin_lv(const struct logical_volume *lv)
 		origin = first_seg(lv)->origin;
 	else if (lv_is_thin_volume(lv) && first_seg(lv)->external_lv)
 		origin = first_seg(lv)->external_lv;
+	else if (lv_is_writecache(lv) && first_seg(lv)->origin)
+		origin = first_seg(lv)->origin;
+	else if (lv_is_integrity(lv) && first_seg(lv)->origin)
+		origin = first_seg(lv)->origin;
 
 	return origin;
 }
@@ -707,6 +737,9 @@ struct logical_volume *lv_pool_lv(const struct logical_volume *lv)
 	if (lv_is_vdo(lv))
 		return seg_lv(first_seg(lv), 0);
 
+	if (lv_is_writecache(lv))
+		return first_seg(lv)->writecache;
+
 	return NULL;
 }
 
@@ -810,7 +843,7 @@ const char *lv_layer(const struct logical_volume *lv)
 	if (lv_is_vdo_pool(lv))
 		return "vpool";
 
-	if (lv_is_origin(lv) || lv_is_external_origin(lv))
+	if (lv_is_origin(lv) || lv_is_external_origin(lv) || lv_is_writecache_origin(lv))
 		return "real";
 
 	return NULL;
@@ -932,10 +965,18 @@ uint64_t lv_origin_size(const struct logical_volume *lv)
 
 uint64_t lv_metadata_size(const struct logical_volume *lv)
 {
-	struct lv_segment *seg = (lv_is_thin_pool(lv) || lv_is_cache_pool(lv)) ?
-		first_seg(lv) : NULL;
+	struct lv_segment *seg;
 
-	return seg ? seg->metadata_lv->size : 0;
+	if (!(seg = first_seg(lv)))
+		return 0;
+
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		return seg->metadata_len;
+
+	if (lv_is_thin_pool(lv) || lv_is_cache_pool(lv))
+		return seg->metadata_lv->size;
+
+	return 0;
 }
 
 char *lv_path_dup(struct dm_pool *mem, const struct logical_volume *lv)
@@ -986,6 +1027,37 @@ char *lv_dmpath_dup(struct dm_pool *mem, const struct logical_volume *lv)
 	}
 
 	if (dm_snprintf(repstr, len, "%s/%s", dm_dir(), name) < 0) {
+		log_error("lv_dmpath snprintf failed");
+		return NULL;
+	}
+
+	return repstr;
+}
+
+/* maybe factor a common function with lv_dmpath_dup */
+char *lv_dmpath_suffix_dup(struct dm_pool *mem, const struct logical_volume *lv,
+			   const char *suffix)
+{
+	char *name;
+	char *repstr;
+	size_t len;
+
+	if (!*lv->vg->name)
+		return dm_pool_strdup(mem, "");
+
+	if (!(name = dm_build_dm_name(mem, lv->vg->name, lv->name, NULL))) {
+		log_error("dm_build_dm_name failed");
+		return NULL;
+	}
+
+	len = strlen(dm_dir()) + strlen(name) + strlen(suffix) + 2;
+
+	if (!(repstr = dm_pool_zalloc(mem, len))) {
+		log_error("dm_pool_alloc failed");
+		return NULL;
+	}
+
+	if (dm_snprintf(repstr, len, "%s/%s%s", dm_dir(), name, suffix) < 0) {
 		log_error("lv_dmpath snprintf failed");
 		return NULL;
 	}
@@ -1180,10 +1252,13 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 		repstr[0] = (lv_is_merging_origin(lv)) ? 'O' : 'o';
 	else if (lv_is_pool_metadata(lv) ||
 		 lv_is_pool_metadata_spare(lv) ||
-		 lv_is_raid_metadata(lv))
+		 lv_is_raid_metadata(lv) ||
+		 lv_is_integrity_metadata(lv))
 		repstr[0] = 'e';
-	else if (lv_is_cache_type(lv))
+	else if (lv_is_cache_type(lv) || lv_is_writecache(lv))
 		repstr[0] = 'C';
+	else if (lv_is_integrity(lv))
+		repstr[0] = 'g';
 	else if (lv_is_raid(lv))
 		repstr[0] = (lv_is_not_synced(lv)) ? 'R' : 'r';
 	else if (lv_is_mirror(lv))
@@ -1218,7 +1293,7 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 		repstr[0] = 'l';
 	else if (lv_is_cow(lv))
 		repstr[0] = (lv_is_merging_cow(lv)) ? 'S' : 's';
-	else if (lv_is_cache_origin(lv))
+	else if (lv_is_cache_origin(lv) || lv_is_writecache_origin(lv))
 		repstr[0] = 'o';
 	else
 		repstr[0] = '-';
@@ -1297,7 +1372,12 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 
 	if (lv_is_thin_pool(lv) || lv_is_thin_volume(lv))
 		repstr[6] = 't';
-	else if (lv_is_cache_pool(lv) || lv_is_cache(lv) || lv_is_cache_origin(lv))
+	else if (lv_is_cache_pool(lv) ||
+		 lv_is_cache_vol(lv) ||
+		 lv_is_cache(lv) ||
+		 lv_is_cache_origin(lv) ||
+		 lv_is_writecache(lv) ||
+		 lv_is_writecache_origin(lv))
 		repstr[6] = 'C';
 	else if (lv_is_raid_type(lv))
 		repstr[6] = 'r';
@@ -1363,6 +1443,9 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 	} else if (lvdm->seg_status.type == SEG_STATUS_THIN) {
 		if (lvdm->seg_status.thin->fail)
 			repstr[8] = 'F';
+	} else if (lvdm->seg_status.type == SEG_STATUS_WRITECACHE) {
+		if (lvdm->seg_status.writecache->error)
+			repstr[8] = 'E';
 	} else if (lvdm->seg_status.type == SEG_STATUS_UNKNOWN)
 		repstr[8] = 'X'; /* Unknown */
 

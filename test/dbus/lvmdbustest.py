@@ -58,8 +58,11 @@ if pv_device_list:
 	testlib.validate_introspection = False
 
 
-def vg_n():
-	return g_prefix + rs(8, '_vg')
+def vg_n(prefix=None):
+	name = rs(8, '_vg')
+	if prefix:
+		name = prefix + name
+	return name
 
 
 def lv_n(suffix=None):
@@ -71,7 +74,8 @@ def lv_n(suffix=None):
 
 
 def _is_testsuite_pv(pv_name):
-	return g_prefix != "" and pv_name[-1].isdigit() and pv_name[:-1].endswith(g_prefix + "pv")
+	return g_prefix != "" and pv_name[-1].isdigit() and \
+			pv_name[:-1].endswith(g_prefix + "pv")
 
 
 def is_nested_pv(pv_name):
@@ -84,8 +88,15 @@ def _root_pv_name(res, pv_name):
 	vg_name = pv_name.split('/')[2]
 	for v in res[VG_INT]:
 		if v.Vg.Name == vg_name:
-			pv = ClientProxy(bus, v.Vg.Pvs[0], interfaces=(PV_INT, ))
-			return _root_pv_name(res, pv.Pv.Name)
+			for pv in res[PV_INT]:
+				if pv.object_path in v.Vg.Pvs:
+					return _root_pv_name(res, pv.Pv.Name)
+			return None
+
+
+def _prune_lvs(res, interface, vg_object_path):
+	lvs = [lv for lv in res[interface] if lv.LvCommon.Vg == vg_object_path]
+	res[interface] = lvs
 
 
 def _prune(res, pv_filter):
@@ -102,11 +113,16 @@ def _prune(res, pv_filter):
 
 		vg_list = []
 		for v in res[VG_INT]:
-			# Only need to validate one of the PVs is in the selection set
 			if v.Vg.Pvs[0] in pv_lookup:
 				vg_list.append(v)
 
+				for interface in \
+					[LV_INT, THINPOOL_INT, LV_COMMON_INT,
+						CACHE_POOL_INT, CACHE_LV_INT, VDOPOOL_INT]:
+					_prune_lvs(res, interface, v.object_path)
+
 		res[VG_INT] = vg_list
+
 	return res
 
 
@@ -114,13 +130,13 @@ def get_objects():
 	rc = {
 		MANAGER_INT: [], PV_INT: [], VG_INT: [], LV_INT: [],
 		THINPOOL_INT: [], JOB_INT: [], SNAPSHOT_INT: [], LV_COMMON_INT: [],
-		CACHE_POOL_INT: [], CACHE_LV_INT: []}
+		CACHE_POOL_INT: [], CACHE_LV_INT: [], VG_VDO_INT: [], VDOPOOL_INT: []}
 
 	object_manager_object = bus.get_object(
 		BUS_NAME, "/com/redhat/lvmdbus1", introspect=False)
 
-	manager_interface = dbus.Interface(object_manager_object,
-							"org.freedesktop.DBus.ObjectManager")
+	manager_interface = dbus.Interface(
+		object_manager_object, "org.freedesktop.DBus.ObjectManager")
 
 	objects = manager_interface.GetManagedObjects()
 
@@ -130,7 +146,7 @@ def get_objects():
 			rc[interface].append(proxy)
 
 	# At this point we have a full population of everything, we now need to
-	# prune the PV list and the VG list if we are using a sub selection
+	# prune the the objects if we are filtering PVs with a sub selection.
 	return _prune(rc, pv_device_list), bus
 
 
@@ -166,13 +182,25 @@ def call_lvm(command):
 	# in different locations on the same box
 	command.insert(0, LVM_EXECUTABLE)
 
-	process = Popen(command, stdout=PIPE, stderr=PIPE, close_fds=True,
-					env=os.environ)
+	process = Popen(
+		command, stdout=PIPE, stderr=PIPE, close_fds=True, env=os.environ)
 	out = process.communicate()
 
 	stdout_text = bytes(out[0]).decode("utf-8")
 	stderr_text = bytes(out[1]).decode("utf-8")
 	return process.returncode, stdout_text, stderr_text
+
+
+def supports_vdo():
+	cmd = ['segtypes']
+	modprobe = Popen(["modprobe", "kvdo"], stdout=PIPE, stderr=PIPE, close_fds=True, env=os.environ)
+	modprobe.communicate()
+	if modprobe.returncode != 0:
+		return False
+	rc, out, err = call_lvm(cmd)
+	if rc != 0 or "vdo" not in out:
+		return False
+	return True
 
 
 # noinspection PyUnresolvedReferences
@@ -196,6 +224,8 @@ class TestDbusService(unittest.TestCase):
 		self.pvs = []
 		for p in self.objs[PV_INT]:
 			self.pvs.append(p.Pv.Name)
+
+		self.vdo = supports_vdo()
 
 	def _recurse_vg_delete(self, vg_proxy, pv_proxy, nested_pv_hash):
 
@@ -303,12 +333,12 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(rc is not None and len(rc) > 0)
 		self._check_consistency()
 
-	def _vg_create(self, pv_paths=None):
+	def _vg_create(self, pv_paths=None, vg_prefix=None):
 
 		if not pv_paths:
-			pv_paths = [self.objs[PV_INT][0].object_path]
+			pv_paths = self._all_pv_object_paths()
 
-		vg_name = vg_n()
+		vg_name = vg_n(prefix=vg_prefix)
 
 		vg_path = self.handle_return(
 			self.objs[MANAGER_INT][0].Manager.VgCreate(
@@ -319,7 +349,12 @@ class TestDbusService(unittest.TestCase):
 
 		self._validate_lookup(vg_name, vg_path)
 		self.assertTrue(vg_path is not None and len(vg_path) > 0)
-		return ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
+
+		intf = [VG_INT, ]
+		if self.vdo:
+			intf.append(VG_VDO_INT)
+
+		return ClientProxy(self.bus, vg_path, interfaces=intf)
 
 	def test_vg_create(self):
 		self._vg_create()
@@ -356,11 +391,7 @@ class TestDbusService(unittest.TestCase):
 		data_name = "data_r5"
 
 		if not vg:
-			pv_paths = []
-			for pp in self.objs[PV_INT]:
-				pv_paths.append(pp.object_path)
-
-			vg = self._vg_create(pv_paths).Vg
+			vg = self._vg_create(self._all_pv_object_paths()).Vg
 
 		lv_meta_path = self.handle_return(
 			vg.LvCreateRaid(
@@ -395,10 +426,8 @@ class TestDbusService(unittest.TestCase):
 		)
 
 		# Get thin pool client proxy
-		thin_pool = ClientProxy(self.bus, thin_pool_path,
-								interfaces=(LV_COMMON_INT,
-											LV_INT,
-											THINPOOL_INT))
+		intf = (LV_COMMON_INT, LV_INT, THINPOOL_INT)
+		thin_pool = ClientProxy(self.bus, thin_pool_path, interfaces=intf)
 
 		return vg, thin_pool
 
@@ -424,10 +453,9 @@ class TestDbusService(unittest.TestCase):
 		)
 
 		# Get object proxy for cached thin pool
-		cached_thin_pool_object = ClientProxy(self.bus, cached_thin_pool_path,
-												interfaces=(LV_COMMON_INT,
-															LV_INT,
-															THINPOOL_INT))
+		intf = (LV_COMMON_INT, LV_INT, THINPOOL_INT)
+		cached_thin_pool_object = ClientProxy(
+			self.bus, cached_thin_pool_path, interfaces=intf)
 
 		# Check properties on cache pool
 		self.assertTrue(cached_thin_pool_object.ThinPool.DataLv != '/')
@@ -489,6 +517,26 @@ class TestDbusService(unittest.TestCase):
 			self.assertTrue(path == '/')
 			self._check_consistency()
 
+	def _verify_lv_paths(self, vg, new_name):
+		"""
+		# Go through each LV and make sure it has the correct path back to the
+		# VG
+		:return:
+		"""
+		lv_paths = vg.Lvs
+
+		for l in lv_paths:
+			lv_proxy = ClientProxy(
+				self.bus, l, interfaces=(LV_COMMON_INT,)).LvCommon
+			self.assertTrue(
+				lv_proxy.Vg == vg.object_path, "%s != %s" %
+				(lv_proxy.Vg, vg.object_path))
+			full_name = "%s/%s" % (new_name, lv_proxy.Name)
+			lv_path = self._lookup(full_name)
+			self.assertTrue(
+				lv_path == lv_proxy.object_path, "%s != %s" %
+				(lv_path, lv_proxy.object_path))
+
 	# noinspection PyUnresolvedReferences
 	def test_vg_rename(self):
 		vg = self._vg_create().Vg
@@ -524,27 +572,15 @@ class TestDbusService(unittest.TestCase):
 		# VG
 		vg.update()
 
-		lv_paths = vg.Lvs
-		self.assertTrue(len(lv_paths) == 5)
-
-		for l in lv_paths:
-			lv_proxy = ClientProxy(self.bus, l,
-									interfaces=(LV_COMMON_INT,)).LvCommon
-			self.assertTrue(
-				lv_proxy.Vg == vg.object_path, "%s != %s" %
-				(lv_proxy.Vg, vg.object_path))
-			full_name = "%s/%s" % (new_name, lv_proxy.Name)
-			lv_path = self._lookup(full_name)
-			self.assertTrue(
-				lv_path == lv_proxy.object_path, "%s != %s" %
-				(lv_path, lv_proxy.object_path))
+		self.assertTrue(len(vg.Lvs) == 5)
+		self._verify_lv_paths(vg, new_name)
 
 	def _verify_hidden_lookups(self, lv_common_object, vgname):
 		hidden_lv_paths = lv_common_object.HiddenLvs
 
 		for h in hidden_lv_paths:
-			h_lv = ClientProxy(self.bus, h,
-								interfaces=(LV_COMMON_INT,)).LvCommon
+			h_lv = ClientProxy(
+				self.bus, h, interfaces=(LV_COMMON_INT,)).LvCommon
 
 			if len(h_lv.HiddenLvs) > 0:
 				self._verify_hidden_lookups(h_lv, vgname)
@@ -602,26 +638,9 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(path == '/')
 		self._check_consistency()
 
-		# Go through each LV and make sure it has the correct path back to the
-		# VG
 		vg.update()
 		thin_pool.update()
-
-		lv_paths = vg.Lvs
-
-		for l in lv_paths:
-			lv_proxy = ClientProxy(self.bus, l,
-									interfaces=(LV_COMMON_INT,)).LvCommon
-			self.assertTrue(
-				lv_proxy.Vg == vg.object_path, "%s != %s" %
-				(lv_proxy.Vg, vg.object_path))
-			full_name = "%s/%s" % (new_name, lv_proxy.Name)
-			# print('Full Name %s' % (full_name))
-			lv_path = self._lookup(full_name)
-			self.assertTrue(
-				lv_path == lv_proxy.object_path, "%s != %s" %
-				(lv_path, lv_proxy.object_path))
-
+		self._verify_lv_paths(vg, new_name)
 		# noinspection PyTypeChecker
 		self._verify_hidden_lookups(thin_pool.LvCommon, new_name)
 
@@ -647,8 +666,8 @@ class TestDbusService(unittest.TestCase):
 		lv = self._test_lv_create(
 			vg.LvCreate,
 			(dbus.String(lv_name), dbus.UInt64(mib(4)),
-			dbus.Array([], signature='(ott)'), dbus.Int32(g_tmo),
-			EOD), vg, LV_BASE_INT)
+				dbus.Array([], signature='(ott)'), dbus.Int32(g_tmo),
+				EOD), vg, LV_BASE_INT)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_job(self):
@@ -673,52 +692,39 @@ class TestDbusService(unittest.TestCase):
 		lv = self._test_lv_create(
 			vg.LvCreateLinear,
 			(dbus.String(lv_name), dbus.UInt64(mib(4)), dbus.Boolean(False),
-			dbus.Int32(g_tmo), EOD),
-			vg, LV_BASE_INT)
+				dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
+
+	def _all_pv_object_paths(self):
+		return [pp.object_path for pp in self.objs[PV_INT]]
 
 	def test_lv_create_striped(self):
 		lv_name = lv_n()
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
-
-		vg = self._vg_create(pv_paths).Vg
+		vg = self._vg_create(self._all_pv_object_paths()).Vg
 		lv = self._test_lv_create(
 			vg.LvCreateStriped,
 			(dbus.String(lv_name), dbus.UInt64(mib(4)),
-			dbus.UInt32(2), dbus.UInt32(8), dbus.Boolean(False),
-			dbus.Int32(g_tmo), EOD),
-			vg, LV_BASE_INT)
+				dbus.UInt32(2), dbus.UInt32(8), dbus.Boolean(False),
+				dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_mirror(self):
 		lv_name = lv_n()
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
-
-		vg = self._vg_create(pv_paths).Vg
+		vg = self._vg_create(self._all_pv_object_paths()).Vg
 		lv = self._test_lv_create(
 			vg.LvCreateMirror,
 			(dbus.String(lv_name), dbus.UInt64(mib(4)), dbus.UInt32(2),
-			dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
+				dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def test_lv_create_raid(self):
 		lv_name = lv_n()
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
-
-		vg = self._vg_create(pv_paths).Vg
+		vg = self._vg_create(self._all_pv_object_paths()).Vg
 		lv = self._test_lv_create(
 			vg.LvCreateRaid,
 			(dbus.String(lv_name), dbus.String('raid5'), dbus.UInt64(mib(16)),
-			dbus.UInt32(2), dbus.UInt32(8), dbus.Int32(g_tmo),
-			EOD),
-			vg,
-			LV_BASE_INT)
+				dbus.UInt32(2), dbus.UInt32(8), dbus.Int32(g_tmo), EOD),
+			vg, LV_BASE_INT)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
 	def _create_lv(self, thinpool=False, size=None, vg=None, suffix=None):
@@ -730,46 +736,52 @@ class TestDbusService(unittest.TestCase):
 			interfaces.append(THINPOOL_INT)
 
 		if not vg:
-			pv_paths = []
-			for pp in self.objs[PV_INT]:
-				pv_paths.append(pp.object_path)
-
-			vg = self._vg_create(pv_paths).Vg
+			vg = self._vg_create(self._all_pv_object_paths()).Vg
 
 		if size is None:
-			size = mib(4)
+			size = mib(8)
 
 		lv = self._test_lv_create(
 			vg.LvCreateLinear,
 			(dbus.String(lv_name), dbus.UInt64(size),
-			dbus.Boolean(thinpool), dbus.Int32(g_tmo), EOD),
+				dbus.Boolean(thinpool), dbus.Int32(g_tmo), EOD),
 			vg, interfaces)
 
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 		return lv
 
+	def _create_thin_pool_lv(self):
+		return self._create_lv(True)
+
 	def test_lv_create_rounding(self):
 		self._create_lv(size=(mib(2) + 13))
 
 	def test_lv_create_thin_pool(self):
-		self._create_lv(True)
+		self._create_thin_pool_lv()
 
-	def test_lv_rename(self):
-		# Rename a regular LV
-		lv = self._create_lv()
-
+	def _rename_lv_test(self, lv):
 		path = self._lookup(lv.LvCommon.Name)
 		prev_path = path
 
 		new_name = 'renamed_' + lv.LvCommon.Name
 
-		self.handle_return(lv.Lv.Rename(dbus.String(new_name),
-										dbus.Int32(g_tmo), EOD))
+		self.handle_return(
+			lv.Lv.Rename(dbus.String(new_name), dbus.Int32(g_tmo), EOD))
 
 		path = self._lookup(new_name)
 
 		self._check_consistency()
 		self.assertTrue(prev_path == path, "%s != %s" % (prev_path, path))
+
+		lv.update()
+		self.assertTrue(
+			lv.LvCommon.Name == new_name,
+			"%s != %s" % (lv.LvCommon.Name, new_name))
+
+	def test_lv_rename(self):
+		# Rename a regular LV
+		lv = self._create_lv()
+		self._rename_lv_test(lv)
 
 	def test_lv_thinpool_rename(self):
 		# Rename a thin pool
@@ -785,12 +797,7 @@ class TestDbusService(unittest.TestCase):
 		self._check_consistency()
 		self.assertEqual(new_name, tp.LvCommon.Name)
 
-	# noinspection PyUnresolvedReferences
-	def test_lv_on_thin_pool_rename(self):
-		# Rename a LV on a thin Pool
-
-		# This returns a LV with the LV interface, need to get a proxy for
-		# thinpool interface too
+	def _create_thin_lv(self):
 		vg = self._vg_create().Vg
 		tp = self._create_lv(thinpool=True, vg=vg)
 
@@ -799,15 +806,20 @@ class TestDbusService(unittest.TestCase):
 		thin_path = self.handle_return(
 			tp.ThinPool.LvCreate(
 				dbus.String(lv_name),
-				dbus.UInt64(mib(8)),
+				dbus.UInt64(mib(10)),
 				dbus.Int32(g_tmo),
 				EOD)
 		)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), thin_path)
 
-		lv = ClientProxy(self.bus, thin_path,
-							interfaces=(LV_COMMON_INT, LV_INT))
+		lv = ClientProxy(
+			self.bus, thin_path, interfaces=(LV_COMMON_INT, LV_INT))
+		return vg, thin_path, lv
 
+	# noinspection PyUnresolvedReferences
+	def test_lv_on_thin_pool_rename(self):
+		# Rename a LV on a thin Pool
+		vg, thin_path, lv = self._create_thin_lv()
 		re_named = 'rename_test' + lv.LvCommon.Name
 		rc = self.handle_return(
 			lv.Lv.Rename(
@@ -820,28 +832,36 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(rc == '/')
 		self._check_consistency()
 
-	def test_lv_remove(self):
-		lv = self._create_lv().Lv
+	def _lv_remove(self, lv):
 		rc = self.handle_return(
-			lv.Remove(
+			lv.Lv.Remove(
 				dbus.Int32(g_tmo),
 				EOD))
 		self.assertTrue(rc == '/')
 		self._check_consistency()
 
-	def test_lv_snapshot(self):
-		lv_p = self._create_lv()
+	def test_lv_remove(self):
+		lv = self._create_lv()
+		self._lv_remove(lv)
+
+	def _take_lv_snapshot(self, lv_p):
 		ss_name = 'ss_' + lv_p.LvCommon.Name
 
-		rc = self.handle_return(lv_p.Lv.Snapshot(
+		ss_obj_path = self.handle_return(lv_p.Lv.Snapshot(
 			dbus.String(ss_name),
 			dbus.UInt64(0),
 			dbus.Int32(g_tmo),
 			EOD))
 
-		self.assertTrue(rc != '/')
+		self.assertTrue(ss_obj_path != '/')
+		return ClientProxy(
+			self.bus, ss_obj_path, interfaces=(LV_COMMON_INT, LV_INT))
 
-	# noinspection PyUnresolvedReferences
+	def test_lv_snapshot(self):
+		lv_p = self._create_lv()
+		self._take_lv_snapshot(lv_p)
+
+	# noinspection PyUnresolvedReferences,PyUnusedLocal
 	def _wait_for_job(self, j_path):
 		rc = None
 		j = ClientProxy(self.bus, j_path, interfaces=(JOB_INT, )).Job
@@ -876,26 +896,29 @@ class TestDbusService(unittest.TestCase):
 			vg.LvCreate, (
 				dbus.String(lv_name),
 				dbus.UInt64(mib(4)),
-				dbus.Array([[pvp.object_path, 0, (pvp.Pv.PeCount - 1)]],
-				signature='(ott)'),
+				dbus.Array(
+					[[pvp.object_path, 0, (pvp.Pv.PeCount - 1)]],
+					signature='(ott)'),
 				dbus.Int32(g_tmo), EOD), vg, LV_BASE_INT)
 		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
 
-	def test_lv_resize(self):
+	def _test_lv_resize(self, lv):
+		# Can't resize cache or thin pool volumes or vdo pool lv
+		if lv.LvCommon.Attr[0] == 'C' or lv.LvCommon.Attr[0] == 't' or \
+				lv.LvCommon.Attr[0] == 'd':
+			return
 
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
+		vg = ClientProxy(self.bus, lv.LvCommon.Vg, interfaces=(VG_INT,)).Vg
 
-		vg = self._vg_create(pv_paths).Vg
-		lv = self._create_lv(vg=vg, size=mib(16))
+		start_size = lv.LvCommon.SizeBytes
 
-		for size in \
-			[
-			lv.LvCommon.SizeBytes + 4194304,
-			lv.LvCommon.SizeBytes - 4194304,
-			lv.LvCommon.SizeBytes + 2048,
-			lv.LvCommon.SizeBytes - 2048]:
+		# Vdo are fairly big and need large re-size amounts.
+		if start_size > mib(4) * 3:
+			delta = mib(4)
+		else:
+			delta = 16384
+
+		for size in [start_size + delta, start_size - delta]:
 
 			pv_in_use = [i[0] for i in lv.LvCommon.Devices]
 			# Select a PV in the VG that isn't in use
@@ -930,19 +953,25 @@ class TestDbusService(unittest.TestCase):
 				# We are testing re-sizing to same size too...
 				self.assertTrue(lv.LvCommon.SizeBytes <= prev)
 
-	def test_lv_resize_same(self):
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
+	def test_lv_resize(self):
+
+		pv_paths = [
+			self.objs[PV_INT][0].object_path, self.objs[PV_INT][1].object_path]
 
 		vg = self._vg_create(pv_paths).Vg
+		lv = self._create_lv(vg=vg, size=mib(16))
+
+		self._test_lv_resize(lv)
+
+	def test_lv_resize_same(self):
+		vg = self._vg_create(self._all_pv_object_paths()).Vg
 		lv = self._create_lv(vg=vg)
 
 		with self.assertRaises(dbus.exceptions.DBusException):
-				lv.Lv.Resize(
-					dbus.UInt64(lv.LvCommon.SizeBytes),
-					dbus.Array([], '(oii)'),
-					dbus.Int32(-1), EOD)
+			lv.Lv.Resize(
+				dbus.UInt64(lv.LvCommon.SizeBytes),
+				dbus.Array([], '(oii)'),
+				dbus.Int32(-1), EOD)
 
 	def test_lv_move(self):
 		lv = self._create_lv()
@@ -964,10 +993,7 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(
 			pv_path_move != new_pv, "%s == %s" % (pv_path_move, new_pv))
 
-	def test_lv_activate_deactivate(self):
-		lv_p = self._create_lv()
-		lv_p.update()
-
+	def _test_activate_deactivate(self, lv_p):
 		self.handle_return(lv_p.Lv.Deactivate(
 			dbus.UInt64(0), dbus.Int32(g_tmo), EOD))
 		lv_p.update()
@@ -979,7 +1005,17 @@ class TestDbusService(unittest.TestCase):
 
 		lv_p.update()
 		self.assertTrue(lv_p.LvCommon.Active)
-		self._check_consistency()
+
+		# Vdo property "IndexState" when getting activated goes from
+		# "opening" -> "online" after we have returned from the activate call
+		# thus when we try to check the consistency we fail as the property
+		# is changing on it's own and not because the lvmdbusd failed to
+		# refresh it's own state.  One solution is to not expose IndexState as
+		# a property.
+		# TODO Expose method to determine if Lv is partaking in VDO.
+		vg = ClientProxy(self.bus, lv_p.LvCommon.Vg, interfaces=(VG_INT,))
+		if "vdo" not in vg.Vg.Name:
+			self._check_consistency()
 
 		# Try control flags
 		for i in range(0, 5):
@@ -991,6 +1027,10 @@ class TestDbusService(unittest.TestCase):
 
 			self.assertTrue(lv_p.LvCommon.Active)
 			self._check_consistency()
+
+	def test_lv_activate_deactivate(self):
+		lv_p = self._create_lv()
+		self._test_activate_deactivate(lv_p)
 
 	def test_move(self):
 		lv = self._create_lv()
@@ -1034,10 +1074,7 @@ class TestDbusService(unittest.TestCase):
 		self._check_consistency()
 
 	def test_job_handling(self):
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
-
+		pv_paths = self._all_pv_object_paths()
 		vg_name = vg_n()
 
 		# Test getting a job right away
@@ -1055,15 +1092,12 @@ class TestDbusService(unittest.TestCase):
 
 	def _test_expired_timer(self, num_lvs):
 		rc = False
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
 
 		# In small configurations lvm is pretty snappy, so lets create a VG
 		# add a number of LVs and then remove the VG and all the contained
 		# LVs which appears to consistently run a little slow.
 
-		vg_proxy = self._vg_create(pv_paths)
+		vg_proxy = self._vg_create(self._all_pv_object_paths())
 
 		for i in range(0, num_lvs):
 			lv_name = lv_n()
@@ -1107,6 +1141,7 @@ class TestDbusService(unittest.TestCase):
 
 		return rc
 
+	# noinspection PyUnusedLocal
 	def test_job_handling_timer(self):
 
 		yes = False
@@ -1127,12 +1162,7 @@ class TestDbusService(unittest.TestCase):
 
 	def test_pv_tags(self):
 		pvs = []
-
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
-
-		vg = self._vg_create(pv_paths).Vg
+		vg = self._vg_create(self._all_pv_object_paths()).Vg
 
 		# Get the PVs
 		for p in vg.Pvs:
@@ -1186,25 +1216,13 @@ class TestDbusService(unittest.TestCase):
 		vg.update()
 		self.assertTrue([] == vg.Tags)
 
-	def test_lv_tags(self):
-		vg = self._vg_create().Vg
-		lv_name = lv_n()
-		lv = self._test_lv_create(
-			vg.LvCreateLinear,
-			(dbus.String(lv_name),
-			dbus.UInt64(mib(4)),
-			dbus.Boolean(False),
-			dbus.Int32(g_tmo),
-			EOD),
-			vg, LV_BASE_INT)
-
-		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
-
+	def _test_lv_tags(self, lv):
 		t = ['Testing', 'tags']
 
 		self.handle_return(
 			lv.Lv.TagsAdd(
 				dbus.Array(t, 's'), dbus.Int32(g_tmo), EOD))
+		self._check_consistency()
 		lv.update()
 		self.assertTrue(t == lv.LvCommon.Tags)
 
@@ -1213,8 +1231,14 @@ class TestDbusService(unittest.TestCase):
 				dbus.Array(t, 's'),
 				dbus.Int32(g_tmo),
 				EOD))
+		self._check_consistency()
 		lv.update()
 		self.assertTrue([] == lv.LvCommon.Tags)
+
+	def test_lv_tags(self):
+		vg = self._vg_create().Vg
+		lv = self._create_lv(vg=vg)
+		self._test_lv_tags(lv)
 
 	def test_vg_allocation_policy_set(self):
 		vg = self._vg_create().Vg
@@ -1231,10 +1255,7 @@ class TestDbusService(unittest.TestCase):
 			self.assertTrue(prop)
 
 	def test_vg_max_pv(self):
-		vg = self._vg_create().Vg
-
-		# BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1280496
-		# TODO: Add a test back for larger values here when bug is resolved
+		vg = self._vg_create([self.objs[PV_INT][0].object_path]).Vg
 		for p in [0, 1, 10, 100, 100, 1024, 2 ** 32 - 1]:
 			rc = self.handle_return(
 				vg.MaxPvSet(
@@ -1247,9 +1268,6 @@ class TestDbusService(unittest.TestCase):
 
 	def test_vg_max_lv(self):
 		vg = self._vg_create().Vg
-
-		# BZ: https://bugzilla.redhat.com/show_bug.cgi?id=1280496
-		# TODO: Add a test back for larger values here when bug is resolved
 		for p in [0, 1, 10, 100, 100, 1024, 2 ** 32 - 1]:
 			rc = self.handle_return(
 				vg.MaxLvSet(
@@ -1275,18 +1293,7 @@ class TestDbusService(unittest.TestCase):
 
 	def test_vg_activate_deactivate(self):
 		vg = self._vg_create().Vg
-		lv_name = lv_n()
-		lv = self._test_lv_create(
-			vg.LvCreateLinear, (
-				dbus.String(lv_name),
-				dbus.UInt64(mib(4)),
-				dbus.Boolean(False),
-				dbus.Int32(g_tmo),
-				EOD),
-			vg, LV_BASE_INT)
-
-		self._validate_lookup("%s/%s" % (vg.Name, lv_name), lv.object_path)
-
+		self._create_lv(vg=vg)
 		vg.update()
 
 		rc = self.handle_return(
@@ -1315,8 +1322,9 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(len(self.objs[PV_INT]) > 0)
 
 		if len(self.objs[PV_INT]) > 0:
-			pv = ClientProxy(self.bus, self.objs[PV_INT][0].object_path,
-								interfaces=(PV_INT, )).Pv
+			pv = ClientProxy(
+				self.bus, self.objs[PV_INT][0].object_path,
+				interfaces=(PV_INT, )).Pv
 
 			original_size = pv.SizeBytes
 
@@ -1342,12 +1350,7 @@ class TestDbusService(unittest.TestCase):
 			self.assertTrue(pv.SizeBytes == original_size)
 
 	def test_pv_allocation(self):
-
-		pv_paths = []
-		for pp in self.objs[PV_INT]:
-			pv_paths.append(pp.object_path)
-
-		vg = self._vg_create(pv_paths).Vg
+		vg = self._vg_create(self._all_pv_object_paths()).Vg
 
 		pv = ClientProxy(self.bus, vg.Pvs[0], interfaces=(PV_INT, )).Pv
 
@@ -1381,75 +1384,39 @@ class TestDbusService(unittest.TestCase):
 		context = pyudev.Context()
 		return context.list_devices(subsystem='block', MAJOR='8')
 
+	def _pv_scan(self, activate, cache, device_paths, major_minors):
+		mgr = self._manager().Manager
+		return self.handle_return(
+			mgr.PvScan(
+				dbus.Boolean(activate),
+				dbus.Boolean(cache),
+				dbus.Array(device_paths, 's'),
+				dbus.Array(major_minors, '(ii)'),
+				dbus.Int32(g_tmo),
+				EOD))
+
 	def test_pv_scan(self):
+
+		def major_minor(d):
+			return (int(d.properties['MAJOR']), int(d.properties['MINOR']))
+
 		devices = TestDbusService._get_devices()
 
-		mgr = self._manager().Manager
-
-		self.assertEqual(
-			self.handle_return(
-				mgr.PvScan(
-					dbus.Boolean(False),
-					dbus.Boolean(True),
-					dbus.Array([], 's'),
-					dbus.Array([], '(ii)'),
-					dbus.Int32(g_tmo),
-					EOD)), '/')
-
+		self.assertEqual(self._pv_scan(False, True, [], []), '/')
 		self._check_consistency()
-		self.assertEqual(
-			self.handle_return(
-				mgr.PvScan(
-					dbus.Boolean(False),
-					dbus.Boolean(False),
-					dbus.Array([], 's'),
-					dbus.Array([], '(ii)'),
-					dbus.Int32(g_tmo),
-					EOD)), '/')
-
+		self.assertEqual(self._pv_scan(False, False, [], []), '/')
 		self._check_consistency()
 
-		block_path = []
-		for d in devices:
-			block_path.append(d.properties['DEVNAME'])
-
-		self.assertEqual(
-			self.handle_return(
-				mgr.PvScan(
-					dbus.Boolean(False),
-					dbus.Boolean(True),
-					dbus.Array(block_path, 's'),
-					dbus.Array([], '(ii)'),
-					dbus.Int32(g_tmo),
-					EOD)), '/')
-
+		block_path = [d.properties['DEVNAME'] for d in devices]
+		self.assertEqual(self._pv_scan(False, True, block_path, []), '/')
 		self._check_consistency()
 
-		mm = []
-		for d in devices:
-			mm.append((int(d.properties['MAJOR']), int(d.properties['MINOR'])))
+		mm = [major_minor(d) for d in devices]
 
-		self.assertEqual(
-			self.handle_return(
-				mgr.PvScan(
-					dbus.Boolean(False),
-					dbus.Boolean(True),
-					dbus.Array(block_path, 's'),
-					dbus.Array(mm, '(ii)'),
-					dbus.Int32(g_tmo),
-					EOD)), '/')
-
+		self.assertEqual(self._pv_scan(False, True, block_path, mm), '/')
 		self._check_consistency()
 
-		self.assertEqual(
-			self.handle_return(
-				mgr.PvScan(
-					dbus.Boolean(False),
-					dbus.Boolean(True),
-					dbus.Array([], 's'),
-					dbus.Array(mm, '(ii)'),
-					dbus.Int32(g_tmo),
-					EOD)), '/')
+		self.assertEqual(self._pv_scan(False, True, [], mm), '/')
 		self._check_consistency()
 
 	@staticmethod
@@ -1477,8 +1444,8 @@ class TestDbusService(unittest.TestCase):
 				dbus.Int32(g_tmo),
 				EOD))
 
-		ss = ClientProxy(self.bus, snapshot_path,
-							interfaces=(LV_COMMON_INT, LV_INT, SNAPSHOT_INT, ))
+		intf = (LV_COMMON_INT, LV_INT, SNAPSHOT_INT, )
+		ss = ClientProxy(self.bus, snapshot_path, interfaces=intf)
 
 		# Write some data to snapshot so merge takes some time
 		TestDbusService._write_some_data(ss.LvCommon.Path, ss_size // 2)
@@ -1491,21 +1458,7 @@ class TestDbusService(unittest.TestCase):
 
 	def test_snapshot_merge_thin(self):
 		# Create a thin LV, snapshot it and merge it
-		vg = self._vg_create().Vg
-		tp = self._create_lv(thinpool=True, vg=vg)
-		lv_name = lv_n('_thin_lv')
-
-		thin_path = self.handle_return(
-			tp.ThinPool.LvCreate(
-				dbus.String(lv_name),
-				dbus.UInt64(mib(10)),
-				dbus.Int32(g_tmo),
-				EOD))
-
-		self._validate_lookup("%s/%s" % (vg.Name, lv_name), thin_path)
-
-		lv_p = ClientProxy(self.bus, thin_path,
-							interfaces=(LV_INT, LV_COMMON_INT))
+		_vg, _thin_path, lv_p = self._create_thin_lv()
 
 		ss_name = lv_p.LvCommon.Name + '_snap'
 		snapshot_path = self.handle_return(
@@ -1515,8 +1468,8 @@ class TestDbusService(unittest.TestCase):
 				dbus.Int32(g_tmo),
 				EOD))
 
-		ss = ClientProxy(self.bus, snapshot_path,
-							interfaces=(LV_INT, LV_COMMON_INT, SNAPSHOT_INT))
+		intf = (LV_INT, LV_COMMON_INT, SNAPSHOT_INT)
+		ss = ClientProxy(self.bus, snapshot_path, interfaces=intf)
 
 		job_path = self.handle_return(
 			ss.Snapshot.Merge(
@@ -1539,8 +1492,8 @@ class TestDbusService(unittest.TestCase):
 				dbus.Int32(g_tmo),
 				EOD))
 
-		cp = ClientProxy(self.bus, cache_pool_path,
-							interfaces=(CACHE_POOL_INT, ))
+		intf = (CACHE_POOL_INT, )
+		cp = ClientProxy(self.bus, cache_pool_path, interfaces=intf)
 
 		return vg, cp
 
@@ -1551,23 +1504,28 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(
 			'/com/redhat/lvmdbus1/CachePool' in cache_pool.object_path)
 
+	def _create_cache_lv(self, return_all=False):
+		vg, cache_pool = self._create_cache_pool()
+
+		lv_to_cache = self._create_lv(size=mib(32), vg=vg)
+
+		c_lv_path = self.handle_return(
+			cache_pool.CachePool.CacheLv(
+				dbus.ObjectPath(lv_to_cache.object_path),
+				dbus.Int32(g_tmo),
+				EOD))
+
+		intf = (LV_COMMON_INT, LV_INT, CACHE_LV_INT)
+		cached_lv = ClientProxy(self.bus, c_lv_path, interfaces=intf)
+
+		if return_all:
+			return vg, cache_pool, cached_lv
+		return cached_lv
+
 	def test_cache_lv_create(self):
 
 		for destroy_cache in [True, False]:
-			vg, cache_pool = self._create_cache_pool()
-
-			lv_to_cache = self._create_lv(size=mib(8), vg=vg)
-
-			c_lv_path = self.handle_return(
-				cache_pool.CachePool.CacheLv(
-					dbus.ObjectPath(lv_to_cache.object_path),
-					dbus.Int32(g_tmo),
-					EOD))
-
-			cached_lv = ClientProxy(self.bus, c_lv_path,
-									interfaces=(LV_COMMON_INT, LV_INT,
-												CACHE_LV_INT))
-
+			vg, _, cached_lv = self._create_cache_lv(True)
 			uncached_lv_path = self.handle_return(
 				cached_lv.CachedLv.DetachCachePool(
 					dbus.Boolean(destroy_cache),
@@ -1580,6 +1538,55 @@ class TestDbusService(unittest.TestCase):
 			rc = self.handle_return(
 				vg.Remove(dbus.Int32(g_tmo), EOD))
 			self.assertTrue(rc == '/')
+
+	def test_cache_lv_rename(self):
+		"""
+		Make sure that if we rename a cache lv that we correctly handle the
+		internal state update.
+		:return:
+		"""
+		def verify_cache_lv_count():
+			cur_objs, _ = get_objects()
+			self.assertEqual(len(cur_objs[CACHE_LV_INT]), 2)
+			self._check_consistency()
+
+		cached_lv = self._create_cache_lv()
+
+		verify_cache_lv_count()
+		new_name = 'renamed_' + cached_lv.LvCommon.Name
+		self.handle_return(
+			cached_lv.Lv.Rename(dbus.String(new_name), dbus.Int32(g_tmo), EOD))
+		verify_cache_lv_count()
+
+	def test_writecache_lv(self):
+		vg = self._vg_create().Vg
+		data_lv = self._create_lv(size=mib(16), vg=vg)
+		cache_lv = self._create_lv(size=mib(16), vg=vg)
+
+		# both LVs need to be inactive
+		self.handle_return(data_lv.Lv.Deactivate(
+			dbus.UInt64(0), dbus.Int32(g_tmo), EOD))
+		data_lv.update()
+		self.handle_return(cache_lv.Lv.Deactivate(
+			dbus.UInt64(0), dbus.Int32(g_tmo), EOD))
+		cache_lv.update()
+
+		cached_lv_path = self.handle_return(
+			cache_lv.Lv.WriteCacheLv(
+				dbus.ObjectPath(data_lv.object_path),
+				dbus.Int32(g_tmo),
+				EOD))
+
+		intf = (LV_COMMON_INT, LV_INT, CACHE_LV_INT)
+		cached_lv = ClientProxy(self.bus, cached_lv_path, interfaces=intf)
+		self.assertEqual(cached_lv.LvCommon.SegType, ["writecache"])
+
+		uncached_lv_path = self.handle_return(
+				cached_lv.CachedLv.DetachCachePool(
+					dbus.Boolean(True),
+					dbus.Int32(g_tmo),
+					EOD))
+		self.assertTrue('/com/redhat/lvmdbus1/Lv' in uncached_lv_path)
 
 	def test_vg_change(self):
 		vg_proxy = self._vg_create()
@@ -1670,7 +1677,7 @@ class TestDbusService(unittest.TestCase):
 		for reserved in (
 				"_cdata", "_cmeta", "_corig", "_mimage", "_mlog",
 				"_pmspare", "_rimage", "_rmeta", "_tdata", "_tmeta",
-				"_vorigin"):
+				"_vorigin", "_vdata"):
 			with self.assertRaises(dbus.exceptions.DBusException):
 				self.handle_return(
 					vg_proxy.Vg.LvCreateLinear(
@@ -1697,19 +1704,7 @@ class TestDbusService(unittest.TestCase):
 		return ''.join(bad_tag_ch_set)
 
 	def test_invalid_tags(self):
-		mgr = self.objs[MANAGER_INT][0].Manager
-		pv_paths = [self.objs[PV_INT][0].object_path]
-		vg_name = vg_n()
-
-		vg_path = self.handle_return(
-			mgr.VgCreate(
-				dbus.String(vg_name),
-				dbus.Array(pv_paths, 'o'),
-				dbus.Int32(g_tmo),
-				EOD))
-		self._validate_lookup(vg_name, vg_path)
-
-		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
+		vg_proxy = self._vg_create()
 
 		for c in self._invalid_tag_characters():
 			with self.assertRaises(dbus.exceptions.DBusException):
@@ -1727,55 +1722,7 @@ class TestDbusService(unittest.TestCase):
 						dbus.Int32(g_tmo),
 						EOD))
 
-	def test_tag_names(self):
-		mgr = self.objs[MANAGER_INT][0].Manager
-		pv_paths = [self.objs[PV_INT][0].object_path]
-		vg_name = vg_n()
-
-		vg_path = self.handle_return(
-			mgr.VgCreate(
-				dbus.String(vg_name),
-				dbus.Array(pv_paths, 'o'),
-				dbus.Int32(g_tmo),
-				EOD))
-		self._validate_lookup(vg_name, vg_path)
-		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
-
-		for i in range(1, 64):
-			tag = rs(i, "", self._ALLOWABLE_TAG_CH)
-
-			tmp = self.handle_return(
-				vg_proxy.Vg.TagsAdd(
-					dbus.Array([tag], 's'),
-					dbus.Int32(g_tmo),
-					EOD))
-			self.assertTrue(tmp == '/')
-			vg_proxy.update()
-
-			self.assertTrue(
-				tag in vg_proxy.Vg.Tags,
-				"%s not in %s" % (tag, str(vg_proxy.Vg.Tags)))
-
-			self.assertEqual(
-				i, len(vg_proxy.Vg.Tags),
-				"%d != %d" % (i, len(vg_proxy.Vg.Tags)))
-
-	def test_tag_regression(self):
-		mgr = self.objs[MANAGER_INT][0].Manager
-		pv_paths = [self.objs[PV_INT][0].object_path]
-		vg_name = vg_n()
-
-		vg_path = self.handle_return(
-			mgr.VgCreate(
-				dbus.String(vg_name),
-				dbus.Array(pv_paths, 'o'),
-				dbus.Int32(g_tmo),
-				EOD))
-		self._validate_lookup(vg_name, vg_path)
-		vg_proxy = ClientProxy(self.bus, vg_path, interfaces=(VG_INT, ))
-
-		tag = '--h/K.6g0A4FOEatf3+k_nI/Yp&L_u2oy-=j649x:+dUcYWPEo6.IWT0c'
-
+	def _tag_add_common(self, vg_proxy, tag):
 		tmp = self.handle_return(
 			vg_proxy.Vg.TagsAdd(
 				dbus.Array([tag], 's'),
@@ -1787,6 +1734,22 @@ class TestDbusService(unittest.TestCase):
 		self.assertTrue(
 			tag in vg_proxy.Vg.Tags,
 			"%s not in %s" % (tag, str(vg_proxy.Vg.Tags)))
+
+	def test_tag_names(self):
+		vg_proxy = self._vg_create()
+
+		for i in range(1, 64):
+			tag = rs(i, "", self._ALLOWABLE_TAG_CH)
+			self._tag_add_common(vg_proxy, tag)
+
+			self.assertEqual(
+				i, len(vg_proxy.Vg.Tags),
+				"%d != %d" % (i, len(vg_proxy.Vg.Tags)))
+
+	def test_tag_regression(self):
+		vg_proxy = self._vg_create()
+		tag = '--h/K.6g0A4FOEatf3+k_nI/Yp&L_u2oy-=j649x:+dUcYWPEo6.IWT0c'
+		self._tag_add_common(vg_proxy, tag)
 
 	def _verify_existence(self, cmd, operation, resource_name):
 		ec, stdout, stderr = call_lvm(cmd)
@@ -1806,10 +1769,10 @@ class TestDbusService(unittest.TestCase):
 		vg_name = vg_n()
 
 		# Get all the PV device paths
-		pv_paths = [p.Pv.Name for p in self.objs[PV_INT]]
+		pv_device_paths = [p.Pv.Name for p in self.objs[PV_INT]]
 
 		cmd = ['vgcreate', vg_name]
-		cmd.extend(pv_paths)
+		cmd.extend(pv_device_paths)
 		self._verify_existence(cmd, cmd[0], vg_name)
 
 	def test_external_lv_create(self):
@@ -1844,23 +1807,22 @@ class TestDbusService(unittest.TestCase):
 		pv = ClientProxy(self.bus, pv_object_path, interfaces=(PV_INT,))
 
 		self.assertEqual(pv.Pv.Vg, vg.object_path)
-		self.assertIn(pv_object_path, vg.Vg.Pvs,
-						"Expecting PV object path in Vg.Pvs")
+		self.assertIn(
+			pv_object_path, vg.Vg.Pvs, "Expecting PV object path in Vg.Pvs")
 
-		lv = self._create_lv(vg=vg.Vg, size=vg.Vg.FreeBytes,
-								suffix="_pv")
+		lv = self._create_lv(
+			vg=vg.Vg, size=vg.Vg.FreeBytes, suffix="_pv")
 		device_path = '/dev/%s/%s' % (vg.Vg.Name, lv.LvCommon.Name)
 		new_pv_object_path = self._pv_create(device_path)
 
 		vg.update()
 
 		self.assertEqual(lv.LvCommon.Vg, vg.object_path)
-		self.assertIn(lv.object_path, vg.Vg.Lvs,
-						"Expecting LV object path in Vg.Lvs")
+		self.assertIn(
+			lv.object_path, vg.Vg.Lvs, "Expecting LV object path in Vg.Lvs")
 
-		new_pv_proxy = ClientProxy(self.bus,
-									new_pv_object_path,
-									interfaces=(PV_INT, ))
+		new_pv_proxy = ClientProxy(
+			self.bus, new_pv_object_path, interfaces=(PV_INT, ))
 		self.assertEqual(new_pv_proxy.Pv.Name, device_path)
 
 		return new_pv_object_path
@@ -1871,16 +1833,19 @@ class TestDbusService(unittest.TestCase):
 		#
 		# NOTE: This needs an equivalent of aux extend_filter_LVMTEST
 		# when run from lvm2 testsuite. See dbustest.sh.
+		# Also if developing locally with actual devices one can achieve this
+		# by editing lvm.conf with "devices/scan_lvs = 1"  As testing
+		# typically utilizes loopback, this test is skipped in
+		# those environments.
 		pv_object_path = self.objs[PV_INT][0].object_path
 
-		if not pv_object_path.startswith("/dev"):
-			std_err_print('Skipping test not running in /dev')
-			return
+		if not self.objs[PV_INT][0].Pv.Name.startswith("/dev"):
+			raise unittest.SkipTest('test not running in /dev')
 
 		for i in range(0, 5):
 			pv_object_path = self._create_nested(pv_object_path)
 
-	def DISABLED_test_pv_symlinks(self):
+	def test_pv_symlinks(self):
 		# Lets take one of our test PVs, pvremove it, find a symlink to it
 		# and re-create using the symlink to ensure we return an object
 		# path to it.  Additionally, we will take the symlink and do a lookup
@@ -1890,6 +1855,9 @@ class TestDbusService(unittest.TestCase):
 
 		pv = self.objs[PV_INT][0]
 		pv_device_path = pv.Pv.Name
+
+		if not pv_device_path.startswith("/dev"):
+			raise unittest.SkipTest('test not running in /dev')
 
 		self._pv_remove(pv)
 
@@ -1919,6 +1887,158 @@ class TestDbusService(unittest.TestCase):
 		# Lets check symlink lookup
 		self.assertEqual(pv_object_path, self._lookup(symlink))
 		self.assertEqual(pv_object_path, self._lookup(pv_device_path))
+
+	def _create_vdo_pool_and_lv(self, vg_prefix="vdo_"):
+		pool_name = lv_n("_vdo_pool")
+		lv_name = lv_n()
+
+		vg_proxy = self._vg_create(vg_prefix=vg_prefix)
+		vdo_pool_object_path = self.handle_return(
+			vg_proxy.VgVdo.CreateVdoPoolandLv(
+				pool_name, lv_name,
+				dbus.UInt64(mib(4096)),		# Appears to be minimum size
+				dbus.UInt64(mib(8192)),
+				dbus.Int32(g_tmo),
+				EOD))
+
+		self.assertNotEqual(vdo_pool_object_path, "/")
+		self.assertEqual(
+			vdo_pool_object_path,
+			self._lookup("%s/%s" % (vg_proxy.Vg.Name, pool_name)))
+
+		vdo_pool_path = self._lookup("%s/%s" % (vg_proxy.Vg.Name, pool_name))
+		self.assertNotEqual(vdo_pool_path, "/")
+		intf = [LV_COMMON_INT, LV_INT]
+		vdo_lv_obj_path = self._lookup("%s/%s" % (vg_proxy.Vg.Name, lv_name))
+		vdo_lv = ClientProxy(self.bus, vdo_lv_obj_path, interfaces=intf)
+		intf.append(VDOPOOL_INT)
+		vdo_pool_lv = ClientProxy(self.bus, vdo_pool_path, interfaces=intf)
+		return vg_proxy, vdo_pool_lv, vdo_lv
+
+	def _create_vdo_lv(self):
+		return self._create_vdo_pool_and_lv()[2]
+
+	def _vdo_pool_lv(self):
+		return self._create_vdo_pool_and_lv()[1]
+
+	def test_vdo_pool_create(self):
+		# Basic vdo sanity testing
+		if not self.vdo:
+			raise unittest.SkipTest('vdo not supported')
+
+		# Do this twice to ensure we are providing the correct flags to force
+		# the operation when if finds an existing vdo signature, which likely
+		# shouldn't exist.
+		for _ in range(0, 2):
+			vg, _, _ = self._create_vdo_pool_and_lv()
+			self.handle_return(vg.Vg.Remove(dbus.Int32(g_tmo), EOD))
+
+	def _create_vdo_pool(self):
+		pool_name = lv_n('_vdo_pool')
+		lv_name = lv_n('_vdo_data')
+		vg_proxy = self._vg_create(vg_prefix="vdo_conv_")
+		lv = self._test_lv_create(
+			vg_proxy.Vg.LvCreate,
+			(dbus.String(pool_name), dbus.UInt64(mib(4096)),
+				dbus.Array([], signature='(ott)'), dbus.Int32(g_tmo),
+				EOD), vg_proxy.Vg, LV_BASE_INT)
+		lv_obj_path = self._lookup("%s/%s" % (vg_proxy.Vg.Name, pool_name))
+		self.assertNotEqual(lv_obj_path, "/")
+
+		vdo_pool_path = self.handle_return(
+			vg_proxy.VgVdo.CreateVdoPool(
+				dbus.ObjectPath(lv.object_path), lv_name,
+				dbus.UInt64(mib(8192)),
+				dbus.Int32(g_tmo),
+				EOD))
+
+		self.assertNotEqual(vdo_pool_path, "/")
+		self.assertEqual(
+			vdo_pool_path,
+			self._lookup("%s/%s" % (vg_proxy.Vg.Name, pool_name)))
+		intf = [LV_COMMON_INT, LV_INT]
+		vdo_lv_obj_path = self._lookup("%s/%s" % (vg_proxy.Vg.Name, lv_name))
+		vdo_lv = ClientProxy(self.bus, vdo_lv_obj_path, interfaces=intf)
+		intf.append(VDOPOOL_INT)
+		vdo_pool_lv = ClientProxy(self.bus, vdo_pool_path, interfaces=intf)
+		return vg_proxy, vdo_pool_lv, vdo_lv
+
+	def test_vdo_pool_convert(self):
+		# Basic vdo sanity testing
+		if not self.vdo:
+			raise unittest.SkipTest('vdo not supported')
+
+		vg, _pool, _lv = self._create_vdo_pool()
+		self.handle_return(vg.Vg.Remove(dbus.Int32(g_tmo), EOD))
+
+	def test_vdo_pool_compression_deduplication(self):
+		if not self.vdo:
+			raise unittest.SkipTest('vdo not supported')
+
+		vg, pool, _lv = self._create_vdo_pool_and_lv(vg_prefix="vdo2_")
+
+		# compression and deduplication should be enabled by default
+		self.assertEqual(pool.VdoPool.Compression, "enabled")
+		self.assertEqual(pool.VdoPool.Deduplication, "enabled")
+
+		self.handle_return(
+			pool.VdoPool.DisableCompression(dbus.Int32(g_tmo), EOD))
+		self.handle_return(
+			pool.VdoPool.DisableDeduplication(dbus.Int32(g_tmo), EOD))
+		pool.update()
+		self.assertEqual(pool.VdoPool.Compression, "")
+		self.assertEqual(pool.VdoPool.Deduplication, "")
+
+		self.handle_return(
+			pool.VdoPool.EnableCompression(dbus.Int32(g_tmo), EOD))
+		self.handle_return(
+			pool.VdoPool.EnableDeduplication(dbus.Int32(g_tmo), EOD))
+		pool.update()
+		self.assertEqual(pool.VdoPool.Compression, "enabled")
+		self.assertEqual(pool.VdoPool.Deduplication, "enabled")
+
+		self.handle_return(vg.Vg.Remove(dbus.Int32(g_tmo), EOD))
+
+	def _test_lv_method_interface(self, lv):
+		self._rename_lv_test(lv)
+		self._test_activate_deactivate(lv)
+		self._test_lv_tags(lv)
+		self._test_lv_resize(lv)
+
+	def _test_lv_method_interface_sequence(
+			self, lv, test_ss=True, remove_lv=True):
+		self._test_lv_method_interface(lv)
+
+		# We can't take a snapshot of a pool lv (not yet).
+		if test_ss:
+			ss_lv = self._take_lv_snapshot(lv)
+			self._test_lv_method_interface(ss_lv)
+			self._lv_remove(ss_lv)
+
+		if remove_lv:
+			self._lv_remove(lv)
+
+	def test_lv_interface_plain_lv(self):
+		self._test_lv_method_interface_sequence(self._create_lv())
+
+	def test_lv_interface_vdo_lv(self):
+		if not self.vdo:
+			raise unittest.SkipTest('vdo not supported')
+		self._test_lv_method_interface_sequence(self._create_vdo_lv())
+
+	def test_lv_interface_cache_lv(self):
+		self._test_lv_method_interface_sequence(
+			self._create_cache_lv(), remove_lv=False)
+
+	def test_lv_interface_thin_pool_lv(self):
+		self._test_lv_method_interface_sequence(
+			self._create_thin_pool_lv(), test_ss=False)
+
+	def test_lv_interface_vdo_pool_lv(self):
+		if not self.vdo:
+			raise unittest.SkipTest('vdo not supported')
+		self._test_lv_method_interface_sequence(
+			self._vdo_pool_lv(), test_ss=False)
 
 
 class AggregateResults(object):

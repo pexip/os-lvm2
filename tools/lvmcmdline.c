@@ -23,7 +23,6 @@
 #include "stub.h"
 #include "lib/misc/last-path-component.h"
 
-#include <signal.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <sys/resource.h>
@@ -123,13 +122,17 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	{ lvconvert_to_thinpool_CMD,			lvconvert_to_pool_cmd },
 	{ lvconvert_to_cachepool_CMD,			lvconvert_to_pool_cmd },
 	{ lvconvert_to_thin_with_external_CMD,		lvconvert_to_thin_with_external_cmd },
-	{ lvconvert_to_cache_vol_CMD,			lvconvert_to_cache_vol_cmd },
+	{ lvconvert_to_cache_with_cachevol_CMD,		lvconvert_to_cache_with_cachevol_cmd },
+	{ lvconvert_to_cache_with_device_CMD,		lvconvert_to_cache_with_cachevol_cmd },
+	{ lvconvert_to_cache_with_cachepool_CMD,	lvconvert_to_cache_with_cachepool_cmd },
+	{ lvconvert_to_writecache_CMD,			lvconvert_to_writecache_cmd },
+	{ lvconvert_to_writecache_with_device_CMD,	lvconvert_to_writecache_cmd },
 	{ lvconvert_swap_pool_metadata_CMD,		lvconvert_swap_pool_metadata_cmd },
 	{ lvconvert_to_thinpool_or_swap_metadata_CMD,   lvconvert_to_pool_or_swap_metadata_cmd },
 	{ lvconvert_to_cachepool_or_swap_metadata_CMD,  lvconvert_to_pool_or_swap_metadata_cmd },
 	{ lvconvert_merge_thin_CMD,			lvconvert_merge_thin_cmd },
-	{ lvconvert_split_and_keep_cachepool_CMD,	lvconvert_split_cachepool_cmd },
-	{ lvconvert_split_and_remove_cachepool_CMD,	lvconvert_split_cachepool_cmd },
+	{ lvconvert_split_and_keep_cache_CMD,		lvconvert_split_cache_cmd },
+	{ lvconvert_split_and_remove_cache_CMD,		lvconvert_split_cache_cmd },
 
 	/* lvconvert raid-related type conversions */
 	{ lvconvert_raid_types_CMD,			lvconvert_raid_types_cmd },
@@ -146,6 +149,15 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	/* lvconvert VDO pool */
 	{ lvconvert_to_vdopool_CMD, lvconvert_to_vdopool_cmd },
 	{ lvconvert_to_vdopool_param_CMD, lvconvert_to_vdopool_param_cmd },
+
+	/* lvconvert for integrity */
+	{ lvconvert_integrity_CMD, lvconvert_integrity_cmd },
+
+	/* lvcreate */
+	{ lvcreate_and_attach_cachevol_for_cache_CMD,		lvcreate_and_attach_cache_cmd },
+	{ lvcreate_and_attach_cachedevice_for_cache_CMD,	lvcreate_and_attach_cache_cmd },
+	{ lvcreate_and_attach_cachevol_for_writecache_CMD,	lvcreate_and_attach_writecache_cmd },
+	{ lvcreate_and_attach_cachedevice_for_writecache_CMD,	lvcreate_and_attach_writecache_cmd },
 
 	{ pvscan_display_CMD, pvscan_display_cmd },
 	{ pvscan_cache_CMD, pvscan_cache_cmd },
@@ -1075,6 +1087,27 @@ int configtype_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
+int repairtype_arg(struct cmd_context *cmd, struct arg_values *av)
+{
+	if (!strcmp(av->value, "pv_header") ||
+	    !strcmp(av->value, "metadata") ||
+	    !strcmp(av->value, "label_header"))
+		return 1;
+	return 0;
+}
+
+int dumptype_arg(struct cmd_context *cmd, struct arg_values *av)
+{
+	if (!strcmp(av->value, "headers") ||
+	    !strcmp(av->value, "metadata") ||
+	    !strcmp(av->value, "metadata_all") ||
+	    !strcmp(av->value, "metadata_search") ||
+	    !strcmp(av->value, "metadata_area") ||
+	    !strcmp(av->value, "backup_to_raw"))
+		return 1;
+	return 0;
+}
+
 /*
  * FIXME: there's been a confusing mixup among:
  * resizeable, resizable, allocatable, allocation.
@@ -1190,7 +1223,7 @@ static void _set_valid_args_for_command_name(int ci)
 		if (strcmp(commands[i].name, command_names[ci].name))
 			continue;
 
-		for (ro = 0; ro < commands[i].ro_count; ro++) {
+		for (ro = 0; ro < (commands[i].ro_count + commands[i].any_ro_count); ro++) {
 			opt_enum = commands[i].required_opt_args[ro].opt;
 			all_args[opt_enum] = 1;
 
@@ -1518,6 +1551,65 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 }
 
 /*
+ * Return 1 if we should skip this command from consideration.
+ * This would happen if the command does not include a --type
+ * option that does not match type_arg.
+ */
+
+static int _command_skip_for_type_arg(struct cmd_context *cmd, int ci, const char *type_arg)
+{
+	int ro, oo, opt_enum;
+
+	for (ro = 0; ro < (commands[ci].ro_count + commands[ci].any_ro_count); ro++) {
+		opt_enum = commands[ci].required_opt_args[ro].opt;
+
+		if (opt_enum != type_ARG)
+			continue;
+
+		/* SegType keyword in command def matches any type_arg */
+		if (val_bit_is_set(commands[ci].required_opt_args[ro].def.val_bits, segtype_VAL))
+			return 0;
+
+		if (!commands[ci].required_opt_args[ro].def.str)
+			return 0;
+
+		if (!strcmp(commands[ci].required_opt_args[ro].def.str, type_arg))
+			return 0;
+
+		if (!strncmp(commands[ci].required_opt_args[ro].def.str, "raid", 4) &&
+		    !strncmp(type_arg, "raid", 4))
+			return 0;
+
+		return 1;
+	}
+
+	for (oo = 0; oo < commands[ci].oo_count; oo++) {
+		opt_enum = commands[ci].optional_opt_args[oo].opt;
+
+		if (opt_enum != type_ARG)
+			continue;
+
+		/* SegType keyword in command def matches any type_arg */
+		if (val_bit_is_set(commands[ci].optional_opt_args[oo].def.val_bits, segtype_VAL))
+			return 0;
+
+		if (!commands[ci].optional_opt_args[oo].def.str)
+			return 0;
+
+		if (!strcmp(commands[ci].optional_opt_args[oo].def.str, type_arg))
+			return 0;
+
+		if (!strncmp(commands[ci].optional_opt_args[oo].def.str, "raid", 4) &&
+		    !strncmp(type_arg, "raid", 4))
+			return 0;
+
+		return 1;
+	}
+
+	return 1;
+}
+
+/*
  * Match what the user typed with a one specific command definition/prototype
  * from commands[].  If nothing matches, it's not a valid command.  The match
  * is based on command name, required opt args and required pos args.
@@ -1531,7 +1623,7 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
  * For each command[i], check how many required opt/pos args cmd matches.
  * Save the command[i] that matches the most.
  *
- * commands[i].cmd_flags & CMD_FLAG_ONE_REQUIRED_OPT means
+ * commands[i].cmd_flags & CMD_FLAG_ANY_REQUIRED_OPT means
  * any one item from commands[i].required_opt_args needs to be
  * set to match.
  *
@@ -1547,9 +1639,10 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 static struct command *_find_command(struct cmd_context *cmd, const char *path, int *argc, char **argv)
 {
 	const char *name;
+	const char *type_arg = NULL;
 	char opts_msg[MAX_OPTS_MSG];
 	char check_opts_msg[MAX_OPTS_MSG];
-	int match_required, match_ro, match_rp, match_type, match_unused, mismatch_required;
+	int match_required, match_ro, match_rp, match_any_ro, match_type, match_unused, mismatch_required;
 	int best_i = 0, best_required = 0, best_type = 0, best_unused = 0;
 	int close_i = 0, close_ro = 0, close_type = 0;
 	int only_i = 0;
@@ -1573,6 +1666,9 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 		variants++;
 	}
 
+	if (arg_is_set(cmd, type_ARG))
+		type_arg = arg_str_value(cmd, type_ARG, "");
+
 	for (i = 0; i < COMMAND_COUNT; i++) {
 		if (strcmp(name, commands[i].name))
 			continue;
@@ -1595,9 +1691,20 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 				continue;
 		}
 
+		/*
+		 * '--type foo' is special.  If the user has set --type foo, then
+		 * we will only look at command defs that include the same --type foo
+		 * (as required or optional).  We'll never match some command based
+		 * on *other* (non-type) options, and then at the end complain that
+		 * the user's --type is not accepted.
+		 */
+		if (type_arg && _command_skip_for_type_arg(cmd, i, type_arg))
+			continue;
+
 		match_required = 0;	/* required parameters that match */
 		match_ro = 0;		/* required opt_args that match */
 		match_rp = 0;		/* required pos_args that match */
+		match_any_ro = 0;
 		match_type = 0;		/* type arg matches */
 		match_unused = 0;	/* options set that are not accepted by command */
 		mismatch_required = 0;	/* required parameters that do not match */
@@ -1626,18 +1733,17 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 			}
 		}
 
-		/*
-		 * Special case where missing required_opt_arg's does not matter
-		 * if one required_opt_arg did match.
-		 */
-		if (commands[i].cmd_flags & CMD_FLAG_ONE_REQUIRED_OPT) {
-			if (match_ro) {
-				/* one or more of the required_opt_args is used */
-				mismatch_required = 0;
-			} else {
-				/* not even one of the required_opt_args is used */
-				mismatch_required = 1;
+		for (ro = commands[i].ro_count; ro < commands[i].ro_count + commands[i].any_ro_count; ro++) {
+			if (_command_required_opt_matches(cmd, i, ro)) {
+				/* log_warn("match %d any ro opt %d", i, commands[i].required_opt_args[ro].opt); */
+				match_any_ro++;
 			}
+		}
+
+		if ((commands[i].cmd_flags & CMD_FLAG_ANY_REQUIRED_OPT) && !match_any_ro) {
+			/* not even one of the any ro is used */
+			/* log_warn("match %d not one from any", i); */
+			mismatch_required = 1;
 		}
 
 		/* match required_pos_args */
@@ -1695,7 +1801,7 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 			accepted = 0;
 
 			/* NB in some cases required_opt_args are optional */
-			for (j = 0; j < commands[i].ro_count; j++) {
+			for (j = 0; j < commands[i].ro_count + commands[i].any_ro_count; j++) {
 				if (commands[i].required_opt_args[j].opt == opt_enum) {
 					accepted = 1;
 					break;
@@ -2120,7 +2226,7 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 		 * value (e.g. foo_ARG) from the args array.
 		 */
 		if ((arg_enum = _find_arg(cmd->name, goval)) < 0) {
-			log_fatal("Unrecognised option.");
+			log_fatal("Unrecognised option %d (%c).", goval, goval);
 			return 0;
 		}
 
@@ -2285,6 +2391,7 @@ static void _apply_current_output_settings(struct cmd_context *cmd)
 static int _get_current_settings(struct cmd_context *cmd)
 {
 	const char *activation_mode;
+	const char *hint_mode;
 
 	_get_current_output_settings_from_args(cmd);
 
@@ -2311,6 +2418,35 @@ static int _get_current_settings(struct cmd_context *cmd)
 
 	if (cmd->cname->flags & CAN_USE_ONE_SCAN)
 		cmd->can_use_one_scan = 1;
+
+	cmd->include_exported_vgs = (cmd->cname->flags & ALLOW_EXPORTED) ? 1 : 0;
+
+	cmd->scan_lvs = find_config_tree_bool(cmd, devices_scan_lvs_CFG, NULL);
+
+	cmd->allow_mixed_block_sizes = find_config_tree_bool(cmd, devices_allow_mixed_block_sizes_CFG, NULL);
+
+	/*
+	 * enable_hints is set to 1 if any commands are using hints.
+	 * use_hints is set to 1 if this command doesn't use the hints.
+	 * enable_hints=1 and use_hints=0 means that this command won't
+	 * use the hints, but it may invalidate the hints that are used
+	 * by other commands.
+	 *
+	 * enable_hints=0 means no commands are using hints, so this
+	 * command would not need to invalidate hints for other cmds.
+	 */
+	cmd->enable_hints = 1;
+
+	/* Only certain commands need to be optimized by using hints. */
+	if (cmd->cname->flags & ALLOW_HINTS)
+		cmd->use_hints = 1;
+	else
+		cmd->use_hints = 0;
+
+	if ((hint_mode = find_config_tree_str(cmd, devices_hints_CFG, NULL))) {
+		if (!strcmp(hint_mode, "none"))
+			cmd->enable_hints = 0;
+	}
 
 	cmd->partial_activation = 0;
 	cmd->degraded_activation = 0;
@@ -2367,17 +2503,6 @@ static int _get_current_settings(struct cmd_context *cmd)
 
 	if (arg_is_set(cmd, binary_ARG))
 		cmd->report_binary_values_as_numeric = 1;
-
-	if (arg_is_set(cmd, trustcache_ARG)) {
-		if (arg_is_set(cmd, all_ARG)) {
-			log_error("--trustcache is incompatible with --all");
-			return EINVALID_CMD_LINE;
-		}
-		init_trust_cache(1);
-		log_warn("WARNING: Cache file of PVs will be trusted.  "
-			  "New devices holding PVs may get ignored.");
-	} else
-		init_trust_cache(0);
 
 	if (arg_is_set(cmd, noudevsync_ARG))
 		cmd->current_settings.udev_sync = 0;
@@ -2465,7 +2590,6 @@ static void _apply_current_settings(struct cmd_context *cmd)
 	init_dmeventd_monitor(DEFAULT_DMEVENTD_MONITOR);
 
 	init_msg_prefix(cmd->default_settings.msg_prefix);
-	init_cmd_name(cmd->default_settings.cmd_name);
 
 	archive_enable(cmd, cmd->current_settings.archive);
 	backup_enable(cmd, cmd->current_settings.backup);
@@ -2687,6 +2811,19 @@ static int _init_lvmlockd(struct cmd_context *cmd)
 	const char *lvmlockd_socket;
 	int use_lvmlockd = find_config_tree_bool(cmd, global_use_lvmlockd_CFG, NULL);
 
+	if (cmd->command->command_enum == pvscan_cache_CMD) {
+		/* pvscan cache ignores shared vgs, it only activates local vgs. */
+		if (use_lvmlockd)
+			log_debug("Ignore lvmlockd for pvscan cache.");
+		return 1;
+	}
+
+	/*
+	 * Think about when/how to enable hints with lvmlockd.
+	 */
+	if (use_lvmlockd)
+		cmd->enable_hints = 0;
+
 	if (use_lvmlockd && arg_is_set(cmd, nolocking_ARG)) {
 		/* --nolocking is only allowed with vgs/lvs/pvs commands */
 		cmd->lockd_gl_disable = 1;
@@ -2726,6 +2863,50 @@ static int _init_lvmlockd(struct cmd_context *cmd)
 	return 1;
 }
 
+/*
+ * md_component_check full: always set use_full_md_check
+ * which causes filter-md to read the start+end of every
+ * device on the system (this could be optimized to only
+ * read the end of PVs.)
+ *
+ * md_component_check start: the end of devices will
+ * not generally be read to check for an md superblock
+ * (lvm may still scan for end-of-device md superblocks
+ * if it knows that some exists.)
+ *
+ * md_component_check auto: lvm will use some built-in
+ * heuristics to decide when it should scan the end of
+ * devices to look for md superblocks, e.g. commands
+ * like pvcreate that could clobber a component, or if
+ * udev info is not available and hints are not available.
+ */
+static void _init_md_checks(struct cmd_context *cmd)
+{
+	const char *md_check;
+
+	cmd->md_component_detection = find_config_tree_bool(cmd, devices_md_component_detection_CFG, NULL);
+
+	md_check = find_config_tree_str(cmd, devices_md_component_checks_CFG, NULL);
+	if (!md_check)
+		cmd->md_component_checks = "auto";
+	else if (!strcmp(md_check, "auto") ||
+	         !strcmp(md_check, "start") ||
+	         !strcmp(md_check, "full"))
+		cmd->md_component_checks = md_check;
+	else {
+		log_warn("Ignoring unknown md_component_checks setting, using auto.");
+		cmd->md_component_checks = "auto";
+	}
+
+	if (!strcmp(cmd->md_component_checks, "full"))
+		cmd->use_full_md_check = 1;
+
+	/* use_full_md_check can also be set later */
+
+	log_debug("Using md_component_checks %s use_full_md_check %d",
+		  cmd->md_component_checks, cmd->use_full_md_check);
+}
+
 static int _cmd_no_meta_proc(struct cmd_context *cmd)
 {
 	return cmd->cname->flags & NO_METADATA_PROCESSING;
@@ -2754,6 +2935,10 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		log_error("Failed to strdup command basename.");
 		return ECMD_FAILED;
 	}
+
+	set_cmd_name(cmd->name);
+
+	init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL), 0);
 
 	configure_command_option_values(cmd->name);
 
@@ -2822,8 +3007,6 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	cmd->position_argc = argc;
 	cmd->position_argv = argv;
 
-	set_cmd_name(cmd->name);
-
 	if (arg_is_set(cmd, config_ARG))
 		if (!override_config_tree_from_string(cmd, arg_str_value(cmd, config_ARG, ""))) {
 			ret = EINVALID_CMD_LINE;
@@ -2851,12 +3034,12 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	    !init_filters(cmd, !refresh_done))
 		return_ECMD_FAILED;
 
-	if (arg_is_set(cmd, readonly_ARG))
-		cmd->metadata_read_only = 1;
+	cmd->metadata_read_only = arg_is_set(cmd, readonly_ARG);
 
-	if ((cmd->command->command_enum == vgchange_activate_CMD) ||
-	    (cmd->command->command_enum == lvchange_activate_CMD))
-		cmd->is_activating = 1;
+	cmd->is_activating = (cmd->command->command_enum == vgchange_activate_CMD) ||
+			     (cmd->command->command_enum == lvchange_activate_CMD);
+
+	cmd->wipe_outdated_pvs = 0;
 
 	/*
 	 * Now that all configs, profiles and command lines args are available,
@@ -2916,7 +3099,9 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		log_warn("WARNING: locking_type (%d) is deprecated, using file locking.", locking_type);
 	}
 
-	if (arg_is_set(cmd, nolocking_ARG) || _cmd_no_meta_proc(cmd))
+	cmd->nolocking = arg_is_set(cmd, nolocking_ARG);
+
+	if (cmd->nolocking || _cmd_no_meta_proc(cmd))
 		nolocking = 1;
 
 	if (arg_is_set(cmd, sysinit_ARG))
@@ -2935,6 +3120,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
+	_init_md_checks(cmd);
+
 	if (!_cmd_no_meta_proc(cmd) && !_init_lvmlockd(cmd)) {
 		ret = ECMD_FAILED;
 		goto_out;
@@ -2948,13 +3135,14 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		ret = cmd->command->fn(cmd, argc, argv);
 
 	lvmlockd_disconnect();
-	fin_locking();
+	fin_locking(cmd);
 
 	if (!_cmd_no_meta_proc(cmd) && find_config_tree_bool(cmd, global_notify_dbus_CFG, NULL))
 		lvmnotify_send(cmd);
 
       out:
 
+	hints_exit(cmd);
 	lvmcache_destroy(cmd, 1, 1);
 	label_scan_destroy(cmd);
 
@@ -3241,7 +3429,9 @@ static int _close_stray_fds(const char *command, struct custom_fds *custom_fds)
 	return 1;
 }
 
-struct cmd_context *init_lvm(unsigned set_connections, unsigned set_filters)
+struct cmd_context *init_lvm(unsigned set_connections,
+			     unsigned set_filters,
+			     unsigned threaded)
 {
 	struct cmd_context *cmd;
 
@@ -3255,7 +3445,7 @@ struct cmd_context *init_lvm(unsigned set_connections, unsigned set_filters)
 	 */
 	dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
 
-	if (!(cmd = create_toolcontext(0, NULL, 1, 0,
+	if (!(cmd = create_toolcontext(0, NULL, 1, threaded,
 			set_connections, set_filters))) {
 		udev_fin_library_context();
 		return_NULL;
@@ -3409,7 +3599,7 @@ int lvm2_main(int argc, char **argv)
 	if (!alias && (argc > 2) && !strcmp(argv[2], "-?"))
 		argv[2] = (char *)"-h";
 
-	if (!(cmd = init_lvm(0, 0)))
+	if (!(cmd = init_lvm(0, 0, 0)))
 		return EINIT_FAILED;
 
 	/* Store original argv location so we may customise it if we become a daemon */
@@ -3453,7 +3643,7 @@ int lvm2_main(int argc, char **argv)
 	}
 
 	if (run_shell) {
-#ifdef READLINE_SUPPORT
+#if defined(READLINE_SUPPORT) || defined(EDITLINE_SUPPORT)
 		_nonroot_warning();
 		if (!_prepare_profiles(cmd)) {
 			ret = ECMD_FAILED;

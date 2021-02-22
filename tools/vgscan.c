@@ -47,17 +47,10 @@ int vgscan(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_PROCESSED;
 	}
 
-	if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_WRITE, NULL)) {
-		log_error("Unable to obtain global lock.");
-		return ECMD_FAILED;
-	}
-
 	if (arg_is_set(cmd, cache_long_ARG)) {
 		log_warn("Ignoring vgscan --cache command because lvmetad is no longer used.");
 		return ECMD_PROCESSED;
 	}
-
-	log_print_unless_silent("Reading all physical volumes.  This may take a while...");
 
 	maxret = process_each_vg(cmd, argc, argv, NULL, NULL, 0, 0, NULL, &_vgscan_single);
 
@@ -67,6 +60,5 @@ int vgscan(struct cmd_context *cmd, int argc, char **argv)
 			maxret = ret;
 	}
 
-	unlock_vg(cmd, NULL, VG_GLOBAL);
 	return maxret;
 }

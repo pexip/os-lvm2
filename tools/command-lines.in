@@ -198,7 +198,7 @@ OO_REPORT: --aligned, --all, --binary, --configreport ConfigReport, --foreign,
 --nameprefixes, --noheadings, --nosuffix,
 --options String, --readonly, --reportformat ReportFmt, --rows,
 --select String, --separator String, --shared, --sort String,
---trustcache, --unbuffered, --units Units, --unquoted
+--unbuffered, --units Units, --unquoted
 
 #
 # options for config, dumpconfig, lvmconfig
@@ -247,7 +247,7 @@ RULE: --profile not --detachprofile
 RULE: --metadataprofile not --detachprofile
 RULE: --minrecoveryrate --maxrecoveryrate and LV_raid
 RULE: --writebehind --writemostly and LV_raid1
-RULE: --cachemode --cachepolicy --cachesettings and LV_cache LV_cachepool
+RULE: --cachemode --cachepolicy --cachesettings and LV_cache LV_cachepool LV_writecache
 RULE: --errorwhenfull --discards --zero and LV_thinpool
 RULE: --permission not lv_is_external_origin lv_is_raid_metadata lv_is_raid_image LV_thinpool
 RULE: --alloc --contiguous --metadataprofile --permission --persistent --profile --readahead not lv_is_thick_origin
@@ -261,7 +261,8 @@ OO: --activate Active, OO_LVCHANGE
 IO: --ignoreskippedcluster
 ID: lvchange_resync
 DESC: Resyncronize a mirror or raid LV.
-RULE: all not lv_is_pvmove lv_is_locked
+DESC: Use to reset 'R' attribute on a not initially synchronized LV.
+RULE: all not lv_is_pvmove lv_is_locked lv_is_raid_with_integrity
 RULE: all not LV_raid0
 
 lvchange --syncaction SyncAction VG|LV_raid|Tag|Select ...
@@ -343,13 +344,11 @@ DESC: Convert LV to striped.
 RULE: all not lv_is_locked lv_is_pvmove
 
 lvconvert --type mirror LV
-OO: --mirrors SNumber, --regionsize RegionSize, --interval Number, --mirrorlog MirrorLog, OO_LVCONVERT
+OO: --mirrors SNumber, --stripes_long Number, --stripesize SizeKB, --regionsize RegionSize, --interval Number, --mirrorlog MirrorLog, OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_raid_types
 DESC: Convert LV to type mirror (also see type raid1),
-DESC: (also see lvconvert --mirrors).
 RULE: all not lv_is_locked lv_is_pvmove
-FLAGS: SECONDARY_SYNTAX
 
 # When LV is already raid, this changes the raid layout
 # (changing layout of raid0 and raid1 not allowed.)
@@ -361,6 +360,7 @@ ID: lvconvert_raid_types
 DESC: Convert LV to raid or change raid layout
 DESC: (a specific raid level must be used, e.g. raid1).
 RULE: all not lv_is_locked lv_is_pvmove
+RULE: lv_is_raid_with_integrity not --stripes_long --stripesize --regionsize --interval
 
 lvconvert --mirrors SNumber LV
 OO: --regionsize RegionSize, --interval Number, --mirrorlog MirrorLog, OO_LVCONVERT
@@ -374,21 +374,21 @@ OO: OO_LVCONVERT, --interval Number, --regionsize RegionSize, --stripesize SizeK
 OP: PV ...
 ID: lvconvert_raid_types
 DESC: Convert raid LV to change number of stripe images.
-RULE: all not lv_is_locked lv_is_pvmove
+RULE: all not lv_is_locked lv_is_pvmove lv_is_raid_with_integrity
 RULE: all not LV_raid0 LV_raid1
 
 lvconvert --stripesize SizeKB LV_raid
 OO: OO_LVCONVERT, --interval Number, --regionsize RegionSize
 ID: lvconvert_raid_types
 DESC: Convert raid LV to change the stripe size.
-RULE: all not lv_is_locked lv_is_pvmove
+RULE: all not lv_is_locked lv_is_pvmove lv_is_raid_with_integrity
 RULE: all not LV_raid0 LV_raid1
 
 lvconvert --regionsize RegionSize LV_raid
 OO: OO_LVCONVERT
 ID: lvconvert_change_region_size
 DESC: Change the region size of an LV.
-RULE: all not lv_is_locked lv_is_pvmove
+RULE: all not lv_is_locked lv_is_pvmove lv_is_raid_with_integrity
 RULE: all not LV_raid0
 FLAGS: SECONDARY_SYNTAX
 
@@ -402,20 +402,20 @@ OO: OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_split_mirror_images
 DESC: Split images from a raid1 or mirror LV and use them to create a new LV.
-RULE: all not lv_is_locked lv_is_pvmove
+RULE: all not lv_is_locked lv_is_pvmove lv_is_raid_with_integrity
 
 lvconvert --splitmirrors Number --trackchanges LV_raid1_cache
 OO: OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_split_mirror_images
 DESC: Split images from a raid1 LV and track changes to origin for later merge.
-RULE: all not lv_is_locked lv_is_pvmove
+RULE: all not lv_is_locked lv_is_pvmove lv_is_raid_with_integrity
 
 lvconvert --mergemirrors LV_linear_raid|VG|Tag ...
 OO: OO_LVCONVERT
 ID: lvconvert_merge_mirror_images
 DESC: Merge LV images that were split from a raid1 LV.
-RULE: all not lv_is_locked lv_is_pvmove lv_is_merging_origin lv_is_virtual_origin lv_is_external_origin lv_is_merging_cow
+RULE: all not lv_is_locked lv_is_pvmove lv_is_merging_origin lv_is_virtual_origin lv_is_external_origin lv_is_merging_cow lv_is_raid_with_integrity
 
 lvconvert --mirrorlog MirrorLog LV_mirror
 OO: OO_LVCONVERT
@@ -435,7 +435,7 @@ OO: --thin, --originname LV_new, OO_LVCONVERT_POOL, OO_LVCONVERT
 ID: lvconvert_to_thin_with_external
 DESC: Convert LV to a thin LV, using the original LV as an external origin.
 RULE: all and lv_is_visible
-RULE: all not lv_is_locked
+RULE: all not lv_is_locked lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 # alternate form of lvconvert --type thin
@@ -446,26 +446,69 @@ DESC: Convert LV to a thin LV, using the original LV as an external origin
 DESC: (infers --type thin).
 FLAGS: SECONDARY_SYNTAX
 RULE: all and lv_is_visible
-RULE: all not lv_is_locked
+RULE: all not lv_is_locked lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 ---
 
-lvconvert --type cache --cachepool LV LV_linear_striped_raid_thinpool
+lvconvert --type cache --cachepool LV LV_linear_striped_raid_thinpool_vdo_vdopool_vdopooldata
 OO: --cache, OO_LVCONVERT_CACHE, OO_LVCONVERT_POOL, OO_LVCONVERT
-ID: lvconvert_to_cache_vol
-DESC: Convert LV to type cache.
+ID: lvconvert_to_cache_with_cachepool
+DESC: Attach a cache pool to an LV, converts the LV to type cache.
 RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 # alternate form of lvconvert --type cache
-lvconvert --cache --cachepool LV LV_linear_striped_raid_thinpool
+lvconvert --cache --cachepool LV LV_linear_striped_raid_thinpool_vdo_vdopool_vdopooldata
 OO: --type cache, OO_LVCONVERT_CACHE, OO_LVCONVERT_POOL, OO_LVCONVERT
-ID: lvconvert_to_cache_vol
-DESC: Convert LV to type cache (infers --type cache).
+ID: lvconvert_to_cache_with_cachepool
+DESC: Attach a cache pool to an LV (infers --type cache).
 RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 FLAGS: SECONDARY_SYNTAX
+
+---
+
+lvconvert --type writecache --cachevol LV LV_linear_striped_raid
+OO: OO_LVCONVERT, --cachesettings String
+ID: lvconvert_to_writecache
+DESC: Attach a writecache to an LV, converts the LV to type writecache.
+RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
+
+---
+
+lvconvert --type cache --cachevol LV LV_linear_striped_raid_thinpool
+OO: --cache, OO_LVCONVERT_CACHE, OO_LVCONVERT, --poolmetadatasize SizeMB, --chunksize SizeKB
+ID: lvconvert_to_cache_with_cachevol
+DESC: Attach a cache to an LV, converts the LV to type cache.
+RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
+
+# alternate form of lvconvert --type cache
+lvconvert --cache --cachevol LV LV_linear_striped_raid_thinpool
+OO: OO_LVCONVERT_CACHE, OO_LVCONVERT, --poolmetadatasize SizeMB, --chunksize SizeKB
+ID: lvconvert_to_cache_with_cachevol
+DESC: Attach a cache to an LV, converts the LV to type cache.
+RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
+FLAGS: SECONDARY_SYNTAX
+
+---
+
+lvconvert --type writecache --cachedevice PV LV_linear_striped_raid
+OO: OO_LVCONVERT, --cachesize SizeMB, --cachesettings String
+ID: lvconvert_to_writecache_with_device
+DESC: Add a writecache to an LV, using a specified cache device.
+RULE: all and lv_is_visible
+
+lvconvert --type cache --cachedevice PV LV_linear_striped_raid_thinpool
+OO: OO_LVCONVERT, --cachesize SizeMB, --cachesettings String, --chunksize SizeKB
+ID: lvconvert_to_cache_with_device
+DESC: Add a cache to an LV, using a specified cache device.
+RULE: all and lv_is_visible
 
 ---
 
@@ -476,7 +519,7 @@ OP: PV ...
 ID: lvconvert_to_thinpool
 DESC: Convert LV to type thin-pool.
 RULE: all and lv_is_visible
-RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual
+RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 # This command syntax has two different meanings depending on
@@ -510,6 +553,7 @@ DESC: Convert LV to type thin-pool (variant, use --type thin-pool).
 DESC: Swap metadata LV in a thin pool (variant, use --swapmetadata).
 FLAGS: PREVIOUS_SYNTAX
 RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 ---
@@ -520,6 +564,7 @@ OP: PV ...
 ID: lvconvert_to_cachepool
 DESC: Convert LV to type cache-pool.
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
+RULE: all not lv_is_raid_with_integrity
 
 # This command syntax has two different meanings depending on
 # whether the LV pos arg is already a cache pool or not.
@@ -551,6 +596,7 @@ DESC: Convert LV to type cache-pool (variant, use --type cache-pool).
 DESC: Swap metadata LV in a cache pool (variant, use --swapmetadata).
 FLAGS: PREVIOUS_SYNTAX
 RULE: all and lv_is_visible
+RULE: all not lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 ---
@@ -560,7 +606,7 @@ OO: --name LV_new, --virtualsize SizeMB, --compression Bool, --deduplication Boo
 ID: lvconvert_to_vdopool
 DESC: Convert LV to type vdopool.
 RULE: all and lv_is_visible
-RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual
+RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual lv_is_raid_with_integrity
 
 lvconvert --vdopool LV_linear_striped_raid_cache
 OO: --type vdo-pool, OO_LVCONVERT,
@@ -568,22 +614,22 @@ OO: --type vdo-pool, OO_LVCONVERT,
 ID: lvconvert_to_vdopool_param
 DESC: Convert LV to type vdopool.
 RULE: all and lv_is_visible
-RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual
+RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual lv_is_raid_with_integrity
 FLAGS: SECONDARY_SYNTAX
 
 ---
 
-lvconvert --splitcache LV_cachepool_cache_thinpool
-OO: OO_LVCONVERT
-ID: lvconvert_split_and_keep_cachepool
-DESC: Separate and keep the cache pool from a cache LV.
+lvconvert --splitcache LV_cachepool_cache_thinpool_vdopool_writecache
+OO: OO_LVCONVERT, --cachesettings String
+ID: lvconvert_split_and_keep_cache
+DESC: Detach a cache from an LV.
 
 ---
 
-lvconvert --uncache LV_cache_thinpool
-OO: OO_LVCONVERT
-ID: lvconvert_split_and_remove_cachepool
-DESC: Separate and delete the cache pool from a cache LV.
+lvconvert --uncache LV_cache_thinpool_vdopool_writecache
+OO: OO_LVCONVERT, --cachesettings String
+ID: lvconvert_split_and_remove_cache
+DESC: Detach and delete a cache from an LV.
 FLAGS: SECONDARY_SYNTAX
 
 ---
@@ -734,6 +780,14 @@ FLAGS: SECONDARY_SYNTAX
 
 ---
 
+lvconvert --raidintegrity Bool LV_raid
+OO: --raidintegritymode String, --raidintegrityblocksize Number, OO_LVCONVERT
+OP: PV ...
+ID: lvconvert_integrity
+DESC: Add or remove data integrity checksums to raid images.
+
+---
+
 # --extents is not specified; it's an automatic alternative for --size
 
 OO_LVCREATE: --addtag Tag, --alloc Alloc, --autobackup Bool, --activate Active,
@@ -757,31 +811,6 @@ lvcreate --type error --size SizeMB VG
 OO: OO_LVCREATE
 ID: lvcreate_error_vol
 DESC: Create an LV that returns errors when used.
-FLAGS: SECONDARY_SYNTAX
-
----
-
-lvcreate --type vdo --size SizeMB VG
-OO: --vdo, OO_LVCREATE, OO_LVCREATE_VDO, --virtualsize SizeMB, --stripes Number, --stripesize SizeKB,
-OP: PV ...
-IO: --mirrors 0
-ID: lvcreate_vdo_vol
-DESC: Create an LV that returns VDO when used.
-
-lvcreate --vdo --size SizeMB VG
-OO: OO_LVCREATE, OO_LVCREATE_VDO, --virtualsize SizeMB, --stripes Number, --stripesize SizeKB
-OP: PV ...
-IO: --mirrors 0
-ID: lvcreate_vdo_vol
-DESC: Create an VDO LV with VDO pool.
-FLAGS: SECONDARY_SYNTAX
-
-lvcreate --vdopool LV --virtualsize SizeMB VG
-OO: --vdo, --type vdo
-OP: PV ...
-IO: --mirrors 0
-ID: lvcreate_vdo_vol
-DESC: Create an VDO LV using existing VDO pool.
 FLAGS: SECONDARY_SYNTAX
 
 ---
@@ -872,7 +901,8 @@ DESC: Create a raid1 or mirror LV (infers --type raid1|mirror).
 # R9,R10,R11,R12 (--type raid with any use of --stripes/--mirrors)
 lvcreate --type raid --size SizeMB VG
 OO: --mirrors PNumber, --stripes Number, --stripesize SizeKB,
---regionsize RegionSize, --minrecoveryrate SizeKB, --maxrecoveryrate SizeKB, OO_LVCREATE
+--regionsize RegionSize, --minrecoveryrate SizeKB, --maxrecoveryrate SizeKB,
+--raidintegrity Bool, --raidintegritymode String, --raidintegrityblocksize Number, OO_LVCREATE
 OP: PV ...
 ID: lvcreate_raid_any
 DESC: Create a raid LV (a specific raid level must be used, e.g. raid1).
@@ -1060,6 +1090,34 @@ FLAGS: SECONDARY_SYNTAX
 
 ---
 
+lvcreate --type vdo --size SizeMB VG
+OO: --vdo, --vdopool LV_new, OO_LVCREATE, OO_LVCREATE_VDO,
+--virtualsize SizeMB, --stripes Number, --stripesize SizeKB,
+OP: PV ...
+IO: --mirrors 0
+ID: lvcreate_vdo_vol
+DESC: Create a LV that returns VDO when used.
+
+lvcreate --vdo --size SizeMB VG
+OO: --vdopool LV_new, OO_LVCREATE, OO_LVCREATE_VDO,
+--virtualsize SizeMB, --stripes Number, --stripesize SizeKB
+OP: PV ...
+IO: --mirrors 0
+ID: lvcreate_vdo_vol
+DESC: Create a VDO LV with VDO pool.
+FLAGS: SECONDARY_SYNTAX
+
+lvcreate --vdopool LV_new --size SizeMB VG
+OO: --vdo, --type vdo, OO_LVCREATE, OO_LVCREATE_VDO,
+--virtualsize SizeMB, --stripes Number, --stripesize SizeKB
+OP: PV ...
+IO: --mirrors 0
+ID: lvcreate_vdo_vol
+DESC: Create a VDO LV with VDO pool.
+FLAGS: SECONDARY_SYNTAX
+
+---
+
 # stripes option is not intuitive when creating a thin LV,
 # but here it applies to creating the new thin pool that
 # is used for the thin LV
@@ -1162,84 +1220,104 @@ lvcreate --type cache --size SizeMB --cachepool LV_cachepool VG
 OO: --cache, OO_LVCREATE_POOL, OO_LVCREATE_CACHE, OO_LVCREATE,
 --stripes Number, --stripesize SizeKB
 OP: PV ...
-ID: lvcreate_cache_vol_with_new_origin
-DESC: Create a cache LV, first creating a new origin LV,
-DESC: then combining it with the existing cache pool named
-DESC: by the --cachepool arg.
+ID: lvcreate_and_attach_cachepool
+DESC: Create a new LV, then attach the specified cachepool
+DESC: which converts the new LV to type cache.
 
 # alternate form of lvcreate --type cache
+# (omits the --type cache option which is inferred)
 lvcreate --size SizeMB --cachepool LV_cachepool VG
 OO: --type cache, --cache, OO_LVCREATE_CACHE, OO_LVCREATE,
 --stripes Number, --stripesize SizeKB
 OP: PV ...
-ID: lvcreate_cache_vol_with_new_origin
-DESC: Create a cache LV, first creating a new origin LV,
-DESC: then combining it with the existing cache pool named
-DESC: by the --cachepool arg (variant, infers --type cache).
+ID: lvcreate_and_attach_cachepool_v2
+DESC: Create a new LV, then attach the specified cachepool
+DESC: which converts the new LV to type cache
+DESC: (variant, infers --type cache.)
 FLAGS: SECONDARY_SYNTAX
 
 # alternate form of lvcreate --type cache
+# (moves cachepool from option arg to position arg,
+# dropping the normal VG position arg)
 lvcreate --type cache --size SizeMB LV_cachepool
 OO: --cache, OO_LVCREATE_POOL, OO_LVCREATE_CACHE, OO_LVCREATE,
 --stripes Number, --stripesize SizeKB
 OP: PV ...
-ID: lvcreate_cache_vol_with_new_origin
-DESC: Create a cache LV, first creating a new origin LV,
-DESC: then combining it with the existing cache pool named
-DESC: in the first arg (variant, also use --cachepool).
+ID: lvcreate_and_attach_cachepool_v3
+DESC: Create a new LV, then attach the specified cachepool
+DESC: which converts the new LV to type cache.
+DESC: (variant, also use --cachepool).
 FLAGS: SECONDARY_SYNTAX
 
-# This is a ridiculously crazy command which nobody could
-# understand.  It should be be eliminated.  It does two different
-# things depending on whether LV in pos 1 is a cachepool LV
-# or not.  Both variations are unnecessary.
+# This command has two different meanings which ought to
+# have separate command defs, but since the syntax is the
+# same for both they have to share one command def with
+# an ambiguous meaning.  Which command is performed depends
+# on whether the LV in the first arg position is a
+# cachepool or not (we can't have two different command
+# defs that differ only in the type of LV in the arg position
+# because when parsing commands we don't know the LV type.)
 #
-# 1. If LV is a cachepool, then it's an alternate form of
-#    an already complicated command above.
+# 1. An alternate form of lvcreate_and_attach_cachepool_v3
+#    this syntax:         lvcreate --cache --size SizeMB LV_cachepool
+#    is alternative for:  lvcreate --type cache --size SizeMB LV_cachepool
 #
-# # alternate form for lvcreate_cache_vol_with_new_origin
-# lvcreate --cache --size SizeMB LV_cachepool
-# OO: --type cache, --cache, OO_LVCREATE_CACHE, OO_LVCREATE, --stripes Number, --stripesize SizeKB
-# OP: PV ...
-# ID: lvcreate_cache_vol_with_new_origin
-# DESC: Create a cache LV, first creating a new origin LV,
-# DESC: then combining it with the existing cache pool named
-# DESC: in the first arg (variant, infers --type cache,
-# DESC: also use --cachepool).
-#
-# 2. If LV is not a cachepool, then it's a disguised lvconvert.
-#
-# # FIXME: this should be done by lvconvert, and this command removed
-# lvcreate --type cache --size SizeMB LV
-# OO: OO_LVCREATE_POOL, OO_LVCREATE_CACHE, OO_LVCREATE
-# OP: PV ...
-# ID: lvcreate_convert_to_cache_vol_with_cachepool
-# DESC: Convert the specified LV to type cache after creating a new
-# DESC: cache pool LV to use (use lvconvert).
+# 2. An alternative to using lvconvert to convert LV to type cache,
+#    but in this case the cachepool is created internally and
+#    then attached to the LV arg.
 #
 # Note that stripes are accepted by the first and not by the
 # second, but it's not possible to validate this until after
 # the LV type is known.
-#
-# So, to define this syntax we have to combine both of
-# those variants, each crazy on it's own, into one
-# ridiculous command.
 
-# def1: alternate form of lvcreate --type cache, or
-# def2: it should be done by lvconvert.
 lvcreate --cache --size SizeMB LV
 OO: OO_LVCREATE_CACHE, OO_LVCREATE_POOL, OO_LVCREATE,
 --stripes Number, --stripesize SizeKB
 OP: PV ...
-ID: lvcreate_cache_vol_with_new_origin_or_convert_to_cache_vol_with_cachepool
-DESC: When LV is a cache pool, create a cache LV,
-DESC: first creating a new origin LV, then combining it with
-DESC: the existing cache pool named in the first arg
-DESC: (variant, infers --type cache, also use --cachepool).
-DESC: When LV is not a cache pool, convert the specified LV
-DESC: to type cache after creating a new cache pool LV to use
-DESC: (use lvconvert).
+ID: lvcreate_new_plus_old_cachepool_or_lvconvert_old_plus_new_cachepool
+DESC: When the LV arg is a cachepool, then create a new LV and
+DESC: attach the cachepool arg to it.
+DESC: (variant, use --type cache and --cachepool.)
+DESC: When the LV arg is not a cachepool, then create a new cachepool
+DESC: and attach it to the LV arg (alternative, use lvconvert.)
 FLAGS: SECONDARY_SYNTAX
+
+---
+
+# These all create a new origin LV, then forwards to lvconvert
+# which combines it with a cachevol (which already exists or
+# which needs to be created from cachedevice), converting
+# the new LV to type cache or writecache.
+
+lvcreate --type cache --size SizeMB --cachevol LV VG
+OO: OO_LVCREATE, OO_LVCREATE_CACHE, --stripes Number, --stripesize SizeKB
+OP: PV ...
+ID: lvcreate_and_attach_cachevol_for_cache
+DESC: Create a new LV, then attach the specified cachevol
+DESC: which converts the new LV to type cache.
+
+lvcreate --type cache --size SizeMB --cachedevice PV VG
+OO: OO_LVCREATE, OO_LVCREATE_CACHE, --cachesize SizeMB, --stripes Number, --stripesize SizeKB
+OP: PV ...
+ID: lvcreate_and_attach_cachedevice_for_cache
+DESC: Create a new LV, then attach a cachevol created from
+DESC: the specified cache device, which converts the
+DESC: new LV to type cache.
+
+lvcreate --type writecache --size SizeMB --cachevol LV VG
+OO: OO_LVCREATE, --cachesettings String, --stripes Number, --stripesize SizeKB
+OP: PV ...
+ID: lvcreate_and_attach_cachevol_for_writecache
+DESC: Create a new LV, then attach the specified cachevol
+DESC: which converts the new LV to type writecache.
+
+lvcreate --type writecache --size SizeMB --cachedevice PV VG
+OO: OO_LVCREATE, --cachesize SizeMB, --cachesettings String, --stripes Number, --stripesize SizeKB
+OP: PV ...
+ID: lvcreate_and_attach_cachedevice_for_writecache
+DESC: Create a new LV, then attach a cachevol created from
+DESC: the specified cache device, which converts the
+DESC: new LV to type writecache.
 
 ---
 
@@ -1365,7 +1443,7 @@ DESC: Resize a pool metadata SubLV by a specified size.
 lvs
 OO: --history, --segments, OO_REPORT
 OP: VG|LV|Tag ...
-IO: --partial, --ignoreskippedcluster
+IO: --partial, --ignoreskippedcluster, --trustcache
 ID: lvs_general
 
 ---
@@ -1385,7 +1463,7 @@ OO_PVCHANGE: --autobackup Bool, --force, --reportformat ReportFmt, --uuid
 OO_PVCHANGE_META: --allocatable Bool, --addtag Tag, --deltag Tag,
 --uuid, --metadataignore Bool
 
-pvchange OO_PVCHANGE_META --all
+pvchange --all OO_PVCHANGE_META
 OO: OO_PVCHANGE
 IO: --ignoreskippedcluster
 ID: pvchange_properties_all
@@ -1408,6 +1486,23 @@ ID: pvresize_general
 pvck PV ...
 OO: --labelsector Number
 ID: pvck_general
+DESC: Check for metadata on a device
+
+pvck --dump DumpType PV
+OO: --settings String, --file String,
+--pvmetadatacopies MetadataCopiesPV, --labelsector Number
+ID: pvck_dump
+DESC: Check and print LVM headers and metadata on a device
+
+pvck --repairtype RepairType PV
+OO: --settings String, --file String, --labelsector Number
+ID: pvck_repair_type
+DESC: Repair LVM headers or metadata on a device
+
+pvck --repair --file String PV
+OO: --settings String, --labelsector Number
+ID: pvck_repair
+DESC: Repair LVM headers and metadata on a device
 
 ---
 
@@ -1461,7 +1556,7 @@ ID: pvremove_general
 pvs
 OO: --segments, OO_REPORT
 OP: PV|Tag ...
-IO: --partial, --ignoreskippedcluster
+IO: --partial, --ignoreskippedcluster, --trustcache
 ID: pvs_general
 
 ---
@@ -1474,7 +1569,7 @@ DESC: Display PV information.
 
 pvscan --cache_long
 OO: --ignorelockingfailure, --reportformat ReportFmt,
---activate ay, --major Number, --minor Number
+--activate ay, --major Number, --minor Number, --noudevsync
 OP: PV|String ...
 IO: --background
 ID: pvscan_cache
@@ -1599,6 +1694,11 @@ vgck
 OO: --reportformat ReportFmt
 OP: VG|Tag ...
 ID: vgck_general
+DESC: Read and display information about a VG.
+
+vgck --updatemetadata VG
+ID: vgck_update_metadata
+DESC: Rewrite VG metadata to correct problems.
 
 ---
 
@@ -1722,7 +1822,7 @@ DESC: Rename a VG by specifying the VG UUID.
 vgs
 OO: OO_REPORT
 OP: VG|Tag ...
-IO: --partial, --ignoreskippedcluster
+IO: --partial, --ignoreskippedcluster, --trustcache
 ID: vgs_general
 
 ---
@@ -1777,7 +1877,7 @@ ID: devtypes_general
 fullreport
 OO: OO_REPORT
 OP: VG ...
-IO: --partial, --ignoreskippedcluster
+IO: --partial, --ignoreskippedcluster, --trustcache
 ID: fullreport_general
 
 lastlog

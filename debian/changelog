@@ -1,3 +1,76 @@
+lvm2 (2.03.11-2.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Add patch to fix path to sort in blkdeactivate. (closes: #946882)
+
+ -- Ivo De Decker <ivodd@debian.org>  Mon, 22 Feb 2021 21:39:14 +0000
+
+lvm2 (2.03.11-2) unstable; urgency=medium
+
+  * Make sure lvmlockd can use sd notify. (closes: #980225)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 16 Jan 2021 21:51:13 +0100
+
+lvm2 (2.03.11-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Use libedit instead of old readline. (closes: #966152)
+  * Drop dev symlink to internal lib for good. (closes: #857954)
+  * Fix watch file and signing key. (closes: #979584)
+  * Use per-arch pkg-config. (closes: #968411)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 15 Jan 2021 20:08:29 +0100
+
+lvm2 (2.03.10-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Auto-generate slightly more strict and correct dependencies.
+    - Also fixes the broken dmsetup dependency. (closes: #928700)
+  * Add raid modules to initramfs by default. (closes: #868268)
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 15 Nov 2020 18:28:02 +0100
+
+lvm2 (2.03.09-3) unstable; urgency=medium
+
+  * Make lvm2-dbusd package arch-all. (closes: #908908)
+  * Fix blk-availability.service. (closes: #966816)
+
+ -- Bastian Blank <bastian.blank@credativ.de>  Thu, 13 Aug 2020 16:40:23 +0200
+
+lvm2 (2.03.09-2) unstable; urgency=medium
+
+  * Use debhelper compat 13.
+  * Consider using /usr the default case. (closes: #929437)
+  * Enable hardening.
+  * Properly declare modified dm-event api.
+  * Do not require root for building.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 02 Aug 2020 12:09:54 +0200
+
+lvm2 (2.03.09-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop not longer needed breaks and conflicts.
+  * Detect systemd at run-time in udev, patch by Julian Andres Klode.
+    (closes: #933011)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 25 Jul 2020 21:14:19 +0200
+
+lvm2 (2.03.07-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Add instructions on how to handle source.
+  * Build-depend on libdlmcontrol-dev.
+  * Install new files.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 07 Jan 2020 14:44:41 +0100
+
+lvm2 (2.03.02-4) unstable; urgency=medium
+
+  * Use new source format.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 06 Jan 2020 17:53:00 +0100
+
 lvm2 (2.03.02-3) unstable; urgency=medium
 
   * Stop lvm2-lvmetad on upgrade. (closes: #929080)

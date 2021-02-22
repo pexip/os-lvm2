@@ -20,7 +20,6 @@
 
 #include <fcntl.h>
 
-#define DEV_ACCESSED_W		0x00000001	/* Device written to? */
 #define DEV_REGULAR		0x00000002	/* Regular file? */
 #define DEV_ALLOCED		0x00000004	/* malloc used */
 #define DEV_OPENED_RW		0x00000008	/* Opened RW */
@@ -36,6 +35,9 @@
 #define DEV_FILTER_AFTER_SCAN	0x00002000	/* apply filter after bcache has data */
 #define DEV_FILTER_OUT_SCAN	0x00004000	/* filtered out during label scan */
 #define DEV_BCACHE_WRITE	0x00008000      /* bcache_fd is open with RDWR */
+#define DEV_SCAN_FOUND_LABEL	0x00010000      /* label scan read dev and found label */
+#define DEV_IS_MD_COMPONENT	0x00020000	/* device is an md component */
+#define DEV_UDEV_INFO_MISSING   0x00040000	/* we have no udev info for this device */
 
 /*
  * Support for external device info.
@@ -65,11 +67,13 @@ struct device {
 	/* private */
 	int fd;
 	int open_count;
-	int phys_block_size;
-	int block_size;
+	int physical_block_size; /* From BLKPBSZGET: lowest possible sector size that the hardware can operate on without reverting to read-modify-write operations */
+	int logical_block_size;  /* From BLKSSZGET: lowest possible block size that the storage device can address */
 	int read_ahead;
 	int bcache_fd;
+	int bcache_di;
 	uint32_t flags;
+	uint32_t filtered_flags;
 	unsigned size_seqno;
 	uint64_t size;
 	uint64_t end;
@@ -129,7 +133,8 @@ void dev_size_seqno_inc(void);
 /*
  * All io should use these routines.
  */
-int dev_get_block_size(struct device *dev, unsigned int *phys_block_size, unsigned int *block_size);
+int dev_get_direct_block_sizes(struct device *dev, unsigned int *physical_block_size,
+                               unsigned int *logical_block_size);
 int dev_get_size(struct device *dev, uint64_t *size);
 int dev_get_read_ahead(struct device *dev, uint32_t *read_ahead);
 int dev_discard_blocks(struct device *dev, uint64_t offset_bytes, uint64_t size_bytes);
@@ -143,17 +148,10 @@ int dev_open_readonly_buffered(struct device *dev);
 int dev_open_readonly_quiet(struct device *dev);
 int dev_close(struct device *dev);
 int dev_close_immediate(struct device *dev);
-int dev_test_excl(struct device *dev);
 
 int dev_fd(struct device *dev);
 const char *dev_name(const struct device *dev);
 
-int dev_read(struct device *dev, uint64_t offset, size_t len, dev_io_reason_t reason, void *buffer);
-int dev_read_circular(struct device *dev, uint64_t offset, size_t len,
-		      uint64_t offset2, size_t len2, dev_io_reason_t reason, char *buf);
-int dev_write(struct device *dev, uint64_t offset, size_t len, dev_io_reason_t reason, void *buffer);
-int dev_append(struct device *dev, size_t len, dev_io_reason_t reason, char *buffer);
-int dev_set(struct device *dev, uint64_t offset, size_t len, dev_io_reason_t reason, int value);
 void dev_flush(struct device *dev);
 
 struct device *dev_create_file(const char *filename, struct device *dev,

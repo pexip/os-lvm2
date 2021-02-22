@@ -15,7 +15,14 @@
 #include "lib/misc/lib.h"
 #include "daemons/dmeventd/plugins/lvm2/dmeventd_lvm.h"
 #include "daemons/dmeventd/libdevmapper-event.h"
-#include "device_mapper/vdo/target.h"
+
+/*
+ * Use parser from new device_mapper library.
+ * Although during compilation we can see dm_vdo_status_parse()
+ * in runtime we are linked agains systems libdm 'older' library
+ * which does not provide this symbol and plugin fails to load
+ */
+#include "device_mapper/vdo/status.c"
 
 #include <sys/wait.h>
 #include <stdarg.h>
@@ -253,8 +260,7 @@ void process_event(struct dm_task *dmt,
 	} else
 		state->max_fails = 1; /* Reset on success */
 
-	/* FIXME: ATM nothing can be done, drop 0, once it becomes useful */
-	if (0 && needs_policy)
+	if (needs_policy)
 		_use_policy(dmt, state);
 out:
 	if (vdop.status)

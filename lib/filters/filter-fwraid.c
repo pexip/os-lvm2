@@ -15,6 +15,7 @@
 #include "base/memory/zalloc.h"
 #include "lib/misc/lib.h"
 #include "lib/filters/filter.h"
+#include "lib/commands/toolcontext.h"
 
 #ifdef UDEV_SYNC_SUPPORT
 #include <libudev.h>
@@ -65,9 +66,14 @@ static int _dev_is_fwraid(struct device *dev)
 #define MSG_SKIPPING "%s: Skipping firmware RAID component device"
 
 static int _ignore_fwraid(struct cmd_context *cmd, struct dev_filter *f __attribute__((unused)),
-			   struct device *dev)
+			   struct device *dev, const char *use_filter_name)
 {
 	int ret;
+
+	if (cmd->filter_nodata_only)
+		return 1;
+
+	dev->filtered_flags &= ~DEV_FILTERED_FWRAID;
 
 	if (!fwraid_filtering())
 		return 1;
@@ -80,12 +86,14 @@ static int _ignore_fwraid(struct cmd_context *cmd, struct dev_filter *f __attrib
 		else
 			log_debug_devs(MSG_SKIPPING " [%s:%p]", dev_name(dev),
 					dev_ext_name(dev), dev->ext.handle);
+		dev->filtered_flags |= DEV_FILTERED_FWRAID;
 		return 0;
 	}
 
 	if (ret < 0) {
 		log_debug_devs("%s: Skipping: error in firmware RAID component detection",
 			       dev_name(dev));
+		dev->filtered_flags |= DEV_FILTERED_FWRAID;
 		return 0;
 	}
 
@@ -113,6 +121,7 @@ struct dev_filter *fwraid_filter_create(struct dev_types *dt __attribute__((unus
 	f->destroy = _destroy;
 	f->use_count = 0;
 	f->private = NULL;
+	f->name = "fwraid";
 
 	log_debug_devs("Firmware RAID filter initialised.");
 

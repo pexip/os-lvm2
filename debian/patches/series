@@ -1,10 +1,2 @@
-0001-install.patch
-0002-libs-cleanup.patch
-0003-force-paths.patch
-0004-implicit-pointer.patch
-0005-dm-event-api.patch
-udev.patch
-systemd.patch
-udev-md.patch
-systemd-pvscan-background.patch
-0010-make-generate-config-update.patch
+debian-changes
+fix-sort-path.patch

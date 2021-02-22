@@ -407,8 +407,8 @@ static int _vgchange_metadata_copies(struct cmd_context *cmd,
 {
 	uint32_t mda_copies = arg_uint_value(cmd, vgmetadatacopies_ARG, DEFAULT_VGMETADATACOPIES);
 
-	log_warn("vgchange_metadata_copies new %u vg_mda_copies %u D %u",
-		 mda_copies, vg_mda_copies(vg), DEFAULT_VGMETADATACOPIES);
+	log_debug("vgchange_metadata_copies new %u vg_mda_copies %u D %u",
+		  mda_copies, vg_mda_copies(vg), DEFAULT_VGMETADATACOPIES);
 
 	if (mda_copies == vg_mda_copies(vg)) {
 		if (vg_mda_copies(vg) == VGMETADATACOPIES_UNMANAGED)
@@ -560,6 +560,7 @@ static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg
 {
 	const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
 	int auto_opt = 0;
+	int exists = 0;
 	int r;
 
 	if (!vg_is_shared(vg))
@@ -586,9 +587,11 @@ static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg
 	}
 
 do_start:
-	r = lockd_start_vg(cmd, vg, 0);
+	r = lockd_start_vg(cmd, vg, 0, &exists);
 
 	if (r)
+		vp->lock_start_count++;
+	else if (exists)
 		vp->lock_start_count++;
 	if (!strcmp(vg->lock_type, "sanlock"))
 		vp->lock_start_sanlock = 1;
@@ -626,11 +629,6 @@ static int _vgchange_single(struct cmd_context *cmd, const char *vg_name,
 		{ profile_ARG, &_vgchange_profile },
 		{ detachprofile_ARG, &_vgchange_profile },
 	};
-
-	if (vg_is_exported(vg)) {
-		log_error("Volume group \"%s\" is exported", vg_name);
-		return ECMD_FAILED;
-	}
 
 	/*
 	 * FIXME: DEFAULT_BACKGROUND_POLLING should be "unspecified".
@@ -751,12 +749,6 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
-	if (arg_is_set(cmd, activate_ARG) &&
-	    arg_is_set(cmd, autobackup_ARG)) {
-		log_error("-A option not necessary with -a option");
-		return EINVALID_CMD_LINE;
-	}
-
 	if (arg_is_set(cmd, maxphysicalvolumes_ARG) &&
 	    arg_sign_value(cmd, maxphysicalvolumes_ARG, SIGN_NONE) == SIGN_MINUS) {
 		log_error("MaxPhysicalVolumes may not be negative");
@@ -795,8 +787,10 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 			cmd->lockd_vg_enforce_sh = 1;
 	}
 
-	if (update || arg_is_set(cmd, activate_ARG))
+	if (update)
 		flags |= READ_FOR_UPDATE;
+	else if (arg_is_set(cmd, activate_ARG))
+		flags |= READ_FOR_ACTIVATE;
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
@@ -818,7 +812,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
 	int lv_lock_count = 0;
 
 	/* Special recovery case. */
-	if (lockopt && !strcmp(lock_type, "none") && !strcmp(lockopt, "force")) {
+	if (lock_type && lockopt && !strcmp(lock_type, "none") && !strcmp(lockopt, "force")) {
 		vg->status &= ~CLUSTERED;
 		vg->lock_type = "none";
 		vg->lock_args = NULL;
@@ -867,7 +861,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
 	}
 
 	/* clvm to none */
-	if (!strcmp(vg->lock_type, "clvm") && !strcmp(lock_type, "none")) {
+	if (lock_type && !strcmp(vg->lock_type, "clvm") && !strcmp(lock_type, "none")) {
 		vg->status &= ~CLUSTERED;
 		vg->lock_type = "none";
 		return 1;
@@ -963,7 +957,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
 	}
 
 	/* ... to none */
-	if (!strcmp(lock_type, "none")) {
+	if (lock_type && !strcmp(lock_type, "none")) {
 		vg->lock_type = NULL;
 		vg->system_id = cmd->system_id ? dm_pool_strdup(vg->vgmem, cmd->system_id) : NULL;
 		return 1;
@@ -977,11 +971,6 @@ static int _vgchange_locktype_single(struct cmd_context *cmd, const char *vg_nam
 			             struct volume_group *vg,
 			             struct processing_handle *handle)
 {
-	if (vg_is_exported(vg)) {
-		log_error("Volume group \"%s\" is exported", vg_name);
-		return ECMD_FAILED;
-	}
-
 	if (!archive(vg))
 		return_ECMD_FAILED;
 
@@ -1002,8 +991,13 @@ static int _vgchange_locktype_single(struct cmd_context *cmd, const char *vg_nam
 	 * deactivate it.
 	 */
 	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock") &&
-	    (cmd->command->command_enum == vgchange_locktype_CMD))
-		deactivate_lv(cmd, vg->sanlock_lv);
+	    (cmd->command->command_enum == vgchange_locktype_CMD)) {
+		if (!deactivate_lv(cmd, vg->sanlock_lv)) {
+			log_error("Failed to deativate %s.",
+				  display_lvname(vg->sanlock_lv));
+			return ECMD_FAILED;
+		}
+	}
 
 	log_print_unless_silent("Volume group \"%s\" successfully changed", vg->name);
 
@@ -1072,7 +1066,7 @@ int vgchange_locktype_cmd(struct cmd_context *cmd, int argc, char **argv)
 	 * on other hosts, to cause them to see the new system_id or
 	 * lock_type.
 	 */
-	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+	if (!lockd_global(cmd, "ex"))
 		return 0;
 
 process:
@@ -1135,23 +1129,26 @@ int vgchange_lock_start_stop_cmd(struct cmd_context *cmd, int argc, char **argv)
 	if (arg_is_set(cmd, lockstart_ARG)) {
 		cmd->lockd_vg_disable = 1;
 
-		if (!lockd_gl(cmd, "sh", 0))
+		if (!lockd_global(cmd, "sh"))
 			log_debug("No global lock for lock start");
 
 		/* Disable the lockd_gl in process_each_vg. */
 		cmd->lockd_gl_disable = 1;
+	} else {
+		/* If the VG was started when it was exported, allow it to be stopped. */
+		cmd->include_exported_vgs = 1;
 	}
 
 	handle->custom_handle = &vp;
 
-	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_ALLOW_EXPORTED, 0, handle, &_vgchange_lock_start_stop_single);
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, 0, 0, handle, &_vgchange_lock_start_stop_single);
 
 	/* Wait for lock-start ops that were initiated in vgchange_lockstart. */
 
 	if (arg_is_set(cmd, lockstart_ARG) && vp.lock_start_count) {
 		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
 
-		if (!lockd_gl(cmd, "un", 0))
+		if (!lockd_global(cmd, "un"))
 			stack;
 
 		if (!start_opt || !strcmp(start_opt, "auto")) {
@@ -1173,11 +1170,6 @@ static int _vgchange_systemid_single(struct cmd_context *cmd, const char *vg_nam
 			             struct volume_group *vg,
 			             struct processing_handle *handle)
 {
-	if (vg_is_exported(vg)) {
-		log_error("Volume group \"%s\" is exported", vg_name);
-		return ECMD_FAILED;
-	}
-
 	if (!archive(vg))
 		return_ECMD_FAILED;
 
@@ -1207,7 +1199,7 @@ int vgchange_systemid_cmd(struct cmd_context *cmd, int argc, char **argv)
 	 * on other hosts, to cause them to see the new system_id or
 	 * lock_type.
 	 */
-	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+	if (!lockd_global(cmd, "ex"))
 		return 0;
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {

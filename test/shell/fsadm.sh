@@ -54,14 +54,15 @@ test ! -d "$mount_space_dir" && mkdir "$mount_space_dir"
 
 cleanup_mounted_and_teardown()
 {
-	umount "$mount_dir" || true
-	umount "$mount_space_dir" || true
+	umount "$mount_dir" 2>/dev/null || true
+	umount "$mount_space_dir" 2>/dev/null || true
 	aux teardown
 }
 
 fscheck_ext3()
 {
-	fsck.ext3 -p -F -f "$dev_vg_lv"
+	# fsck with result code '1' is success
+	fsck.ext3 -p -F -f "$dev_vg_lv" || test "$?" -eq 1
 }
 
 fscheck_xfs()
@@ -95,9 +96,19 @@ lvcreate -n $lv1 -L20M $vg
 lvcreate -n ${lv1}bar -L10M $vg
 trap 'cleanup_mounted_and_teardown' EXIT
 
+# prints help
+fsadm
+
+# check needs arg
+not fsadm check
+
 if check_missing ext2; then
 	mkfs.ext2 -b4096 -j "$dev_vg_lv"
 
+	# Check 'check' works
+	fsadm check $vg_lv
+	# Check 'resize' without size parameter works
+	fsadm resize $vg_lv
 	fsadm --lvresize resize $vg_lv 30M
 	# Fails - not enough space for 4M fs
 	not fsadm -y --lvresize resize "$dev_vg_lv" 4M
@@ -113,6 +124,30 @@ if check_missing ext2; then
 	fscheck_ext3
 
 	lvresize -f -L20M $vg_lv
+
+	if which debugfs ; then
+		mkfs.ext2 -b4096 -j "$dev_vg_lv"
+		mount "$dev_vg_lv" "$mount_dir"
+		touch "$mount_dir/file"
+		umount "$mount_dir"
+		# generate a 'repariable' corruption
+		# so fsck returns code 1  (fs repaired)
+		debugfs -R "clri file" -w "$dev_vg_lv"
+
+		fsadm -v -f check "$dev_vg_lv"
+
+		# corrupting again
+		mount "$dev_vg_lv" "$mount_dir"
+		touch "$mount_dir/file"
+		umount "$mount_dir"
+		debugfs -R "clri file" -w "$dev_vg_lv"
+
+		mount "$dev_vg_lv" "$mount_dir"
+		fsadm -v -y --lvresize resize $vg_lv 10M
+		lvresize -L+10M -y -r -n $vg_lv
+		umount "$mount_dir" 2>/dev/null || true
+		fscheck_ext3
+	fi
 fi
 
 if check_missing ext3; then

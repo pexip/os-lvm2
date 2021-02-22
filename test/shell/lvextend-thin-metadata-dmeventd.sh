@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2014-2016 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2014-2020 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -18,6 +18,7 @@ SKIP_WITH_LVMPOLLD=1
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest
+
 
 meta_percent_() {
 	get lv_field $vg/pool metadata_percent | cut -d. -f1
@@ -59,6 +60,9 @@ test -n "$LVM_TEST_THIN_RESTORE_CMD" || LVM_TEST_THIN_RESTORE_CMD=$(which thin_r
 "$LVM_TEST_THIN_RESTORE_CMD" -V || skip
 aux have_thin 1 10 0 || skip
 
+BIG_DATA=""
+aux thin_restore_needs_more_volumes && BIG_DATA="generate_more_metadata"
+
 aux prepare_dmeventd
 
 aux prepare_pvs 3 256
@@ -91,7 +95,7 @@ lvchange -an $vg/pool
 # Consume more then (100% - 4MiB) out of 32MiB metadata volume  (>87.5%)
 # (Test for less than 4MiB free space in metadata, which is less than 25%)
 DATA=7200  # Newer version of thin-pool have hidden reserve, so use lower value
-aux target_at_least dm-thin-pool 1 20 0 || DATA=7400
+test -z "$BIG_DATA" || DATA=7400
 fake_metadata_ "$DATA" 2 >data
 "$LVM_TEST_THIN_RESTORE_CMD" -i data -o "$DM_DEV_DIR/mapper/$vg-$lv2"
 # Swap volume with restored fake metadata
@@ -111,7 +115,10 @@ lvs -a $vg
 lvextend --use-policies --config "\
 activation/thin_pool_autoextend_percent=1 \
 activation/thin_pool_autoextend_threshold=99" $vg/pool
-test "$(meta_percent_)" -lt "88"
+# Originaly wanted to test <88% -
+#  however some older kernels consume a bit more space, so be happy
+#  when it's <90%
+test "$(meta_percent_)" -lt "90"
 
 # After such operatoin creation of thin LV has to pass
 lvcreate -V20 $vg/pool
@@ -174,7 +181,7 @@ lvchange -an $vg
 
 #
 DATA=300  # Newer version of thin-pool have hidden reserve, so use lower value
-aux target_at_least dm-thin-pool 1 20 0 || DATA=350
+test -z "$BIG_DATA" || DATA=350
 fake_metadata_ $DATA 2 >data
 lvchange -ay $vg/$lv1
 "$LVM_TEST_THIN_RESTORE_CMD" -i data -o "$DM_DEV_DIR/mapper/$vg-$lv1"

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2018-2019 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -74,6 +74,21 @@ const char *get_vdo_operating_mode_name(enum dm_vdo_operating_mode mode)
 	}
 }
 
+const char *get_vdo_write_policy_name(enum dm_vdo_write_policy policy)
+{
+	switch (policy) {
+	case DM_VDO_WRITE_POLICY_SYNC:
+		return "sync";
+	case DM_VDO_WRITE_POLICY_ASYNC:
+		return "async";
+	default:
+		log_debug(INTERNAL_ERROR "Unrecognized VDO write policy: %u.", policy);
+		/* Fall through */
+	case DM_VDO_WRITE_POLICY_AUTO:
+		return "auto";
+	}
+}
+
 /*
  * Size of VDO virtual LV is adding header_size in front and back of device
  * to avoid colission with blkid checks.
@@ -89,6 +104,23 @@ uint64_t get_vdo_pool_virtual_size(const struct lv_segment *vdo_pool_seg)
 	return _get_virtual_size(vdo_pool_seg->vdo_pool_virtual_extents,
 				 vdo_pool_seg->lv->vg->extent_size,
 				 vdo_pool_seg->vdo_pool_header_size);
+}
+
+int update_vdo_pool_virtual_size(struct lv_segment *vdo_pool_seg)
+{
+	struct seg_list *sl;
+	uint32_t extents = 0;
+
+	/* FIXME: as long as we have only SINGLE VDO with vdo-pool this works */
+	/* after adding support for multiple VDO LVs - this needs heavy rework */
+	dm_list_iterate_items(sl, &vdo_pool_seg->lv->segs_using_this_lv)
+		extents += sl->seg->len;
+
+	/* Only growing virtual/logical VDO size */
+	if (extents > vdo_pool_seg->vdo_pool_virtual_extents)
+		vdo_pool_seg->vdo_pool_virtual_extents = extents;
+
+	return 1;
 }
 
 static int _sysfs_get_kvdo_value(const char *dm_name, const char *vdo_param, uint64_t *value)
@@ -142,7 +174,7 @@ int parse_vdo_pool_status(struct dm_pool *mem, const struct logical_volume *vdo_
 	status->data_usage = DM_PERCENT_INVALID;
 
 	if (!(dm_name = dm_build_dm_name(mem, vdo_pool_lv->vg->name,
-					 vdo_pool_lv->name, NULL))) {
+					 vdo_pool_lv->name, lv_layer(vdo_pool_lv)))) {
 		log_error("Failed to build VDO DM name %s.",
 			  display_lvname(vdo_pool_lv));
 		return 0;
@@ -216,7 +248,7 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 		args++;
 	}
 
-	slabbits = 31 - clz(vtp->slab_size_mb / DM_VDO_BLOCK_SIZE * 512);
+	slabbits = 31 - clz(vtp->slab_size_mb / DM_VDO_BLOCK_SIZE * 2 * 1024);  /* to KiB / block_size */
 	log_debug("Slab size %s converted to %u bits.",
 		  display_size(data_lv->vg->cmd, vtp->slab_size_mb * UINT64_C(2 * 1024)), slabbits);
 	if (dm_snprintf(buf_args[args], sizeof(buf_args[0]), "--slab-bits=%u", slabbits) < 0)
@@ -284,20 +316,27 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 		return 0;
 	}
 
-	if (!*logical_size)
-		while (fgets(buf, sizeof(buf), f)) {
-			/* TODO: Watch out for locales */
+	while (!feof(f) && fgets(buf, sizeof(buf), f)) {
+		/* TODO: Watch out for locales */
+		if (!*logical_size)
 			if (sscanf(buf, "Logical blocks defaulted to " FMTu64 " blocks", &lb) == 1) {
 				*logical_size = lb * DM_VDO_BLOCK_SIZE;
 				log_verbose("Available VDO logical blocks " FMTu64 " (%s).",
 					    lb, display_size(data_lv->vg->cmd, *logical_size));
-				break;
-			} else
-				log_warn("WARNING: Cannot parse output '%s' from %s.", buf, argv[0]);
-		}
+			}
+		if ((dpath = strchr(buf, '\n')))
+			*dpath = 0; /* cut last '\n' away */
+		if (buf[0])
+			log_print("  %s", buf); /* Print vdo_format messages */
+	}
 
 	if (!pipe_close(&pdata)) {
 		log_error("Command %s failed.", argv[0]);
+		return 0;
+	}
+
+	if (!*logical_size) {
+		log_error("Number of VDO logical blocks was not provided by vdo_format output.");
 		return 0;
 	}
 
@@ -351,7 +390,8 @@ struct logical_volume *convert_vdo_pool_lv(struct logical_volume *data_lv,
 	}
 
 	if (!deactivate_lv(data_lv->vg->cmd, data_lv)) {
-		log_error("Aborting. Manual intervention required.");
+		log_error("Cannot deactivate formated VDO pool volume %s.",
+			  display_lvname(data_lv));
 		return NULL;
 	}
 
@@ -387,7 +427,7 @@ struct logical_volume *convert_vdo_pool_lv(struct logical_volume *data_lv,
 	return data_lv;
 }
 
-int get_vdo_write_policy(enum dm_vdo_write_policy *vwp, const char *policy)
+int set_vdo_write_policy(enum dm_vdo_write_policy *vwp, const char *policy)
 {
 	if (strcasecmp(policy, "sync") == 0)
 		*vwp = DM_VDO_WRITE_POLICY_SYNC;
@@ -416,22 +456,20 @@ int fill_vdo_target_params(struct cmd_context *cmd,
 		find_config_tree_int(cmd, allocation_vdo_use_compression_CFG, profile);
 	vtp->use_deduplication =
 		find_config_tree_int(cmd, allocation_vdo_use_deduplication_CFG, profile);
-	vtp->emulate_512_sectors =
-		find_config_tree_int(cmd, allocation_vdo_emulate_512_sectors_CFG, profile);
+	vtp->use_metadata_hints =
+		find_config_tree_int(cmd, allocation_vdo_use_metadata_hints_CFG, profile);
+	vtp->minimum_io_size =
+		find_config_tree_int(cmd, allocation_vdo_minimum_io_size_CFG, profile) >> SECTOR_SHIFT;
 	vtp->block_map_cache_size_mb =
 		find_config_tree_int64(cmd, allocation_vdo_block_map_cache_size_mb_CFG, profile);
-	vtp->block_map_period =
-		find_config_tree_int(cmd, allocation_vdo_block_map_period_CFG, profile);
+	vtp->block_map_era_length =
+		find_config_tree_int(cmd, allocation_vdo_block_map_era_length_CFG, profile);
 	vtp->check_point_frequency =
 		find_config_tree_int(cmd, allocation_vdo_check_point_frequency_CFG, profile);
 	vtp->use_sparse_index =
 		find_config_tree_int(cmd, allocation_vdo_use_sparse_index_CFG, profile);
 	vtp->index_memory_size_mb =
 		find_config_tree_int64(cmd, allocation_vdo_index_memory_size_mb_CFG, profile);
-	vtp->use_read_cache =
-		find_config_tree_int(cmd, allocation_vdo_use_read_cache_CFG, profile);
-	vtp->read_cache_size_mb =
-		find_config_tree_int64(cmd, allocation_vdo_read_cache_size_mb_CFG, profile);
 	vtp->slab_size_mb =
 		find_config_tree_int(cmd, allocation_vdo_slab_size_mb_CFG, profile);
 	vtp->ack_threads =
@@ -448,9 +486,11 @@ int fill_vdo_target_params(struct cmd_context *cmd,
 		find_config_tree_int(cmd, allocation_vdo_logical_threads_CFG, profile);
 	vtp->physical_threads =
 		find_config_tree_int(cmd, allocation_vdo_physical_threads_CFG, profile);
+	vtp->max_discard =
+		find_config_tree_int(cmd, allocation_vdo_max_discard_CFG, profile);
 
 	policy = find_config_tree_str(cmd, allocation_vdo_write_policy_CFG, profile);
-	if (!get_vdo_write_policy(&vtp->write_policy, policy))
+	if (!set_vdo_write_policy(&vtp->write_policy, policy))
 		return_0;
 
 	return 1;

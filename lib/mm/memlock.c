@@ -122,6 +122,7 @@ static const char * const _blacklist_maps[] = {
 	"/libpcre.so.",		/* not using pcre during mlock (selinux) */
 	"/libpcre2-",		/* not using pcre during mlock (selinux) */
 	"/libreadline.so.",	/* not using readline during mlock */
+	"/libedit.so.",		/* not using editline during mlock */
 	"/libresolv-",		/* not using during mlock (udev) */
 	"/libselinux.so.",	/* not using selinux during mlock */
 	"/libsepol.so.",	/* not using sepol during mlock */
@@ -166,10 +167,13 @@ static void _allocate_memory(void)
 	char *areas[max_areas];
 
 	/* Check if we could preallocate requested stack */
-	if ((getrlimit (RLIMIT_STACK, &limit) == 0) &&
-	    ((_size_stack * 2) < limit.rlim_cur) &&
-	    ((stack_mem = alloca(_size_stack))))
-		_touch_memory(stack_mem, _size_stack);
+	if (getrlimit(RLIMIT_STACK, &limit) == 0) {
+		limit.rlim_cur /= 2;
+		if (_size_stack > limit.rlim_cur)
+			_size_stack = limit.rlim_cur;
+		if ((stack_mem = alloca(_size_stack)))
+			_touch_memory(stack_mem, _size_stack);
+	}
 	/* FIXME else warn user setting got ignored */
 
         /*
@@ -232,7 +236,7 @@ static int _maps_line(const struct dm_config_node *cn, lvmlock_t lock,
 		      const char *line, size_t *mstats)
 {
 	const struct dm_config_value *cv;
-	long from, to;
+	unsigned long from, to;
 	int pos;
 	unsigned i;
 	char fr, fw, fx, fp;

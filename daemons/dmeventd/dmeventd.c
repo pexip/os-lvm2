@@ -17,7 +17,6 @@
  */
 
 
-#include "configure.h"
 #include "libdevmapper-event.h"
 #include "dmeventd.h"
 
@@ -753,7 +752,7 @@ static void _exit_timeout(void *unused __attribute__((unused)))
 static void *_timeout_thread(void *unused __attribute__((unused)))
 {
 	struct thread_status *thread;
-	struct timespec timeout;
+	struct timespec timeout, real_time;
 	time_t curr_time;
 	int ret;
 
@@ -764,7 +763,16 @@ static void *_timeout_thread(void *unused __attribute__((unused)))
 	while (!dm_list_empty(&_timeout_registry)) {
 		timeout.tv_sec = 0;
 		timeout.tv_nsec = 0;
+#ifndef HAVE_REALTIME
 		curr_time = time(NULL);
+#else
+		if (clock_gettime(CLOCK_REALTIME, &real_time)) {
+			log_error("Failed to read clock_gettime().");
+			break;
+		}
+		/* 10ms back to the future */
+		curr_time = real_time.tv_sec + ((real_time.tv_nsec > (1000000000 - 10000000)) ? 1 : 0);
+#endif
 
 		dm_list_iterate_items_gen(thread, &_timeout_registry, timeout_list) {
 			if (thread->next_time <= curr_time) {
@@ -1486,37 +1494,34 @@ static int _client_read(struct dm_event_fifos *fifos,
 		t.tv_usec = 0;
 		ret = select(fifos->client + 1, &fds, NULL, NULL, &t);
 
-		if (!ret && !bytes)	/* nothing to read */
-			return 0;
+		if (!ret && bytes)
+			continue; /* trying to finish read */
 
-		if (!ret)	/* trying to finish read */
-			continue;
-
-		if (ret < 0)	/* error */
-			return 0;
+		if (ret <= 0)	/* nothing to read */
+			goto bad;
 
 		ret = read(fifos->client, buf + bytes, size - bytes);
 		bytes += ret > 0 ? ret : 0;
-		if (header && (bytes == 2 * sizeof(uint32_t))) {
+		if (!msg->data && (bytes == 2 * sizeof(uint32_t))) {
 			msg->cmd = ntohl(header[0]);
-			size = msg->size = ntohl(header[1]);
 			bytes = 0;
-			if (!size)
-				break; /* No data -> error */
-			buf = msg->data = malloc(msg->size);
-			if (!buf)
-				break; /* No mem -> error */
-			header = 0;
+
+			if (!(size = msg->size = ntohl(header[1])))
+				break;
+
+			if (!(buf = msg->data = malloc(msg->size)))
+				goto bad;
 		}
 	}
 
-	if (bytes != size) {
-		free(msg->data);
-		msg->data = NULL;
-		return 0;
-	}
+	if (bytes == size)
+		return 1;
 
-	return 1;
+bad:
+	free(msg->data);
+	msg->data = NULL;
+
+	return 0;
 }
 
 /*
@@ -1746,7 +1751,8 @@ static void _init_thread_signals(void)
 	sigdelset(&my_sigset, SIGHUP);
 	sigdelset(&my_sigset, SIGQUIT);
 
-	pthread_sigmask(SIG_BLOCK, &my_sigset, NULL);
+	if (pthread_sigmask(SIG_BLOCK, &my_sigset, NULL))
+		log_sys_error("pthread_sigmask", "SIG_BLOCK");
 }
 
 /*
@@ -2022,8 +2028,8 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
 static void _restart_dmeventd(void)
 {
 	struct dm_event_fifos fifos = {
-		.server = -1,
 		.client = -1,
+		.server = -1,
 		/* FIXME Make these either configurable or depend directly on dmeventd_path */
 		.client_path = DM_EVENT_FIFO_CLIENT,
 		.server_path = DM_EVENT_FIFO_SERVER
@@ -2237,7 +2243,8 @@ int main(int argc, char *argv[])
 
 	_init_thread_signals();
 
-	pthread_mutex_init(&_global_mutex, NULL);
+	if (pthread_mutex_init(&_global_mutex, NULL))
+		exit(EXIT_FAILURE);
 
 	if (!_systemd_activation && !_open_fifos(&fifos))
 		exit(EXIT_FIFO_FAILURE);

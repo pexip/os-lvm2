@@ -47,6 +47,8 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	/* Don't create a new PV on top of an existing PV like pvcreate does. */
 	pp.preserve_existing = 1;
 
+	pp.check_consistent_block_size = 1;
+
 	if (!vgcreate_params_set_defaults(cmd, &vp_def, NULL))
 		return EINVALID_CMD_LINE;
 	vp_def.vg_name = vg_name;
@@ -56,16 +58,12 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (!vgcreate_params_validate(cmd, &vp_new))
 		return EINVALID_CMD_LINE;
 
-	/*
-	 * Needed to change the global VG namespace,
-	 * and to change the set of orphan PVs.
-	 */
-	if (!lockd_gl_create(cmd, "ex", vp_new.lock_type))
+	if (!lockf_global(cmd, "ex"))
 		return_ECMD_FAILED;
-	cmd->lockd_gl_disable = 1;
+	if (!lockd_global_create(cmd, "ex", vp_new.lock_type))
+		return_ECMD_FAILED;
 
-	/* Check for old md signatures at the end of devices. */
-	cmd->use_full_md_check = 1;
+	clear_hint_file(cmd);
 
 	/*
 	 * Check if the VG name already exists.  This should be done before
@@ -75,7 +73,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	 * then do the initial label scan which reads all devices and
 	 * populates lvmcache with any VG name it finds.  If the VG name
 	 * we want to use exists, then the label scan will find it,
-	 * and the fmt_from_vgname call (used to check if the name exists)
+	 * and the vginfo_from_vgname call (used to check if the name exists)
 	 * will return non-NULL.
 	 */
 
@@ -86,20 +84,11 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 
 	lvmcache_label_scan(cmd);
 
-	if (lvmcache_fmt_from_vgname(cmd, vp_new.vg_name, NULL, 0)) {
+	if (lvmcache_vginfo_from_vgname(vp_new.vg_name, NULL)) {
 		unlock_vg(cmd, NULL, vp_new.vg_name);
 		log_error("A volume group called %s already exists.", vp_new.vg_name);
 		return ECMD_FAILED;
 	}
-
-	/*
-	 * FIXME: we have to unlock/relock the new VG name around the pvcreate
-	 * step because pvcreate needs to destroy lvmcache, which doesn't allow
-	 * any locks to be held.  There shouldn't be any reason to require this
-	 * VG lock to be released, so the lvmcache destroy rule about locks
-	 * seems to be unwarranted here.
-	 */
-	unlock_vg(cmd, NULL, vp_new.vg_name);
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
@@ -110,18 +99,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		destroy_processing_handle(cmd, handle);
 		return_ECMD_FAILED;
 	}
-
-	/* Relock the new VG name, see comment above. */
-	if (!lock_vol(cmd, vp_new.vg_name, LCK_VG_WRITE, NULL)) {
-		destroy_processing_handle(cmd, handle);
-		return_ECMD_FAILED;
-	}
-
-	/*
-	 * pvcreate_each_device returns with the VG_ORPHANS write lock held,
-	 * which was used to do pvcreate.  Now to create the VG using those
-	 * PVs, the VG lock will be taken (with the orphan lock already held.)
-	 */
 
 	if (!(vg = vg_create(cmd, vp_new.vg_name)))
 		goto_bad;
@@ -184,7 +161,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		goto_bad;
 	}
 
-	unlock_vg(cmd, NULL, VG_ORPHANS);
 	unlock_vg(cmd, vg, vp_new.vg_name);
 
 	backup(vg);
@@ -202,12 +178,12 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	if (vg_is_shared(vg)) {
 		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
 
-		if (!lockd_start_vg(cmd, vg, 1)) {
+		if (!lockd_start_vg(cmd, vg, 1, NULL)) {
 			log_error("Failed to start locking");
 			goto out;
 		}
 
-		lockd_gl(cmd, "un", 0);
+		lock_global(cmd, "un");
 
 		if (!start_opt || !strcmp(start_opt, "wait")) {
 			/* It is OK if the user does Ctrl-C to cancel the wait. */
@@ -226,7 +202,6 @@ out:
 
 bad:
 	unlock_vg(cmd, vg, vp_new.vg_name);
-	unlock_vg(cmd, NULL, VG_ORPHANS);
 	release_vg(vg);
 	destroy_processing_handle(cmd, handle);
 	return ECMD_FAILED;

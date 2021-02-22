@@ -82,9 +82,14 @@
  * that will not pass.
  */
 
-static int _passes_md_filter(struct cmd_context *cmd, struct dev_filter *f __attribute__((unused)), struct device *dev)
+static int _passes_md_filter(struct cmd_context *cmd, struct dev_filter *f __attribute__((unused)), struct device *dev, const char *use_filter_name)
 {
 	int ret;
+
+	if (cmd->filter_nodata_only)
+		return 1;
+
+	dev->filtered_flags &= ~DEV_FILTERED_MD_COMPONENT;
 
 	/*
 	 * When md_component_dectection=0, don't even try to skip md
@@ -93,7 +98,7 @@ static int _passes_md_filter(struct cmd_context *cmd, struct dev_filter *f __att
 	if (!md_filtering())
 		return 1;
 
-	ret = dev_is_md(dev, NULL, cmd->use_full_md_check);
+	ret = dev_is_md_component(dev, NULL, cmd->use_full_md_check);
 
 	if (ret == -EAGAIN) {
 		/* let pass, call again after scan */
@@ -112,12 +117,14 @@ static int _passes_md_filter(struct cmd_context *cmd, struct dev_filter *f __att
 		else
 			log_debug_devs(MSG_SKIPPING " [%s:%p]", dev_name(dev),
 					dev_ext_name(dev), dev->ext.handle);
+		dev->filtered_flags |= DEV_FILTERED_MD_COMPONENT;
 		return 0;
 	}
 
 	if (ret < 0) {
 		log_debug_devs("%s: Skipping: error in md component detection",
 			       dev_name(dev));
+		dev->filtered_flags |= DEV_FILTERED_MD_COMPONENT;
 		return 0;
 	}
 
@@ -145,6 +152,7 @@ struct dev_filter *md_filter_create(struct cmd_context *cmd, struct dev_types *d
 	f->destroy = _destroy;
 	f->use_count = 0;
 	f->private = dt;
+	f->name = "md";
 
 	log_debug_devs("MD filter initialised.");
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (C) 2007-2017 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2007-2020 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -28,6 +28,8 @@
 #   1 error
 #   2 break detected
 #   3 unsupported online filesystem check for given mounted fs
+
+set -euE -o pipefail
 
 TOOL=fsadm
 
@@ -61,7 +63,7 @@ CRYPTSETUP=cryptsetup
 # user may override lvm location by setting LVM_BINARY
 LVM=${LVM_BINARY:-lvm}
 
-YES=${_FSADM_YES}
+YES="${_FSADM_YES-}"
 DRY=0
 VERB=
 FORCE=
@@ -130,7 +132,15 @@ dry() {
 		return 0
 	fi
 	verbose "Executing" "$@"
-	"$@"
+	$@
+}
+
+# Accept as succss also return code 1 with fsck
+accept_0_1() {
+	$@
+	local ret="$?"
+	test "$ret" -eq 1 || return "$ret"
+	# Filesystem was corrected
 }
 
 cleanup() {
@@ -198,7 +208,7 @@ decode_major_minor() {
 # detect filesystem on the given device
 # dereference device name if it is symbolic link
 detect_fs() {
-	test -n "$VOLUME_ORIG" || VOLUME_ORIG=$1
+	test -n "${VOLUME_ORIG-}" || VOLUME_ORIG=$1
 	VOLUME=${1/#"${DM_DEV_DIR}/"/}
 	VOLUME=$("$READLINK" $READLINK_E "$DM_DEV_DIR/$VOLUME")
 	test -n "$VOLUME" || error "Cannot get readlink \"$1\"."
@@ -233,8 +243,8 @@ validate_mounted_major_minor() {
 	test "$1" = "$MAJORMINOR" || {
 		local REFNAME
 		local CURNAME
-		REFNAME=$(dmsetup info -c -j "${1%%:*}" -m "${1##*:}" -o name --noheadings 2>/dev/null)
-		CURNAME=$(dmsetup info -c -j "$MAJOR" -m "$MINOR" -o name --noheadings 2>/dev/null)
+		REFNAME=$(dmsetup info -c -j "${1%%:*}" -m "${1##*:}" -o name --noheadings 2>"$NULL")
+		CURNAME=$(dmsetup info -c -j "$MAJOR" -m "$MINOR" -o name --noheadings 2>"$NULL")
 		error "Cannot ${CHECK+CHECK}${RESIZE+RESIZE} device \"$VOLUME\" without umounting filesystem $MOUNTED first." \
 		      "Mounted filesystem is using device $CURNAME, but referenced device is $REFNAME." \
 		      "Filesystem utilities currently do not support renamed devices."
@@ -249,11 +259,11 @@ check_valid_mounted_device() {
 	local MOUNTEDMAJORMINOR
 	local VOL
 	local CURNAME
-	local SUGGEST="Possibly device \"$1\" has been renamed to \"$CURNAME\"?"
 
 	VOL=$("$READLINK" $READLINK_E "$1")
 	CURNAME=$(dmsetup info -c -j "$MAJOR" -m "$MINOR" -o name --noheadings)
 	# more confused, device is not DM....
+	local SUGGEST="Possibly device \"$1\" has been renamed to \"$CURNAME\"?"
 	test -n "$CURNAME" || SUGGEST="Mounted volume is not a device mapper device???"
 
 	test -n "$VOL" ||
@@ -262,7 +272,7 @@ check_valid_mounted_device() {
 		"Filesystem utilities currently do not support renamed devices."
 
 	case "$VOL" in
-	  # hardcoded /dev  since udev does not create these entries elsewhere
+	  # hardcoded /dev  since kernel does not create these entries elsewhere
 	  /dev/dm-[0-9]*)
 		read -r <"/sys/block/${VOL#/dev/}/dev" MOUNTEDMAJORMINOR 2>&1 || error "Cannot get major:minor for \"$VOLUME\"."
 		;;
@@ -279,7 +289,7 @@ check_valid_mounted_device() {
 detect_mounted_with_proc_self_mountinfo() {
 	# Check self mountinfo
 	# grab major:minor mounted_device mount_point
-	MOUNTED=$("$GREP" "^[0-9]* [0-9]* $MAJORMINOR " "$PROCSELFMOUNTINFO" 2>/dev/null | head -1)
+	MOUNTED=$("$GREP" "^[0-9]* [0-9]* $MAJORMINOR " "$PROCSELFMOUNTINFO" 2>"$NULL" | head -1)
 
 	# If device is opened and not yet found as self mounted
 	# check all other mountinfos (since it can be mounted in cgroups)
@@ -287,7 +297,7 @@ detect_mounted_with_proc_self_mountinfo() {
 	# only 1st. line is needed
 	test -z "$MOUNTED" &&
 		test "$(dmsetup info -c --noheading -o open -j "$MAJOR" -m "$MINOR")" -gt 0 &&
-		MOUNTED=$(find "$PROCDIR" -maxdepth 2 -name mountinfo -print0 |  xargs -0 "$GREP" "^[0-9]* [0-9]* $MAJORMINOR " 2>/dev/null | head -1 2>/dev/null)
+		MOUNTED=$(find "$PROCDIR" -maxdepth 2 -name mountinfo -print0 |  xargs -0 "$GREP" "^[0-9]* [0-9]* $MAJORMINOR " 2>"$NULL" | head -1 2>"$NULL")
 
 	# TODO: for performance compare with sed and stop with 1st. match:
 	# sed -n "/$MAJORMINOR/ {;p;q;}"
@@ -367,16 +377,13 @@ detect_mounted() {
 # get the full size of device in bytes
 detect_device_size() {
 	# check if blockdev supports getsize64
-	"$BLOCKDEV" --help 2>&1 | "$GREP" getsize64 >"$NULL"
-	if test $? -eq 0; then
-		DEVSIZE=$("$BLOCKDEV" --getsize64 "$VOLUME")
+	DEVSIZE=$("$BLOCKDEV" --getsize64 "$VOLUME" 2>"$NULL" || true)
+	if test -n "$DEVSIZE" ; then
+		DEVSIZE=$("$BLOCKDEV" --getsize "$VOLUME" || true)
 		test -n "$DEVSIZE" || error "Cannot read size of device \"$VOLUME\"."
-	else
-		DEVSIZE=$("$BLOCKDEV" --getsize "$VOLUME")
-		test -n "$DEVSIZE" || error "Cannot read size of device \"$VOLUME\"."
-		SSSIZE=$("$BLOCKDEV" --getss "$VOLUME")
+		SSSIZE=$("$BLOCKDEV" --getss "$VOLUME" || true)
 		test -n "$SSSIZE" || error "Cannot read sector size of device \"$VOLUME\"."
-		DEVSIZE=$(("$DEVSIZE" * "$SSSIZE"))
+		DEVSIZE=$(( $DEVSIZE * $SSSIZE ))
 	fi
 }
 
@@ -455,9 +462,10 @@ resize_ext() {
 		if test -n "$MOUNTED" ; then
 			# Forced fsck -f for umounted extX filesystem.
 			case "$-" in
-			  *i*) dry "$FSCK" $YES -f "$VOLUME" ;;
-			  *) dry "$FSCK" -f -p "$VOLUME" ;;
+			*i*) FLAG=$YES ;;
+			*)   FLAG="-p" ;;
 			esac
+			accept_0_1 dry "$FSCK" -f $FLAG "$VOLUME" || error "Failed to fsck $VOLUME"
 		fi
 	fi
 
@@ -532,7 +540,7 @@ detect_luks_device() {
 	CRYPT_NAME=""
 	CRYPT_DATA_OFFSET=""
 
-	_LUKS_VERSION=$("$CRYPTSETUP" luksDump "$VOLUME" 2> /dev/null | "$GREP" "Version:")
+	_LUKS_VERSION=$("$CRYPTSETUP" luksDump "$VOLUME" 2>"$NULL" | "$GREP" "Version:")
 
 	if [ -z "$_LUKS_VERSION" ]; then
 		verbose "Failed to parse LUKS version on volume \"$VOLUME\""
@@ -541,7 +549,7 @@ detect_luks_device() {
 
 	_LUKS_VERSION=${_LUKS_VERSION//[Version:[:space:]]/}
 
-	_LUKS_UUID=$("$CRYPTSETUP" luksDump "$VOLUME" 2> /dev/null | "$GREP" "UUID:")
+	_LUKS_UUID=$("$CRYPTSETUP" luksDump "$VOLUME" 2>"$NULL" | "$GREP" "UUID:")
 
 	if [ -z "$_LUKS_UUID" ]; then
 		verbose "Failed to parse LUKS UUID on volume \"$VOLUME\""
@@ -612,9 +620,9 @@ detect_crypt_device() {
 	local L_NEWSIZE
 	local TMP
 
-	which "$CRYPTSETUP" > /dev/null 2>&1 || error "$CRYPTSETUP utility required to resize crypt device"
+	which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required to resize crypt device"
 
-	CRYPT_TYPE=$("$CRYPTSETUP" status "$1" 2> /dev/null | "$GREP" "type:")
+	CRYPT_TYPE=$("$CRYPTSETUP" status "$1" 2>"$NULL" | "$GREP" "type:")
 
 	test -n "$CRYPT_TYPE" || error "$CRYPTSETUP failed to detect device type on $1."
 
@@ -665,20 +673,23 @@ resize() {
 	# if the size parameter is missing use device size
 	#if [ -n "$NEWSIZE" -a $NEWSIZE <
 	test -z "$NEWSIZE" && NEWSIZE=${DEVSIZE}b
-	test -n "$NEWSIZE_ORIG" || NEWSIZE_ORIG=$NEWSIZE
+	NEWSIZE_ORIG=${NEWSIZE_ORIG:-$NEWSIZE}
 	IFS=$NL
-	test -z "$DO_CRYPTRESIZE" || detect_crypt_device "$VOLUME_ORIG" "$NEWSIZE_ORIG"
-	test -z "$CRYPT_GROW" || resize_crypt "$VOLUME_ORIG"
+	test -z "${DO_CRYPTRESIZE-}" || detect_crypt_device "$VOLUME_ORIG" "$NEWSIZE_ORIG"
+	test -z "${CRYPT_GROW-}" || resize_crypt "$VOLUME_ORIG"
+
 	case "$FSTYPE" in
-	  "ext3"|"ext2"|"ext4") resize_ext $NEWSIZE ;;
-	  "reiserfs") resize_reiser $NEWSIZE ;;
-	  "xfs") resize_xfs $NEWSIZE ;;
+	  ext[234])	CMD=resize_ext ;;
+	  "reiserfs")	CMD=resize_reiser ;;
+	  "xfs")	CMD=resize_xfs ;;
 	  "crypto_LUKS")
-		which "$CRYPTSETUP" > /dev/null 2>&1 || error "$CRYPTSETUP utility required to resize LUKS volume"
-		resize_luks $NEWSIZE ;;
+		which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required to resize LUKS volume"
+		CMD=resize_luks ;;
 	  *) error "Filesystem \"$FSTYPE\" on device \"$VOLUME\" is not supported by this tool." ;;
-	esac || error "Resize $FSTYPE failed."
-	test -z "$CRYPT_SHRINK" || resize_crypt "$VOLUME_ORIG"
+	esac
+
+	$CMD $NEWSIZE || error "$FSTYPE resize failed."
+	test -z "${CRYPT_SHRINK-}" || resize_crypt "$VOLUME_ORIG"
 }
 
 ####################################
@@ -707,7 +718,7 @@ check() {
 	fi
 
 	case "$FSTYPE" in
-	  "ext2"|"ext3"|"ext4")
+	  ext[234])
 		IFS_CHECK=$IFS
 		IFS=$NL
 		for i in $(LC_ALL=C "$TUNE_EXT" -l "$VOLUME"); do
@@ -731,23 +742,26 @@ check() {
 
 	case "$FSTYPE" in
 	  "xfs") if which "$XFS_CHECK" >"$NULL" 2>&1 ; then
-			dry "$XFS_CHECK" "$VOLUME"
+			dry "$XFS_CHECK" "$VOLUME" || error "Xfs check failed."
 		 else
 			# Replacement for outdated xfs_check
 			# FIXME: for small devices we need to force_geometry,
 			# since we run in '-n' mode, it shouldn't be problem.
 			# Think about better way....
-			dry "$XFS_REPAIR" -n -o force_geometry "$VOLUME"
+			dry "$XFS_REPAIR" -n -o force_geometry "$VOLUME" || error "Xfs repair failed."
 		 fi ;;
-	  "ext2"|"ext3"|"ext4"|"reiserfs")
+	  ext[234]|"reiserfs")
 	        # check if executed from interactive shell environment
 		case "$-" in
-		  *i*) dry "$FSCK" $YES $FORCE "$VOLUME" ;;
-		  *) dry "$FSCK" $FORCE -p "$VOLUME" ;;
-		esac ;;
+		  *i*) FLAG=$YES ;;
+		  *)   FLAG="-p" ;;
+		esac
+		accept_0_1 dry "$FSCK" $FORCE $FLAG "$VOLUME" || error "Fsck $FSTYPE failed."
+		;;
 	  "crypto_LUKS")
-		which "$CRYPTSETUP" > /dev/null 2>&1 || error "$CRYPTSETUP utility required."
-		check_luks ;;
+		which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required."
+		check_luks || error "Crypto luks check failed."
+		;;
 	  *)
 		error "Filesystem \"$FSTYPE\" on device \"$VOLUME\" is not supported by this tool." ;;
 	esac
@@ -760,7 +774,7 @@ check() {
 trap "cleanup 2" 2
 
 # test if we are not invoked recursively
-test -n "$FSADM_RUNNING" && exit 0
+test -n "${FSADM_RUNNING-}" && exit 0
 
 # test some prerequisities
 for i in "$TUNE_EXT" "$RESIZE_EXT" "$TUNE_REISER" "$RESIZE_REISER" \
@@ -782,6 +796,10 @@ if [ "$#" -eq 0 ] ; then
 	tool_usage
 fi
 
+CHECK=""
+RESIZE=""
+NEWSIZE=""
+
 while [ "$#" -ne 0 ]
 do
 	 case "$1" in
@@ -794,8 +812,11 @@ do
 	  "-y"|"--yes") YES="-y" ;;
 	  "-l"|"--lvresize") DO_LVRESIZE=1 ;;
 	  "-c"|"--cryptresize") DO_CRYPTRESIZE=1 ;;
-	  "check") CHECK=$2 ; shift ;;
-	  "resize") RESIZE=$2 ; NEWSIZE=$3 ; shift 2 ;;
+	  "check") test -z "${2-}" && error "Missing <device>. (see: $TOOL --help)"
+		   CHECK=$2 ; shift ;;
+	  "resize") test -z "${2-}" && error "Missing <device>. (see: $TOOL --help)"
+		    RESIZE=$2 ; shift
+		    if test -n "${2-}" ; then NEWSIZE="${2-}" ; shift ; fi ;;
 	  *) error "Wrong argument \"$1\". (see: $TOOL --help)"
 	esac
 	shift

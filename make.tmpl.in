@@ -77,6 +77,7 @@ RT_LIBS = @RT_LIBS@
 M_LIBS = @M_LIBS@
 PTHREAD_LIBS = @PTHREAD_LIBS@
 READLINE_LIBS = @READLINE_LIBS@
+EDITLINE_LIBS = @EDITLINE_LIBS@
 SELINUX_LIBS = @SELINUX_LIBS@
 UDEV_CFLAGS = @UDEV_CFLAGS@
 UDEV_LIBS = @UDEV_LIBS@
@@ -294,12 +295,12 @@ LIB_VERSION_DM := $(shell $(AWK) -F '.' '{printf "%s.%s",$$1,$$2}' $(top_srcdir)
 
 LIB_VERSION_APP := $(shell $(AWK) -F '[(). ]' '{printf "%s.%s",$$1,$$4}' $(top_srcdir)/VERSION)
 
-INCLUDES += -I$(srcdir) -I$(top_srcdir) -I$(top_builddir)/include
+INCLUDES += -I$(srcdir) -I$(top_srcdir) -I$(top_builddir)/include -include configure.h
 
 #VDO_INCLUDES=-I@VDO_INCLUDE@
 
 DEPS = $(top_builddir)/make.tmpl $(top_srcdir)/VERSION \
-       $(top_builddir)/Makefile
+       $(top_builddir)/Makefile $(top_builddir)/include/configure.h
 
 OBJECTS = $(SOURCES:%.c=%.o) $(CXXSOURCES:%.cpp=%.o)
 POTFILES = $(SOURCES:%.c=%.pot)
@@ -551,17 +552,17 @@ EXPORTED_SYMBOLS := $(wildcard $(srcdir)/.exported_symbols.Base $(srcdir)/.expor
 .export.sym: .exported_symbols_generated $(EXPORTED_SYMBOLS)
 ifeq (,$(firstword $(EXPORTED_SYMBOLS)))
 	$(Q) set -e; (echo "Base {"; echo "	global:";\
-		 $(SED) "s/^/		/;s/$$/;/" $<;\
+		 $(SED) "/^#/d;s/^/		/;s/$$/;/" $<;\
 		 echo "};";\
 		 echo "Local {"; echo "	local:"; echo "		*;"; echo "};";\
 		 ) > $@
 else
 	$(Q) set -e;\
-	R=$$($(SORT) $^ | uniq -u);\
+	R=$$($(SORT) $^ | $(GREP) -v "^#" | uniq -u);\
 	test -z "$$R" || { echo "Mismatch between symbols in shared library and lists in .exported_symbols.* files: $$R"; false; } ;\
 	( for i in $$(echo $(EXPORTED_SYMBOLS) | tr ' ' '\n' | $(SORT) -rnt_ -k5 ); do\
 		echo "$${i##*.} {"; echo "	global:";\
-		$(SED) "s/^/		/;s/$$/;/" $$i;\
+		$(SED) "/^#/d;s/^/		/;s/$$/;/" $$i;\
 		echo "};";\
 	  done;\
 	  echo "Local {"; echo "	local:"; echo "		*;"; echo "};";\

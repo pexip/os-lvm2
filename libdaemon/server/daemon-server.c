@@ -85,7 +85,7 @@ static int _is_idle(daemon_state s)
 	return s.idle && s.idle->is_idle && !s.threads->next;
 }
 
-static struct timeval *_get_timeout(daemon_state s)
+static struct timespec *_get_timeout(daemon_state s)
 {
 	return s.idle ? s.idle->ptimeout : NULL;
 }
@@ -94,7 +94,7 @@ static void _reset_timeout(daemon_state s)
 {
 	if (s.idle) {
 		s.idle->ptimeout->tv_sec = 1;
-		s.idle->ptimeout->tv_usec = 0;
+		s.idle->ptimeout->tv_nsec = 0;
 	}
 }
 
@@ -505,19 +505,22 @@ static int _handle_connect(daemon_state s)
 
 	client.socket_fd = accept(s.socket_fd, (struct sockaddr *) &sockaddr, &sl);
 	if (client.socket_fd < 0) {
-		if (errno != EAGAIN || !_shutdown_requested)
+		if (errno != EAGAIN)
 			ERROR(&s, "Failed to accept connection: %s.", strerror(errno));
-		return 0;
+		goto bad;
 	}
 
-	 if (fcntl(client.socket_fd, F_SETFD, FD_CLOEXEC))
+	if (_shutdown_requested) {
+		ERROR(&s, "Shutdown requested.");
+		goto bad;
+	}
+
+	if (fcntl(client.socket_fd, F_SETFD, FD_CLOEXEC))
 		WARN(&s, "setting CLOEXEC on client socket fd %d failed", client.socket_fd);
 
 	if (!(ts = malloc(sizeof(thread_state)))) {
-		if (close(client.socket_fd))
-			perror("close");
 		ERROR(&s, "Failed to allocate thread state");
-		return 0;
+		goto bad;
 	}
 
 	ts->next = s.threads->next;
@@ -529,10 +532,16 @@ static int _handle_connect(daemon_state s)
 
 	if ((errno = pthread_create(&ts->client.thread_id, NULL, _client_thread, ts))) {
 		ERROR(&s, "Failed to create client thread: %s.", strerror(errno));
-		return 0;
+		ts->active = 0;
+		goto bad;
 	}
 
 	return 1;
+bad:
+	if ((client.socket_fd >= 0) && close(client.socket_fd))
+		perror("close");
+
+	return 0;
 }
 
 static void _reap(daemon_state s, int waiting)
@@ -542,7 +551,8 @@ static void _reap(daemon_state s, int waiting)
 
 	while (ts) {
 		if (waiting || !ts->active) {
-			if ((errno = pthread_join(ts->client.thread_id, &rv)))
+			if (ts->client.thread_id &&
+			    (errno = pthread_join(ts->client.thread_id, &rv)))
 				ERROR(&s, "pthread_join failed: %s", strerror(errno));
 			last->next = ts->next;
 			free(ts);
@@ -559,6 +569,8 @@ void daemon_start(daemon_state s)
 	thread_state _threads = { .next = NULL };
 	unsigned timeout_count = 0;
 	fd_set in;
+	sigset_t new_set, old_set;
+	int ret;
 
 	/*
 	 * Switch to C locale to avoid reading large locale-archive file used by
@@ -626,8 +638,7 @@ void daemon_start(daemon_state s)
 	if (!s.foreground)
 		kill(getppid(), SIGTERM);
 
-	/*
-	 * Use daemon_main for daemon-specific init and polling, or
+	/*                                                                               	 * Use daemon_main for daemon-specific init and polling, or
 	 * use daemon_init for daemon-specific init and generic lib polling.
 	 */
 
@@ -641,21 +652,41 @@ void daemon_start(daemon_state s)
 		if (!s.daemon_init(&s))
 			failed = 1;
 
+	if (s.socket_fd >= FD_SETSIZE)
+		failed = 1; /* FD out of available selectable set */
+
+	sigfillset(&new_set);
+	if (sigprocmask(SIG_SETMASK, NULL, &old_set))
+		perror("sigprocmask error");
+
 	while (!failed) {
 		_reset_timeout(s);
 		FD_ZERO(&in);
 		FD_SET(s.socket_fd, &in);
-		if (select(FD_SETSIZE, &in, NULL, NULL, _get_timeout(s)) < 0 && errno != EINTR)
-			perror("select error");
+
+		if (sigprocmask(SIG_SETMASK, &new_set, NULL))
+			perror("sigprocmask error");
+		if (_shutdown_requested && !s.threads->next) {
+			if (sigprocmask(SIG_SETMASK, &old_set, NULL))
+				perror("sigprocmask error");
+			INFO(&s, "%s shutdown requested", s.name);
+			break;
+		}
+		ret = pselect(s.socket_fd + 1, &in, NULL, NULL, _get_timeout(s), &old_set);
+		if (sigprocmask(SIG_SETMASK, &old_set, NULL))
+			perror("sigprocmask error");
+
+		if (ret < 0) {
+			if ((errno != EINTR) && (errno != EAGAIN))
+				perror("select error");
+			continue;
+		}
+
 		if (FD_ISSET(s.socket_fd, &in)) {
 			timeout_count = 0;
 			_handle_connect(s);
 		}
-
 		_reap(s, 0);
-
-		if (_shutdown_requested && !s.threads->next)
-			break;
 
 		/* s.idle == NULL equals no shutdown on timeout */
 		if (_is_idle(s)) {
@@ -672,7 +703,7 @@ void daemon_start(daemon_state s)
 out:
 	/* If activated by systemd, do not unlink the socket - systemd takes care of that! */
 	if (!_systemd_activation && s.socket_fd >= 0)
-		if (unlink(s.socket_path))
+		if (s.socket_path && unlink(s.socket_path))
 			perror("unlink error");
 
 	if (s.socket_fd >= 0)

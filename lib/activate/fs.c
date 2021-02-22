@@ -313,7 +313,7 @@ struct fs_op_parms {
 	char *lv_name;
 	char *dev;
 	char *old_lv_name;
-	char names[0];
+	char names[];
 };
 
 static void _store_str(char **pos, char **ptr, const char *str)
@@ -487,7 +487,8 @@ int fs_rename_lv(const struct logical_volume *lv, const char *dev,
 
 void fs_unlock(void)
 {
-	if (!prioritized_section()) {
+	/* Do not allow syncing device name with suspended devices */
+	if (!dm_get_suspended_counter()) {
 		log_debug_activation("Syncing device names");
 		/* Wait for all processed udev devices */
 		if (!dm_udev_wait(_fs_cookie))

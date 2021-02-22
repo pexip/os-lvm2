@@ -47,9 +47,11 @@ BUS_NAME = os.getenv('LVM_DBUS_NAME', 'com.redhat.lvmdbus1')
 BASE_INTERFACE = 'com.redhat.lvmdbus1'
 PV_INTERFACE = BASE_INTERFACE + '.Pv'
 VG_INTERFACE = BASE_INTERFACE + '.Vg'
+VG_VDO_INTERFACE = BASE_INTERFACE + '.VgVdo'
 LV_INTERFACE = BASE_INTERFACE + '.Lv'
 LV_COMMON_INTERFACE = BASE_INTERFACE + '.LvCommon'
 THIN_POOL_INTERFACE = BASE_INTERFACE + '.ThinPool'
+VDO_POOL_INTERFACE = BASE_INTERFACE + '.VdoPool'
 CACHE_POOL_INTERFACE = BASE_INTERFACE + '.CachePool'
 LV_CACHED = BASE_INTERFACE + '.CachedLv'
 SNAPSHOT_INTERFACE = BASE_INTERFACE + '.Snapshot'
@@ -61,6 +63,7 @@ PV_OBJ_PATH = BASE_OBJ_PATH + '/Pv'
 VG_OBJ_PATH = BASE_OBJ_PATH + '/Vg'
 LV_OBJ_PATH = BASE_OBJ_PATH + '/Lv'
 THIN_POOL_PATH = BASE_OBJ_PATH + "/ThinPool"
+VDO_POOL_PATH = BASE_OBJ_PATH + "/VdoPool"
 CACHE_POOL_PATH = BASE_OBJ_PATH + "/CachePool"
 HIDDEN_LV_PATH = BASE_OBJ_PATH + "/HiddenLv"
 MANAGER_OBJ_PATH = BASE_OBJ_PATH + '/Manager'
@@ -71,6 +74,7 @@ pv_id = itertools.count()
 vg_id = itertools.count()
 lv_id = itertools.count()
 thin_id = itertools.count()
+vdo_id = itertools.count()
 cache_pool_id = itertools.count()
 job_id = itertools.count()
 hidden_lv = itertools.count()
@@ -78,6 +82,9 @@ hidden_lv = itertools.count()
 # Used to prevent circular imports...
 load = None
 event = None
+
+# Boolean to denote if lvm supports VDO integration
+vdo_support = False
 
 # Global cached state
 db = None
@@ -87,3 +94,13 @@ blackbox = None
 
 # RequestEntry ctor
 create_request_entry = None
+
+
+def exit_daemon():
+    """
+    Exit the daemon cleanly
+    :return:
+    """
+    if run and loop:
+        run.value = 0
+        loop.quit()

@@ -10,10 +10,11 @@
 from .automatedproperties import AutomatedProperties
 
 from . import utils
-from .utils import pv_obj_path_generate, vg_obj_path_generate, n
+from .utils import pv_obj_path_generate, vg_obj_path_generate, n, \
+	_handle_execute
 import dbus
 from . import cfg
-from .cfg import VG_INTERFACE
+from .cfg import VG_INTERFACE, VG_VDO_INTERFACE
 from . import cmdhandler
 from .request import RequestEntry
 from .loader import common
@@ -46,24 +47,29 @@ def vgs_state_retrieve(selection, cache_refresh=True):
 
 def load_vgs(vg_specific=None, object_path=None, refresh=False,
 		emit_signal=False, cache_refresh=True):
-	return common(vgs_state_retrieve, (Vg,), vg_specific, object_path, refresh,
+	return common(vgs_state_retrieve, (Vg, VgVdo, ), vg_specific, object_path, refresh,
 					emit_signal, cache_refresh)
 
 
 # noinspection PyPep8Naming,PyUnresolvedReferences,PyUnusedLocal
 class VgState(State):
+
 	@property
-	def lvm_id(self):
+	def internal_name(self):
 		return self.Name
 
+	@property
+	def lvm_id(self):
+		return self.internal_name
+
 	def identifiers(self):
-		return (self.Uuid, self.Name)
+		return (self.Uuid, self.internal_name)
 
 	def _lv_paths_build(self):
 		rc = []
 		for lv in cfg.db.lvs_in_vg(self.Uuid):
 			(lv_name, meta, lv_uuid) = lv
-			full_name = "%s/%s" % (self.Name, lv_name)
+			full_name = "%s/%s" % (self.internal_name, lv_name)
 
 			gen = utils.lv_object_path_method(lv_name, meta)
 
@@ -92,8 +98,12 @@ class VgState(State):
 	def create_dbus_object(self, path):
 		if not path:
 			path = cfg.om.get_object_path_by_uuid_lvm_id(
-				self.Uuid, self.Name, vg_obj_path_generate)
-		return Vg(path, self)
+				self.Uuid, self.internal_name, vg_obj_path_generate)
+
+		if cfg.vdo_support:
+			return VgVdo(path, self)
+		else:
+			return Vg(path, self)
 
 	# noinspection PyMethodMayBeStatic
 	def creation_signature(self):
@@ -102,7 +112,6 @@ class VgState(State):
 
 # noinspection PyPep8Naming
 @utils.dbus_property(VG_INTERFACE, 'Uuid', 's')
-@utils.dbus_property(VG_INTERFACE, 'Name', 's')
 @utils.dbus_property(VG_INTERFACE, 'Fmt', 's')
 @utils.dbus_property(VG_INTERFACE, 'SizeBytes', 't', 0)
 @utils.dbus_property(VG_INTERFACE, 'FreeBytes', 't', 0)
@@ -135,6 +144,7 @@ class Vg(AutomatedProperties):
 	_AllocNormal_meta = ('b', VG_INTERFACE)
 	_AllocAnywhere_meta = ('b', VG_INTERFACE)
 	_Clustered_meta = ('b', VG_INTERFACE)
+	_Name_meta = ('s', VG_INTERFACE)
 
 	# noinspection PyUnusedLocal,PyPep8Naming
 	def __init__(self, object_path, object_state):
@@ -149,13 +159,7 @@ class Vg(AutomatedProperties):
 
 	@staticmethod
 	def handle_execute(rc, out, err):
-		if rc == 0:
-			cfg.load()
-		else:
-			# Need to work on error handling, need consistent
-			raise dbus.exceptions.DBusException(
-				VG_INTERFACE,
-				'Exit code %s, stderr = %s' % (str(rc), err))
+		return _handle_execute(rc, out, err, VG_INTERFACE)
 
 	@staticmethod
 	def validate_dbus_object(vg_uuid, vg_name):
@@ -171,9 +175,8 @@ class Vg(AutomatedProperties):
 	def _rename(uuid, vg_name, new_name, rename_options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = cmdhandler.vg_rename(
-			vg_name, new_name, rename_options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_rename(
+			uuid, new_name, rename_options))
 		return '/'
 
 	@dbus.service.method(
@@ -192,8 +195,7 @@ class Vg(AutomatedProperties):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
 		# Remove the VG, if successful then remove from the model
-		rc, out, err = cmdhandler.vg_remove(vg_name, remove_options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_remove(vg_name, remove_options))
 		return '/'
 
 	@dbus.service.method(
@@ -209,14 +211,13 @@ class Vg(AutomatedProperties):
 	@staticmethod
 	def _change(uuid, vg_name, change_options):
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = cmdhandler.vg_change(change_options, vg_name)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_change(change_options, vg_name))
 		return '/'
 
 	# TODO: This should be broken into a number of different methods
 	# instead of having one method that takes a hash for parameters.  Some of
 	# the changes that vgchange does works on entire system, not just a
-	# specfic vg, thus that should be in the Manager interface.
+	# specific vg, thus that should be in the Manager interface.
 	@dbus.service.method(
 		dbus_interface=VG_INTERFACE,
 		in_signature='ia{sv}',
@@ -246,9 +247,8 @@ class Vg(AutomatedProperties):
 						VG_INTERFACE,
 						'PV Object path not found = %s!' % pv_op)
 
-		rc, out, err = cmdhandler.vg_reduce(vg_name, missing, pv_devices,
-											reduce_options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_reduce(
+			vg_name, missing, pv_devices, reduce_options))
 		return '/'
 
 	@dbus.service.method(
@@ -278,9 +278,8 @@ class Vg(AutomatedProperties):
 					VG_INTERFACE, 'PV Object path not found = %s!' % i)
 
 		if len(extend_devices):
-			rc, out, err = cmdhandler.vg_extend(vg_name, extend_devices,
-												extend_options)
-			Vg.handle_execute(rc, out, err)
+			Vg.handle_execute(*cmdhandler.vg_extend(
+				vg_name, extend_devices, extend_options))
 		else:
 			raise dbus.exceptions.DBusException(
 				VG_INTERFACE, 'No pv_object_paths provided!')
@@ -334,10 +333,8 @@ class Vg(AutomatedProperties):
 
 				pv_dests.append((pv_dbus_obj.lvm_id, pr[1], pr[2]))
 
-		rc, out, err = cmdhandler.vg_lv_create(
-			vg_name, create_options, name, size_bytes, pv_dests)
-
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_lv_create(
+			vg_name, create_options, name, size_bytes, pv_dests))
 		return Vg.fetch_new_lv(vg_name, name)
 
 	@dbus.service.method(
@@ -375,11 +372,8 @@ class Vg(AutomatedProperties):
 			thin_pool, create_options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-
-		rc, out, err = cmdhandler.vg_lv_create_linear(
-			vg_name, create_options, name, size_bytes, thin_pool)
-
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_lv_create_linear(
+			vg_name, create_options, name, size_bytes, thin_pool))
 		return Vg.fetch_new_lv(vg_name, name)
 
 	@dbus.service.method(
@@ -401,10 +395,9 @@ class Vg(AutomatedProperties):
 			stripe_size_kb, thin_pool, create_options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = cmdhandler.vg_lv_create_striped(
+		Vg.handle_execute(*cmdhandler.vg_lv_create_striped(
 			vg_name, create_options, name, size_bytes,
-			num_stripes, stripe_size_kb, thin_pool)
-		Vg.handle_execute(rc, out, err)
+			num_stripes, stripe_size_kb, thin_pool))
 		return Vg.fetch_new_lv(vg_name, name)
 
 	@dbus.service.method(
@@ -429,9 +422,8 @@ class Vg(AutomatedProperties):
 			num_copies, create_options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = cmdhandler.vg_lv_create_mirror(
-			vg_name, create_options, name, size_bytes, num_copies)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_lv_create_mirror(
+			vg_name, create_options, name, size_bytes, num_copies))
 		return Vg.fetch_new_lv(vg_name, name)
 
 	@dbus.service.method(
@@ -454,10 +446,9 @@ class Vg(AutomatedProperties):
 						num_stripes, stripe_size_kb, create_options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = cmdhandler.vg_lv_create_raid(
+		Vg.handle_execute(*cmdhandler.vg_lv_create_raid(
 			vg_name, create_options, name, raid_type, size_bytes,
-			num_stripes, stripe_size_kb)
-		Vg.handle_execute(rc, out, err)
+			num_stripes, stripe_size_kb))
 		return Vg.fetch_new_lv(vg_name, name)
 
 	@dbus.service.method(
@@ -555,9 +546,8 @@ class Vg(AutomatedProperties):
 				raise dbus.exceptions.DBusException(
 					VG_INTERFACE, 'PV object path = %s not found' % p)
 
-		rc, out, err = cmdhandler.pv_tag(
-			pv_devices, tags_add, tags_del, tag_options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.pv_tag(
+			pv_devices, tags_add, tags_del, tag_options))
 		return '/'
 
 	@dbus.service.method(
@@ -598,9 +588,8 @@ class Vg(AutomatedProperties):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
 
-		rc, out, err = cmdhandler.vg_tag(
-			vg_name, tags_add, tags_del, tag_options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.vg_tag(
+			vg_name, tags_add, tags_del, tag_options))
 		return '/'
 
 	@dbus.service.method(
@@ -639,8 +628,7 @@ class Vg(AutomatedProperties):
 	def _vg_change_set(uuid, vg_name, method, value, options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = method(vg_name, value, options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*method(vg_name, value, options))
 		return '/'
 
 	@dbus.service.method(
@@ -700,9 +688,8 @@ class Vg(AutomatedProperties):
 								options):
 		# Make sure we have a dbus object representing it
 		Vg.validate_dbus_object(uuid, vg_name)
-		rc, out, err = cmdhandler.activate_deactivate(
-			'vgchange', vg_name, activate, control_flags, options)
-		Vg.handle_execute(rc, out, err)
+		Vg.handle_execute(*cmdhandler.activate_deactivate(
+			'vgchange', vg_name, activate, control_flags, options))
 		return '/'
 
 	@dbus.service.method(
@@ -728,6 +715,12 @@ class Vg(AutomatedProperties):
 				control_flags, activate_options),
 				cb, cbe, return_tuple=False)
 		cfg.worker_q.put(r)
+
+	@property
+	def Name(self):
+		if ':' in self.state.Name:
+			return self.state.Name.split(':')[0]
+		return self.state.Name
 
 	@property
 	def Tags(self):
@@ -784,3 +777,71 @@ class Vg(AutomatedProperties):
 	@property
 	def Clustered(self):
 		return self._attribute(5, 'c')
+
+
+class VgVdo(Vg):
+
+	# noinspection PyUnusedLocal,PyPep8Naming
+	def __init__(self, object_path, object_state):
+		super(VgVdo, self).__init__(object_path, vgs_state_retrieve)
+		self.set_interface(VG_VDO_INTERFACE)
+		self._object_path = object_path
+		self.state = object_state
+
+	@staticmethod
+	def _lv_vdo_pool_create_with_lv(uuid, vg_name, pool_name, lv_name,
+									data_size, virtual_size, create_options):
+		Vg.validate_dbus_object(uuid, vg_name)
+		Vg.handle_execute(*cmdhandler.vg_create_vdo_pool_lv_and_lv(
+			vg_name, pool_name, lv_name, data_size, virtual_size,
+			create_options))
+		return Vg.fetch_new_lv(vg_name, pool_name)
+
+	@dbus.service.method(
+		dbus_interface=VG_VDO_INTERFACE,
+		in_signature='ssttia{sv}',
+		out_signature='(oo)',
+		async_callbacks=('cb', 'cbe'))
+	def CreateVdoPoolandLv(self, pool_name, lv_name, data_size, virtual_size,
+							tmo, create_options, cb, cbe):
+		utils.validate_lv_name(VG_VDO_INTERFACE, self.Name, pool_name)
+		utils.validate_lv_name(VG_VDO_INTERFACE, self.Name, lv_name)
+
+		r = RequestEntry(tmo, VgVdo._lv_vdo_pool_create_with_lv,
+							(self.state.Uuid, self.state.lvm_id,
+							pool_name, lv_name, round_size(data_size),
+							round_size(virtual_size),
+							create_options), cb, cbe)
+		cfg.worker_q.put(r)
+
+	@staticmethod
+	def _vdo_pool_create(uuid, vg_name, pool_lv, name, virtual_size, create_options):
+		Vg.validate_dbus_object(uuid, vg_name)
+
+		# Retrieve the full name of the pool lv
+		pool = cfg.om.get_object_by_path(pool_lv)
+		if not pool:
+			msg = 'LV with object path %s not present!' % \
+					(pool_lv)
+			raise dbus.exceptions.DBusException(VG_VDO_INTERFACE, msg)
+
+		Vg.handle_execute(*cmdhandler.vg_create_vdo_pool(
+			pool.lv_full_name(), name, virtual_size,
+			create_options))
+		return Vg.fetch_new_lv(vg_name, pool.Name)
+
+	@dbus.service.method(
+		dbus_interface=VG_VDO_INTERFACE,
+		in_signature='ostia{sv}',
+		out_signature='(oo)',
+		async_callbacks=('cb', 'cbe'))
+	def CreateVdoPool(self, pool_lv, name, virtual_size,
+						tmo, create_options, cb, cbe):
+		utils.validate_lv_name(VG_VDO_INTERFACE, self.Name, name)
+
+		r = RequestEntry(tmo, VgVdo._vdo_pool_create,
+							(self.state.Uuid, self.state.lvm_id,
+							pool_lv, name,
+							round_size(virtual_size),
+							create_options), cb, cbe)
+		cfg.worker_q.put(r)

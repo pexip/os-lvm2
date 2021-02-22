@@ -728,7 +728,6 @@ DEFAULT_PID_DIR
 DEFAULT_MIRROR_SEGTYPE
 DEFAULT_LOCK_DIR
 DEFAULT_DM_RUN_DIR
-DEFAULT_DATA_ALIGNMENT
 DEFAULT_CACHE_SUBDIR
 DEFAULT_BACKUP_SUBDIR
 DEFAULT_ARCHIVE_SUBDIR
@@ -743,6 +742,7 @@ CLDNOWHOLEARCHIVE
 CLDFLAGS
 CACHE
 BUILD_DMFILEMAPD
+BUILD_LOCKDDLM_CONTROL
 BUILD_LOCKDDLM
 BUILD_LOCKDSANLOCK
 BUILD_LVMLOCKD
@@ -753,6 +753,8 @@ BUILD_CMIRRORD
 BLKID_PC
 MODPROBE_CMD
 MSGFMT
+EDITLINE_LIBS
+EDITLINE_CFLAGS
 PYTHON3_CONFIG
 pkgpyexecdir
 pyexecdir
@@ -772,6 +774,8 @@ BLKID_LIBS
 BLKID_CFLAGS
 NOTIFY_DBUS_LIBS
 NOTIFY_DBUS_CFLAGS
+LOCKD_DLM_CONTROL_LIBS
+LOCKD_DLM_CONTROL_CFLAGS
 LOCKD_DLM_LIBS
 LOCKD_DLM_CFLAGS
 LOCKD_SANLOCK_LIBS
@@ -915,7 +919,10 @@ with_cache_restore
 enable_cache_check_needs_check
 with_vdo
 with_vdo_format
+with_writecache
+with_integrity
 enable_readline
+enable_editline
 enable_realtime
 enable_ocf
 with_ocfdir
@@ -932,6 +939,7 @@ enable_devmapper
 enable_lvmpolld
 enable_lvmlockd_sanlock
 enable_lvmlockd_dlm
+enable_lvmlockd_dlmcontrol
 enable_use_lvmlockd
 with_lvmlockd_pidfile
 enable_use_lvmpolld
@@ -955,6 +963,7 @@ enable_fsadm
 enable_blkdeactivate
 enable_dmeventd
 enable_selinux
+enable_blkzeroout
 enable_nls
 with_localedir
 with_confdir
@@ -973,7 +982,6 @@ with_default_archive_subdir
 with_default_backup_subdir
 with_default_cache_subdir
 with_default_locking_dir
-with_default_data_alignment
 with_interface
 '
       ac_precious_vars='build_alias
@@ -1001,6 +1009,8 @@ LOCKD_SANLOCK_CFLAGS
 LOCKD_SANLOCK_LIBS
 LOCKD_DLM_CFLAGS
 LOCKD_DLM_LIBS
+LOCKD_DLM_CONTROL_CFLAGS
+LOCKD_DLM_CONTROL_LIBS
 NOTIFY_DBUS_CFLAGS
 NOTIFY_DBUS_LIBS
 BLKID_CFLAGS
@@ -1009,7 +1019,9 @@ SYSTEMD_CFLAGS
 SYSTEMD_LIBS
 UDEV_CFLAGS
 UDEV_LIBS
-PYTHON'
+PYTHON
+EDITLINE_CFLAGS
+EDITLINE_LIBS'
 
 
 # Initialize some variables set by options.
@@ -1632,6 +1644,7 @@ Optional Features:
   --disable-cache_check_needs_check
                           required if cache_check version is < 0.5
   --disable-readline      disable readline support
+  --enable-editline       enable editline support
   --disable-realtime      disable realtime clock support
   --enable-ocf            enable Open Cluster Framework (OCF) compliant
                           resource agents
@@ -1644,6 +1657,8 @@ Optional Features:
   --enable-lvmlockd-sanlock
                           enable the LVM lock daemon using sanlock
   --enable-lvmlockd-dlm   enable the LVM lock daemon using dlm
+  --enable-lvmlockd-dlmcontrol
+                          enable lvmlockd remote refresh using libdlmcontrol
   --disable-use-lvmlockd  disable usage of LVM lock daemon
   --disable-use-lvmpolld  disable usage of LVM Poll Daemon
   --enable-dmfilemapd     enable the dmstats filemap daemon
@@ -1670,6 +1685,7 @@ Optional Features:
   --disable-blkdeactivate disable blkdeactivate
   --enable-dmeventd       enable the device-mapper event daemon
   --disable-selinux       disable selinux support
+  --disable-blkzeroout    do not use BLKZEROOUT for device zeroing
   --enable-nls            enable Native Language Support
 
 Optional Packages:
@@ -1708,14 +1724,16 @@ Optional Packages:
                           cache_restore tool: [autodetect]
   --with-vdo=TYPE         vdo support: internal/none [internal]
   --with-vdo-format=PATH  vdoformat tool: [autodetect]
+  --with-writecache=TYPE  writecache support: internal/none [internal]
+  --with-integrity=TYPE   integrity support: internal/none [internal]
   --with-ocfdir=DIR       install OCF files in
                           [PREFIX/lib/ocf/resource.d/lvm2]
   --with-default-pid-dir=PID_DIR
-                          Default directory to keep PID files in. [autodetect]
+                          default directory to keep PID files in [autodetect]
   --with-default-dm-run-dir=DM_RUN_DIR
-                          Default DM run directory. [autodetect]
+                          default DM run directory [autodetect]
   --with-default-run-dir=RUN_DIR
-                          Default LVM run directory. [autodetect_run_dir/lvm]
+                          default LVM run directory [autodetect_run_dir/lvm]
   --with-cmirrord-pidfile=PATH
                           cmirrord pidfile [PID_DIR/cmirrord.pid]
   --with-optimisation=OPT C optimisation flag [OPT=-O2]
@@ -1752,8 +1770,6 @@ Optional Packages:
                           default metadata cache subdir [cache]
   --with-default-locking-dir=DIR
                           default locking directory [autodetect_lock_dir/lvm]
-  --with-default-data-alignment=NUM
-                          set the default data alignment in MiB [1]
   --with-interface=IFACE  choose kernel interface (ioctl) [ioctl]
 
 Some influential environment variables:
@@ -1790,6 +1806,10 @@ Some influential environment variables:
               C compiler flags for LOCKD_DLM, overriding pkg-config
   LOCKD_DLM_LIBS
               linker flags for LOCKD_DLM, overriding pkg-config
+  LOCKD_DLM_CONTROL_CFLAGS
+              C compiler flags for LOCKD_DLM_CONTROL, overriding pkg-config
+  LOCKD_DLM_CONTROL_LIBS
+              linker flags for LOCKD_DLM_CONTROL, overriding pkg-config
   NOTIFY_DBUS_CFLAGS
               C compiler flags for NOTIFY_DBUS, overriding pkg-config
   NOTIFY_DBUS_LIBS
@@ -1804,6 +1824,10 @@ Some influential environment variables:
   UDEV_CFLAGS C compiler flags for UDEV, overriding pkg-config
   UDEV_LIBS   linker flags for UDEV, overriding pkg-config
   PYTHON      the Python interpreter
+  EDITLINE_CFLAGS
+              C compiler flags for EDITLINE, overriding pkg-config
+  EDITLINE_LIBS
+              linker flags for EDITLINE, overriding pkg-config
 
 Use these variables to override the choices made by `configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -3067,7 +3091,7 @@ if test -z "$CFLAGS"; then :
 fi
 case "$host_os" in
 	linux*)
-		CLDFLAGS="${CLDFLAGS:"$LDFLAGS"} -Wl,--version-script,.export.sym"
+		CLDFLAGS="${CLDFLAGS-"$LDFLAGS"} -Wl,--version-script,.export.sym"
 		# equivalent to -rdynamic
 		ELDFLAGS="-Wl,--export-dynamic"
 		# FIXME Generate list and use --dynamic-list=.dlopen.sym
@@ -3079,6 +3103,7 @@ case "$host_os" in
 		BUILD_LVMPOLLD=no
 		LOCKDSANLOCK=no
 		LOCKDDLM=no
+		LOCKDDLM_CONTROL=no
 		ODIRECT=yes
 		DM_IOCTLS=yes
 		SELINUX=yes
@@ -3087,7 +3112,7 @@ case "$host_os" in
 		;;
 	darwin*)
 		CFLAGS="$CFLAGS -no-cpp-precomp -fno-common"
-		CLDFLAGS="${CLDFLAGS:"$LDFLAGS"}"
+		CLDFLAGS="${CLDFLAGS-"$LDFLAGS"}"
 		ELDFLAGS=
 		CLDWHOLEARCHIVE="-all_load"
 		CLDNOWHOLEARCHIVE=
@@ -3100,7 +3125,7 @@ case "$host_os" in
 		BLKDEACTIVATE=no
 		;;
 	*)
-		CLDFLAGS="${CLDFLAGS:"$LDFLAGS"}"
+		CLDFLAGS="${CLDFLAGS-"$LDFLAGS"}"
 		;;
 esac
 
@@ -6636,7 +6661,7 @@ $as_echo "#define _REENTRANT 1" >>confdefs.h
 
 ################################################################################
 for ac_func in ftruncate gethostname getpagesize gettimeofday localtime_r \
-  memchr memset mkdir mkfifo munmap nl_langinfo realpath rmdir setenv \
+  memchr memset mkdir mkfifo munmap nl_langinfo pselect realpath rmdir setenv \
   setlocale strcasecmp strchr strcspn strdup strerror strncasecmp strndup \
   strrchr strspn strstr strtol strtoul uname
 do :
@@ -6649,6 +6674,17 @@ _ACEOF
 
 else
   as_fn_error $? "bailing out" "$LINENO" 5
+fi
+done
+
+for ac_func in prlimit
+do :
+  ac_fn_c_check_func "$LINENO" "prlimit" "ac_cv_func_prlimit"
+if test "x$ac_cv_func_prlimit" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_PRLIMIT 1
+_ACEOF
+
 fi
 done
 
@@ -9562,7 +9598,7 @@ $as_echo_n "checking whether to include vdo... " >&6; }
 if test "${with_vdo+set}" = set; then :
   withval=$with_vdo; VDO=$withval
 else
-  VDO="none"
+  VDO="internal"
 fi
 
 
@@ -9715,11 +9751,70 @@ _ACEOF
 #AC_MSG_RESULT($VDO_LIB)
 
 ################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include writecache" >&5
+$as_echo_n "checking whether to include writecache... " >&6; }
+
+# Check whether --with-writecache was given.
+if test "${with_writecache+set}" = set; then :
+  withval=$with_writecache; WRITECACHE=$withval
+else
+  WRITECACHE="internal"
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $WRITECACHE" >&5
+$as_echo "$WRITECACHE" >&6; }
+
+case "$WRITECACHE" in
+ none) ;;
+ internal)
+
+$as_echo "#define WRITECACHE_INTERNAL 1" >>confdefs.h
+
+	;;
+ *) as_fn_error $? "--with-writecache parameter invalid" "$LINENO" 5 ;;
+esac
+
+################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to include integrity" >&5
+$as_echo_n "checking whether to include integrity... " >&6; }
+
+# Check whether --with-integrity was given.
+if test "${with_integrity+set}" = set; then :
+  withval=$with_integrity; INTEGRITY=$withval
+else
+  INTEGRITY="internal"
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $INTEGRITY" >&5
+$as_echo "$INTEGRITY" >&6; }
+
+case "$INTEGRITY" in
+ none) ;;
+ internal)
+
+$as_echo "#define INTEGRITY_INTERNAL 1" >>confdefs.h
+
+	;;
+ *) as_fn_error $? "--with-integrity parameter invalid" "$LINENO" 5 ;;
+esac
+
+################################################################################
 # Check whether --enable-readline was given.
 if test "${enable_readline+set}" = set; then :
   enableval=$enable_readline; READLINE=$enableval
 else
   READLINE=maybe
+fi
+
+
+################################################################################
+# Check whether --enable-editline was given.
+if test "${enable_editline+set}" = set; then :
+  enableval=$enable_editline; EDITLINE=$enableval
+else
+  EDITLINE=no
 fi
 
 
@@ -10936,6 +11031,97 @@ $as_echo "#define LOCKDDLM_SUPPORT 1" >>confdefs.h
 fi
 
 ################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lvmlockddlmcontrol" >&5
+$as_echo_n "checking whether to build lvmlockddlmcontrol... " >&6; }
+# Check whether --enable-lvmlockd-dlmcontrol was given.
+if test "${enable_lvmlockd_dlmcontrol+set}" = set; then :
+  enableval=$enable_lvmlockd_dlmcontrol; LOCKDDLM_CONTROL=$enableval
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDDLM_CONTROL" >&5
+$as_echo "$LOCKDDLM_CONTROL" >&6; }
+
+BUILD_LOCKDDLM_CONTROL=$LOCKDDLM_CONTROL
+
+if test "$BUILD_LOCKDDLM_CONTROL" = yes; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for LOCKD_DLM_CONTROL" >&5
+$as_echo_n "checking for LOCKD_DLM_CONTROL... " >&6; }
+
+if test -n "$LOCKD_DLM_CONTROL_CFLAGS"; then
+    pkg_cv_LOCKD_DLM_CONTROL_CFLAGS="$LOCKD_DLM_CONTROL_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libdlmcontrol >= 3.2\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libdlmcontrol >= 3.2") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LOCKD_DLM_CONTROL_CFLAGS=`$PKG_CONFIG --cflags "libdlmcontrol >= 3.2" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$LOCKD_DLM_CONTROL_LIBS"; then
+    pkg_cv_LOCKD_DLM_CONTROL_LIBS="$LOCKD_DLM_CONTROL_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libdlmcontrol >= 3.2\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libdlmcontrol >= 3.2") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LOCKD_DLM_CONTROL_LIBS=`$PKG_CONFIG --libs "libdlmcontrol >= 3.2" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        LOCKD_DLM_CONTROL_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libdlmcontrol >= 3.2" 2>&1`
+        else
+	        LOCKD_DLM_CONTROL_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libdlmcontrol >= 3.2" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$LOCKD_DLM_CONTROL_PKG_ERRORS" >&5
+
+	$bailout
+elif test $pkg_failed = untried; then
+     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	$bailout
+else
+	LOCKD_DLM_CONTROL_CFLAGS=$pkg_cv_LOCKD_DLM_CONTROL_CFLAGS
+	LOCKD_DLM_CONTROL_LIBS=$pkg_cv_LOCKD_DLM_CONTROL_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+	HAVE_LOCKD_DLM_CONTROL=yes
+fi
+
+$as_echo "#define LOCKDDLM_CONTROL_SUPPORT 1" >>confdefs.h
+
+	BUILD_LVMLOCKD=yes
+fi
+
+################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lvmlockd" >&5
 $as_echo_n "checking whether to build lvmlockd... " >&6; }
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $BUILD_LVMLOCKD" >&5
@@ -11659,6 +11845,7 @@ if test "$BUILD_LVMDBUSD" = yes; then
 
 
 
+
         if test -n "$PYTHON"; then
       # If the user set $PYTHON, use it and don't search something else.
       { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether $PYTHON version is >= 3" >&5
@@ -11694,7 +11881,7 @@ if ${am_cv_pathless_PYTHON+:} false; then :
   $as_echo_n "(cached) " >&6
 else
 
-	for am_cv_pathless_PYTHON in python python2 python3 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0 python2.7  python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0 none; do
+	for am_cv_pathless_PYTHON in  python3 python2 python 	python3.9 python3.8 python3.7 python3.6 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0 	python2.7 python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0  none; do
 	  test "$am_cv_pathless_PYTHON" = none && break
 	  prog="import sys
 # split strings by '.' and convert to numeric.  Append some zeros
@@ -11775,7 +11962,7 @@ $as_echo_n "checking for $am_display_PYTHON version... " >&6; }
 if ${am_cv_python_version+:} false; then :
   $as_echo_n "(cached) " >&6
 else
-  am_cv_python_version=`$PYTHON -c "import sys; sys.stdout.write(sys.version[:3])"`
+  am_cv_python_version=`$PYTHON -c "import sys; print('%u.%u' % sys.version_info[:2])"`
 fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $am_cv_python_version" >&5
 $as_echo "$am_cv_python_version" >&6; }
@@ -12524,6 +12711,61 @@ fi
 fi
 
 ################################################################################
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for BLKZEROOUT in sys/ioctl.h." >&5
+$as_echo_n "checking for BLKZEROOUT in sys/ioctl.h.... " >&6; }
+if ${ac_cv_have_blkzeroout+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+int bar(void) { return ioctl(0, BLKZEROOUT, 0); }
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_cv_have_blkzeroout=yes
+else
+  ac_cv_have_blkzeroout=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_have_blkzeroout" >&5
+$as_echo "$ac_cv_have_blkzeroout" >&6; }
+
+
+# Check whether --enable-blkzeroout was given.
+if test "${enable_blkzeroout+set}" = set; then :
+  enableval=$enable_blkzeroout; BLKZEROOUT=$enableval
+else
+  BLKZEROOUT=yes
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to use BLKZEROOUT for device zeroing" >&5
+$as_echo_n "checking whether to use BLKZEROOUT for device zeroing... " >&6; }
+if test "$BLKZEROOUT" = yes; then
+	if test $ac_cv_have_blkzeroout = yes; then :
+
+$as_echo "#define HAVE_BLKZEROOUT 1" >>confdefs.h
+
+else
+  BLKZEROOUT=no
+fi
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $BLKZEROOUT" >&5
+$as_echo "$BLKZEROOUT" >&6; }
+
+
+################################################################################
 RT_LIBS=
 HAVE_REALTIME=no
 if test "$REALTIME" = yes; then
@@ -12642,6 +12884,86 @@ fi
 
 done
 
+
+################################################################################
+if test "$EDITLINE" == yes; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for EDITLINE" >&5
+$as_echo_n "checking for EDITLINE... " >&6; }
+
+if test -n "$EDITLINE_CFLAGS"; then
+    pkg_cv_EDITLINE_CFLAGS="$EDITLINE_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libedit\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libedit") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_EDITLINE_CFLAGS=`$PKG_CONFIG --cflags "libedit" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$EDITLINE_LIBS"; then
+    pkg_cv_EDITLINE_LIBS="$EDITLINE_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libedit\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libedit") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_EDITLINE_LIBS=`$PKG_CONFIG --libs "libedit" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        EDITLINE_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libedit" 2>&1`
+        else
+	        EDITLINE_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libedit" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$EDITLINE_PKG_ERRORS" >&5
+
+	as_fn_error $? "libedit could not be found which is required for the --enable-readline option." "$LINENO" 5
+
+elif test $pkg_failed = untried; then
+     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	as_fn_error $? "libedit could not be found which is required for the --enable-readline option." "$LINENO" 5
+
+else
+	EDITLINE_CFLAGS=$pkg_cv_EDITLINE_CFLAGS
+	EDITLINE_LIBS=$pkg_cv_EDITLINE_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+
+$as_echo "#define EDITLINE_SUPPORT 1" >>confdefs.h
+
+fi
+fi
 
 ################################################################################
 if test "$READLINE" != no; then
@@ -13080,6 +13402,28 @@ fi
 $as_echo_n "checking whether to enable readline... " >&6; }
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $READLINE" >&5
 $as_echo "$READLINE" >&6; }
+
+if test "$EDITLINE" = yes; then
+	for ac_header in editline/readline.h editline/history.h
+do :
+  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
+ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
+if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
+  cat >>confdefs.h <<_ACEOF
+#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+else
+  hard_bailout
+fi
+
+done
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable editline" >&5
+$as_echo_n "checking whether to enable editline... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $EDITLINE" >&5
+$as_echo "$EDITLINE" >&6; }
 
 if test "$BUILD_CMIRRORD" = yes; then
 	for ac_func in atexit
@@ -13572,21 +13916,6 @@ _ACEOF
 
 
 ################################################################################
-
-# Check whether --with-default-data-alignment was given.
-if test "${with_default_data_alignment+set}" = set; then :
-  withval=$with_default_data_alignment; DEFAULT_DATA_ALIGNMENT=$withval
-else
-  DEFAULT_DATA_ALIGNMENT=1
-fi
-
-
-cat >>confdefs.h <<_ACEOF
-#define DEFAULT_DATA_ALIGNMENT $DEFAULT_DATA_ALIGNMENT
-_ACEOF
-
-
-################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for kernel interface choice" >&5
 $as_echo_n "checking for kernel interface choice... " >&6; }
 
@@ -13630,6 +13959,7 @@ _ACEOF
 
 
 ################################################################################
+
 
 
 
@@ -15149,8 +15479,8 @@ $as_echo "$as_me: WARNING: You should install latest cache_check vsn 0.7.0 to us
 fi
 
 if test -n "$VDO_CONFIGURE_WARN"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&5
-$as_echo "$as_me: WARNING: unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&2;}
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&5
+$as_echo "$as_me: WARNING: Unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&2;}
 fi
 
 

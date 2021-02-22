@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stddef.h> /* offsetof */
 
 #ifndef __GNUC__
 # define __typeof__ typeof
@@ -121,7 +122,9 @@ enum {
 
 	DM_DEVICE_SET_GEOMETRY,
 
-	DM_DEVICE_ARM_POLL
+	DM_DEVICE_ARM_POLL,
+
+	DM_DEVICE_GET_TARGET_VERSION
 };
 
 /*
@@ -162,20 +165,20 @@ struct dm_info {
 struct dm_deps {
 	uint32_t count;
 	uint32_t filler;
-	uint64_t device[0];
+	uint64_t device[];
 };
 
 struct dm_names {
 	uint64_t dev;
 	uint32_t next;		/* Offset to next struct from start of this struct */
-	char name[0];
+	char name[];
 };
 
 struct dm_versions {
 	uint32_t next;		/* Offset to next struct from start of this struct */
 	uint32_t version[3];
 
-	char name[0];
+	char name[];
 };
 
 int dm_get_library_version(char *version, size_t size);
@@ -1893,6 +1896,7 @@ int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
 #define DM_CACHE_FEATURE_WRITETHROUGH 0x00000002
 #define DM_CACHE_FEATURE_PASSTHROUGH  0x00000004
 #define DM_CACHE_FEATURE_METADATA2    0x00000008 /* cache v1.10 */
+#define DM_CACHE_FEATURE_NO_DISCARD_PASSDOWN 0x00000010
 
 struct dm_config_node;
 /*
@@ -2238,7 +2242,7 @@ int dm_bit_get_next(dm_bitset_t bs, int last_bit);
 int dm_bit_get_last(dm_bitset_t bs);
 int dm_bit_get_prev(dm_bitset_t bs, int last_bit);
 
-#define DM_BITS_PER_INT (sizeof(int) * CHAR_BIT)
+#define DM_BITS_PER_INT ((unsigned)sizeof(int) * CHAR_BIT)
 
 #define dm_bit(bs, i) \
    ((bs)[((i) / DM_BITS_PER_INT) + 1] & (0x1 << ((i) & (DM_BITS_PER_INT - 1))))
@@ -2467,7 +2471,7 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
  * contained in a structure of type t, return the containing structure.
  */
 #define dm_list_struct_base(v, t, head) \
-    ((t *)((const char *)(v) - (const char *)&((t *) 0)->head))
+    ((t *)((char *)(v) - offsetof(t, head)))
 
 /*
  * Given the address v of an instance of 'struct dm_list list' contained in
@@ -2480,7 +2484,7 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
  * return another element f.
  */
 #define dm_struct_field(v, t, e, f) \
-    (((t *)((uintptr_t)(v) - (uintptr_t)&((t *) 0)->e))->f)
+    (((t *)((uintptr_t)(v) - offsetof(t, e))->f)
 
 /*
  * Given the address v of a known element e in a known structure of type t,

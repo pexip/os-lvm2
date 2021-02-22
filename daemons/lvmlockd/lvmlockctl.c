@@ -280,13 +280,12 @@ static void format_info_line(char *line, char *r_name, char *r_type)
 
 static void format_info(void)
 {
-	char line[MAX_LINE];
-	char r_name[MAX_NAME+1];
-	char r_type[MAX_NAME+1];
+	char line[MAX_LINE] = { 0 };
+	char r_name[MAX_NAME+1] = { 0 };
+	char r_type[MAX_NAME+1] = { 0 };
 	int i, j;
 
 	j = 0;
-	memset(line, 0, sizeof(line));
 
 	for (i = 0; i < dump_len; i++) {
 		line[j++] = dump_buf[i];
@@ -326,6 +325,8 @@ static int _lvmlockd_result(daemon_reply reply, int *result)
 {
 	int reply_result;
 
+	*result = NO_LOCKD_RESULT;
+
 	if (reply.error) {
 		log_error("lvmlockd_result reply error %d", reply.error);
 		return 0;
@@ -337,7 +338,7 @@ static int _lvmlockd_result(daemon_reply reply, int *result)
 	}
 
 	reply_result = daemon_reply_int(reply, "op_result", NO_LOCKD_RESULT);
-	if (reply_result == -1000) {
+	if (reply_result == NO_LOCKD_RESULT) {
 		log_error("lvmlockd_result no op_result");
 		return 0;
 	}

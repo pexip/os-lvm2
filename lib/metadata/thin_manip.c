@@ -224,7 +224,7 @@ int thin_pool_feature_supported(const struct logical_volume *lv, int feature)
 int pool_metadata_min_threshold(const struct lv_segment *pool_seg)
 {
 	/*
-	 * Hardcoded minimal requirment for thin pool target.
+	 * Hardcoded minimal requirement for thin pool target.
 	 *
 	 * In the metadata LV there should be minimum from either 4MiB of free space
 	 * or at least 25% of free space, which applies when the size of thin pool's
@@ -243,51 +243,86 @@ int pool_metadata_min_threshold(const struct lv_segment *pool_seg)
 int pool_below_threshold(const struct lv_segment *pool_seg)
 {
 	struct cmd_context *cmd = pool_seg->lv->vg->cmd;
-	dm_percent_t percent;
+	struct lv_status_thin_pool *thin_pool_status = NULL;
 	dm_percent_t min_threshold = pool_metadata_min_threshold(pool_seg);
 	dm_percent_t threshold = DM_PERCENT_1 *
 		find_config_tree_int(cmd, activation_thin_pool_autoextend_threshold_CFG,
 				     lv_config_profile(pool_seg->lv));
+	int ret = 1;
 
-	/* Data */
-	if (!lv_thin_pool_percent(pool_seg->lv, 0, &percent))
+	if (threshold > DM_PERCENT_100)
+		threshold = DM_PERCENT_100;
+
+	/* FIXME: currently with FLUSH - this may block pool while holding VG lock
+	 * maybe try 2-phase version - 1st. check without commit
+	 * 2nd. quickly following with commit */
+	if (!lv_thin_pool_status(pool_seg->lv, 1, &thin_pool_status))
 		return_0;
 
-	if (percent > threshold || percent >= DM_PERCENT_100) {
+	if (thin_pool_status->thin_pool->fail |
+	    thin_pool_status->thin_pool->out_of_data_space |
+	    thin_pool_status->thin_pool->needs_check |
+	    thin_pool_status->thin_pool->error |
+	    thin_pool_status->thin_pool->read_only) {
+		log_warn("WARNING: Thin pool %s%s%s%s%s%s.",
+			 display_lvname(pool_seg->lv),
+			 thin_pool_status->thin_pool->fail ? " is failed" : "",
+			 thin_pool_status->thin_pool->out_of_data_space ? " is out of data space" : "",
+			 thin_pool_status->thin_pool->needs_check ? " needs check" : "",
+			 thin_pool_status->thin_pool->error ? " is erroring" : "",
+			 thin_pool_status->thin_pool->read_only ? " has read-only metadata" : "");
+		ret = 0;
+		if (thin_pool_status->thin_pool->fail)
+			goto out;
+	}
+
+	/* Data */
+
+	if (thin_pool_status->data_usage > threshold) {
 		log_debug("Threshold configured for free data space in "
 			  "thin pool %s has been reached (%s%% >= %s%%).",
 			  display_lvname(pool_seg->lv),
-			  display_percent(cmd, percent),
+			  display_percent(cmd, thin_pool_status->data_usage),
 			  display_percent(cmd, threshold));
-		return 0;
+		ret = 0;
 	}
 
 	/* Metadata */
-	if (!lv_thin_pool_percent(pool_seg->lv, 1, &percent))
-		return_0;
 
-
-	if (percent >= min_threshold) {
+	if (thin_pool_status->metadata_usage >= min_threshold) {
 		log_warn("WARNING: Remaining free space in metadata of thin pool %s "
 			 "is too low (%s%% >= %s%%). "
 			 "Resize is recommended.",
 			 display_lvname(pool_seg->lv),
-			 display_percent(cmd, percent),
+			 display_percent(cmd, thin_pool_status->metadata_usage),
 			 display_percent(cmd, min_threshold));
-		return 0;
+		ret = 0;
 	}
 
-
-	if (percent > threshold) {
+	if (thin_pool_status->metadata_usage > threshold) {
 		log_debug("Threshold configured for free metadata space in "
 			  "thin pool %s has been reached (%s%% > %s%%).",
 			  display_lvname(pool_seg->lv),
-			  display_percent(cmd, percent),
+			  display_percent(cmd, thin_pool_status->metadata_usage),
 			  display_percent(cmd, threshold));
-		return 0;
+		ret = 0;
 	}
 
-	return 1;
+	if ((thin_pool_status->thin_pool->transaction_id != pool_seg->transaction_id) &&
+	    (dm_list_empty(&pool_seg->thin_messages) ||
+	     ((thin_pool_status->thin_pool->transaction_id + 1) != pool_seg->transaction_id))) {
+		log_warn("WARNING: Thin pool %s has unexpected transaction id " FMTu64
+			 ", expecting " FMTu64 "%s.",
+			 display_lvname(pool_seg->lv),
+			 thin_pool_status->thin_pool->transaction_id,
+			 pool_seg->transaction_id,
+			 dm_list_empty(&pool_seg->thin_messages) ? "" : " or lower by 1");
+		ret = 0;
+	}
+out:
+	dm_pool_destroy(thin_pool_status->mem);
+
+	return ret;
 }
 
 /*
@@ -505,13 +540,13 @@ int update_pool_lv(struct logical_volume *lv, int activate)
 			 *   which Node has pool active.
 			 */
 			if (!activate_lv(lv->vg->cmd, lv)) {
-				init_dmeventd_monitor(monitored);
+				(void) init_dmeventd_monitor(monitored);
 				return_0;
 			}
 			if (!lv_is_active(lv)) {
-				init_dmeventd_monitor(monitored);
-				log_error("Cannot activate thin pool %s, perhaps skipped in lvm.conf volume_list?",
-					  display_lvname(lv));
+				(void) init_dmeventd_monitor(monitored);
+				log_error("Cannot activate thin pool %s%s", display_lvname(lv),
+					  activation() ? ", perhaps skipped in lvm.conf volume_list?" : ".");
 				return 0;
 			}
 		} else
@@ -529,6 +564,12 @@ int update_pool_lv(struct logical_volume *lv, int activate)
 				log_error("Failed to resume %s.", display_lvname(lv));
 				ret = 0;
 			}
+		}
+
+		if (!sync_local_dev_names(lv->vg->cmd)) {
+			log_error("Failed to sync local devices LV %s.",
+				  display_lvname(lv));
+			ret = 0;
 		}
 
 		if (activate &&
@@ -579,21 +620,15 @@ static uint32_t _estimate_chunk_size(uint32_t data_extents, uint32_t extent_size
 				     uint64_t metadata_size, int attr)
 {
 	uint32_t chunk_size = _estimate_size(data_extents, extent_size, metadata_size);
+	const uint32_t BIG_CHUNK =  2 * DEFAULT_THIN_POOL_CHUNK_SIZE_ALIGNED - 1;
 
-	if (attr & THIN_FEATURE_BLOCK_SIZE) {
-		/* Round up to 64KB */
-		chunk_size += DM_THIN_MIN_DATA_BLOCK_SIZE - 1;
-		chunk_size &= ~(uint32_t)(DM_THIN_MIN_DATA_BLOCK_SIZE - 1);
-	} else {
-		/* Round up to nearest power of 2 */
-		chunk_size--;
-		chunk_size |= chunk_size >> 1;
-		chunk_size |= chunk_size >> 2;
-		chunk_size |= chunk_size >> 4;
-		chunk_size |= chunk_size >> 8;
-		chunk_size |= chunk_size >> 16;
-		chunk_size++;
-	}
+	if ((attr & THIN_FEATURE_BLOCK_SIZE) &&
+	    (chunk_size > BIG_CHUNK) &&
+	    (chunk_size < (UINT32_MAX - BIG_CHUNK)))
+		chunk_size = (chunk_size + BIG_CHUNK) & ~BIG_CHUNK;
+	else
+		/* Round up to nearest power of 2 of 32-bit */
+		chunk_size = 1 << (32 - clz(chunk_size - 1));
 
 	if (chunk_size < DM_THIN_MIN_DATA_BLOCK_SIZE)
 		chunk_size = DM_THIN_MIN_DATA_BLOCK_SIZE;
@@ -855,6 +890,7 @@ int check_new_thin_pool(const struct logical_volume *pool_lv)
 {
 	struct cmd_context *cmd = pool_lv->vg->cmd;
 	uint64_t transaction_id;
+	struct lv_status_thin_pool *status = NULL;
 
 	/* For transaction_id check LOCAL activation is required */
 	if (!activate_lv(cmd, pool_lv)) {
@@ -864,11 +900,14 @@ int check_new_thin_pool(const struct logical_volume *pool_lv)
 	}
 
 	/* With volume lists, check pool really is locally active */
-	if (!lv_thin_pool_transaction_id(pool_lv, &transaction_id)) {
+	if (!lv_thin_pool_status(pool_lv, 1, &status)) {
 		log_error("Cannot read thin pool %s transaction id locally, perhaps skipped in lvm.conf volume_list?",
 			  display_lvname(pool_lv));
 		return 0;
 	}
+
+	transaction_id = status->thin_pool->transaction_id;
+	dm_pool_destroy(status->mem);
 
 	/* Require pool to have same transaction_id as new  */
 	if (first_seg(pool_lv)->transaction_id != transaction_id) {
@@ -915,4 +954,16 @@ int validate_thin_pool_chunk_size(struct cmd_context *cmd, uint32_t chunk_size)
 	}
 
 	return r;
+}
+
+uint64_t estimate_thin_pool_metadata_size(uint32_t data_extents, uint32_t extent_size, uint32_t chunk_size)
+{
+	uint64_t sz = _estimate_metadata_size(data_extents, extent_size, chunk_size);
+
+	if (sz > (2 * DEFAULT_THIN_POOL_MAX_METADATA_SIZE))
+		sz = 2 * DEFAULT_THIN_POOL_MAX_METADATA_SIZE;
+	else if (sz < (2 * DEFAULT_THIN_POOL_MIN_METADATA_SIZE))
+		sz = 2 * DEFAULT_THIN_POOL_MIN_METADATA_SIZE;
+
+	return sz;
 }

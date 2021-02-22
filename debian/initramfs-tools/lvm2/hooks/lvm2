@@ -33,6 +33,6 @@ copy_exec /sbin/dmsetup
 copy_exec /sbin/lvm
 ln -s lvm ${DESTDIR}/sbin/vgchange
 
-for x in dm_mod dm_snapshot dm_mirror dm_raid; do
+for x in dm_mod dm_snapshot dm_mirror dm_raid raid0 raid1 raid10 raid456; do
 	manual_add_modules ${x}
 done

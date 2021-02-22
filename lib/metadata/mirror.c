@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2008 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2008,2018 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -161,8 +161,7 @@ uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
 				     uint32_t extent_size, uint32_t extents,
 				     uint32_t region_size, int internal, int clustered)
 {
-	uint64_t region_max, region_min;
-	uint32_t region_min_pow2;
+	uint64_t region_max;
 
 	region_max = (uint64_t) extents * extent_size;
 
@@ -175,44 +174,6 @@ uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
 			log_verbose("Using reduced mirror region size of %s",
 				    display_size(cmd, region_size));
 	}
-
-#ifdef CMIRROR_REGION_COUNT_LIMIT
-	if (clustered) {
-		/*
-		 * The CPG code used by cluster mirrors can only handle a
-		 * payload of < 1MB currently.  (This deficiency is tracked by
-		 * http://bugzilla.redhat.com/682771.)  The region size for cluster
-		 * mirrors must be restricted in such a way as to limit the
-		 * size of the bitmap to < 512kB, because there are two bitmaps
-		 * which get sent around during checkpointing while a cluster
-		 * mirror starts up.  Ergo, the number of regions must not
-		 * exceed 512k * 8.  We also need some room for the other
-		 * checkpointing structures as well, so we reduce by another
-		 * factor of two.
-		 *
-		 * This code should be removed when the CPG restriction is
-		 * lifted.
-		 */
-		region_min = region_max / CMIRROR_REGION_COUNT_LIMIT;
-		if (region_min > UINT32_MAX / 2) {
-			log_error("Can't find proper region size for too big mirror.");
-			return 0;
-		}
-		region_min_pow2 = UINT64_C(1) << (1 + 31 - clz(region_min));
-
-		if (region_size < region_min_pow2) {
-			if (internal)
-				log_print_unless_silent("Increasing mirror region size from %s to %s",
-							display_size(cmd, region_size),
-							display_size(cmd, region_min_pow2));
-			else
-				log_verbose("Increasing mirror region size from %s to %s",
-					    display_size(cmd, region_size),
-					    display_size(cmd, region_min_pow2));
-			region_size = region_min_pow2;
-		}
-	}
-#endif /* CMIRROR_REGION_COUNT_LIMIT */
 
 	return region_size;
 }
@@ -305,7 +266,6 @@ static int _write_log_header(struct cmd_context *cmd, struct logical_volume *lv)
 	dev_set_last_byte(dev, sizeof(log_header));
 
 	if (!dev_write_bytes(dev, UINT64_C(0), sizeof(log_header), &log_header)) {
-		dev_unset_last_byte(dev);
 		log_error("Failed to write log header to %s.", name);
 		return 0;
 	}
@@ -365,8 +325,8 @@ static int _init_mirror_log(struct cmd_context *cmd,
 
 	if (activation()) {
 		if (!wipe_lv(log_lv, (struct wipe_params)
-			     { .do_zero = 1, .zero_sectors = log_lv->size,
-			       .zero_value = in_sync ? -1 : 0 })) {
+			     { .zero_sectors = log_lv->size, .do_zero = 1,
+			       .zero_value = in_sync ? 0xff : 0 })) {
 			log_error("Aborting. Failed to wipe mirror log.");
 			goto deactivate_and_revert_new_lv;
 		}
@@ -778,7 +738,7 @@ static int _split_mirror_images(struct logical_volume *lv,
 
 	act = lv_is_active(lv_lock_holder(lv));
 
-	if (act && (!deactivate_lv(cmd, new_lv) || !_activate_lv_like_model(lv, new_lv))) {
+	if (act && !_activate_lv_like_model(lv, new_lv)) {
 		log_error("Failed to rename newly split LV in the kernel");
 		return 0;
 	}
@@ -1164,163 +1124,6 @@ int collapse_mirrored_lv(struct logical_volume *lv)
 	return 1;
 }
 
-#if 0
-/* FIXME: reconfigure_mirror_images: remove this code? */
-static int _get_mirror_fault_policy(struct cmd_context *cmd __attribute__((unused)),
-				   int log_policy)
-{
-	const char *policy = NULL;
-/*
-	if (log_policy)
-		policy = find_config_tree_str(cmd, activation_mirror_log_fault_policy_CFG);
-	else {
-		policy = find_config_tree_str(cmd, activation_mirror_image_fault_policy_CFG);
-		if (!policy)
-			policy = find_config_tree_str(cmd, activation_mirror_device_fault_policy_CFG);
-	}
-*/
-	if (!strcmp(policy, "remove"))
-		return MIRROR_REMOVE;
-	else if (!strcmp(policy, "allocate"))
-		return MIRROR_ALLOCATE;
-	else if (!strcmp(policy, "allocate_anywhere"))
-		return MIRROR_ALLOCATE_ANYWHERE;
-
-	if (log_policy)
-		log_error("Bad activation/mirror_log_fault_policy");
-	else
-		log_error("Bad activation/mirror_device_fault_policy");
-
-	return MIRROR_REMOVE;
-}
-
-static int _get_mirror_log_fault_policy(struct cmd_context *cmd)
-{
-	return _get_mirror_fault_policy(cmd, 1);
-}
-
-static int _get_mirror_device_fault_policy(struct cmd_context *cmd)
-{
-	return _get_mirror_fault_policy(cmd, 0);
-}
-
-/*
- * replace_mirror_images
- * @mirrored_seg: segment (which may be linear now) to restore
- * @num_mirrors: number of copies we should end up with
- * @replace_log: replace log if not present
- * @in_sync: was the original mirror in-sync?
- *
- * in_sync will be set to 0 if new mirror devices are being added
- * In other words, it is only useful if the log (and only the log)
- * is being restored.
- *
- * Returns: 0 on failure, 1 on reconfig, -1 if no reconfig done
- */
-static int _replace_mirror_images(struct lv_segment *mirrored_seg,
-				 uint32_t num_mirrors,
-				 int log_policy, int in_sync)
-{
-	int r = -1;
-	struct logical_volume *lv = mirrored_seg->lv;
-
-	/* FIXME: Use lvconvert rather than duplicating its code */
-
-	if (mirrored_seg->area_count < num_mirrors) {
-		log_warn("WARNING: Failed to replace mirror device in %s.",
-			 display_lvname(mirrored_seg->lv);
-
-		if ((mirrored_seg->area_count > 1) && !mirrored_seg->log_lv)
-			log_warn("WARNING: Use 'lvconvert -m %d %s --corelog' to replace failed devices.",
-				 num_mirrors - 1, display_lvname(lv));
-		else
-			log_warn("WARNING: Use 'lvconvert -m %d %s' to replace failed devices.",
-				 num_mirrors - 1, display_lvname(lv));
-		r = 0;
-
-		/* REMEMBER/FIXME: set in_sync to 0 if a new mirror device was added */
-		in_sync = 0;
-	}
-
-	/*
-	 * FIXME: right now, we ignore the allocation policy specified to
-	 * allocate the new log.
-	 */
-	if ((mirrored_seg->area_count > 1) && !mirrored_seg->log_lv &&
-	    (log_policy != MIRROR_REMOVE)) {
-		log_warn("WARNING: Failed to replace mirror log device in %s.",
-			 display_lvname(lv));
-
-		log_warn("WARNING: Use 'lvconvert -m %d %s' to replace failed devices.",
-			 mirrored_seg->area_count - 1 , display_lvname(lv));
-		r = 0;
-	}
-
-	return r;
-}
-
-int reconfigure_mirror_images(struct lv_segment *mirrored_seg, uint32_t num_mirrors,
-			      struct dm_list *removable_pvs, unsigned remove_log)
-{
-	int r;
-	int in_sync;
-	int log_policy, dev_policy;
-	uint32_t old_num_mirrors = mirrored_seg->area_count;
-	int had_log = (mirrored_seg->log_lv) ? 1 : 0;
-
-	/* was the mirror in-sync before problems? */
-	in_sync = _mirrored_lv_in_sync(mirrored_seg->lv);
-
-	/*
-	 * While we are only removing devices, we can have sync set.
-	 * Setting this is only useful if we are moving to core log
-	 * otherwise the disk log will contain the sync information
-	 */
-	init_mirror_in_sync(in_sync);
-
-	r = _remove_mirror_images(mirrored_seg->lv, old_num_mirrors - num_mirrors,
-				  is_mirror_image_removable, removable_pvs,
-				  remove_log, 0, NULL, 0);
-	if (!r)
-		/* Unable to remove bad devices */
-		return 0;
-
-	log_warn("WARNING: Bad device removed from mirror volume %s.",
-		  display_lvname(mirrored_seg->lv));
-
-	log_policy = _get_mirror_log_fault_policy(mirrored_seg->lv->vg->cmd);
-	dev_policy = _get_mirror_device_fault_policy(mirrored_seg->lv->vg->cmd);
-
-	r = _replace_mirror_images(mirrored_seg,
-				  (dev_policy != MIRROR_REMOVE) ?
-				  old_num_mirrors : num_mirrors,
-				  log_policy, in_sync);
-
-	if (!r)
-		/* Failed to replace device(s) */
-		log_warn("WARNING: Unable to find substitute device for mirror volume %s.",
-			 display_lvname(mirrored_seg->lv));
-	else if (r > 0)
-		/* Success in replacing device(s) */
-		log_warn("WARNING: Mirror volume %s restored - substitute for failed device found.",
-			 display_lvname(mirrored_seg->lv));
-	else
-		/* Bad device removed, but not replaced because of policy */
-		if (mirrored_seg->area_count == 1) {
-			log_warn("WARNING: Mirror volume %s converted to linear due to device failure.",
-				  display_lvname(mirrored_seg->lv);
-		} else if (had_log && !mirrored_seg->log_lv) {
-			log_warn("WARNING: Mirror volume %s disk log removed due to device failure.",
-				  display_lvname(mirrored_seg->lv));
-		}
-	/*
-	 * If we made it here, we at least removed the bad device.
-	 * Consider this success.
-	 */
-	return 1;
-}
-#endif
-
 static int _create_mimage_lvs(struct alloc_handle *ah,
 			      uint32_t num_mirrors,
 			      uint32_t stripes,
@@ -1519,10 +1322,8 @@ struct dm_list *lvs_using_lv(struct cmd_context *cmd, struct volume_group *vg,
 			  struct logical_volume *lv)
 {
 	struct dm_list *lvs;
-	struct logical_volume *lv1;
-	struct lv_list *lvl, *lvl1;
-	struct lv_segment *seg;
-	uint32_t s;
+	struct lv_list *lvl;
+	struct seg_list *sl;
 
 	if (!(lvs = dm_pool_alloc(cmd->mem, sizeof(*lvs)))) {
 		log_error("lvs list alloc failed.");
@@ -1531,29 +1332,14 @@ struct dm_list *lvs_using_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 	dm_list_init(lvs);
 
-	/* Loop through all LVs except the one supplied */
-	dm_list_iterate_items(lvl1, &vg->lvs) {
-		lv1 = lvl1->lv;
-		if (lv1 == lv)
-			continue;
-
+	dm_list_iterate_items(sl, &lv->segs_using_this_lv) {
 		/* Find whether any segment points at the supplied LV */
-		dm_list_iterate_items(seg, &lv1->segments) {
-			for (s = 0; s < seg->area_count; s++) {
-				if (seg_type(seg, s) != AREA_LV ||
-				    seg_lv(seg, s) != lv)
-					continue;
-				if (!(lvl = dm_pool_alloc(cmd->mem, sizeof(*lvl)))) {
-					log_error("lv_list alloc failed.");
-					return NULL;
-				}
-				lvl->lv = lv1;
-				dm_list_add(lvs, &lvl->list);
-				goto next_lv;
-			}
+		if (!(lvl = dm_pool_alloc(cmd->mem, sizeof(*lvl)))) {
+			log_error("lv_list alloc failed.");
+			return NULL;
 		}
-	      next_lv:
-		;
+		lvl->lv = sl->seg->lv;
+		dm_list_add(lvs, &lvl->list);
 	}
 
 	return lvs;
@@ -1908,8 +1694,12 @@ int add_mirror_log(struct cmd_context *cmd, struct logical_volume *lv,
 	}
 
 	if (log_count > 1) {
-		log_err("Log type \"mirrored\" is DEPRECATED. Use RAID1 LV or disk log instead.");
-		return 0;
+		if (find_config_tree_bool(cmd, global_support_mirrored_mirror_log_CFG, NULL))
+			log_warn("Log type \"mirrored\" creation/conversion is not supported for regular operation!");
+		else {
+			log_err("Log type \"mirrored\" is DEPRECATED. Use RAID1 LV or disk log instead.");
+			return 0;
+		}
 	}
 
 	if (!(parallel_areas = build_parallel_areas_from_lv(lv, 0, 0)))
@@ -2050,18 +1840,6 @@ int lv_add_mirrors(struct cmd_context *cmd, struct logical_volume *lv,
 	if (!mirrors && !log_count) {
 		log_error("No conversion is requested.");
 		return 0;
-	}
-
-	if (lv->vg->lock_type && !strcmp(lv->vg->lock_type, "dlm") && cmd->lockd_lv_sh) {
-		if (!cluster_mirror_is_available(cmd)) {
-			log_error("Shared cluster mirrors are not available.");
-			return 0;
-		}
-
-		if (log_count > 1) {
-			log_error("Log type, \"mirrored\", is unavailable to cluster mirrors.");
-			return 0;
-		}
 	}
 
 	/* For corelog mirror, activation code depends on

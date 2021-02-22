@@ -35,17 +35,12 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 
 	params->total++;
 
-	if (vg && vg_is_exported(vg)) {
-		log_error("Volume group %s is exported", vg->name);
-		goto bad;
-	}
-
 	/*
 	 * The primary location of this check is in vg_write(), but it needs
 	 * to be copied here to prevent the pv_write() which is called before
 	 * the vg_write().
 	 */
-	if (vg && lvmcache_found_duplicate_pvs() && vg_has_duplicate_pvs(vg)) {
+	if (vg && lvmcache_has_duplicate_devs() && vg_has_duplicate_pvs(vg)) {
 	    	if (!find_config_tree_bool(vg->cmd, devices_allow_changes_with_duplicate_pvs_CFG, NULL)) {
 			log_error("Cannot update volume group %s with duplicate PV devices.",
 				  vg->name);
@@ -122,9 +117,8 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 	 * Convert sh to ex.
 	 */
 	if (is_orphan(pv)) {
-		if (!lockd_gl(cmd, "ex", 0))
+		if (!lock_global_convert(cmd, "ex"))
 			return_ECMD_FAILED;
-		cmd->lockd_gl_disable = 1;
 	}
 
 	if (tagargs) {
@@ -236,26 +230,11 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
-	if (!argc) {
-		/*
-		 * Take the global lock here so the lvmcache remains
-		 * consistent across orphan/non-orphan vg locks.  If we don't
-		 * take the lock here, pvs with 0 mdas in a non-orphan VG will
-		 * be processed twice.
-		 */
-		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_WRITE, NULL)) {
-			log_error("Unable to obtain global lock.");
-			ret = ECMD_FAILED;
-			goto out;
-		}
-	}
-
 	set_pv_notify(cmd);
 
-	ret = process_each_pv(cmd, argc, argv, NULL, 0, READ_FOR_UPDATE | READ_ALLOW_EXPORTED, handle, _pvchange_single);
+	clear_hint_file(cmd);
 
-	if (!argc)
-		unlock_vg(cmd, NULL, VG_GLOBAL);
+	ret = process_each_pv(cmd, argc, argv, NULL, 0, READ_FOR_UPDATE, handle, _pvchange_single);
 
 	log_print_unless_silent("%d physical volume%s changed / %d physical volume%s not changed",
 				params.done, params.done == 1 ? "" : "s",
