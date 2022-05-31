@@ -13,15 +13,14 @@
 
 #include "libdaemon/client/config-util.h"
 #include "libdaemon/client/daemon-client.h"
+#include "lib/metadata/metadata-exported.h" /* is_lockd_type() */
 
 #define LOCKD_SANLOCK_LV_NAME "lvmlock"
-
-/* lockd_gl flags */
-#define LDGL_UPDATE_NAMES         0x00000001
 
 /* lockd_lv flags */
 #define LDLV_MODE_NO_SH           0x00000001
 #define LDLV_PERSISTENT           0x00000002
+#define LDLV_SH_EXISTS_OK         0x00000004
 
 /* lvmlockd result flags */
 #define LD_RF_NO_LOCKSPACES     0x00000001
@@ -29,6 +28,7 @@
 #define LD_RF_WARN_GL_REMOVED   0x00000004
 #define LD_RF_DUP_GL_LS         0x00000008
 #define LD_RF_NO_LM		0x00000010
+#define LD_RF_SH_EXISTS		0x00000020
 
 /* lockd_state flags */
 #define LDST_EX			0x00000001
@@ -40,6 +40,9 @@
 #define LDST_FAIL		(LDST_FAIL_REQUEST | LDST_FAIL_NOLS | LDST_FAIL_STARTING | LDST_FAIL_OTHER)
 
 #ifdef LVMLOCKD_SUPPORT
+
+struct lvresize_params;
+struct lvcreate_params;
 
 /* lvmlockd connection and communication */
 
@@ -63,14 +66,14 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 
 /* start and stop the lockspace for a vg */
 
-int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init);
+int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init, int *exists);
 int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg);
 int lockd_start_wait(struct cmd_context *cmd);
 
 /* locking */
 
-int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type);
-int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags);
+int lockd_global_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type);
+int lockd_global(struct cmd_context *cmd, const char *def_mode);
 int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	     uint32_t flags, uint32_t *lockd_state);
 int lockd_vg_update(struct volume_group *vg);
@@ -80,6 +83,8 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lock_args, const char *def_mode, uint32_t flags);
 int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	     const char *def_mode, uint32_t flags);
+int lockd_lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
+	     const char *def_mode, uint32_t flags, struct lvresize_params *lp);
 
 /* lvcreate/lvremove use init/free */
 
@@ -95,6 +100,8 @@ const char *lockd_running_lock_type(struct cmd_context *cmd, int *found_multiple
 int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg);
 
 int lockd_lv_uses_lock(struct logical_volume *lv);
+
+int lockd_lv_refresh(struct cmd_context *cmd, struct lvresize_params *lp);
 
 #else /* LVMLOCKD_SUPPORT */
 
@@ -148,7 +155,7 @@ static inline int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_g
 	return 1;
 }
 
-static inline int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init)
+static inline int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init, int *exists)
 {
 	return 0;
 }
@@ -163,7 +170,7 @@ static inline int lockd_start_wait(struct cmd_context *cmd)
 	return 0;
 }
 
-static inline int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type)
+static inline int lockd_global_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type)
 {
 	/*
 	 * When lvm is built without lvmlockd support, creating a VG with
@@ -176,7 +183,7 @@ static inline int lockd_gl_create(struct cmd_context *cmd, const char *def_mode,
 	return 1;
 }
 
-static inline int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
+static inline int lockd_global(struct cmd_context *cmd, const char *def_mode)
 {
 	return 1;
 }
@@ -202,6 +209,12 @@ static inline int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg
 
 static inline int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	     const char *def_mode, uint32_t flags)
+{
+	return 1;
+}
+
+static inline int lockd_lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
+	     const char *def_mode, uint32_t flags, struct lvresize_params *lp)
 {
 	return 1;
 }
@@ -236,6 +249,11 @@ static inline int handle_sanlock_lv(struct cmd_context *cmd, struct volume_group
 }
 
 static inline int lockd_lv_uses_lock(struct logical_volume *lv)
+{
+	return 0;
+}
+
+static inline int lockd_lv_refresh(struct cmd_context *cmd, struct lvresize_params *lp)
 {
 	return 0;
 }

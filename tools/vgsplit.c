@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2009,2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2019 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -123,6 +123,10 @@ static int _move_lvs(struct volume_group *vg_from, struct volume_group *vg_to)
 
 		if (lv_is_thin_pool(lv) ||
 		    lv_is_thin_volume(lv))
+			continue;
+
+		if (lv_is_vdo_pool(lv) ||
+		    lv_is_vdo(lv))
 			continue;
 
 		if (lv_is_cache(lv) || lv_is_cache_pool(lv))
@@ -374,156 +378,127 @@ static int _move_thins(struct volume_group *vg_from,
 	return 1;
 }
 
-static int _move_cache(struct volume_group *vg_from,
-		       struct volume_group *vg_to)
+static int _move_vdos(struct volume_group *vg_from,
+		      struct volume_group *vg_to)
 {
-	int is_moving;
 	struct dm_list *lvh, *lvht;
-	struct logical_volume *lv, *data, *meta, *orig;
-	struct lv_segment *seg, *cache_seg;
+	struct logical_volume *lv, *vdo_data_lv;
+	struct lv_segment *seg;
 
 	dm_list_iterate_safe(lvh, lvht, &vg_from->lvs) {
 		lv = dm_list_item(lvh, struct lv_list)->lv;
-		data = meta = orig = NULL;
-		seg = first_seg(lv);
 
-		if (!lv_is_cache(lv) && !lv_is_cache_pool(lv))
-			continue;
+		if (lv_is_vdo(lv)) {
+			seg = first_seg(lv);
+			vdo_data_lv = seg_lv(first_seg(seg_lv(seg, 0)), 0);
 
-		/*
-		 * FIXME: The code seems to move cache LVs fine, but it
-		 *        hasn't been well tested and it causes problems
-		 *        when just splitting PVs that don't contain
-		 *        cache LVs.
-		 * Waiting for next release before fixing and enabling.
-		 */
-		log_error("Unable to split VG while it contains cache LVs");
-		return 0;
+			/* Ignore, if no allocations on PVs of @vg_to */
+			if (!lv_is_on_pvs(vdo_data_lv, &vg_to->pvs))
+				continue;
 
-		/* NOTREACHED */
-
-		if (lv_is_cache(lv)) {
-			orig = seg_lv(seg, 0);
-			data = seg_lv(first_seg(seg->pool_lv), 0);
-			meta = first_seg(seg->pool_lv)->metadata_lv;
-			/* Ensure all components are coming along */
-			is_moving = _lv_is_in_vg(vg_to, orig);
-		} else {
-			if (!dm_list_empty(&seg->lv->segs_using_this_lv) &&
-			    !(cache_seg = get_only_segment_using_this_lv(seg->lv)))
+			if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 				return_0;
-			orig = seg_lv(cache_seg, 0);
-			data = seg_lv(seg, 0);
-			meta = seg->metadata_lv;
+		} else if (lv_is_vdo_pool(lv)) {
+			seg = first_seg(lv);
+			vdo_data_lv = seg_lv(seg, 0);
 
-			if (_lv_is_in_vg(vg_to, data) ||
-			    _lv_is_in_vg(vg_to, meta))
-				is_moving = 1;
+			/* Ignore, if no allocations on PVs of @vg_to */
+			if (!lv_is_on_pvs(vdo_data_lv, &vg_to->pvs))
+				continue;
+
+			if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
+				return_0;
 		}
-
-		if (!lv_is_on_pvs(data, &vg_to->pvs))
-			continue;
-
-		if (!lv_is_on_pvs(meta, &vg_to->pvs))
-			continue;
-
-		if (orig && (_lv_is_in_vg(vg_to, orig) != is_moving)) {
-			log_error("Can't split %s and its origin (%s)"
-				  " into separate VGs", lv->name, orig->name);
-			return 0;
-		}
-
-		if (data && (_lv_is_in_vg(vg_to, data) != is_moving)) {
-			log_error("Can't split %s and its cache pool"
-				  " data LV (%s) into separate VGs",
-				  lv->name, data->name);
-			return 0;
-		}
-
-		if (meta && (_lv_is_in_vg(vg_to, meta) != is_moving)) {
-			log_error("Can't split %s and its cache pool"
-				  " metadata LV (%s) into separate VGs",
-				  lv->name, meta->name);
-			return 0;
-		}
-		if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
-			return_0;
 	}
 
 	return 1;
 }
 
-/*
- * Create or open the destination of the vgsplit operation.
- * Returns
- * - non-NULL: VG handle w/VG lock held
- * - NULL: no VG lock held
- */
-static struct volume_group *_vgsplit_to(struct cmd_context *cmd,
-					const char *vg_name_to,
-					int *existing_vg)
+static int _move_cache(struct volume_group *vg_from,
+		       struct volume_group *vg_to)
 {
-	struct volume_group *vg_to = NULL;
+	int is_moving;
+	struct dm_list *lvh, *lvht;
+	struct logical_volume *lv, *data = NULL, *meta = NULL, *orig = NULL, *fast = NULL;
+	struct lv_segment *seg, *cache_seg;
 
-	log_verbose("Checking for new volume group \"%s\"", vg_name_to);
-	/*
-	 * First try to create a new VG.  If we cannot create it,
-	 * and we get FAILED_EXIST (we will not be holding a lock),
-	 * a VG must already exist with this name.  We then try to
-	 * read the existing VG - the vgsplit will be into an existing VG.
-	 *
-	 * Otherwise, if the lock was successful, it must be the case that
-	 * we obtained a WRITE lock and could not find the vgname in the
-	 * system.  Thus, the split will be into a new VG.
-	 */
-	vg_to = vg_lock_and_create(cmd, vg_name_to);
-	if (vg_read_error(vg_to) == FAILED_LOCKING) {
-		log_error("Can't get lock for %s", vg_name_to);
-		release_vg(vg_to);
-		return NULL;
-	}
-	if (vg_read_error(vg_to) == FAILED_EXIST) {
-		*existing_vg = 1;
-		release_vg(vg_to);
-		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0);
+	dm_list_iterate_safe(lvh, lvht, &vg_from->lvs) {
+		lv = dm_list_item(lvh, struct lv_list)->lv;
+		seg = first_seg(lv);
 
-		if (vg_read_error(vg_to)) {
-			release_vg(vg_to);
-			return_NULL;
+		if (!lv_is_cache(lv) && !lv_is_writecache(lv) && !lv_is_cache_pool(lv) && !lv_is_cache_vol(lv))
+			continue;
+
+		if (lv_is_cache(lv)) {
+			orig = seg_lv(seg, 0);
+			seg = first_seg(seg->pool_lv);
+
+		} else if (lv_is_writecache(lv)) {
+			orig = seg_lv(seg, 0);
+			seg = first_seg(seg->writecache);
+
+		} else if (lv_is_cache_pool(lv) || lv_is_cache_vol(lv)) {
+			orig = NULL;
+			if (!dm_list_empty(&seg->lv->segs_using_this_lv)) {
+				if (!(cache_seg = get_only_segment_using_this_lv(seg->lv)))
+					return_0;
+				orig = seg_lv(cache_seg, 0);
+			}
 		}
 
-	} else if (vg_read_error(vg_to) == SUCCESS) {
-		*existing_vg = 0;
+		if (lv_is_cache_vol(lv)) {
+			fast = lv;
+		} else {
+			data = seg_lv(seg, 0);
+			meta = seg->metadata_lv;
+		}
+
+		if (data && meta) {
+			if ((orig && !lv_is_on_pvs(orig, &vg_to->pvs)) &&
+			    !lv_is_on_pvs(data, &vg_to->pvs) &&
+			    !lv_is_on_pvs(meta, &vg_to->pvs))
+				continue;
+		}
+		
+		if (fast && orig &&
+		    !lv_is_on_pvs(orig, &vg_to->pvs) && !lv_is_on_pvs(fast, &vg_to->pvs))
+			continue;
+
+		/* Ensure all components are coming along */
+		if (orig && data && meta) {
+			is_moving = _lv_is_in_vg(vg_to, orig);
+
+			if (_lv_is_in_vg(vg_to, data) != is_moving) {
+				log_error("Cannot split cache origin %s and its cache pool data %s "
+					  "into separate VGs.",
+					  display_lvname(orig), display_lvname(data));
+				return 0;
+			}
+
+			if (_lv_is_in_vg(vg_to, meta) != is_moving) {
+				log_error("Cannot split cache origin %s and its cache pool metadata %s "
+					  "into separate VGs.",
+					  display_lvname(orig), display_lvname(meta));
+				return 0;
+			}
+
+		} else if (data && meta && (_lv_is_in_vg(vg_to, data) != _lv_is_in_vg(vg_to, meta))) {
+			log_error("Cannot split cache pool data %s and its metadata %s "
+				  "into separate VGs.",
+				  display_lvname(data), display_lvname(meta));
+			return 0;
+
+		} else if (orig && fast && (_lv_is_in_vg(vg_to, orig) != _lv_is_in_vg(vg_to, fast))) {
+			log_error("Cannot split cache origin %s and its cachevol %s into separate VGs.",
+				  display_lvname(orig), display_lvname(fast));
+			return 0;
+		}
+
+		if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
+			return_0;
 	}
-	return vg_to;
-}
 
-/*
- * Open the source of the vgsplit operation.
- * Returns
- * - non-NULL: VG handle w/VG lock held
- * - NULL: no VG lock held
- */
-static struct volume_group *_vgsplit_from(struct cmd_context *cmd,
-					  const char *vg_name_from)
-{
-	struct volume_group *vg_from;
-
-	log_verbose("Checking for volume group \"%s\"", vg_name_from);
-
-	vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0, 0);
-	if (vg_read_error(vg_from)) {
-		release_vg(vg_from);
-		return NULL;
-	}
-
-	if (vg_is_shared(vg_from)) {
-		log_error("vgsplit not allowed for lock_type %s", vg_from->lock_type);
-		unlock_and_release_vg(cmd, vg_from, vg_name_from);
-		return NULL;
-	}
-
-	return vg_from;
+	return 1;
 }
 
 /*
@@ -544,11 +519,11 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	struct vgcreate_params vp_def;
 	const char *vg_name_from, *vg_name_to;
 	struct volume_group *vg_to = NULL, *vg_from = NULL;
+	struct lvmcache_vginfo *vginfo_to;
 	int opt;
 	int existing_vg = 0;
 	int r = ECMD_FAILED;
 	const char *lv_name;
-	int lock_vg_from_first = 1;
 
 	if ((arg_is_set(cmd, name_ARG) + argc) < 3) {
 		log_error("Existing VG, new VG and either physical volumes "
@@ -562,9 +537,10 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
-	/* Needed change the global VG namespace. */
-	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+	if (!lock_global(cmd, "ex"))
 		return_ECMD_FAILED;
+
+	clear_hint_file(cmd);
 
 	if (arg_is_set(cmd, name_ARG))
 		lv_name = arg_value(cmd, name_ARG);
@@ -583,47 +559,44 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 
 	lvmcache_label_scan(cmd);
 
-	if (strcmp(vg_name_to, vg_name_from) < 0)
-		lock_vg_from_first = 0;
+	if (!(vginfo_to = lvmcache_vginfo_from_vgname(vg_name_to, NULL))) {
+		if (!validate_name(vg_name_to)) {
+			log_error("Invalid vg name %s.", vg_name_to);
+			return ECMD_FAILED;
+		}
 
-	if (lock_vg_from_first) {
-		if (!(vg_from = _vgsplit_from(cmd, vg_name_from)))
-			return_ECMD_FAILED;
-		/*
-		 * Set metadata format of original VG.
-		 * NOTE: We must set the format before calling vg_lock_and_create()
-		 * since vg_lock_and_create() calls the per-format constructor.
-		 */
-		cmd->fmt = vg_from->fid->fmt;
+		if (!lock_vol(cmd, vg_name_to, LCK_VG_WRITE, NULL)) {
+			log_error("Failed to lock new VG name %s.", vg_name_to);
+			return ECMD_FAILED;
+		}
 
-		if (!(vg_to = _vgsplit_to(cmd, vg_name_to, &existing_vg))) {
-			unlock_and_release_vg(cmd, vg_from, vg_name_from);
-			return_ECMD_FAILED;
+		if (!(vg_to = vg_create(cmd, vg_name_to))) {
+			log_error("Failed to create new VG %s.", vg_name_to);
+			unlock_vg(cmd, NULL, vg_name_to);
+			return ECMD_FAILED;
 		}
 	} else {
-		if (!(vg_to = _vgsplit_to(cmd, vg_name_to, &existing_vg)))
-			return_ECMD_FAILED;
-
-		if (!(vg_from = _vgsplit_from(cmd, vg_name_from))) {
-			unlock_and_release_vg(cmd, vg_to, vg_name_to);
-			return_ECMD_FAILED;
+		if (!(vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0))) {
+			log_error("Failed to read VG %s.", vg_name_to);
+			return ECMD_FAILED;
 		}
-
-		if (cmd->fmt != vg_from->fid->fmt) {
-			/* In this case we don't know the vg_from->fid->fmt */
-			log_error("Unable to set new VG metadata type based on "
-				  "source VG format - use -M option.");
-			goto bad;
-		}
+		existing_vg = 1;
 	}
+
+	if (!(vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0, 0))) {
+		log_error("Failed to read VG %s.", vg_name_to);
+		unlock_and_release_vg(cmd, vg_to, vg_name_to);
+		return ECMD_FAILED;
+	}
+
+	cmd->fmt = vg_from->fid->fmt;
 
 	if (existing_vg) {
 		if (_new_vg_option_specified(cmd)) {
-			log_error("Volume group \"%s\" exists, but new VG "
-				    "option specified", vg_name_to);
+			log_error("Volume group \"%s\" exists, but new VG option specified", vg_name_to);
 			goto bad;
 		}
-		if (!vgs_are_compatible(cmd, vg_from,vg_to))
+		if (!vgs_are_compatible(cmd, vg_from, vg_to))
 			goto_bad;
 	} else {
 		if (!vgcreate_params_set_defaults(cmd, &vp_def, vg_from)) {
@@ -688,6 +661,10 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!(_move_thins(vg_from, vg_to)))
 		goto_bad;
 
+	/* Move required vdo pools across */
+	if (!(_move_vdos(vg_from, vg_to)))
+		goto_bad;
+
 	/* Move required cache LVs across */
 	if (!(_move_cache(vg_from, vg_to)))
 		goto_bad;
@@ -748,9 +725,17 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!test_mode()) {
 		unlock_vg(cmd, NULL, vg_name_to);
 		release_vg(vg_to);
-		vg_to = vg_read_for_update(cmd, vg_name_to, NULL,
-					   READ_ALLOW_EXPORTED, 0);
-		if (vg_read_error(vg_to)) {
+
+		/*
+		 * This command uses the exported vg flag internally, but
+		 * exported VGs are not allowed to be split from the command
+		 * level, so ALLOW_EXPORTED is not set in commands.h.
+		 */
+		cmd->include_exported_vgs = 1;
+
+		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0);
+
+		if (!vg_to) {
 			log_error("Volume group \"%s\" became inconsistent: "
 				  "please fix manually", vg_name_to);
 			goto bad;

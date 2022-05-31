@@ -217,7 +217,10 @@ def options_to_cli_args(options):
 		else:
 			rc.append("--%s" % k)
 		if v != "":
-			rc.append(str(v))
+			if isinstance(v, int):
+				rc.append(str(int(v)))
+			else:
+				rc.append(str(v))
 	return rc
 
 
@@ -263,10 +266,10 @@ def lv_tag(lv_name, add, rm, tag_options):
 	return _tag('lvchange', lv_name, add, rm, tag_options)
 
 
-def vg_rename(vg, new_name, rename_options):
+def vg_rename(vg_uuid, new_name, rename_options):
 	cmd = ['vgrename']
 	cmd.extend(options_to_cli_args(rename_options))
-	cmd.extend([vg, new_name])
+	cmd.extend([vg_uuid, new_name])
 	return call(cmd)
 
 
@@ -280,7 +283,7 @@ def vg_remove(vg_name, remove_options):
 def vg_lv_create(vg_name, create_options, name, size_bytes, pv_dests):
 	cmd = ['lvcreate']
 	cmd.extend(options_to_cli_args(create_options))
-	cmd.extend(['--size', str(size_bytes) + 'B'])
+	cmd.extend(['--size', '%dB' % size_bytes])
 	cmd.extend(['--name', name, vg_name, '--yes'])
 	pv_dest_ranges(cmd, pv_dests)
 	return call(cmd)
@@ -292,7 +295,7 @@ def vg_lv_snapshot(vg_name, snapshot_options, name, size_bytes):
 	cmd.extend(["-s"])
 
 	if size_bytes != 0:
-		cmd.extend(['--size', str(size_bytes) + 'B'])
+		cmd.extend(['--size', '%dB' % size_bytes])
 
 	cmd.extend(['--name', name, vg_name])
 	return call(cmd)
@@ -303,9 +306,9 @@ def _vg_lv_create_common_cmd(create_options, size_bytes, thin_pool):
 	cmd.extend(options_to_cli_args(create_options))
 
 	if not thin_pool:
-		cmd.extend(['--size', str(size_bytes) + 'B'])
+		cmd.extend(['--size', '%dB' % size_bytes])
 	else:
-		cmd.extend(['--thin', '--size', str(size_bytes) + 'B'])
+		cmd.extend(['--thin', '--size', '%dB' % size_bytes])
 
 	cmd.extend(['--yes'])
 	return cmd
@@ -320,10 +323,10 @@ def vg_lv_create_linear(vg_name, create_options, name, size_bytes, thin_pool):
 def vg_lv_create_striped(vg_name, create_options, name, size_bytes,
 							num_stripes, stripe_size_kb, thin_pool):
 	cmd = _vg_lv_create_common_cmd(create_options, size_bytes, thin_pool)
-	cmd.extend(['--stripes', str(num_stripes)])
+	cmd.extend(['--stripes', str(int(num_stripes))])
 
 	if stripe_size_kb != 0:
-		cmd.extend(['--stripesize', str(stripe_size_kb)])
+		cmd.extend(['--stripesize', str(int(stripe_size_kb))])
 
 	cmd.extend(['--name', name, vg_name])
 	return call(cmd)
@@ -336,13 +339,13 @@ def _vg_lv_create_raid(vg_name, create_options, name, raid_type, size_bytes,
 	cmd.extend(options_to_cli_args(create_options))
 
 	cmd.extend(['--type', raid_type])
-	cmd.extend(['--size', str(size_bytes) + 'B'])
+	cmd.extend(['--size', '%dB' % size_bytes])
 
 	if num_stripes != 0:
-		cmd.extend(['--stripes', str(num_stripes)])
+		cmd.extend(['--stripes', str(int(num_stripes))])
 
 	if stripe_size_kb != 0:
-		cmd.extend(['--stripesize', str(stripe_size_kb)])
+		cmd.extend(['--stripesize', str(int(stripe_size_kb))])
 
 	cmd.extend(['--name', name, vg_name, '--yes'])
 	return call(cmd)
@@ -363,8 +366,8 @@ def vg_lv_create_mirror(
 	cmd.extend(options_to_cli_args(create_options))
 
 	cmd.extend(['--type', 'mirror'])
-	cmd.extend(['--mirrors', str(num_copies)])
-	cmd.extend(['--size', str(size_bytes) + 'B'])
+	cmd.extend(['--mirrors', str(int(num_copies))])
+	cmd.extend(['--size', '%dB' % size_bytes])
 	cmd.extend(['--name', name, vg_name, '--yes'])
 	return call(cmd)
 
@@ -382,6 +385,24 @@ def vg_create_thin_pool(md_full_name, data_full_name, create_options):
 	cmd.extend(options_to_cli_args(create_options))
 	cmd.extend(['--type', 'thin-pool', '--force', '-y',
 				'--poolmetadata', md_full_name, data_full_name])
+	return call(cmd)
+
+
+def vg_create_vdo_pool_lv_and_lv(vg_name, pool_name, lv_name, data_size,
+									virtual_size, create_options):
+	cmd = ['lvcreate']
+	cmd.extend(options_to_cli_args(create_options))
+	cmd.extend(['-y', '--type', 'vdo', '-n', lv_name,
+				'-L', '%dB' % data_size, '-V', '%dB' % virtual_size,
+				"%s/%s" % (vg_name, pool_name)])
+	return call(cmd)
+
+
+def vg_create_vdo_pool(pool_full_name, lv_name, virtual_size, create_options):
+	cmd = ['lvconvert']
+	cmd.extend(options_to_cli_args(create_options))
+	cmd.extend(['--type', 'vdo-pool', '-n', lv_name, '--force', '-y',
+				'-V', '%dB' % virtual_size, pool_full_name])
 	return call(cmd)
 
 
@@ -418,7 +439,7 @@ def lv_resize(lv_full_name, size_change, pv_dests,
 def lv_lv_create(lv_full_name, create_options, name, size_bytes):
 	cmd = ['lvcreate']
 	cmd.extend(options_to_cli_args(create_options))
-	cmd.extend(['--virtualsize', str(size_bytes) + 'B', '-T'])
+	cmd.extend(['--virtualsize', '%dB' % size_bytes, '-T'])
 	cmd.extend(['--name', name, lv_full_name, '--yes'])
 	return call(cmd)
 
@@ -429,6 +450,15 @@ def lv_cache_lv(cache_pool_full_name, lv_full_name, cache_options):
 	cmd.extend(options_to_cli_args(cache_options))
 	cmd.extend(['-y', '--type', 'cache', '--cachepool',
 				cache_pool_full_name, lv_full_name])
+	return call(cmd)
+
+
+def lv_writecache_lv(cache_lv_full_name, lv_full_name, cache_options):
+	# lvconvert --type writecache --cachevol VG/CacheLV VG/OriginLV
+	cmd = ['lvconvert']
+	cmd.extend(options_to_cli_args(cache_options))
+	cmd.extend(['-y', '--type', 'writecache', '--cachevol',
+				cache_lv_full_name, lv_full_name])
 	return call(cmd)
 
 
@@ -447,6 +477,28 @@ def lv_detach_cache(lv_full_name, detach_options, destroy_cache):
 	return call(cmd)
 
 
+def lv_vdo_compression(lv_path, enable, comp_options):
+	cmd = ['lvchange', '--compression']
+	if enable:
+		cmd.append('y')
+	else:
+		cmd.append('n')
+	cmd.extend(options_to_cli_args(comp_options))
+	cmd.append(lv_path)
+	return call(cmd)
+
+
+def lv_vdo_deduplication(lv_path, enable, dedup_options):
+	cmd = ['lvchange', '--deduplication']
+	if enable:
+		cmd.append('y')
+	else:
+		cmd.append('n')
+	cmd.extend(options_to_cli_args(dedup_options))
+	cmd.append(lv_path)
+	return call(cmd)
+
+
 def supports_json():
 	cmd = ['help']
 	rc, out, err = call(cmd)
@@ -456,6 +508,16 @@ def supports_json():
 		else:
 			if 'fullreport' in err:
 				return True
+	return False
+
+
+def supports_vdo():
+	cmd = ['segtypes']
+	rc, out, err = call(cmd)
+	if rc == 0:
+		if "vdo" in out:
+			log_debug("We have VDO support")
+			return True
 	return False
 
 
@@ -486,6 +548,22 @@ def lvm_full_report_json():
 
 	lv_seg_columns = ['seg_pe_ranges', 'segtype', 'lv_uuid']
 
+	if cfg.vdo_support:
+		lv_columns.extend(
+			['vdo_operating_mode', 'vdo_compression_state', 'vdo_index_state',
+				'vdo_used_size', 'vdo_saving_percent']
+		)
+
+		lv_seg_columns.extend(
+			['vdo_compression', 'vdo_deduplication',
+				'vdo_use_metadata_hints', 'vdo_minimum_io_size',
+				'vdo_block_map_cache_size', 'vdo_block_map_era_length',
+				'vdo_use_sparse_index', 'vdo_index_memory_size',
+				'vdo_slab_size', 'vdo_ack_threads', 'vdo_bio_threads',
+				'vdo_bio_rotation', 'vdo_cpu_threads', 'vdo_hash_zone_threads',
+				'vdo_logical_threads', 'vdo_physical_threads',
+				'vdo_max_discard', 'vdo_write_policy', 'vdo_header_size'])
+
 	cmd = _dc('fullreport', [
 		'-a',		# Need hidden too
 		'--configreport', 'pv', '-o', ','.join(pv_columns),
@@ -497,7 +575,8 @@ def lvm_full_report_json():
 	])
 
 	rc, out, err = call(cmd)
-	if rc == 0:
+	# When we have an exported vg the exit code of lvs or fullreport will be 5
+	if rc == 0 or rc == 5:
 		# With the current implementation, if we are using the shell then we
 		# are using JSON and JSON is returned back to us as it was parsed to
 		# figure out if we completed OK or not
@@ -555,7 +634,7 @@ def pv_resize(device, size_bytes, create_options):
 	cmd.extend(options_to_cli_args(create_options))
 
 	if size_bytes != 0:
-		cmd.extend(['--yes', '--setphysicalvolumesize', str(size_bytes) + 'B'])
+		cmd.extend(['--yes', '--setphysicalvolumesize', '%dB' % size_bytes])
 
 	cmd.extend([device])
 	return call(cmd)
@@ -651,12 +730,12 @@ def vg_allocation_policy(vg_name, policy, policy_options):
 
 
 def vg_max_pv(vg_name, number, max_options):
-	return _vg_value_set(vg_name, ['--maxphysicalvolumes', str(number)],
+	return _vg_value_set(vg_name, ['--maxphysicalvolumes', str(int(number))],
 							max_options)
 
 
 def vg_max_lv(vg_name, number, max_options):
-	return _vg_value_set(vg_name, ['-l', str(number)], max_options)
+	return _vg_value_set(vg_name, ['-l', str(int(number))], max_options)
 
 
 def vg_uuid_gen(vg_name, ignore, options):
@@ -698,6 +777,7 @@ def activate_deactivate(op, name, activate, control_flags, options):
 		op += 'n'
 
 	cmd.append(op)
+	cmd.append("-y")
 	cmd.append(name)
 	return call(cmd)
 

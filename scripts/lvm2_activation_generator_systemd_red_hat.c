@@ -12,29 +12,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 */
 
-#include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>		/* For PATH_MAX for musl libc */
-#include <stdarg.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
-#include <syslog.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-#include "configure.h"
-#include "device_mapper/all.h"
-
-//----------------------------------------------------------------
-
 // Code in this file gets included in the unit tests.
 #include "generator-internals.c"
 
-//----------------------------------------------------------------
 // Logging
 
 #define KMSG_DEV_PATH		"/dev/kmsg"
@@ -69,7 +49,8 @@ static void _error(const char *format, ...)
 		return;
 
 	/* The n+31: +30 for "<n>lvm2-activation-generator: " prefix and +1 for '\0' suffix */
-	(void) write(_kmsg_fd, message, n + 31);
+	if (write(_kmsg_fd, message, n + 31) < 0)
+		_error("Failed to write activation message %s: %m.\n", message);
 }
 
 //----------------------------------------------------------------
@@ -158,6 +139,8 @@ static int generate_unit(struct generator *gen, int unit)
 	      "Documentation=man:lvm2-activation-generator(8)\n"
 	      "SourcePath=/etc/lvm/lvm.conf\n" "DefaultDependencies=no\n", f);
 
+	fputs("Conflicts=shutdown.target\n", f);
+
 	if (unit == UNIT_NET) {
 		fprintf(f, "After=%s iscsi.service fcoe.service rbdmap.service\n"
 			"Before=remote-fs-pre.target shutdown.target\n\n"
@@ -213,12 +196,17 @@ static bool _run(int argc, const char **argv)
 	if (!_parse_command_line(&gen, argc, argv))
 		return false;
 
-	if (!_get_config(&gen.cfg, LVMCONFIG_PATH))
-		return false;
+	if (_get_config(&gen.cfg, LVMCONFIG_PATH)) {
+		if (gen.cfg.event_activation)
+			// If event_activation=1, pvscan --cache -aay does activation.
+			return true;
+	}
 
-	if (gen.cfg.event_activation)
-		// If event_activation=1, pvscan --cache -aay does activation.
-		return true;
+	/*
+	 *  Create the activation units if:
+	 *    - _get_config succeeded and event_activation=0
+	 *    - _get_config failed, then this is a failsafe fallback
+	 */
 
 	/* mark lvm2-activation.*.service as world-accessible */
 	old_mask = umask(0022);

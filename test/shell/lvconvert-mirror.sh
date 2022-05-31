@@ -14,6 +14,8 @@
 
 . lib/inittest
 
+aux lvmconf "global/support_mirrored_mirror_log=1"
+
 aux prepare_pvs 5
 get_devs
 
@@ -241,6 +243,18 @@ not lvconvert --type mirror -m1 --corelog --stripes 2 $vg/$lv1
 lvremove -ff $vg
 
 
+# Linear to mirror with mirrored log using --alloc anywhere
+lvcreate -aey -l2 -n $lv1 $vg "$dev1"
+if test -e LOCAL_CLVMD; then
+# This is not supposed to work in cluster
+not lvconvert --type mirror -m +1 --mirrorlog mirrored --alloc anywhere $vg/$lv1 "$dev1" "$dev2"
+else
+lvconvert --type mirror -m +1 --mirrorlog mirrored --alloc anywhere $vg/$lv1 "$dev1" "$dev2"
+check mirror $vg $lv1
+fi
+lvremove -ff $vg
+
+
 if test -e LOCAL_CLVMD; then
 : # FIXME - cases which needs to be fixed to work in cluster
 else
@@ -309,7 +323,7 @@ SHOULD=
 aux throttle_dm_mirror || SHOULD=should
 
 # Use large enough mirror that takes time to sychronize with small regionsize
-lvcreate -aey -L20 -Zn -Wn --type mirror --regionsize 16k -m2 -n $lv1 $vg "$dev1" "$dev2" "$dev4" "$dev3:$DEVRANGE"
+lvcreate -aey -L30 -Zn -Wn --type mirror --regionsize 16k -m2 -n $lv1 $vg "$dev1" "$dev2" "$dev4" "$dev3:$DEVRANGE"
 $SHOULD not lvconvert -m-1 $vg/$lv1 "$dev1" 2>&1 | tee out
 aux restore_dm_mirror
 grep "not in-sync" out
@@ -327,7 +341,7 @@ lvremove -ff $vg
 aux throttle_dm_mirror || :
 # No parallel lvconverts on a single LV please
 # Use big enough mirror size and small regionsize to run on all test machines succesfully
-lvcreate -aey -Zn -Wn -L20 --type mirror --regionsize 16k -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:0-8"
+lvcreate -aey -Zn -Wn -L30 --type mirror --regionsize 16k -m1 -n $lv1 $vg "$dev1" "$dev2" "$dev3:0-8"
 check mirror $vg $lv1
 check mirror_legs $vg $lv1 2
 

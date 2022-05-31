@@ -14,7 +14,7 @@ import dbus
 from .cfg import PV_INTERFACE
 from . import cmdhandler
 from .utils import vg_obj_path_generate, n, pv_obj_path_generate, \
-	lv_object_path_method
+	lv_object_path_method, _handle_execute
 from .loader import common
 from .request import RequestEntry
 from .state import State
@@ -138,19 +138,12 @@ class Pv(AutomatedProperties):
 		# Remove the PV, if successful then remove from the model
 		# Make sure we have a dbus object representing it
 		Pv.validate_dbus_object(pv_uuid, pv_name)
-		rc, out, err = cmdhandler.pv_remove(pv_name, remove_options)
-		Pv.handle_execute(rc, out, err)
+		Pv.handle_execute(*cmdhandler.pv_remove(pv_name, remove_options))
 		return '/'
 
 	@staticmethod
 	def handle_execute(rc, out, err):
-		if rc == 0:
-			cfg.load()
-		else:
-			# Need to work on error handling, need consistent
-			raise dbus.exceptions.DBusException(
-				PV_INTERFACE,
-				'Exit code %s, stderr = %s' % (str(rc), err))
+		return _handle_execute(rc, out, err, PV_INTERFACE)
 
 	@staticmethod
 	def validate_dbus_object(pv_uuid, pv_name):
@@ -178,10 +171,8 @@ class Pv(AutomatedProperties):
 	def _resize(pv_uuid, pv_name, new_size_bytes, resize_options):
 		# Make sure we have a dbus object representing it
 		Pv.validate_dbus_object(pv_uuid, pv_name)
-
-		rc, out, err = cmdhandler.pv_resize(pv_name, new_size_bytes,
-												resize_options)
-		Pv.handle_execute(rc, out, err)
+		Pv.handle_execute(*cmdhandler.pv_resize(pv_name, new_size_bytes,
+												resize_options))
 		return '/'
 
 	@dbus.service.method(
@@ -200,9 +191,8 @@ class Pv(AutomatedProperties):
 	def _allocation_enabled(pv_uuid, pv_name, yes_no, allocation_options):
 		# Make sure we have a dbus object representing it
 		Pv.validate_dbus_object(pv_uuid, pv_name)
-		rc, out, err = cmdhandler.pv_allocatable(
-			pv_name, yes_no, allocation_options)
-		Pv.handle_execute(rc, out, err)
+		Pv.handle_execute(*cmdhandler.pv_allocatable(pv_name, yes_no,
+														allocation_options))
 		return '/'
 
 	@dbus.service.method(

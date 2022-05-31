@@ -182,15 +182,6 @@ void opt_array_to_str(struct cmd_context *cmd, int *opts, int count,
 int pvcreate_params_from_args(struct cmd_context *cmd, struct pvcreate_params *pp);
 int pvcreate_each_device(struct cmd_context *cmd, struct processing_handle *handle, struct pvcreate_params *pp);
 
-/*
- * Builds a list of pv's from the names in argv.  Used in
- * lvcreate/extend.
- */
-struct dm_list *create_pv_list(struct dm_pool *mem, struct volume_group *vg, int argc,
-			    char **argv, int allocatable_only);
-
-struct dm_list *clone_pv_list(struct dm_pool *mem, struct dm_list *pvs);
-
 int vgcreate_params_set_defaults(struct cmd_context *cmd,
 				 struct vgcreate_params *vp_def,
 				 struct volume_group *vg);
@@ -225,6 +216,9 @@ int get_cache_params(struct cmd_context *cmd,
 		     cache_mode_t *cache_mode,
 		     const char **name,
 		     struct dm_config_tree **settings);
+
+int get_writecache_settings(struct cmd_context *cmd, struct writecache_settings *settings,
+                            uint32_t *block_size_sectors);
 
 int change_tag(struct cmd_context *cmd, struct volume_group *vg,
 	       struct logical_volume *lv, struct physical_volume *pv, int arg);

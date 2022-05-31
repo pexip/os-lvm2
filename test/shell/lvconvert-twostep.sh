@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2010 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2010,2018 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -14,6 +14,8 @@
 
 . lib/inittest
 
+aux lvmconf "global/support_mirrored_mirror_log=1"
+
 aux prepare_vg 4
 
 lvcreate -aey --type mirror -m 1 --mirrorlog disk --ignoremonitoring -L 1 -n mirror $vg
@@ -24,5 +26,11 @@ lvconvert -m 2 $vg/mirror "$dev3"
 lvconvert --mirrorlog core $vg/mirror
 not lvconvert -m 1 --mirrorlog disk $vg/mirror "$dev3" 2>&1 | tee errs
 grep "two steps" errs
+
+if test ! -e LOCAL_CLVMD ; then
+# FIXME  mirrored unsupported in cluster
+not lvconvert -m 1 --mirrorlog mirrored $vg/mirror "$dev3" "$dev4" 2>&1 | tee errs
+grep "two steps" errs
+fi
 
 vgremove -ff $vg

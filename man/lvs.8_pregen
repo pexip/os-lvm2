@@ -96,10 +96,6 @@ lvs produces formatted output about LVs.
 .ad b
 .br
 .ad l
-[    \fB--trustcache\fP ]
-.ad b
-.br
-.ad l
 [    \fB--unbuffered\fP ]
 .ad b
 .br
@@ -427,12 +423,6 @@ back metadata it believes has changed but hasn't.
 .ad b
 .HP
 .ad l
-\fB--trustcache\fP
-.br
-Avoids certain device scanning during command processing. Do not use.
-.ad b
-.HP
-.ad l
 \fB--unbuffered\fP
 .br
 Produce output immediately without sorting or aligning the columns properly.
@@ -503,9 +493,8 @@ Input units are always treated as base two values, regardless of
 capitalization, e.g. 'k' and 'K' both refer to 1024.
 The default input unit is specified by letter, followed by |UNIT.
 UNIT represents other possible input units: \fBbBsSkKmMgGtTpPeE\fP.
-b|B is bytes, s|S is sectors of 512 bytes, k|K is kilobytes,
-m|M is megabytes, g|G is gigabytes, t|T is terabytes,
-p|P is petabytes, e|E is exabytes.
+b|B is bytes, s|S is sectors of 512 bytes, k|K is KiB,
+m|M is MiB, g|G is GiB, t|T is TiB, p|P is PiB, e|E is EiB.
 (This should not be confused with the output control --units, where
 capital letters mean multiple of 1000.)
 .SH ENVIRONMENT VARIABLES
@@ -519,8 +508,9 @@ Volume type: (C)ache, (m)irrored, (M)irrored without initial sync, (o)rigin,
 (O)rigin with merging snapshot, (r)aid, (R)aid without initial sync,
 (s)napshot, merging (S)napshot, (p)vmove, (v)irtual,
 mirror or raid (i)mage, mirror or raid (I)mage out-of-sync, mirror (l)og device,
-under (c)onversion, thin (V)olume, (t)hin pool, (T)hin pool data, raid or
-pool m(e)tadata or pool metadata spare.
+under (c)onversion, thin (V)olume, (t)hin pool, (T)hin pool data,
+v(d)o pool, v(D)o pool data,
+raid or pool m(e)tadata or pool metadata spare.
 .IP 2 3
 Permissions: (w)riteable, (r)ead-only, (R)ead-only activation of non-read-only
 volume
@@ -586,6 +576,10 @@ Related to Thin Logical Volumes: (F)ailed.
 .br
 (F)ailed is set when related thin pool enters Failed state and no further I/O
 is permitted at all.
+.IP
+Related to writecache logical volumes: (E)rror.
+.br
+(E)rror is set dm-writecache reports an error.
 .IP 10 3
 s(k)ip activation: this volume is flagged to be skipped during activation.
 .SH SEE ALSO

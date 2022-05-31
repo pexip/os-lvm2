@@ -15,6 +15,7 @@
 
 #include "base/memory/zalloc.h"
 #include "lib/misc/lib.h"
+#include "lib/device/dev-type.h"
 #include "lib/datastruct/btree.h"
 #include "lib/config/config.h"
 #include "lib/commands/toolcontext.h"
@@ -34,7 +35,7 @@ struct dev_iter {
 
 struct dir_list {
 	struct dm_list list;
-	char dir[0];
+	char dir[];
 };
 
 static struct {
@@ -63,9 +64,9 @@ static int _insert(const char *path, const struct stat *info,
 /* Setup non-zero members of passed zeroed 'struct device' */
 static void _dev_init(struct device *dev)
 {
-	dev->phys_block_size = -1;
-	dev->block_size = -1;
 	dev->fd = -1;
+	dev->bcache_fd = -1;
+	dev->bcache_di = -1;
 	dev->read_ahead = -1;
 
 	dev->ext.enabled = 0;
@@ -358,12 +359,14 @@ static int _get_sysfs_value(const char *path, char *buf, size_t buf_size, int er
 	int r = 0;
 
 	if (!(fp = fopen(path, "r"))) {
-		log_sys_error("fopen", path);
+		if (error_if_no_value)
+			log_sys_error("fopen", path);
 		return 0;
 	}
 
 	if (!fgets(buf, buf_size, fp)) {
-		log_sys_error("fgets", path);
+		if (error_if_no_value)
+			log_sys_error("fgets", path);
 		goto out;
 	}
 
@@ -1088,7 +1091,7 @@ out:
 static void _insert_dirs(struct dm_list *dirs)
 {
 	struct dir_list *dl;
-	struct udev *udev;
+	struct udev *udev = NULL;
 	int with_udev;
 
 	with_udev = obtain_device_list_from_udev() &&
@@ -1155,13 +1158,13 @@ static int _insert(const char *path, const struct stat *info,
 		}
 
 		if (rec && !_insert_dir(path))
-			return_0;
+			return 0;
 	} else {		/* add a device */
 		if (!S_ISBLK(info->st_mode))
 			return 1;
 
 		if (!_insert_dev(path, info->st_rdev))
-			return_0;
+			return 0;
 	}
 
 	return 1;
@@ -1420,17 +1423,9 @@ const char *dev_name_confirmed(struct device *dev, int quiet)
 	return dev_name(dev);
 }
 
-/* Provide a custom reason when a device is ignored */
-const char *dev_cache_filtered_reason(const char *name)
+struct device *dev_hash_get(const char *name)
 {
-	const char *reason = "not found";
-	struct device *d = (struct device *) dm_hash_lookup(_cache.names, name);
-
-	if (d)
-		/* FIXME Record which filter caused the exclusion */
-		reason = "excluded by a filter";
-
-	return reason;
+	return (struct device *) dm_hash_lookup(_cache.names, name);
 }
 
 struct device *dev_cache_get(struct cmd_context *cmd, const char *name, struct dev_filter *f)
@@ -1461,6 +1456,7 @@ struct device *dev_cache_get(struct cmd_context *cmd, const char *name, struct d
 		_insert(name, info_available ? &buf : NULL, 0, obtain_device_list_from_udev());
 		d = (struct device *) dm_hash_lookup(_cache.names, name);
 		if (!d) {
+			log_debug_devs("Device name not found in dev_cache repeat dev_cache_scan for %s", name);
 			dev_cache_scan();
 			d = (struct device *) dm_hash_lookup(_cache.names, name);
 		}
@@ -1473,7 +1469,7 @@ struct device *dev_cache_get(struct cmd_context *cmd, const char *name, struct d
 		return d;
 
 	if (f && !(d->flags & DEV_REGULAR)) {
-		ret = f->passes_filter(cmd, f, d);
+		ret = f->passes_filter(cmd, f, d, NULL);
 
 		if (ret == -EAGAIN) {
 			log_debug_devs("get device by name defer filter %s", dev_name(d));
@@ -1505,13 +1501,16 @@ static struct device *_dev_cache_seek_devt(dev_t dev)
  * TODO This is very inefficient. We probably want a hash table indexed by
  * major:minor for keys to speed up these lookups.
  */
-struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t dev, struct dev_filter *f)
+struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t dev, struct dev_filter *f, int *filtered)
 {
 	char path[PATH_MAX];
 	const char *sysfs_dir;
 	struct stat info;
 	struct device *d = _dev_cache_seek_devt(dev);
 	int ret;
+
+	if (filtered)
+		*filtered = 0;
 
 	if (d && (d->flags & DEV_REGULAR))
 		return d;
@@ -1520,7 +1519,7 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t dev, struct 
 		sysfs_dir = dm_sysfs_dir();
 		if (sysfs_dir && *sysfs_dir) {
 			/* First check if dev is sysfs to avoid useless scan */
-			if (dm_snprintf(path, sizeof(path), "%s/dev/block/%d:%d",
+			if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d",
 					sysfs_dir, (int)MAJOR(dev), (int)MINOR(dev)) < 0) {
 				log_error("dm_snprintf partition failed.");
 				return NULL;
@@ -1533,6 +1532,8 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t dev, struct 
 			}
 		}
 
+		log_debug_devs("Device num not found in dev_cache repeat dev_cache_scan for %d:%d",
+				(int)MAJOR(dev), (int)MINOR(dev));
 		dev_cache_scan();
 		d = _dev_cache_seek_devt(dev);
 	}
@@ -1546,7 +1547,7 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t dev, struct 
 	if (!f)
 		return d;
 
-	ret = f->passes_filter(cmd, f, d);
+	ret = f->passes_filter(cmd, f, d, NULL);
 
 	if (ret == -EAGAIN) {
 		log_debug_devs("get device by number defer filter %s", dev_name(d));
@@ -1557,6 +1558,8 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t dev, struct 
 	if (ret)
 		return d;
 
+	if (filtered)
+		*filtered = 1;
 	return NULL;
 }
 
@@ -1603,7 +1606,7 @@ struct device *dev_iter_get(struct cmd_context *cmd, struct dev_iter *iter)
 		f = iter->filter;
 
 		if (f && !(d->flags & DEV_REGULAR)) {
-			ret = f->passes_filter(cmd, f, d);
+			ret = f->passes_filter(cmd, f, d, NULL);
 
 			if (ret == -EAGAIN) {
 				log_debug_devs("get device by iter defer filter %s", dev_name(d));
@@ -1628,4 +1631,21 @@ const char *dev_name(const struct device *dev)
 {
 	return (dev && dev->aliases.n) ? dm_list_item(dev->aliases.n, struct dm_str_list)->str :
 	    unknown_device_name();
+}
+
+bool dev_cache_has_md_with_end_superblock(struct dev_types *dt)
+{
+	struct btree_iter *iter = btree_first(_cache.devices);
+	struct device *dev;
+
+	while (iter) {
+		dev = btree_get_data(iter);
+
+		if (dev_is_md_with_end_superblock(dt, dev))
+			return true;
+
+		iter = btree_next(iter);
+	}
+
+	return false;
 }

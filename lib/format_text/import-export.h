@@ -47,11 +47,15 @@ enum pv_vg_lv_e {
 
 struct text_vg_version_ops {
 	int (*check_version) (const struct dm_config_tree * cf);
-	struct volume_group *(*read_vg) (struct format_instance * fid,
-					 const struct dm_config_tree *cf,
-					 unsigned allow_lvmetad_extensions);
+
+	struct volume_group *(*read_vg) (struct cmd_context *cmd,
+					 const struct format_type *fmt,
+					 struct format_instance *fid,
+					 const struct dm_config_tree *cft);
+
 	void (*read_desc) (struct dm_pool * mem, const struct dm_config_tree *cf,
 			   time_t *when, char **desc);
+
 	int (*read_vgsummary) (const struct format_type *fmt,
 			       const struct dm_config_tree *cft,
 			       struct lvmcache_vgsummary *vgsummary);
@@ -66,7 +70,7 @@ int print_segtype_lvflags(char *buffer, size_t size, uint64_t status);
 int read_segtype_lvflags(uint64_t *status, char *segtype_str);
 
 int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp);
-size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf);
+size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf, uint32_t *alloc_size);
 struct volume_group *text_read_metadata_file(struct format_instance *fid,
 					 const char *file,
 					 time_t *when, char **desc);

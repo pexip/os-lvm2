@@ -115,6 +115,10 @@ Autoactivate a VG when all PVs are online.
 [    \fB--minor\fP \fINumber\fP ]
 .ad b
 .br
+.ad l
+[    \fB--noudevsync\fP ]
+.ad b
+.br
 [ COMMON_OPTIONS ]
 .RE
 .br
@@ -289,6 +293,15 @@ Disable locking.
 .ad b
 .HP
 .ad l
+\fB--noudevsync\fP
+.br
+Disables udev synchronisation. The process will not wait for notification
+from udev. It will continue irrespective of any possible udev processing
+in the background. Only use this if udev is not running or has rules that
+ignore the devices LVM creates.
+.ad b
+.HP
+.ad l
 \fB-n\fP|\fB--novolumegroup\fP
 .br
 Only show PVs not belonging to any VG.
@@ -384,9 +397,8 @@ Input units are always treated as base two values, regardless of
 capitalization, e.g. 'k' and 'K' both refer to 1024.
 The default input unit is specified by letter, followed by |UNIT.
 UNIT represents other possible input units: \fBbBsSkKmMgGtTpPeE\fP.
-b|B is bytes, s|S is sectors of 512 bytes, k|K is kilobytes,
-m|M is megabytes, g|G is gigabytes, t|T is terabytes,
-p|P is petabytes, e|E is exabytes.
+b|B is bytes, s|S is sectors of 512 bytes, k|K is KiB,
+m|M is MiB, g|G is GiB, t|T is TiB, p|P is PiB, e|E is EiB.
 (This should not be confused with the output control --units, where
 capital letters mean multiple of 1000.)
 .SH ENVIRONMENT VARIABLES

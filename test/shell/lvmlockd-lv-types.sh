@@ -39,6 +39,20 @@ aux prepare_devs 5
 vgcreate --shared $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5"
 
 #
+# pvscan autoactivation ignore shared PVs
+#
+RUNDIR="/run"
+test -d "$RUNDIR" || RUNDIR="/var/run"
+
+PVID1=`pvs $dev1 --noheading -o uuid | tr -d - | awk '{print $1}'`
+pvscan --cache -aay "$dev1"
+not ls "$RUNDIR/lvm/pvs_online/$PVID1"
+pvscan --cache -aay
+not ls "$RUNDIR/lvm/pvs_online/$PVID1"
+not ls "$RUNDIR/lvm/vgs_online/$vg"
+
+
+#
 # thin pool, thin lv, thin snap
 #
 
@@ -117,9 +131,9 @@ check lva_field $vg/lv1 lockargs $LOCKARGS1
 
 lvconvert -y --type cache --cachepool $vg/cache1 $vg/lv1
 check lva_field $vg/lv1 lockargs $LOCKARGS1
-check lva_field $vg/cache1 lockargs ""
-check lva_field $vg/cache1_cdata lockargs ""
-check lva_field $vg/cache1_cmeta lockargs ""
+check lva_field $vg/cache1_cpool lockargs ""
+check lva_field $vg/cache1_cpool_cdata lockargs ""
+check lva_field $vg/cache1_cpool_cmeta lockargs ""
 
 lvconvert --splitcache $vg/lv1
 check lva_field $vg/lv1 lockargs $LOCKARGS1

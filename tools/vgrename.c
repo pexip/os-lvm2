@@ -183,7 +183,7 @@ int vgrename(struct cmd_context *cmd, int argc, char **argv)
 	vg_name_new = skip_dev_dir(cmd, argv[1], NULL);
 
 	if (!validate_vg_rename_params(cmd, vg_name_old, vg_name_new))
-		return_0;
+		return_ECMD_FAILED;
 
 	if (!(vp.vg_name_old = dm_pool_strdup(cmd->mem, vg_name_old)))
 		return_ECMD_FAILED;
@@ -191,9 +191,10 @@ int vgrename(struct cmd_context *cmd, int argc, char **argv)
 	if (!(vp.vg_name_new = dm_pool_strdup(cmd->mem, vg_name_new)))
 		return_ECMD_FAILED;
 
-	/* Needed change the global VG namespace. */
-	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+	if (!lock_global(cmd, "ex"))
 		return_ECMD_FAILED;
+
+	clear_hint_file(cmd);
 
 	/*
 	 * Special case where vg_name_old may be a UUID:
@@ -232,8 +233,7 @@ int vgrename(struct cmd_context *cmd, int argc, char **argv)
 
 	handle->custom_handle = &vp;
 
-	ret = process_each_vg(cmd, 0, NULL, vg_name_old, NULL,
-			      READ_FOR_UPDATE | READ_ALLOW_EXPORTED,
+	ret = process_each_vg(cmd, 0, NULL, vg_name_old, NULL, READ_FOR_UPDATE,
 			      0, handle, _vgrename_single);
 
 	/* Needed if process_each_vg returns error before calling _single. */

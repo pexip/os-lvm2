@@ -17,11 +17,8 @@ SKIP_WITH_LVMPOLLD=1
 
 # Test reshaping under io load
 
-# FIXME: This test requires 3GB in /dev/shm!
-test $(aux total_mem) -gt $((4096*1024)) || skip
-
 which mkfs.ext4 || skip
-aux have_raid 1 13 2 || skip
+aux have_raid 1 14 0 || skip
 
 mount_dir="mnt"
 
@@ -40,11 +37,12 @@ vgcreate $SHARED -s 1M "$vg" "${DEVICES[@]}"
 trap 'cleanup_mounted_and_teardown' EXIT
 
 # Create 13-way striped raid5 (14 legs total)
-lvcreate --yes --type raid5_ls --stripes 13 -L190M -n$lv1 $vg
+lvcreate --yes --type raid5_ls --stripes 13 -L4 -n$lv1 $vg
 check lv_first_seg_field $vg/$lv1 segtype "raid5_ls"
 check lv_first_seg_field $vg/$lv1 data_stripes 13
 check lv_first_seg_field $vg/$lv1 stripes 14
-echo y|mkfs -t ext4 /dev/$vg/$lv1
+wipefs -a /dev/$vg/$lv1
+mkfs -t ext4 /dev/$vg/$lv1
 aux wait_for_sync $vg $lv1
 
 mkdir -p $mount_dir

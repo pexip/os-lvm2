@@ -322,8 +322,8 @@ static int _do_pvsegs_sub_single(struct cmd_context *cmd,
 	struct lv_segment *seg = pvseg->lvseg;
 
 	struct segment_type _freeseg_type = {
-		.name = "free",
 		.flags = SEG_VIRTUAL | SEG_CANNOT_BE_ZEROED,
+		.name = "free",
 	};
 
 	struct volume_group _free_vg = {
@@ -336,24 +336,24 @@ static int _do_pvsegs_sub_single(struct cmd_context *cmd,
 	};
 
 	struct logical_volume _free_logical_volume = {
-		.vg = vg ?: &_free_vg,
 		.name = "",
+		.vg = vg ?: &_free_vg,
 		.status = VISIBLE_LV,
 		.major = -1,
 		.minor = -1,
-		.tags = DM_LIST_HEAD_INIT(_free_logical_volume.tags),
+		.snapshot_segs = DM_LIST_HEAD_INIT(_free_logical_volume.snapshot_segs),
 		.segments = DM_LIST_HEAD_INIT(_free_logical_volume.segments),
+		.tags = DM_LIST_HEAD_INIT(_free_logical_volume.tags),
 		.segs_using_this_lv = DM_LIST_HEAD_INIT(_free_logical_volume.segs_using_this_lv),
 		.indirect_glvs = DM_LIST_HEAD_INIT(_free_logical_volume.indirect_glvs),
-		.snapshot_segs = DM_LIST_HEAD_INIT(_free_logical_volume.snapshot_segs),
 	};
 
 	struct lv_segment _free_lv_segment = {
 		.lv = &_free_logical_volume,
 		.segtype = &_freeseg_type,
 		.len = pvseg->len,
-		.tags = DM_LIST_HEAD_INIT(_free_lv_segment.tags),
 		.origin_list = DM_LIST_HEAD_INIT(_free_lv_segment.origin_list),
+		.tags = DM_LIST_HEAD_INIT(_free_lv_segment.tags),
 	};
 
 	struct lv_with_info_and_seg_status status = {
@@ -708,7 +708,6 @@ int report_for_selection(struct cmd_context *cmd,
 static void _check_pv_list(struct cmd_context *cmd, struct report_args *args, struct single_report_args *single_args)
 {
 	int i;
-	int rescan_done = 0;
 
 	if (!args->argv)
 		return;
@@ -719,12 +718,6 @@ static void _check_pv_list(struct cmd_context *cmd, struct report_args *args, st
 
 	if (single_args->args_are_pvs && args->argc) {
 		for (i = 0; i < args->argc; i++) {
-			if (!rescan_done && !dev_cache_get(cmd, args->argv[i], cmd->filter)) {
-				cmd->filter->wipe(cmd->filter);
-				/* FIXME scan only one device */
-				lvmcache_label_scan(cmd);
-				rescan_done = 1;
-			}
 			if (*args->argv[i] == '@') {
 				/*
 				 * Tags are metadata related, not label
@@ -732,13 +725,7 @@ static void _check_pv_list(struct cmd_context *cmd, struct report_args *args, st
 				 */
 				if (single_args->report_type == LABEL)
 					single_args->report_type = PVS;
-				/*
-				 * If we changed the report_type and we did rescan,
-				 * no need to iterate over dev list further - nothing
-				 * else would change.
-				 */
-				if (rescan_done)
-					break;
+				break;
 			}
 		}
 	}
@@ -1076,7 +1063,6 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 	void *orig_custom_handle = handle->custom_handle;
 	report_type_t report_type = single_args->report_type;
 	void *report_handle = NULL;
-	int lock_global = 0;
 	int lv_info_needed;
 	int lv_segment_status_needed;
 	int report_in_group = 0;
@@ -1098,18 +1084,6 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 		if (!dm_report_group_push(cmd->cmd_report.report_group, report_handle, (void *) single_args->report_name))
 			goto_out;
 		report_in_group = 1;
-	}
-
-	/*
-	 * We lock VG_GLOBAL to enable use of metadata cache.
-	 * This can pause alongide pvscan or vgscan process for a while.
-	 */
-	if (single_args->args_are_pvs && (report_type == PVS || report_type == PVSEGS)) {
-		lock_global = 1;
-		if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_READ, NULL)) {
-			log_error("Unable to obtain global lock.");
-			goto out;
-		}
 	}
 
 	switch (report_type) {
@@ -1209,8 +1183,6 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 	if (!(args->log_only && (single_args->report_type != CMDLOG)))
 		dm_report_output(report_handle);
 
-	if (lock_global)
-		unlock_vg(cmd, NULL, VG_GLOBAL);
 out:
 	if (report_handle) {
 		if (report_in_group && !dm_report_group_pop(cmd->cmd_report.report_group))
@@ -1455,6 +1427,13 @@ int vgs(struct cmd_context *cmd, int argc, char **argv)
 int pvs(struct cmd_context *cmd, int argc, char **argv)
 {
 	report_type_t type;
+
+	/*
+	 * Without -a, command only looks at PVs and can use hints,
+	 * with -a, the command looks at all (non-hinted) devices.
+	 */
+	if (arg_is_set(cmd, all_ARG))
+		cmd->use_hints = 0;
 
 	if (arg_is_set(cmd, segments_ARG))
 		type = PVSEGS;

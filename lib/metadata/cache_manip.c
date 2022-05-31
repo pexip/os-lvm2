@@ -30,33 +30,49 @@
 #define DM_HINT_OVERHEAD_PER_BLOCK	8  /* bytes */
 #define DM_MAX_HINT_WIDTH		(4+16)  /* bytes.  FIXME Configurable? */
 
-const char *display_cache_mode(const struct lv_segment *seg)
+const char *cache_mode_num_to_str(cache_mode_t mode)
 {
-	if (seg_is_cache(seg))
-		seg = first_seg(seg->pool_lv);
-
-	if (!seg_is_cache_pool(seg) ||
-	    (seg->cache_mode == CACHE_MODE_UNSELECTED))
-		return "";
-
-	return get_cache_mode_name(seg);
-}
-
-
-const char *get_cache_mode_name(const struct lv_segment *pool_seg)
-{
-	switch (pool_seg->cache_mode) {
-	default:
-		log_error(INTERNAL_ERROR "Cache pool %s has undefined cache mode, using writethrough instead.",
-			  display_lvname(pool_seg->lv));
-		/* Fall through */
+	switch (mode) {
 	case CACHE_MODE_WRITETHROUGH:
 		return "writethrough";
 	case CACHE_MODE_WRITEBACK:
 		return "writeback";
 	case CACHE_MODE_PASSTHROUGH:
 		return "passthrough";
+	default:
+		return NULL;
 	}
+}
+
+const char *get_cache_mode_name(const struct lv_segment *pool_seg)
+{
+	const char *str;
+		
+	if (!(str = cache_mode_num_to_str(pool_seg->cache_mode))) {
+		log_error(INTERNAL_ERROR "Cache pool %s has undefined cache mode, using writethrough instead.",
+			  display_lvname(pool_seg->lv));
+		str = "writethrough";
+	}
+	return str;
+}
+
+const char *display_cache_mode(const struct lv_segment *seg)
+{
+	const struct lv_segment *setting_seg = NULL;
+
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+
+	if (!setting_seg || (setting_seg->cache_mode == CACHE_MODE_UNSELECTED))
+		return "";
+
+	return cache_mode_num_to_str(setting_seg->cache_mode);
 }
 
 int set_cache_mode(cache_mode_t *mode, const char *cache_mode)
@@ -75,31 +91,13 @@ int set_cache_mode(cache_mode_t *mode, const char *cache_mode)
 	return 1;
 }
 
-int cache_set_cache_mode(struct lv_segment *seg, cache_mode_t mode)
+static cache_mode_t _get_cache_mode_from_config(struct cmd_context *cmd,
+						struct profile *profile,
+						struct logical_volume *lv)
 {
-	struct cmd_context *cmd = seg->lv->vg->cmd;
-	struct profile *profile = seg->lv->profile;
+	cache_mode_t mode;
 	const char *str;
 	int id;
-
-	if (seg_is_cache(seg))
-		seg = first_seg(seg->pool_lv);
-	else if (seg_is_cache_pool(seg)) {
-		if (mode == CACHE_MODE_UNSELECTED)
-			return 1;	/* Defaults only for cache */
-	} else {
-		log_error(INTERNAL_ERROR "Cannot set cache mode for non cache volume %s.",
-			  display_lvname(seg->lv));
-		return 0;
-	}
-
-	if (mode != CACHE_MODE_UNSELECTED) {
-		seg->cache_mode = mode;
-		return 1;
-	}
-
-	if (seg->cache_mode != CACHE_MODE_UNSELECTED)
-		return 1;               /* Default already set in cache pool */
 
 	/* Figure default settings from config/profiles */
 	id = allocation_cache_mode_CFG;
@@ -111,11 +109,51 @@ int cache_set_cache_mode(struct lv_segment *seg, cache_mode_t mode)
 
 	if (!(str = find_config_tree_str(cmd, id, profile))) {
 		log_error(INTERNAL_ERROR "Cache mode is not determined.");
+		return CACHE_MODE_WRITETHROUGH;
+	}
+
+	if (!(set_cache_mode(&mode, str)))
+		return CACHE_MODE_WRITETHROUGH;
+
+	return mode;
+}
+
+int cache_set_cache_mode(struct lv_segment *seg, cache_mode_t mode)
+{
+	struct cmd_context *cmd = seg->lv->vg->cmd;
+	struct lv_segment *setting_seg;
+
+	/*
+	 * Don't set a cache mode on an unused cache pool, the
+	 * cache mode will be set when it's attached.
+	 */
+	if (seg_is_cache_pool(seg) && (mode == CACHE_MODE_UNSELECTED))
+		return 1;
+
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+
+	else {
+		log_error(INTERNAL_ERROR "Cannot set cache mode for non cache volume %s.",
+			  display_lvname(seg->lv));
 		return 0;
 	}
 
-	if (!(set_cache_mode(&seg->cache_mode, str)))
-		return_0;
+	if (mode != CACHE_MODE_UNSELECTED) {
+		setting_seg->cache_mode = mode;
+		return 1;
+	}
+
+	if (setting_seg->cache_mode != CACHE_MODE_UNSELECTED)
+		return 1;
+
+	setting_seg->cache_mode = _get_cache_mode_from_config(cmd, seg->lv->profile, seg->lv);
 
 	return 1;
 }
@@ -132,24 +170,29 @@ void cache_check_for_warns(const struct lv_segment *seg)
 		log_warn("WARNING: Data redundancy could be lost with writeback "
 			 "caching of raid logical volume!");
 
-	if (lv_is_thin_pool_data(seg->lv))
-		log_warn("WARNING: Cached thin pool's data cannot be currently "
-			 "resized and require manual uncache before resize!");
+	if (lv_is_thin_pool_data(seg->lv)) {
+		log_warn("WARNING: thin pool data will not be automatically extended when cached.");
+		log_warn("WARNING: manual splitcache is required before extending thin pool data.");
+	}
 }
 
 /*
- * Returns minimum size of cache metadata volume for give  data and chunk size
- * (all values in sector)
- * Default meta size is: (Overhead + mapping size + hint size)
+ * Returns the minimum size of cache metadata volume for given cache data size and
+ * and cache chunk size (all in/out values in sectors)
+ * Default metadata size is: (Overhead + mapping size + hint size)
  */
 static uint64_t _cache_min_metadata_size(uint64_t data_size, uint32_t chunk_size)
 {
-	uint64_t min_meta_size;
+	/* Used space for mapping and hints for each cached chunk in bytes
+	 * (matching thin-tools cache_metadata_size.cc) */
+	const uint64_t chunk_overhead = (DM_BYTES_PER_BLOCK + DM_MAX_HINT_WIDTH + DM_HINT_OVERHEAD_PER_BLOCK);
+	const uint64_t transaction_overhead = DM_TRANSACTION_OVERHEAD * 1024; /* 4MiB */
 
-	min_meta_size = data_size / chunk_size;		/* nr_chunks */
-	min_meta_size *= (DM_BYTES_PER_BLOCK + DM_MAX_HINT_WIDTH + DM_HINT_OVERHEAD_PER_BLOCK);
-	min_meta_size = (min_meta_size + (SECTOR_SIZE - 1)) >> SECTOR_SHIFT;	/* in sectors */
-	min_meta_size += DM_TRANSACTION_OVERHEAD * (1024 >> SECTOR_SHIFT);
+	/* Number of cache chunks we have in caching volume */
+	uint64_t nr_chunks = data_size / chunk_size;
+	/* Minimal size of metadata volume converted back to sectors */
+	uint64_t min_meta_size = (transaction_overhead + nr_chunks * chunk_overhead +
+				  (SECTOR_SIZE - 1)) >> SECTOR_SHIFT;
 
 	return min_meta_size;
 }
@@ -175,9 +218,12 @@ int update_cache_pool_params(struct cmd_context *cmd,
 
 	if (!*chunk_size) {
 		if (!(*chunk_size = find_config_tree_int(cmd, allocation_cache_pool_chunk_size_CFG,
-							 profile) * 2))
+							 profile) * 2)) {
 			*chunk_size = get_default_allocation_cache_pool_chunk_size_CFG(cmd,
 										       profile);
+			/* Use power-of-2 for min chunk size when unspecified */
+			min_chunk_size = UINT64_C(1) << (32 - clz(min_chunk_size - 1));
+		}
 		if (*chunk_size < min_chunk_size) {
 			/*
 			 * When using more then 'standard' default,
@@ -294,12 +340,6 @@ int validate_lv_cache_create_pool(const struct logical_volume *pool_lv)
 {
 	struct lv_segment *seg;
 
-	if (!lv_is_cache_pool(pool_lv)) {
-		log_error("Logical volume %s is not a cache pool.",
-			  display_lvname(pool_lv));
-		return 0;
-	}
-
 	if (lv_is_locked(pool_lv)) {
 		log_error("Cannot use locked cache pool %s.",
 			  display_lvname(pool_lv));
@@ -326,7 +366,9 @@ int validate_lv_cache_create_origin(const struct logical_volume *origin_lv)
 	}
 
 	/* For now we only support conversion of thin pool data volume */
-	if (!lv_is_visible(origin_lv) && !lv_is_thin_pool_data(origin_lv)) {
+	if (!lv_is_visible(origin_lv) &&
+	    !lv_is_thin_pool_data(origin_lv) &&
+	    !lv_is_vdo_pool_data(origin_lv)) {
 		log_error("Can't convert internal LV %s.", display_lvname(origin_lv));
 		return 0;
 	}
@@ -340,7 +382,8 @@ int validate_lv_cache_create_origin(const struct logical_volume *origin_lv)
 	    lv_is_thin_volume(origin_lv) || lv_is_thin_pool_metadata(origin_lv) ||
 	    lv_is_merging_origin(origin_lv) ||
 	    lv_is_cow(origin_lv) || lv_is_merging_cow(origin_lv) ||
-	    lv_is_virtual(origin_lv)) {
+	    /* TODO: think about enabling caching of a single thin volume */
+	    (lv_is_virtual(origin_lv) && !lv_is_vdo(origin_lv))) {
 		log_error("Cache is not supported with %s segment type of the original logical volume %s.",
 			  lvseg_name(first_seg(origin_lv)), display_lvname(origin_lv));
 		return 0;
@@ -386,6 +429,7 @@ int validate_cache_chunk_size(struct cmd_context *cmd, uint32_t chunk_size)
 struct logical_volume *lv_cache_create(struct logical_volume *pool_lv,
 				       struct logical_volume *origin_lv)
 {
+	char cpool_name[NAME_LEN];
 	const struct segment_type *segtype;
 	struct cmd_context *cmd = pool_lv->vg->cmd;
 	struct logical_volume *cache_lv = origin_lv;
@@ -395,7 +439,7 @@ struct logical_volume *lv_cache_create(struct logical_volume *pool_lv,
 	    !validate_lv_cache_create_origin(cache_lv))
 		return_NULL;
 
-	if (lv_is_thin_pool(cache_lv))
+	if (lv_is_thin_pool(cache_lv) || lv_is_vdo_pool(cache_lv))
 		cache_lv = seg_lv(first_seg(cache_lv), 0); /* cache _tdata */
 
 	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_CACHE)))
@@ -409,6 +453,17 @@ struct logical_volume *lv_cache_create(struct logical_volume *pool_lv,
 
 	if (!attach_pool_lv(seg, pool_lv, NULL, NULL, NULL))
 		return_NULL;
+
+	if (lv_is_cache_pool(pool_lv)) {
+		/* Used cache-pool gets  _cpool suffix (easy to recognize from _cvol usage) */
+		if (dm_snprintf(cpool_name, sizeof(cpool_name), "%s_cpool", pool_lv->name) < 0) {
+			log_error("Can't prepare new cachepool name for %s.", display_lvname(pool_lv));
+			return NULL;
+		}
+
+		if (!lv_rename_update(cmd, pool_lv, cpool_name, 0))
+			return_NULL;
+	}
 
 	if (!seg->lv->profile) /* Inherit profile from cache-pool */
 		seg->lv->profile = seg->pool_lv->profile;
@@ -425,7 +480,7 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 	const struct logical_volume *lock_lv = lv_lock_holder(cache_lv);
 	struct lv_segment *cache_seg = first_seg(cache_lv);
 	struct lv_status_cache *status;
-	int cleaner_policy, writeback;
+	int cleaner_policy = 0, writeback;
 	uint64_t dirty_blocks;
 
 	*is_clean = 0;
@@ -433,6 +488,9 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 	//FIXME: use polling to do this...
 	for (;;) {
 		sigint_allow();
+		if (cleaner_policy)
+			/* TODO: Use centralized place */
+			usleep(500000);
 		sigint_restore();
 		if (sigint_caught()) {
 			sigint_clear();
@@ -468,13 +526,8 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 		log_print_unless_silent("Flushing " FMTu64 " blocks for cache %s.",
 					dirty_blocks, display_lvname(cache_lv));
 
-		if (cleaner_policy) {
-			/* TODO: Use centralized place */
-			sigint_allow();
-			usleep(500000);
-			sigint_restore();
+		if (cleaner_policy)
 			continue;
-		}
 
 		if (!(cache_lv->status & LVM_WRITE)) {
 			log_warn("WARNING: Dirty blocks found on read-only cache volume %s.",
@@ -499,7 +552,7 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 	 * TODO: add check if extra suspend resume is necessary
 	 * ATM this is workaround for missing cache sync when cache gets clean
 	 */
-	if (1) {
+	if (cleaner_policy) {
 		if (!lv_refresh_suspend_resume(lock_lv))
 			return_0;
 
@@ -515,12 +568,13 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 
 	return 1;
 }
+
 /*
  * lv_cache_remove
  * @cache_lv
  *
  * Given a cache LV, remove the cache layer.  This will unlink
- * the origin and cache_pool, remove the cache LV layer, and promote
+ * the origin and cache_pool/cachevol, remove the cache LV layer, and promote
  * the origin to a usable non-cached LV of the same name as the
  * given cache_lv.
  *
@@ -531,6 +585,9 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 	struct lv_segment *cache_seg = first_seg(cache_lv);
 	struct logical_volume *corigin_lv;
 	struct logical_volume *cache_pool_lv;
+	struct id *data_id, *metadata_id;
+	uint64_t data_len, metadata_len;
+	cache_mode_t cache_mode;
 	int is_clear;
 
 	if (!lv_is_cache(cache_lv)) {
@@ -551,7 +608,9 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 		if (!deactivate_lv_with_sub_lv(cache_lv))
 			return_0;
 
-		switch (first_seg(cache_seg->pool_lv)->cache_mode) {
+		cache_mode = (lv_is_cache_pool(cache_seg->pool_lv)) ?
+			first_seg(cache_seg->pool_lv)->cache_mode : cache_seg->cache_mode;
+		switch (cache_mode) {
 		case CACHE_MODE_WRITETHROUGH:
 		case CACHE_MODE_PASSTHROUGH:
 			/* For inactive pass/writethrough just drop cache layer */
@@ -568,8 +627,7 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 			cache_lv->status |= LV_TEMPORARY;
 			if (!activate_lv(cache_lv->vg->cmd, cache_lv) ||
 			    !lv_is_active(cache_lv)) {
-				log_error("Failed to active cache locally %s.",
-					  display_lvname(cache_lv));
+				log_error("Failed to activate %s to flush cache.", display_lvname(cache_lv));
 				return 0;
 			}
 			cache_lv->status &= ~LV_TEMPORARY;
@@ -615,6 +673,13 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 	if (!remove_layer_from_lv(cache_lv, corigin_lv))
 		return_0;
 
+	/* Preserve currently imortant data from original cache segment.
+	 * TODO: can it be done without this ? */
+	data_id = cache_seg->data_id;
+	data_len = cache_seg->data_len;
+	metadata_id = cache_seg->metadata_id;
+	metadata_len = cache_seg->metadata_len;
+
 	/* Replace 'error' with 'cache' segtype */
 	cache_seg = first_seg(corigin_lv);
 	if (!(cache_seg->segtype = get_segtype_from_string(corigin_lv->vg->cmd, SEG_TYPE_NAME_CACHE)))
@@ -630,6 +695,18 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 	corigin_lv->size = cache_lv->size;
 	corigin_lv->status |= LV_PENDING_DELETE;
 
+	/* Restore preserved data into a new cache segment that is going to be removed. */
+	if ((cache_seg->data_len = data_len)) {
+		cache_seg->metadata_len = metadata_len;
+		cache_seg->data_id = data_id;
+		cache_seg->metadata_id = metadata_id;
+		cache_pool_lv->status |= LV_CACHE_VOL;
+		/* Unused settings set only for passing metadata validation. */
+		cache_seg->cache_mode = CACHE_MODE_WRITETHROUGH;
+		cache_seg->chunk_size = DM_CACHE_MAX_DATA_BLOCK_SIZE;
+		cache_seg->cache_metadata_format = CACHE_METADATA_FORMAT_2;
+	}
+
 	/* Reattach cache pool */
 	if (!attach_pool_lv(cache_seg, cache_pool_lv, NULL, NULL, NULL))
 		return_0;
@@ -644,6 +721,8 @@ remove:
 
 	if (!lv_remove(cache_lv)) /* Will use LV_PENDING_DELETE */
 		return_0;
+
+	/* CachePool or CacheVol is left inactivate for further manipulation */
 
 	return 1;
 }
@@ -709,23 +788,33 @@ static cache_metadata_format_t _get_default_cache_metadata_format(struct cmd_con
 	return f;
 }
 
-int cache_set_policy(struct lv_segment *seg, const char *name,
+int cache_set_policy(struct lv_segment *lvseg, const char *name,
 		     const struct dm_config_tree *settings)
 {
+	struct lv_segment *seg;
 	struct dm_config_node *cn;
 	const struct dm_config_node *cns;
 	struct dm_config_tree *old = NULL, *new = NULL, *tmp = NULL;
 	int r = 0;
-	struct profile *profile = seg->lv->profile;
+	struct profile *profile = lvseg->lv->profile;
 
-	if (seg_is_cache(seg))
-		seg = first_seg(seg->pool_lv);
-	else if (seg_is_cache_pool(seg)) {
+	if (seg_is_cache_pool(lvseg)) {
 		if (!name && !settings)
 			return 1; /* Policy and settings can be selected later when caching LV */
-	} else {
+	}
+
+	if (seg_is_cache(lvseg) && lv_is_cache_vol(lvseg->pool_lv))
+		seg = lvseg;
+
+	else if (seg_is_cache_pool(lvseg))
+		seg = lvseg;
+
+	else if (seg_is_cache(lvseg))
+		seg = first_seg(lvseg->pool_lv);
+
+	else {
 		log_error(INTERNAL_ERROR "Cannot set cache metadata format for non cache volume %s.",
-			  display_lvname(seg->lv));
+			  display_lvname(lvseg->lv));
 		return 0;
 	}
 
@@ -887,10 +976,238 @@ int cache_set_metadata_format(struct lv_segment *seg, cache_metadata_format_t fo
 	return 1;
 }
 
-/*
- * Universal 'wrapper' function  do-it-all
- * to update all commonly specified cache parameters
- */
+#define ONE_MB_IN_SECTORS 2048 /* 1MB in sectors */
+#define ONE_GB_IN_SECTORS 2097152 /* 1GB in sectors */
+
+int cache_vol_set_params(struct cmd_context *cmd,
+		     struct logical_volume *cache_lv,
+		     struct logical_volume *pool_lv,
+		     uint64_t poolmetadatasize,
+		     uint32_t chunk_size,
+		     cache_metadata_format_t format,
+		     cache_mode_t mode,
+		     const char *policy,
+		     const struct dm_config_tree *settings)
+{
+	struct dm_pool *mem = cache_lv->vg->vgmem;
+	struct profile *profile = cache_lv->profile;
+	struct lv_segment *cache_seg = first_seg(cache_lv);
+	struct logical_volume *corig_lv = seg_lv(cache_seg, 0);
+	const char *policy_name = NULL;
+	struct dm_config_node *policy_settings = NULL;
+	const struct dm_config_node *cns;
+	struct dm_config_node *cn;
+	uint64_t meta_size = 0;
+	uint64_t data_size = 0;
+	uint64_t max_chunks;
+	uint32_t min_meta_size;
+	uint32_t max_meta_size;
+	uint32_t extent_size;
+
+	/* all _size variables in units of sectors (512 bytes) */
+
+
+	/*
+	 * cache format: only create new cache LVs with 2.
+	 */
+
+	if (format == CACHE_METADATA_FORMAT_UNSELECTED)
+		format = CACHE_METADATA_FORMAT_2;
+	if (format == CACHE_METADATA_FORMAT_1) {
+		log_error("Use cache metadata format 2.");
+		return 0;
+	}
+
+
+	/*
+	 * cache mode: get_cache_params() gets mode from --cachemode or sets
+	 * UNSEL.  When unspecified, it comes from config.
+	 */
+
+	if (mode == CACHE_MODE_UNSELECTED)
+		mode = _get_cache_mode_from_config(cmd, profile, cache_lv);
+
+	cache_seg->cache_mode = mode;
+
+
+	/*
+	 * chunk size: get_cache_params() get chunk_size from --chunksize or
+	 * sets 0.  When unspecified it comes from config or default.
+	 *
+	 * cache_pool_chunk_size in lvm.conf, DEFAULT_CACHE_POOL_CHUNK_SIZE,
+	 * and DEFAULT_CACHE_POOL_MAX_METADATA_SIZE are in KiB, so *2 turn
+	 * them into sectors.
+	 */
+
+	if (!chunk_size)
+		chunk_size = find_config_tree_int(cmd, allocation_cache_pool_chunk_size_CFG, cache_lv->profile) * 2;
+
+	if (!chunk_size)
+		chunk_size = get_default_allocation_cache_pool_chunk_size_CFG(cmd, profile);
+
+	if (!validate_cache_chunk_size(cmd, chunk_size))
+		return_0;
+
+
+	/*
+	 * metadata size: can be specified with --poolmetadatasize,
+	 * otherwise it's set according to the size of the cache.
+	 * data size: the LV size minus the metadata size.
+	 */
+
+	if (!(extent_size = pool_lv->vg->extent_size)) {
+		log_error(INTERNAL_ERROR "Extend size can't be 0.");
+		return 0;
+	}
+	min_meta_size = extent_size;
+	max_meta_size = 2 * DEFAULT_CACHE_POOL_MAX_METADATA_SIZE; /* 2x for KiB to sectors */
+
+	if (pool_lv->size < (extent_size * 2)) {
+		log_error("The minimum cache size is two extents (%s bytes).",
+			  display_size(cmd, extent_size * 2));
+		return 0;
+	}
+
+	if (poolmetadatasize) {
+		meta_size = poolmetadatasize; /* in sectors, from --poolmetadatasize, see _size_arg() */
+
+		if (meta_size > max_meta_size) {
+			meta_size = max_meta_size;
+			log_print_unless_silent("Rounding down metadata size to max size %s",
+						display_size(cmd, meta_size));
+		}
+		if (meta_size < min_meta_size) {
+			meta_size = min_meta_size;
+			log_print_unless_silent("Rounding up metadata size to min size %s",
+						display_size(cmd, meta_size));
+		}
+
+		if (meta_size % extent_size) {
+			meta_size += extent_size - meta_size % extent_size;
+			log_print_unless_silent("Rounding up metadata size to full physical extent %s",
+						display_size(cmd, meta_size));
+		}
+	}
+
+	if (!meta_size) {
+		meta_size = _cache_min_metadata_size(pool_lv->size, chunk_size);
+
+		/* fix bad value from _cache_min_metadata_size */
+		if (meta_size > (pool_lv->size / 2))
+			meta_size = pool_lv->size / 2;
+
+		if (meta_size < min_meta_size)
+			meta_size = min_meta_size;
+
+		if (meta_size % extent_size)
+			meta_size += extent_size - meta_size % extent_size;
+	}
+
+	data_size = pool_lv->size - meta_size;
+
+	max_chunks = get_default_allocation_cache_pool_max_chunks_CFG(cmd, profile);
+
+	if (data_size / chunk_size > max_chunks) {
+		log_error("Cache data blocks %llu and chunk size %u exceed max chunks %llu.",
+			  (unsigned long long)data_size, chunk_size, (unsigned long long)max_chunks);
+		log_error("Use smaller cache, larger --chunksize or increase max chunks setting.");
+		return 0;
+	}
+
+
+	/*
+	 * cache policy: get_cache_params() gets policy from --cachepolicy,
+	 * or sets NULL.
+	 */
+
+	if (!policy)
+		policy = find_config_tree_str(cmd, allocation_cache_policy_CFG, profile);
+
+	if (!policy)
+		policy = _get_default_cache_policy(cmd);
+
+	if (!policy) {
+		log_error(INTERNAL_ERROR "Missing cache policy name.");
+		return 0;
+	}
+
+	if (!(policy_name = dm_pool_strdup(mem, policy)))
+		return_0;
+
+
+	/*
+	 * cache settings: get_cache_params() gets policy from --cachesettings,
+	 * or sets NULL.
+	 * FIXME: code for this is a mess, mostly copied from cache_set_policy
+	 * which is even worse.
+	 */
+
+	if (settings) {
+		if ((cn = dm_config_find_node(settings->root, "policy_settings"))) {
+			if (!(policy_settings = dm_config_clone_node_with_mem(mem, cn, 0)))
+				return_0;
+		}
+	} else {
+		if ((cns = find_config_tree_node(cmd, allocation_cache_settings_CFG_SECTION, profile))) {
+			/* Try to find our section for given policy */
+			for (cn = cns->child; cn; cn = cn->sib) {
+				if (!cn->child)
+					continue; /* Ignore section without settings */
+
+				if (cn->v || strcmp(cn->key, policy_name) != 0)
+					continue; /* Ignore mismatching sections */
+
+				/* Clone nodes with policy name */
+				if (!(policy_settings = dm_config_clone_node_with_mem(mem, cn, 0)))
+					return_0;
+
+				/* Replace policy name key with 'policy_settings' */
+				policy_settings->key = "policy_settings";
+				break; /* Only first match counts */
+			}
+		}
+	}
+  restart: /* remove any 'default" nodes */
+	cn = policy_settings ? policy_settings->child : NULL;
+	while (cn) {
+		if (cn->v->type == DM_CFG_STRING && !strcmp(cn->v->v.str, "default")) {
+			dm_config_remove_node(policy_settings, cn);
+			goto restart;
+		}
+		cn = cn->sib;
+	}
+
+
+	log_debug("Setting LV %s cache on %s meta start 0 len %llu data start %llu len %llu sectors",
+		  display_lvname(cache_lv), display_lvname(pool_lv),
+		  (unsigned long long)meta_size,
+		  (unsigned long long)meta_size,
+		  (unsigned long long)data_size);
+	log_debug("Setting LV %s cache format %u policy %s chunk_size %u sectors",
+		  display_lvname(cache_lv), format, policy_name, chunk_size);
+
+	if (lv_is_raid(corig_lv) && (mode == CACHE_MODE_WRITEBACK))
+		log_warn("WARNING: Data redundancy could be lost with writeback caching of raid logical volume!");
+
+	if (lv_is_thin_pool_data(cache_lv)) {
+		log_warn("WARNING: thin pool data will not be automatically extended when cached.");
+		log_warn("WARNING: manual splitcache is required before extending thin pool data.");
+	}
+
+	cache_seg->chunk_size = chunk_size;
+	cache_seg->metadata_start = 0;
+	cache_seg->metadata_len = meta_size;
+	cache_seg->data_start = meta_size;
+	cache_seg->data_len = data_size;
+	cache_seg->cache_metadata_format = format;
+	cache_seg->policy_name = policy_name;
+	cache_seg->policy_settings = policy_settings;
+	/* Since we add -cdata  and -cmeta to UUID we use CacheVol LV UUID */
+	cache_seg->data_id = cache_seg->metadata_id = NULL;
+
+	return 1;
+}
+
 int cache_set_params(struct lv_segment *seg,
 		     uint32_t chunk_size,
 		     cache_metadata_format_t format,
@@ -956,8 +1273,7 @@ int wipe_cache_pool(struct logical_volume *cache_pool_lv)
 	int r;
 
 	/* Only unused cache-pool could be activated and wiped */
-	if (!lv_is_cache_pool(cache_pool_lv) ||
-	    !dm_list_empty(&cache_pool_lv->segs_using_this_lv)) {
+	if (lv_is_used_cache_pool(cache_pool_lv) || lv_is_cache_vol(cache_pool_lv)) {
 		log_error(INTERNAL_ERROR "Failed to wipe cache pool for volume %s.",
 			  display_lvname(cache_pool_lv));
 		return 0;

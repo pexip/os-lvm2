@@ -38,9 +38,11 @@ void internal_filter_clear(void)
 }
 
 static int _passes_internal(struct cmd_context *cmd, struct dev_filter *f __attribute__((unused)),
-			    struct device *dev)
+			    struct device *dev, const char *use_filter_name)
 {
 	struct device_list *devl;
+
+	dev->filtered_flags &= ~DEV_FILTERED_INTERNAL;
 
 	if (!internal_filtering())
 		return 1;
@@ -50,6 +52,7 @@ static int _passes_internal(struct cmd_context *cmd, struct dev_filter *f __attr
 			return 1;
 	}
 	
+	dev->filtered_flags |= DEV_FILTERED_INTERNAL;
 	log_debug_devs("%s: Skipping for internal filtering.", dev_name(dev));
 	return 0;
 }
@@ -74,6 +77,7 @@ struct dev_filter *internal_filter_create(void)
 	f->passes_filter = _passes_internal;
 	f->destroy = _destroy;
 	f->use_count = 0;
+	f->name = "internal";
 
 	log_debug_devs("Internal filter initialised.");
 

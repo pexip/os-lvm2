@@ -286,12 +286,16 @@ int vg_add_snapshot(struct logical_volume *origin,
 
 int vg_remove_snapshot(struct logical_volume *cow)
 {
-	int merging_snapshot = 0;
 	struct logical_volume *origin = origin_from_cow(cow);
 	int is_origin_active = lv_is_active(origin);
 
 	if (is_origin_active &&
 	    lv_is_virtual_origin(origin)) {
+		if (!sync_local_dev_names(origin->vg->cmd)) {
+			log_error("Failed to sync local devices before deactivating origin LV %s.",
+				  display_lvname(origin));
+			return 0;
+		}
 		if (!deactivate_lv(origin->vg->cmd, origin)) {
 			log_error("Failed to deactivate logical volume \"%s\"",
 				  origin->name);
@@ -310,17 +314,6 @@ int vg_remove_snapshot(struct logical_volume *cow)
 		 * preload origin IFF "snapshot-merge" target is active
 		 * - IMPORTANT: avoids preload if inactivate merge is pending
 		 */
-		if (lv_has_target_type(origin->vg->vgmem, origin, NULL,
-				       TARGET_NAME_SNAPSHOT_MERGE)) {
-			/*
-			 * preload origin to:
-			 * - allow proper release of -cow
-			 * - avoid allocations with other devices suspended
-			 *   when transitioning from "snapshot-merge" to
-			 *   "snapshot-origin after a merge completes.
-			 */
-			merging_snapshot = 1;
-		}
 	}
 
 	if (!lv_remove(cow->snapshot->lv)) {
@@ -351,24 +344,13 @@ int vg_remove_snapshot(struct logical_volume *cow)
 		 * the LV lock on cluster has to be grabbed, so use
 		 * activate_lv() which resumes suspend cow device.
 		 */
-		if (!merging_snapshot && !activate_lv(cow->vg->cmd, cow)) {
+		if (!activate_lv(cow->vg->cmd, cow)) {
 			log_error("Failed to activate %s.", cow->name);
 			return 0;
 		}
 
 		if (!resume_lv(origin->vg->cmd, origin)) {
 			log_error("Failed to resume %s.", origin->name);
-			return 0;
-		}
-
-		/*
-		 * For merged snapshot and clustered VG activate cow LV so
-		 * the following call to deactivate_lv() can clean-up table
-		 * entries. For this clustered lock need to be held.
-		 */
-		if (vg_is_clustered(cow->vg) &&
-		    merging_snapshot && !activate_lv(cow->vg->cmd, cow)) {
-			log_error("Failed to activate %s.", cow->name);
 			return 0;
 		}
 	}
@@ -403,8 +385,11 @@ int validate_snapshot_origin(const struct logical_volume *origin_lv)
 			log_warn("WARNING: Consider using the raid1 mirror type to avoid this.");
 			log_warn("WARNING: See global/mirror_segtype_default in lvm.conf.");
 		}
-	} else if (lv_is_raid_type(origin_lv) && !lv_is_raid(origin_lv))
+	} else if (lv_is_raid_type(origin_lv) && !lv_is_raid(origin_lv)) {
 		err = "raid subvolumes";
+	} else if (lv_is_raid(origin_lv) && lv_raid_has_integrity((struct logical_volume *)origin_lv)) {
+		err = "raid with integrity";
+	}
 
 	if (err) {
 		log_error("Snapshots of %s are not supported.", err);

@@ -67,6 +67,8 @@ static int _consolidate_vg(struct cmd_context *cmd, struct volume_group *vg)
 		cmd->handles_missing_pvs = 1;
 		log_error("There are still partial LVs in VG %s.", vg->name);
 		log_error("To remove them unconditionally use: vgreduce --removemissing --force.");
+		log_error("To remove them unconditionally from mirror LVs use: vgreduce"
+				  " --removemissing --mirrorsonly --force.");
 		log_warn("WARNING: Proceeding to remove empty missing PVs.");
 	}
 
@@ -135,7 +137,7 @@ static int _vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 {
 	int r;
 
-	if (!vg_check_status(vg, EXPORTED_VG | LVM_WRITE | RESIZEABLE_VG))
+	if (!vg_check_status(vg, LVM_WRITE | RESIZEABLE_VG))
 		return ECMD_FAILED;
 
 	r = vgreduce_single(cmd, vg, pv, 1);
@@ -219,10 +221,10 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 	argv++;
 	argc--;
 
-	/* Needed to change the set of orphan PVs. */
-	if (!lockd_gl(cmd, "ex", 0))
+	if (!lock_global(cmd, "ex"))
 		return_ECMD_FAILED;
-	cmd->lockd_gl_disable = 1;
+
+	clear_hint_file(cmd);
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
@@ -231,20 +233,12 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 	handle->custom_handle = &vp;
 
 	if (!repairing) {
-		if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
-			log_error("Can't get lock for orphan PVs");
-			ret = ECMD_FAILED;
-			goto out;
-		}
-
 		/* FIXME: Pass private struct through to all these functions */
 		/* and update in batch afterwards? */
 
-		ret = process_each_pv(cmd, argc, argv, vg_name, 0,
-				      READ_FOR_UPDATE | PROCESS_SKIP_ORPHAN_LOCK,
+		ret = process_each_pv(cmd, argc, argv, vg_name, 0, READ_FOR_UPDATE,
 				      handle, _vgreduce_single);
 
-		unlock_vg(cmd, NULL, VG_ORPHANS);
 		goto out;
 	}
 
@@ -258,8 +252,7 @@ int vgreduce(struct cmd_context *cmd, int argc, char **argv)
 
 	init_ignore_suspended_devices(1);
 
-	process_each_vg(cmd, 0, NULL, vg_name, NULL,
-			READ_FOR_UPDATE | READ_ALLOW_EXPORTED,
+	process_each_vg(cmd, 0, NULL, vg_name, NULL, READ_FOR_UPDATE,
 			0, handle, &_vgreduce_repair_single);
 
 	if (vp.already_consistent) {

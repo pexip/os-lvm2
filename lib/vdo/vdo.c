@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2018-2019 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -165,21 +165,19 @@ static void _vdo_pool_display(const struct lv_segment *seg)
 
 	_print_yes_no("Compression\t", vtp->use_compression);
 	_print_yes_no("Deduplication", vtp->use_deduplication);
-	_print_yes_no("Emulate 512 sectors", vtp->emulate_512_sectors);
+	_print_yes_no("Metadata hints", vtp->use_metadata_hints);
 
+	log_print("  Minimum IO size\t%s",
+		  display_size(cmd, vtp->minimum_io_size));
 	log_print("  Block map cache sz\t%s",
 		  display_size(cmd, vtp->block_map_cache_size_mb * UINT64_C(2 * 1024)));
-	log_print("  Block map period\t%u", vtp->block_map_period);
+	log_print("  Block map era length\t%u", vtp->block_map_era_length);
 
 	_print_yes_no("Sparse index", vtp->use_sparse_index);
 
 	log_print("  Index memory size\t%s",
 		  display_size(cmd, vtp->index_memory_size_mb * UINT64_C(2 * 1024)));
 
-	_print_yes_no("Using read cache", vtp->use_read_cache);
-
-	log_print("  Read cache size\t%s",
-		  display_size(cmd, vtp->read_cache_size_mb * UINT64_C(2 * 1024)));
 	log_print("  Slab size\t\t%s",
 		  display_size(cmd, vtp->slab_size_mb * UINT64_C(2 * 1024)));
 
@@ -190,6 +188,8 @@ static void _vdo_pool_display(const struct lv_segment *seg)
 	log_print("  # Hash zone threads\t%u", (unsigned) vtp->hash_zone_threads);
 	log_print("  # Logical threads\t%u", (unsigned) vtp->logical_threads);
 	log_print("  # Physical threads\t%u", (unsigned) vtp->physical_threads);
+	log_print("  Max discard\t%u", (unsigned) vtp->max_discard);
+	log_print("  Write policy\t%s", get_vdo_write_policy_name(vtp->write_policy));
 }
 
 /* reused as _vdo_text_import_area_count */
@@ -235,14 +235,18 @@ static int _vdo_pool_text_import(struct lv_segment *seg,
 	if (!_import_bool(n, "use_deduplication", &vtp->use_deduplication))
 		return_0;
 
-	if (!_import_bool(n, "emulate_512_sectors", &vtp->emulate_512_sectors))
+	if (!_import_bool(n, "use_metadata_hints", &vtp->use_metadata_hints))
 		return_0;
+
+	if (!dm_config_get_uint32(n, "minimum_io_size", &vtp->minimum_io_size))
+		return _bad_field("minimum_io_size");
+	vtp->minimum_io_size >>= SECTOR_SHIFT; // keep in sectors, while metadata uses bytes
 
 	if (!dm_config_get_uint32(n, "block_map_cache_size_mb", &vtp->block_map_cache_size_mb))
 		return _bad_field("block_map_cache_size_mb");
 
-	if (!dm_config_get_uint32(n, "block_map_period", &vtp->block_map_period))
-		return _bad_field("block_map_period");
+	if (!dm_config_get_uint32(n, "block_map_era_length", &vtp->block_map_era_length))
+		return _bad_field("block_map_era_length");
 
 	if (!_import_bool(n, "use_sparse_index", &vtp->use_sparse_index))
 		return_0;
@@ -250,11 +254,8 @@ static int _vdo_pool_text_import(struct lv_segment *seg,
 	if (!dm_config_get_uint32(n, "index_memory_size_mb", &vtp->index_memory_size_mb))
 		return _bad_field("index_memory_size_mb");
 
-	if (!_import_bool(n, "use_read_cache", &vtp->use_read_cache))
-		return_0;
-
-	if (!dm_config_get_uint32(n, "read_cache_size_mb", &vtp->read_cache_size_mb))
-		return _bad_field("read_cache_size_mb");
+	if (!dm_config_get_uint32(n, "max_discard", &vtp->max_discard))
+		return _bad_field("max_discard");
 
 	if (!dm_config_get_uint32(n, "slab_size_mb", &vtp->slab_size_mb))
 		return _bad_field("slab_size_mb");
@@ -280,6 +281,12 @@ static int _vdo_pool_text_import(struct lv_segment *seg,
 	if (!dm_config_get_uint32(n, "physical_threads", &vtp->physical_threads))
 		return _bad_field("physical_threads");
 
+	if (dm_config_has_node(n, "write_policy")) {
+		if (!(str = dm_config_find_str(n, "write_policy", NULL)) ||
+		    !set_vdo_write_policy(&vtp->write_policy, str))
+			return _bad_field("write_policy");
+	} else
+		vtp->write_policy = DM_VDO_WRITE_POLICY_AUTO;
 
 	if (!set_lv_segment_area_lv(seg, 0, data_lv, 0, LV_VDO_POOL_DATA))
 		return_0;
@@ -295,10 +302,10 @@ static int _vdo_pool_text_export(const struct lv_segment *seg, struct formatter 
 	const struct dm_vdo_target_params *vtp = &seg->vdo_params;
 
 	outf(f, "data = \"%s\"", seg_lv(seg, 0)->name);
-	outsize(f, seg->vdo_pool_header_size, "header_size = %u\t",
+	outsize(f, seg->vdo_pool_header_size, "header_size = %u",
 		seg->vdo_pool_header_size);
 	outsize(f, seg->vdo_pool_virtual_extents * (uint64_t) seg->lv->vg->extent_size,
-		"virtual_extents = %u\t", seg->vdo_pool_virtual_extents);
+		"virtual_extents = %u", seg->vdo_pool_virtual_extents);
 
 	outnl(f);
 
@@ -306,12 +313,14 @@ static int _vdo_pool_text_export(const struct lv_segment *seg, struct formatter 
 		outf(f, "use_compression = 1");
 	if (vtp->use_deduplication)
 		outf(f, "use_deduplication = 1");
-	if (vtp->emulate_512_sectors)
-		outf(f, "emulate_512_sectors = 1");
+	if (vtp->use_metadata_hints)
+		outf(f, "use_metadata_hints = 1");
+
+	outf(f, "minimum_io_size = %u", (vtp->minimum_io_size << SECTOR_SHIFT));
 
 	outsize(f, vtp->block_map_cache_size_mb * UINT64_C(2 * 1024),
 		"block_map_cache_size_mb = %u", vtp->block_map_cache_size_mb);
-	outf(f, "block_map_period = %u", vtp->block_map_period);
+	outf(f, "block_map_era_length = %u", vtp->block_map_era_length);
 
 	if (vtp->use_sparse_index)
 		outf(f, "use_sparse_index = 1");
@@ -319,11 +328,9 @@ static int _vdo_pool_text_export(const struct lv_segment *seg, struct formatter 
 	outsize(f, vtp->index_memory_size_mb * UINT64_C(2 * 1024),
 		"index_memory_size_mb = %u", vtp->index_memory_size_mb);
 
-	if (vtp->use_read_cache)
-		outf(f, "use_read_cache = 1");
+	outf(f, "max_discard = %u", vtp->max_discard);
+
 	// TODO - conditionally
-	outsize(f, vtp->read_cache_size_mb * UINT64_C(2 * 1024),
-		"read_cache_size_mb = %u", vtp->read_cache_size_mb);
 	outsize(f, vtp->slab_size_mb * UINT64_C(2 * 1024),
 		"slab_size_mb = %u", vtp->slab_size_mb);
 	outf(f, "ack_threads = %u", (unsigned) vtp->ack_threads);
@@ -333,6 +340,9 @@ static int _vdo_pool_text_export(const struct lv_segment *seg, struct formatter 
 	outf(f, "hash_zone_threads = %u", (unsigned) vtp->hash_zone_threads);
 	outf(f, "logical_threads = %u", (unsigned) vtp->logical_threads);
 	outf(f, "physical_threads = %u", (unsigned) vtp->physical_threads);
+
+	if (vtp->write_policy != DM_VDO_WRITE_POLICY_AUTO)
+		outf(f, "write_policy = %s", get_vdo_write_policy_name(vtp->write_policy));
 
 	return 1;
 }
@@ -352,19 +362,22 @@ static int _vdo_pool_add_target_line(struct dev_manager *dm,
 				     struct dm_tree_node *node, uint64_t len,
 				     uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
-	char *data_uuid;
+	char *vdo_pool_name, *data_uuid;
 
 	if (!seg_is_vdo_pool(seg)) {
 		log_error(INTERNAL_ERROR "Passed segment is not VDO pool.");
 		return 0;
 	}
+	if (!(vdo_pool_name = dm_build_dm_name(mem, seg->lv->vg->name, seg->lv->name, lv_layer(seg->lv))))
+		return_0;
 
 	if (!(data_uuid = build_dm_uuid(mem, seg_lv(seg, 0), lv_layer(seg_lv(seg, 0)))))
 		return_0;
 
 	/* VDO uses virtual size instead of its physical size */
 	if (!dm_tree_node_add_vdo_target(node, get_vdo_pool_virtual_size(seg),
-					 data_uuid, &seg->vdo_params))
+					 vdo_pool_name, data_uuid, seg_lv(seg, 0)->size,
+					 &seg->vdo_params))
 		return_0;
 
 	return 1;

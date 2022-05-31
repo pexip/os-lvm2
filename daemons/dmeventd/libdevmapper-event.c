@@ -12,7 +12,6 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "configure.h"
 #include "libdevmapper-event.h"
 #include "dmeventd.h"
 #include "libdm/misc/dm-logging.h"
@@ -238,16 +237,16 @@ static int _daemon_read(struct dm_event_fifos *fifos,
 			ret = select(fifos->server + 1, &fds, NULL, NULL, &tval);
 			if (ret < 0 && errno != EINTR) {
 				log_error("Unable to read from event server.");
-				return 0;
+				goto bad;
 			}
 			if ((ret == 0) && (i > 4) && !bytes) {
 				log_error("No input from event server.");
-				return 0;
+				goto bad;
 			}
 		}
 		if (ret < 1) {
 			log_error("Unable to read from event server.");
-			return 0;
+			goto bad;
 		}
 
 		ret = read(fifos->server, buf + bytes, size);
@@ -256,25 +255,32 @@ static int _daemon_read(struct dm_event_fifos *fifos,
 				continue;
 
 			log_error("Unable to read from event server.");
-			return 0;
+			goto bad;
 		}
 
 		bytes += ret;
-		if (header && (bytes == 2 * sizeof(uint32_t))) {
+		if (!msg->data && (bytes == 2 * sizeof(uint32_t))) {
 			msg->cmd = ntohl(header[0]);
-			msg->size = ntohl(header[1]);
-			buf = msg->data = malloc(msg->size);
-			size = msg->size;
 			bytes = 0;
-			header = 0;
+
+			if (!(size = msg->size = ntohl(header[1])))
+				break;
+
+			if (!(buf = msg->data = malloc(msg->size))) {
+				log_error("Unable to allocate message data.");
+				return 0;
+			}
 		}
 	}
 
-	if (bytes != size) {
-		free(msg->data);
-		msg->data = NULL;
-	}
-	return bytes == size;
+	if (bytes == size)
+		return 1;
+
+bad:
+	free(msg->data);
+	msg->data = NULL;
+
+	return 0;
 }
 
 /* Write message to daemon. */
@@ -609,8 +615,8 @@ static int _do_event(int cmd, char *dmeventd_path, struct dm_event_daemon_messag
 {
 	int ret;
 	struct dm_event_fifos fifos = {
-		.server = -1,
 		.client = -1,
+		.server = -1,
 		/* FIXME Make these either configurable or depend directly on dmeventd_path */
 		.client_path = DM_EVENT_FIFO_CLIENT,
 		.server_path = DM_EVENT_FIFO_SERVER

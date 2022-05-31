@@ -192,6 +192,7 @@ struct load_segment {
 	uint64_t transaction_id;	/* Thin_pool */
 	uint64_t low_water_mark;	/* Thin_pool */
 	uint32_t data_block_size;       /* Thin_pool + cache */
+	uint32_t migration_threshold;   /* Cache */
 	unsigned skip_block_zeroing;	/* Thin_pool */
 	unsigned ignore_discard;	/* Thin_pool target vsn 1.1 */
 	unsigned no_discard_passdown;	/* Thin_pool target vsn 1.1 */
@@ -1427,9 +1428,41 @@ out:
 	return r;
 }
 
-static int _thin_pool_node_message(struct dm_tree_node *dnode, struct thin_message *tm)
+static int _node_message(uint32_t major, uint32_t minor,
+			 int expected_errno, const char *message)
 {
 	struct dm_task *dmt;
+	int r = 0;
+
+	if (!(dmt = dm_task_create(DM_DEVICE_TARGET_MSG)))
+		return_0;
+
+	if (!dm_task_set_major(dmt, major) ||
+	    !dm_task_set_minor(dmt, minor)) {
+		log_error("Failed to set message major minor.");
+		goto out;
+	}
+
+	if (!dm_task_set_message(dmt, message))
+		goto_out;
+
+	/* Internal functionality of dm_task */
+	dmt->expected_errno = expected_errno;
+
+	if (!dm_task_run(dmt)) {
+		log_error("Failed to process message \"%s\".", message);
+		goto out;
+	}
+
+	r = 1;
+out:
+	dm_task_destroy(dmt);
+
+	return r;
+}
+
+static int _thin_pool_node_message(struct dm_tree_node *dnode, struct thin_message *tm)
+{
 	struct dm_thin_message *m = &tm->message;
 	char buf[64];
 	int r;
@@ -1469,33 +1502,40 @@ static int _thin_pool_node_message(struct dm_tree_node *dnode, struct thin_messa
 		return 0;
 	}
 
-	r = 0;
+	if (!_node_message(dnode->info.major, dnode->info.minor,
+			   tm->expected_errno, buf)) {
+		switch (m->type) {
+		case DM_THIN_MESSAGE_CREATE_SNAP:
+		case DM_THIN_MESSAGE_CREATE_THIN:
+			if (errno == EEXIST) {
+				/*
+				 * ATM errno from ioctl() is preserved through code error path chain
+				 * If this would ever change, another way need to be used to
+				 * obtain result from failed DM message
+				 */
+				log_error("Thin pool %s already contain thin device with device_id %u.",
+					  _node_name(dnode), m->u.m_create_snap.device_id);
+				/*
+				 * TODO:
+				 *
+				 * Give some useful advice how to solve this problem,
+				 * until lvconvert --repair can handle this automatically
+				 */
+				log_error("Manual intervention may be required to remove device dev_id=%u in thin pool metadata.",
+					  m->u.m_create_snap.device_id);
+				log_error("Optionally new thin volume with device_id=%u can be manually added into a volume group.",
+					  m->u.m_create_snap.device_id);
+				log_warn("WARNING: When uncertain how to do this, contact support!");
+				return 0;
+			}
+			/* fall through */
+		default:
+			return_0;
+		}
 
-	if (!(dmt = dm_task_create(DM_DEVICE_TARGET_MSG)))
-		return_0;
-
-	if (!dm_task_set_major(dmt, dnode->info.major) ||
-	    !dm_task_set_minor(dmt, dnode->info.minor)) {
-		log_error("Failed to set message major minor.");
-		goto out;
 	}
 
-	if (!dm_task_set_message(dmt, buf))
-		goto_out;
-
-	/* Internal functionality of dm_task */
-	dmt->expected_errno = tm->expected_errno;
-
-	if (!dm_task_run(dmt)) {
-		log_error("Failed to process thin pool message \"%s\".", buf);
-		goto out;
-	}
-
-	r = 1;
-out:
-	dm_task_destroy(dmt);
-
-	return r;
+	return 1;
 }
 
 static struct load_segment *_get_last_load_segment(struct dm_tree_node *node)
@@ -1559,6 +1599,15 @@ static int _node_send_messages(struct dm_tree_node *dnode,
 
 	if (!have_messages || !send)
 		return 1; /* transaction_id is matching */
+
+	if (stp.fail || stp.read_only || stp.needs_check) {
+		log_error("Cannot send messages to thin pool %s%s%s%s.",
+			  _node_name(dnode),
+			  stp.fail ? " in failed state" : "",
+			  stp.read_only ? " with read only metadata" : "",
+			  stp.needs_check ? " which needs check first" : "");
+		return 0;
+	}
 
 	dm_list_iterate_items(tmsg, &seg->thin_messages) {
 		if (!(_thin_pool_node_message(dnode, tmsg)))
@@ -1917,26 +1966,26 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 				r = 0;
 				continue;
 			}
+
+			/*
+			 * FIXME: Implement delayed error reporting
+			 * activation should be stopped only in the case,
+			 * the submission of transation_id message fails,
+			 * resume should continue further, just whole command
+			 * has to report failure.
+			 */
+			if (r && (child->props.send_messages > 1) &&
+			    !(r = _node_send_messages(child, uuid_prefix, uuid_prefix_len, 1)))
+				stack;
 		}
 		if (awaiting_peer_rename)
 			priority--; /* redo priority level */
 	}
 
-	/*
-	 * FIXME: Implement delayed error reporting
-	 * activation should be stopped only in the case,
-	 * the submission of transation_id message fails,
-	 * resume should continue further, just whole command
-	 * has to report failure.
-	 */
-	if (r && (dnode->props.send_messages > 1) &&
-	    !(r = _node_send_messages(dnode, uuid_prefix, uuid_prefix_len, 1)))
-		stack;
-
 	return r;
 }
 
-static int _create_node(struct dm_tree_node *dnode)
+static int _create_node(struct dm_tree_node *dnode, struct dm_tree_node *parent)
 {
 	int r = 0;
 	struct dm_task *dmt;
@@ -1985,36 +2034,13 @@ static int _create_node(struct dm_tree_node *dnode)
 				  "Unable to get DM task info for %s.",
 				  dnode->name);
 	}
+
+	if (r)
+		dm_list_add_h(&parent->activated, &dnode->activated_list);
 out:
 	dm_task_destroy(dmt);
 
 	return r;
-}
-
-/*
- * _remove_node
- *
- * This function is only used to remove a DM device that has failed
- * to load any table.
- */
-static int _remove_node(struct dm_tree_node *dnode)
-{
-	if (!dnode->info.exists)
-		return 1;
-
-	if (dnode->info.live_table || dnode->info.inactive_table) {
-		log_error(INTERNAL_ERROR
-			  "_remove_node called on device with loaded table(s).");
-		return 0;
-	}
-
-	if (!_deactivate_node(dnode->name, dnode->info.major, dnode->info.minor,
-			      &dnode->dtree->cookie, dnode->udev_flags, 0)) {
-		log_error("Failed to clean-up device with no table: %s.",
-			  _node_name(dnode));
-		return 0;
-	}
-	return 1;
 }
 
 static int _build_dev_string(char *devbuf, size_t bufsize, struct dm_tree_node *node)
@@ -2462,10 +2488,14 @@ static int _cache_emit_segment_line(struct dm_task *dmt,
 
 	EMIT_PARAMS(pos, " %s", name);
 
-	EMIT_PARAMS(pos, " %u", seg->policy_argc * 2);
+	/* Do not pass migration_threshold 2048 which is default */
+	EMIT_PARAMS(pos, " %u", (seg->policy_argc + (seg->migration_threshold != 2048) ? 1 : 0) * 2);
+	if (seg->migration_threshold != 2048)
+		    EMIT_PARAMS(pos, " migration_threshold %u", seg->migration_threshold);
 	if (seg->policy_settings)
 		for (cn = seg->policy_settings->child; cn; cn = cn->sib)
-			EMIT_PARAMS(pos, " %s %" PRIu64, cn->key, cn->v->v.i);
+			if (cn->v) /* Skip deleted entry */
+				EMIT_PARAMS(pos, " %s %" PRIu64, cn->key, cn->v->v.i);
 
 	return 1;
 }
@@ -2793,6 +2823,16 @@ static int _dm_tree_revert_activated(struct dm_tree_node *parent)
 	return 1;
 }
 
+static int _dm_tree_wait_and_revert_activated(struct dm_tree_node *dnode)
+{
+	if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
+		stack;
+
+	dm_tree_set_cookie(dnode, 0);
+
+	return _dm_tree_revert_activated(dnode);
+}
+
 int dm_tree_preload_children(struct dm_tree_node *dnode,
 			     const char *uuid_prefix,
 			     size_t uuid_prefix_len)
@@ -2822,7 +2862,7 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 				return_0;
 
 		/* FIXME Cope if name exists with no uuid? */
-		if (!child->info.exists && !(node_created = _create_node(child)))
+		if (!child->info.exists && !(node_created = _create_node(child, dnode)))
 			return_0;
 
 		/* Propagate delayed resume from exteded child node */
@@ -2832,18 +2872,15 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 		if (!child->info.inactive_table &&
 		    child->props.segment_count &&
 		    !_load_node(child)) {
+			stack;
 			/*
-			 * If the table load does not succeed, we remove the
-			 * device in the kernel that would otherwise have an
-			 * empty table.  This makes the create + load of the
-			 * device atomic.  However, if other dependencies have
-			 * already been created and loaded; this code is
-			 * insufficient to remove those - only the node
-			 * encountering the table load failure is removed.
+			 * If the table load fails, try to device in the kernel
+			 * together with other created and preloaded devices.
 			 */
-			if (node_created && !_remove_node(child))
-				return_0;
-			return_0;
+			if (!_dm_tree_wait_and_revert_activated(dnode))
+				stack;
+			r = 0;
+			continue;
 		}
 
 		/* No resume for a device without parents or with unchanged or smaller size */
@@ -2858,28 +2895,19 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 				  &child->info, &child->dtree->cookie, child->udev_flags,
 				  child->info.suspended)) {
 			log_error("Unable to resume %s.", _node_name(child));
-			/* If the device was not previously active, we might as well remove this node. */
-			if (!child->info.live_table &&
-			    !_deactivate_node(child->name, child->info.major, child->info.minor,
-					      &child->dtree->cookie, child->udev_flags, 0))
-				log_error("Unable to deactivate %s.", _node_name(child));
+			if (!_dm_tree_wait_and_revert_activated(dnode))
+				stack;
 			r = 0;
-			/* Each child is handled independently */
 			continue;
 		}
 
 		if (node_created) {
-			/* Collect newly introduced devices for revert */
-			dm_list_add_h(&dnode->activated, &child->activated_list);
-
 			/* When creating new node also check transaction_id. */
 			if (child->props.send_messages &&
 			    !_node_send_messages(child, uuid_prefix, uuid_prefix_len, 0)) {
 				stack;
-				if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
+				if (!_dm_tree_wait_and_revert_activated(dnode))
 					stack;
-				dm_tree_set_cookie(dnode, 0);
-				(void) _dm_tree_revert_activated(dnode);
 				r = 0;
 				continue;
 			}
@@ -3373,6 +3401,7 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 	seg->data_block_size = data_block_size;
 	seg->flags = feature_flags;
 	seg->policy_name = policy_name;
+	seg->migration_threshold = 2048; /* Default migration threshold 1MiB */
 
 	/* FIXME: better validation missing */
 	if (policy_settings) {
@@ -3385,9 +3414,17 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				log_error("Cache policy parameter %s is without integer value.", cn->key);
 				return 0;
 			}
-			seg->policy_argc++;
+			if (strcmp(cn->key, "migration_threshold") == 0) {
+				seg->migration_threshold = cn->v->v.i;
+				cn->v = NULL; /* skip this entry */
+			} else
+				seg->policy_argc++;
 		}
 	}
+
+	/* Always some throughput available for cache to proceed */
+	if (seg->migration_threshold < data_block_size * 8)
+		seg->migration_threshold = data_block_size * 8;
 
 	return 1;
 }

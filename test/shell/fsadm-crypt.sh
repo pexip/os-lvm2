@@ -46,7 +46,14 @@ PWD2="mymJeD8ivEhE"
 PWD3="ocMakf3fAcQO"
 SKIP_DETACHED=
 
-which cryptsetup || check_cryptsetup=${check_cryptsetup:-cryptsetup}
+if which cryptsetup ; then
+	# use older format luks1 - otherwise the test would need to pass password everywhere...
+	case $(cryptsetup --version) in
+	"cryptsetup 2"*)  FORMAT_PARAMS="$FORMAT_PARAMS --type luks1" ;;
+	esac
+else
+	check_cryptsetup=${check_cryptsetup:-cryptsetup}
+fi
 
 which mkfs.ext2 || check_ext2=${check_ext2:-mkfs.ext2}
 which mkfs.ext3 || check_ext3=${check_ext3:-mkfs.ext3}
@@ -76,6 +83,7 @@ export LVM_BINARY
 test ! -d "$mount_dir" && mkdir "$mount_dir"
 
 crypt_close() {
+	aux udev_wait
 	cryptsetup remove "$1"
 	if [ "$?" -eq 0 -a -n "$DROP_SYMLINK" ]; then
 		rm -f "$DM_DEV_DIR/mapper/$1"
@@ -130,7 +138,7 @@ get_crypt_kname() {
 # $1 device
 # $2 pass
 crypt_format() {
-	echo "$2" | cryptsetup luksFormat "$FORMAT_PARAMS" "$1"
+	echo "$2" | cryptsetup luksFormat $FORMAT_PARAMS "$1"
 }
 
 
@@ -261,7 +269,7 @@ test_ext3_small_shrink() {
 }
 
 test_xfs_resize() {
-	mkfs.xfs -l internal,size=1000b -f "$3"
+	mkfs.xfs -l internal,size=1536b -f "$3"
 
 	fsadm --lvresize resize $1 30M
 	# Fails - not enough space for 4M fs
@@ -276,7 +284,7 @@ test_xfs_resize() {
 }
 
 test_xfs_small_shrink() {
-	mkfs.xfs -l internal,size=1000b -f "$3"
+	mkfs.xfs -l internal,size=1536b -f "$3"
 
 	not lvresize -L-1 -r $1
 	fscheck_xfs "$3"
@@ -340,7 +348,7 @@ test_ext3_inactive() {
 
 test_xfs_inactive() {
 	crypt_open "$2" $PWD2 "$4"
-	mkfs.xfs -l internal,size=1000b -f "$3"
+	mkfs.xfs -l internal,size=1536b -f "$3"
 	crypt_close "$4"
 
 	not fsadm --lvresize resize $1 30M
@@ -421,7 +429,7 @@ test_ext3_plain() {
 }
 
 test_xfs_plain() {
-	mkfs.xfs -l internal,size=1000b -f "$3"
+	mkfs.xfs -l internal,size=1536b -f "$3"
 
 	not fsadm --lvresize resize $1 30M
 	not lvresize -L+10M -r $1
@@ -487,7 +495,7 @@ test_ext3_detached() {
 }
 
 test_xfs_detached() {
-	mkfs.xfs -l internal,size=1000b -f "$3"
+	mkfs.xfs -l internal,size=1536b -f "$3"
 
 	not fsadm --lvresize resize $1 30M
 	not lvresize -L+10M -r $1

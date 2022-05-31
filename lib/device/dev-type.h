@@ -57,7 +57,7 @@ const char *dev_subsystem_name(struct dev_types *dt, struct device *dev);
 int major_is_scsi_device(struct dev_types *dt, int major);
 
 /* Signature/superblock recognition with position returned where found. */
-int dev_is_md(struct device *dev, uint64_t *sb, int full);
+int dev_is_md_component(struct device *dev, uint64_t *sb, int full);
 int dev_is_swap(struct device *dev, uint64_t *signature, int full);
 int dev_is_luks(struct device *dev, uint64_t *signature, int full);
 int dasd_is_cdl_formatted(struct device *dev);
@@ -92,5 +92,11 @@ unsigned long dev_discard_max_bytes(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_granularity(struct dev_types *dt, struct device *dev);
 
 int dev_is_rotational(struct dev_types *dt, struct device *dev);
+
+int dev_is_pmem(struct device *dev);
+
+int dev_is_lv(struct device *dev);
+
+int get_fs_block_size(struct device *dev, uint32_t *fs_block_size);
 
 #endif

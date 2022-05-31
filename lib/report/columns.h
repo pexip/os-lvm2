@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2017 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2019 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -84,18 +84,21 @@ FIELD(LVS, lv, STR, "SyncAction", lvid, 0, raidsyncaction, raid_sync_action, "Fo
 FIELD(LVS, lv, NUM, "WBehind", lvid, 0, raidwritebehind, raid_write_behind, "For RAID1, the number of outstanding writes allowed to writemostly devices.", 0)
 FIELD(LVS, lv, NUM, "MinSync", lvid, 0, raidminrecoveryrate, raid_min_recovery_rate, "For RAID1, the minimum recovery I/O load in kiB/sec/disk.", 0)
 FIELD(LVS, lv, NUM, "MaxSync", lvid, 0, raidmaxrecoveryrate, raid_max_recovery_rate, "For RAID1, the maximum recovery I/O load in kiB/sec/disk.", 0)
+FIELD(LVS, lv, STR, "IntegMode", lvid, 0, raidintegritymode, raidintegritymode, "The integrity mode", 0)
+FIELD(LVS, lv, NUM, "IntegBlkSize", lvid, 0, raidintegrityblocksize, raidintegrityblocksize, "The integrity block size", 0)
+FIELD(LVS, lv, NUM, "IntegMismatches", lvid, 0, integritymismatches, integritymismatches, "The number of integrity mismatches.", 0)
 FIELD(LVS, lv, STR, "Move", lvid, 0, movepv, move_pv, "For pvmove, Source PV of temporary LV created by pvmove.", 0)
 FIELD(LVS, lv, STR, "Move UUID", lvid, 38, movepvuuid, move_pv_uuid, "For pvmove, the UUID of Source PV of temporary LV created by pvmove.", 0)
 FIELD(LVS, lv, STR, "Convert", lvid, 0, convertlv, convert_lv, "For lvconvert, Name of temporary LV created by lvconvert.", 0)
 FIELD(LVS, lv, STR, "Convert UUID", lvid, 38, convertlvuuid, convert_lv_uuid, "For lvconvert, UUID of temporary LV created by lvconvert.", 0)
 FIELD(LVS, lv, STR, "Log", lvid, 0, loglv, mirror_log, "For mirrors, the LV holding the synchronisation log.", 0)
 FIELD(LVS, lv, STR, "Log UUID", lvid, 38, loglvuuid, mirror_log_uuid, "For mirrors, the UUID of the LV holding the synchronisation log.", 0)
-FIELD(LVS, lv, STR, "Data", lvid, 0, datalv, data_lv, "For thin and cache pools, the LV holding the associated data.", 0)
-FIELD(LVS, lv, STR, "Data UUID", lvid, 38, datalvuuid, data_lv_uuid, "For thin and cache pools, the UUID of the LV holding the associated data.", 0)
-FIELD(LVS, lv, STR, "Meta", lvid, 0, metadatalv, metadata_lv, "For thin and cache pools, the LV holding the associated metadata.", 0)
-FIELD(LVS, lv, STR, "Meta UUID", lvid, 38, metadatalvuuid, metadata_lv_uuid, "For thin and cache pools, the UUID of the LV holding the associated metadata.", 0)
-FIELD(LVS, lv, STR, "Pool", lvid, 0, poollv, pool_lv, "For thin volumes, the thin pool LV for this volume.", 0)
-FIELD(LVS, lv, STR, "Pool UUID", lvid, 38, poollvuuid, pool_lv_uuid, "For thin volumes, the UUID of the thin pool LV for this volume.", 0)
+FIELD(LVS, lv, STR, "Data", lvid, 0, datalv, data_lv, "For cache/thin/vdo pools, the LV holding the associated data.", 0)
+FIELD(LVS, lv, STR, "Data UUID", lvid, 38, datalvuuid, data_lv_uuid, "For cache/thin/vdo pools, the UUID of the LV holding the associated data.", 0)
+FIELD(LVS, lv, STR, "Meta", lvid, 0, metadatalv, metadata_lv, "For cache/thin pools, the LV holding the associated metadata.", 0)
+FIELD(LVS, lv, STR, "Meta UUID", lvid, 38, metadatalvuuid, metadata_lv_uuid, "For cache/thin pools, the UUID of the LV holding the associated metadata.", 0)
+FIELD(LVS, lv, STR, "Pool", lvid, 0, poollv, pool_lv, "For cache/thin/vdo volumes, the cache/thin/vdo pool LV for this volume.", 0)
+FIELD(LVS, lv, STR, "Pool UUID", lvid, 38, poollvuuid, pool_lv_uuid, "For cache/thin/vdo volumes, the UUID of the cache/thin/vdo pool LV for this volume.", 0)
 FIELD(LVS, lv, STR_LIST, "LV Tags", tags, 0, tags, lv_tags, "Tags, if any.", 0)
 FIELD(LVS, lv, STR, "LProfile", lvid, 0, lvprofile, lv_profile, "Configuration profile attached to this LV.", 0)
 FIELD(LVS, lv, STR, "LLockArgs", lvid, 0, lvlockargs, lv_lockargs, "Lock args of the LV used by lvmlockd.", 0)
@@ -146,6 +149,15 @@ FIELD(LVSSTATUS, lv, STR, "KDiscards", lvid, 0, kdiscards, kernel_discards, "For
 FIELD(LVSSTATUS, lv, BIN, "CheckNeeded", lvid, 15, lvcheckneeded, lv_check_needed, "For thin pools and cache volumes, whether metadata check is needed.", 0)
 FIELD(LVSSTATUS, lv, BIN, "MergeFailed", lvid, 15, lvmergefailed, lv_merge_failed, "Set if snapshot merge failed.", 0)
 FIELD(LVSSTATUS, lv, BIN, "SnapInvalid", lvid, 15, lvsnapshotinvalid, lv_snapshot_invalid, "Set if snapshot LV is invalid.", 0)
+FIELD(LVSSTATUS, lv, STR, "VDOOperatingMode", lvid, 0, vdo_operating_mode, vdo_operating_mode, "For vdo pools, its current operating mode.", 0)
+FIELD(LVSSTATUS, lv, STR, "VDOCompressionState", lvid, 0, vdo_compression_state, vdo_compression_state, "For vdo pools, whether compression is running.", 0)
+FIELD(LVSSTATUS, lv, STR, "VDOIndexState", lvid, 0, vdo_index_state, vdo_index_state, "For vdo pools, state of index for deduplication.", 0)
+FIELD(LVSSTATUS, lv, NUM, "VDOUsedSize", lvid, 0, vdo_used_size, vdo_used_size, "For vdo pools, currently used space.", 0)
+FIELD(LVSSTATUS, lv, NUM, "VDOSaving%", lvid, 0, vdo_saving_percent, vdo_saving_percent, "For vdo pools, percentage of saved space.", 0)
+FIELD(LVSSTATUS, lv, NUM, "WCacheTotalBlocks", lvid, 0, writecache_total_blocks, writecache_total_blocks, "Total writecache blocks.", 0)
+FIELD(LVSSTATUS, lv, NUM, "WCacheFreeBlocks", lvid, 0, writecache_free_blocks, writecache_free_blocks, "Total writecache free blocks.", 0)
+FIELD(LVSSTATUS, lv, NUM, "WCacheWritebackBlocks", lvid, 0, writecache_writeback_blocks, writecache_writeback_blocks, "Total writecache writeback blocks.", 0)
+FIELD(LVSSTATUS, lv, NUM, "WCacheErrors", lvid, 0, writecache_error, writecache_error, "Total writecache errors.", 0)
 /*
  * End of LVSSTATUS type fields
  */
@@ -274,6 +286,27 @@ FIELD(SEGS, seg, STR_LIST, "Metadata Devs", list, 0, metadatadevices, metadata_d
 FIELD(SEGS, seg, STR, "Monitor", list, 0, segmonitor, seg_monitor, "Dmeventd monitoring status of the segment.", 0)
 FIELD(SEGS, seg, STR, "CachePolicy", list, 0, cache_policy, cache_policy, "The cache policy (cached segments only).", 0)
 FIELD(SEGS, seg, STR_LIST, "CacheSettings", list, 0, cache_settings, cache_settings, "Cache settings/parameters (cached segments only).", 0)
+
+FIELD(SEGS, seg, BIN, "VDOCompression", list, 0, vdo_compression, vdo_compression, "Set for compressed LV (vdopool).", 0)
+FIELD(SEGS, seg, BIN, "VDODeduplication", list, 0, vdo_deduplication, vdo_deduplication, "Set for deduplicated LV (vdopool).", 0)
+FIELD(SEGS, seg, BIN, "VDOMetadataHints", list, 0, vdo_use_metadata_hints, vdo_use_metadata_hints, "Use REQ_SYNC for writes (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOMinimumIOSize", list, 0, vdo_minimum_io_size, vdo_minimum_io_size, "Minimum acceptable IO size (vdopool).", 0)
+FIELD(SEGS, seg, SIZ, "VDOBlockMapCacheSize", list, 0, vdo_block_map_cache_size, vdo_block_map_cache_size, "Allocated caching size (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOBlockMapEraLength", list, 0, vdo_block_map_era_length, vdo_block_map_era_length, "Speed of cache writes (vdopool).", 0)
+FIELD(SEGS, seg, BIN, "VDOSparseIndex", list, 0, vdo_use_sparse_index, vdo_use_sparse_index, "Sparse indexing (vdopool).", 0)
+FIELD(SEGS, seg, SIZ, "VDOIndexMemorySize", list, 0, vdo_index_memory_size, vdo_index_memory_size, "Allocated indexing memory (vdopool).", 0)
+FIELD(SEGS, seg, SIZ, "VDOSlabSize", list, 0, vdo_slab_size, vdo_slab_size, "Increment size for growing (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOAckThreads", list, 0, vdo_ack_threads, vdo_ack_threads, "Acknowledging threads (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOBioThreads", list, 0, vdo_bio_threads, vdo_bio_threads, "IO submitting threads (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOBioRotation", list, 0, vdo_bio_rotation, vdo_bio_rotation, "IO enqueue (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOCPUThreads", list, 0, vdo_cpu_threads, vdo_cpu_threads, "CPU threads for compression and hashing (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOHashZoneThreads", list, 0, vdo_hash_zone_threads, vdo_hash_zone_threads, "Threads for subdivide parts (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOLogicalThreads", list, 0, vdo_logical_threads, vdo_logical_threads, "Logical threads for subdivide parts (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOPhysicalThreads", list, 0, vdo_physical_threads, vdo_physical_threads, "Physical threads for subdivide parts (vdopool).", 0)
+FIELD(SEGS, seg, NUM, "VDOMaxDiscard", list, 0, vdo_max_discard, vdo_max_discard, "Maximum discard size volume can recieve (vdopool).", 0)
+FIELD(SEGS, seg, STR, "VDOWritePolicy", list, 0, vdo_write_policy, vdo_write_policy, "Specified write policy (vdopool).", 0)
+FIELD(SEGS, seg, SIZ, "VDOHeaderSize", list, 0, vdo_header_size, vdo_header_size, "Header size at front of vdopool.", 0)
+
 /*
  * End of SEGS type fields
  */

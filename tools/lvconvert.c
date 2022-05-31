@@ -16,6 +16,7 @@
 
 #include "lib/lvmpolld/polldaemon.h"
 #include "lib/metadata/lv_alloc.h"
+#include "lib/metadata/metadata.h"
 #include "lvconvert_poll.h"
 
 #define MAX_PDATA_ARGS	10	/* Max number of accepted args for d-m-p-d tools */
@@ -1160,36 +1161,33 @@ static int _lvconvert_validate_thin(struct logical_volume *lv,
 static int _raid_split_image_conversion(struct logical_volume *lv)
 {
 	const char *s;
+	char raidlv_name[NAME_LEN];
+	const struct logical_volume *tmp_lv;
 
 	if (lv_is_raid_with_tracking(lv)) {
 		log_error("Conversion of tracking raid1 LV %s is not supported.",
 			  display_lvname(lv));
-		return 1;
+		return 0;
 	}
 
 	if (lv_is_raid_image(lv) &&
 	    (s = strstr(lv->name, "_rimage_"))) {
-		size_t len = s - lv->name;
-		char raidlv_name[len + 1];
-		const struct logical_volume *tmp_lv;
-
-		strncpy(raidlv_name, lv->name, len);
-		raidlv_name[len] = '\0';
+		(void) dm_strncpy(raidlv_name, lv->name, s - lv->name);
 
 		if (!(tmp_lv = find_lv(lv->vg, raidlv_name))) {
-			log_error(INTERNAL_ERROR "Failed to find RaidLV of RAID subvolume %s.",
+			log_error("Failed to find RaidLV of RAID subvolume %s.",
 				  display_lvname(lv));
-			return 1;
+			return 0;
 		}
 
 		if (lv_is_raid_with_tracking(tmp_lv)) {
 			log_error("Conversion of tracked raid1 subvolume %s is not supported.",
 				  display_lvname(lv));
-			return 1;
+			return 0;
 		}
 	}
 
-	return 0;
+	return 1;
 }
 
 /*
@@ -1207,8 +1205,8 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 	uint32_t new_mimage_count = 0;
 	uint32_t new_log_count = 0;
 
-	if (_raid_split_image_conversion(lv))
-		return 0;
+	if (!_raid_split_image_conversion(lv))
+		return_0;
 
 	if ((lp->corelog || lp->mirrorlog) && *lp->type_str && strcmp(lp->type_str, SEG_TYPE_NAME_MIRROR)) {
 		log_error("--corelog and --mirrorlog are only compatible with mirror devices.");
@@ -1318,11 +1316,13 @@ static int _raid4_conversion_supported(struct logical_volume *lv, struct lvconve
 static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *lp)
 {
 	int image_count = 0;
+	int images_reduced = 0;
+	int type_enforced = 0;
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct lv_segment *seg = first_seg(lv);
 
-	if (_raid_split_image_conversion(lv))
-		return 0;
+	if (!_raid_split_image_conversion(lv))
+		return_0;
 
 	if (_linear_type_requested(lp->type_str)) {
 		if (arg_is_set(cmd, mirrors_ARG) && (arg_uint_value(cmd, mirrors_ARG, 0) != 0)) {
@@ -1356,6 +1356,8 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		else
 			image_count = lp->mirrors + 1;
 
+		images_reduced = (image_count < lv_raid_image_count(lv));
+
 		if (image_count < 1) {
 			log_error("Unable to %s images by specified amount.",
 				  lp->keep_mimages ? "split" : "reduce");
@@ -1367,6 +1369,12 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 			log_error("Exactly one image must be split off from %s when tracking changes.",
 				  display_lvname(lv));
 			return 0;
+		}
+
+		if (!*lp->type_str) {
+			lp->type_str = SEG_TYPE_NAME_RAID1;
+			lp->segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_RAID1);
+			type_enforced = 1;
 		}
 	}
 
@@ -1382,7 +1390,7 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		return lv_raid_split(lv, lp->yes, lp->lv_split_name, image_count, lp->pvh);
 
 	if (lp->mirrors_supplied) {
-		if ((seg_is_striped(seg) && seg->area_count == 1) || seg_is_raid1(seg)) { /* ??? */
+		if (seg_is_linear(seg) || seg_is_raid1(seg)) { /* ??? */
 		if (!*lp->type_str || !strcmp(lp->type_str, SEG_TYPE_NAME_RAID1) || !strcmp(lp->type_str, SEG_TYPE_NAME_LINEAR) ||
 		    (!strcmp(lp->type_str, SEG_TYPE_NAME_STRIPED) && image_count == 1)) {
 			if (image_count > DEFAULT_RAID1_MAX_IMAGES) {
@@ -1390,10 +1398,22 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 					  DEFAULT_RAID1_MAX_IMAGES, lp->segtype->name, display_lvname(lv));
 				return 0;
 			}
+			if (!seg_is_raid1(seg) && lv_raid_has_integrity(lv)) {
+				log_error("Cannot add raid images with integrity for this raid level.");
+				return 0;
+			}
 			if (!lv_raid_change_image_count(lv, lp->yes, image_count,
 							(lp->region_size_supplied || !seg->region_size) ?
 							lp->region_size : seg->region_size , lp->pvh))
 				return_0;
+
+			if (lv_raid_has_integrity(lv) && !images_reduced) {
+				struct integrity_settings *isettings = NULL;
+				if (!lv_get_raid_integrity_settings(lv, &isettings))
+					return_0;
+				if (!lv_add_integrity_to_raid(lv, isettings, lp->pvh, NULL))
+					return_0;
+			}
 
 			log_print_unless_silent("Logical volume %s successfully converted.",
 						display_lvname(lv));
@@ -1424,10 +1444,16 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 			return 0;
 		}
 
+		if (lv_raid_has_integrity(lv)) {
+			/* FIXME: which conversions are happening here? */
+			log_error("This conversion is not supported for raid with integrity.");
+			return 0;
+		}
+
 		/* FIXME This needs changing globally. */
 		if (!arg_is_set(cmd, stripes_long_ARG))
 			lp->stripes = 0;
-		if (!arg_is_set(cmd, type_ARG))
+		if (!type_enforced && !arg_is_set(cmd, type_ARG))
 		       lp->segtype = NULL;
 		if (!arg_is_set(cmd, regionsize_ARG))
 		       lp->region_size = 0;
@@ -1443,13 +1469,19 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	}
 
 try_new_takeover_or_reshape:
+	if (lv_raid_has_integrity(lv)) {
+		/* FIXME: which conversions are happening here? */
+		log_error("This conversion is not supported for raid with integrity.");
+		return 0;
+	}
+
 	if (!_raid4_conversion_supported(lv, lp))
 		return 0;
 
 	/* FIXME This needs changing globally. */
 	if (!arg_is_set(cmd, stripes_long_ARG))
 		lp->stripes = 0;
-	if (!arg_is_set(cmd, type_ARG))
+	if (!type_enforced && !arg_is_set(cmd, type_ARG))
 	       lp->segtype = NULL;
 
 	if (!lv_raid_convert(lv, lp->segtype,
@@ -1758,6 +1790,9 @@ static int _lvconvert_raid_types(struct cmd_context *cmd, struct logical_volume 
 	if (lv_is_cache(lv))
 		lv = seg_lv(first_seg(lv), 0);
 
+	if (lv_is_vdo_pool(lv))
+		return _lvconvert_raid_types(cmd, seg_lv(first_seg(lv), 0), lp);
+
 	if (lv_is_mirror(lv)) {
 		ret = _convert_mirror(cmd, lv, lp);
 		goto out;
@@ -1792,6 +1827,11 @@ static int _lvconvert_splitsnapshot(struct cmd_context *cmd, struct logical_volu
 {
 	struct volume_group *vg = cow->vg;
 	const char *cow_name = display_lvname(cow);
+
+	if (!lv_is_cow(cow)) {
+		log_error(INTERNAL_ERROR "Volume %s is not a COW.", cow_name);
+		return 0;
+	}
 
 	if (lv_is_virtual_origin(origin_from_cow(cow))) {
 		log_error("Unable to split off snapshot %s with virtual origin.", cow_name);
@@ -1835,17 +1875,56 @@ static int _lvconvert_splitsnapshot(struct cmd_context *cmd, struct logical_volu
 	return 1;
 }
 
-static int _lvconvert_split_and_keep_cachepool(struct cmd_context *cmd,
+static int _lvconvert_split_and_keep_cachevol(struct cmd_context *cmd,
 				   struct logical_volume *lv,
-				   struct logical_volume *cachepool_lv)
+				   struct logical_volume *lv_fast)
 {
-	log_debug("Detaching cache pool %s from cache LV %s.",
-		  display_lvname(cachepool_lv), display_lvname(lv));
+	char cvol_name[NAME_LEN];
+	struct lv_segment *cache_seg = first_seg(lv);
+	int cache_mode = cache_seg->cache_mode;
 
 	if (!archive(lv->vg))
 		return_0;
 
+	log_debug("Detaching cachevol %s from LV %s.", display_lvname(lv_fast), display_lvname(lv));
+
+	/*
+	 * Detaching a writeback cache generally requires flushing;
+	 * doing otherwise can mean data loss/corruption.
+	 * If the cache devices are missing, the cache can't be
+	 * flushed, so require the user to use a force option to
+	 * detach the cache in this case.
+	 */
+	if ((cache_mode != CACHE_MODE_WRITETHROUGH) && lv_is_partial(lv_fast)) {
+		if (!arg_count(cmd, force_ARG)) {
+			log_warn("WARNING: writeback cache on %s is not complete and cannot be flushed.", display_lvname(lv_fast));
+			log_warn("WARNING: cannot detach writeback cache from %s without --force.", display_lvname(lv));
+			log_error("Conversion aborted.");
+			return 0;
+		}
+
+		log_warn("WARNING: Data may be lost by detaching writeback cache without flushing.");
+
+		if (!arg_count(cmd, yes_ARG) &&
+		    yes_no_prompt("Detach writeback cache %s from %s without flushing data?",
+				  display_lvname(lv_fast), display_lvname(lv)) == 'n') {
+			log_error("Conversion aborted.");
+			return 0;
+		}
+
+		/* Switch internally to WRITETHROUGH which does not require flushing */
+		cache_seg->cache_mode = CACHE_MODE_WRITETHROUGH;
+	}
+
 	if (!lv_cache_remove(lv))
+		return_0;
+
+	/* Cut off suffix _cvol */
+	if (!drop_lvname_suffix(cvol_name, lv_fast->name, "cvol")) {
+		/* likely older instance of metadata */
+		log_debug("LV %s has no suffix for cachevol (skipping rename).",
+			  display_lvname(lv_fast));
+	} else if (!lv_uniq_rename_update(cmd, lv_fast, cvol_name, 0))
 		return_0;
 
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
@@ -1853,8 +1932,56 @@ static int _lvconvert_split_and_keep_cachepool(struct cmd_context *cmd,
 
 	backup(lv->vg);
 
-	log_print_unless_silent("Logical volume %s is not cached and cache pool %s is unused.",
-				display_lvname(lv), display_lvname(cachepool_lv));
+	return 1;
+}
+
+static int _lvconvert_split_and_remove_cachevol(struct cmd_context *cmd,
+				   struct logical_volume *lv,
+				   struct logical_volume *lv_fast)
+{
+	if (!_lvconvert_split_and_keep_cachevol(cmd, lv, lv_fast))
+		return_0;
+
+	if (lvremove_single(cmd, lv_fast, NULL) != ECMD_PROCESSED)
+		return_0;
+
+	return 1;
+}
+
+static int _lvconvert_split_and_keep_cachepool(struct cmd_context *cmd,
+				   struct logical_volume *lv,
+				   struct logical_volume *lv_fast)
+{
+	char name[NAME_LEN];
+
+	if (!archive(lv->vg))
+		return_0;
+
+	log_debug("Detaching cachepool %s from LV %s.", display_lvname(lv_fast), display_lvname(lv));
+
+	if (vg_missing_pv_count(lv->vg)) {
+		log_error("Cannot split cache pool while PVs are missing, see --uncache to delete cache pool.");
+		return 0;
+	}
+
+	if (!lv_cache_remove(lv))
+		return_0;
+
+	/* Cut off suffix _cpool */
+	if (!drop_lvname_suffix(name, lv_fast->name, "cpool")) {
+		/* likely older instance of metadata */
+		log_debug("LV %s has no suffix for cachepool (skipping rename).",
+			  display_lvname(lv_fast));
+	} else if (!lv_uniq_rename_update(cmd, lv_fast, name, 0))
+		return_0;
+
+	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
+		return_0;
+
+	backup(lv->vg);
+
+	log_print_unless_silent("Logical volume %s is not cached and %s is unused.",
+				display_lvname(lv), display_lvname(lv_fast));
 
 	return 1;
 }
@@ -1888,7 +2015,7 @@ static int _lvconvert_split_and_remove_cachepool(struct cmd_context *cmd,
 		if (first_seg(seg->pool_lv)->cache_mode != CACHE_MODE_WRITETHROUGH) {
 			if (!arg_count(cmd, force_ARG)) {
 				log_error("Conversion aborted.");
-				log_error("Cannot uncache writethrough cache volume %s without --force.",
+				log_error("Cannot uncache writeback cache volume %s without --force.",
 					  display_lvname(lv));
 				return 0;
 			}
@@ -2300,7 +2427,8 @@ static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 		goto deactivate_mlv;
 	}
 
-	if (thin_dump[0]) {
+	/* Check matching transactionId when thin-pool is used by lvm2 (transactionId != 0) */
+	if (first_seg(pool_lv)->transaction_id && thin_dump[0]) {
 		argv[0] = thin_dump;
 		argv[1] = pms_path;
 		argv[2] = NULL;
@@ -2414,6 +2542,11 @@ static int _lvconvert_cache_repair(struct cmd_context *cmd,
 	struct logical_volume *pmslv;
 	struct logical_volume *mlv;
 
+	if (lv_is_cache(cache_lv) && lv_is_cache_vol(first_seg(cache_lv)->pool_lv)) {
+		log_error("Manual repair required.");
+		return 0;
+	}
+
 	pool_lv = lv_is_cache_pool(cache_lv) ? cache_lv : first_seg(cache_lv)->pool_lv;
 	mlv = first_seg(pool_lv)->metadata_lv;
 
@@ -2501,6 +2634,12 @@ static int _lvconvert_cache_repair(struct cmd_context *cmd,
 	/* TODO: any active validation of cache-pool metadata? */
 
 deactivate_mlv:
+	if (!sync_local_dev_names(cmd)) {
+		log_error("Failed to sync local devices before deactivating LV %s.",
+			  display_lvname(mlv));
+		return 0;
+	}
+
 	if (!deactivate_lv(cmd, mlv)) {
 		log_error("Cannot deactivate pool metadata volume %s.",
 			  display_lvname(mlv));
@@ -2508,6 +2647,12 @@ deactivate_mlv:
 	}
 
 deactivate_pmslv:
+	if (!sync_local_dev_names(cmd)) {
+		log_error("Failed to sync local devices before deactivating LV %s.",
+			  display_lvname(pmslv));
+		return 0;
+	}
+
 	if (!deactivate_lv(cmd, pmslv)) {
 		log_error("Cannot deactivate pool metadata spare volume %s.",
 			  display_lvname(pmslv));
@@ -2588,8 +2733,8 @@ static int _lvconvert_to_thin_with_external(struct cmd_context *cmd,
 		.virtual_extents = lv->le_count,
 	};
 
-	if (_raid_split_image_conversion(lv))
-		return 0;
+	if (!_raid_split_image_conversion(lv))
+		return_0;
 
 	if (lv == thinpool_lv) {
 		log_error("Can't use same LV %s for thin pool and thin volume.",
@@ -2900,8 +3045,8 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 	struct id lockd_meta_id;
 	const char *str_seg_type = to_cachepool ? SEG_TYPE_NAME_CACHE_POOL : SEG_TYPE_NAME_THIN_POOL;
 
-	if (_raid_split_image_conversion(lv))
-		return 0;
+	if (!_raid_split_image_conversion(lv))
+		return_0;
 
 	if (lv_is_thin_pool(lv) || lv_is_cache_pool(lv)) {
 		log_error(INTERNAL_ERROR "LV %s is already a pool.", display_lvname(lv));
@@ -2999,8 +3144,9 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 			return 0;
 		}
 
-		/* FIXME Tidy up all these type restrictions. */
+		/* FIXME Tidy up all these type restrictions. (Use a type whitelist?) */
 		if (lv_is_cache_type(metadata_lv) ||
+		    lv_is_writecache(metadata_lv) ||
 		    lv_is_thin_type(metadata_lv) ||
 		    lv_is_cow(metadata_lv) || lv_is_merging_cow(metadata_lv) ||
 		    lv_is_origin(metadata_lv) || lv_is_merging_origin(metadata_lv) ||
@@ -3145,7 +3291,11 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 			}
 			metadata_lv->status &= ~LV_ACTIVATION_SKIP;
 
-			if (!wipe_lv(metadata_lv, (struct wipe_params) { .do_zero = 1 })) {
+			if (!wipe_lv(metadata_lv, (struct wipe_params) {
+						  .do_wipe_signatures = 1,
+						  .is_metadata = 1,
+						  .yes = arg_count(cmd, yes_ARG),
+						  .force = arg_count(cmd, force_ARG) } )) {
 				log_error("Aborting. Failed to wipe metadata lv.");
 				goto bad;
 			}
@@ -3342,9 +3492,113 @@ revert_new_lv:
 #endif
 }
 
-static int _lvconvert_to_cache_vol(struct cmd_context *cmd,
-				   struct logical_volume *lv,
-				   struct logical_volume *cachepool_lv)
+static int _cache_vol_attach(struct cmd_context *cmd,
+			        struct logical_volume *lv,
+			        struct logical_volume *lv_fast)
+{
+	char cvol_name[NAME_LEN];
+	struct volume_group *vg = lv->vg;
+	struct logical_volume *cache_lv;
+	uint32_t chunk_size = 0;
+	uint64_t poolmetadatasize = 0;
+	cache_metadata_format_t cache_metadata_format;
+	cache_mode_t cache_mode;
+	const char *policy_name;
+	struct dm_config_tree *policy_settings = NULL;
+	char *lockd_fast_args = NULL;
+	char *lockd_fast_name = NULL;
+	struct id lockd_fast_id;
+	int r = 0;
+
+	if (!validate_lv_cache_create_pool(lv_fast))
+		return_0;
+
+	if (!get_cache_params(cmd, &chunk_size, &cache_metadata_format, &cache_mode, &policy_name, &policy_settings))
+		goto_out;
+
+	if (!archive(vg))
+		goto_out;
+
+	/*
+	 * lv/cache_lv keeps the same lockd lock it had before, the lock for
+	 * lv_fast is kept but is not used while it's attached, and
+	 * lv_corig has no lock.  (When the cachevol is split a new lvmlockd
+	 * lock does not need to be created for it again.)
+	 */
+	if (vg_is_shared(vg) && lv_fast->lock_args) {
+		lockd_fast_args = dm_pool_strdup(cmd->mem, lv_fast->lock_args);
+		lockd_fast_name = dm_pool_strdup(cmd->mem, lv_fast->name);
+		memcpy(&lockd_fast_id, &lv_fast->lvid.id[1], sizeof(struct id));
+	}
+
+	/*
+	 * The lvm tradition is to rename an LV with a special role-specific
+	 * suffix when it becomes hidden.  Here the _cvol suffix is added to
+	 * the fast LV name.  When the cache is detached, it's renamed back.
+	 */
+	if (dm_snprintf(cvol_name, sizeof(cvol_name), "%s_cvol", lv_fast->name) < 0) {
+		log_error("Can't prepare new cachevol name for %s.", display_lvname(lv_fast));
+		goto out;
+	}
+	if (!lv_rename_update(cmd, lv_fast, cvol_name, 0))
+		goto_out;
+
+	lv_fast->status |= LV_CACHE_VOL; /* Mark as cachevol LV */
+
+	/*
+	 * Changes the vg struct to match the desired state.
+	 *
+	 * - lv == cache_lv, which keeps existing lv name and id, gets new
+	 *   segment with segtype "cache".
+	 *
+	 * - lv_fast keeps its existing name and id, becomes hidden.
+	 *
+	 * - lv_corig gets new name (existing name + _corig suffix),
+	 *   gets new id, becomes hidden, gets segments from lv.
+	 */
+
+	if (!(cache_lv = lv_cache_create(lv_fast, lv)))
+		goto_out;
+
+	if (arg_is_set(cmd, poolmetadatasize_ARG))
+		poolmetadatasize = arg_uint64_value(cmd, poolmetadatasize_ARG, 0);
+
+	if (!cache_vol_set_params(cmd, cache_lv, lv_fast, poolmetadatasize, chunk_size, cache_metadata_format, cache_mode, policy_name, policy_settings))
+		goto_out;
+
+	if (cache_mode == CACHE_MODE_WRITEBACK) {
+		log_warn("WARNING: repairing a damaged cachevol is not yet possible.");
+		log_warn("WARNING: cache mode writethrough is suggested for safe operation.");
+		if (!arg_count(cmd, yes_ARG) &&
+		    yes_no_prompt("Continue using writeback without repair?") == 'n')
+			goto_out;
+	}
+
+	/*
+	 * vg_write(), suspend_lv(), vg_commit(), resume_lv(),
+	 * where the old LV is suspended and the new LV is resumed.
+	 */
+
+	if (!lv_update_and_reload(cache_lv))
+		goto_out;
+
+	if (lockd_fast_name) {
+		/* lockd unlock for lv_fast */
+		if (!lockd_lv_name(cmd, vg, lockd_fast_name, &lockd_fast_id, lockd_fast_args, "un", LDLV_PERSISTENT))
+			log_error("Failed to unlock fast LV %s/%s", vg->name, lockd_fast_name);
+	}
+
+	r = 1;
+out:
+	if (policy_settings)
+		dm_config_destroy(policy_settings);
+
+	return r;
+}
+
+static int _cache_pool_attach(struct cmd_context *cmd,
+			      struct logical_volume *lv,
+			      struct logical_volume *cachepool_lv)
 {
 	struct logical_volume *cache_lv;
 	uint32_t chunk_size = 0;
@@ -3353,13 +3607,6 @@ static int _lvconvert_to_cache_vol(struct cmd_context *cmd,
 	const char *policy_name;
 	struct dm_config_tree *policy_settings = NULL;
 	int r = 0;
-
-	if (_raid_split_image_conversion(lv))
-		return 0;
-
-	/* If LV is inactive here, ensure it's not active elsewhere. */
-	if (!lockd_lv(cmd, lv, "ex", 0))
-		return_0;
 
 	if (!validate_lv_cache_create_pool(cachepool_lv))
 		return_0;
@@ -3379,8 +3626,6 @@ static int _lvconvert_to_cache_vol(struct cmd_context *cmd,
 	if (!lv_update_and_reload(cache_lv))
 		goto_bad;
 
-	log_print_unless_silent("Logical volume %s is now cached.",
-				display_lvname(cache_lv));
 	r = 1;
 bad:
 	if (policy_settings)
@@ -3414,7 +3659,10 @@ static struct convert_poll_id_list* _convert_poll_id_list_create(struct cmd_cont
  * Data/results accumulated during processing.
  */
 struct lvconvert_result {
-	int need_polling;
+	unsigned need_polling:1;
+	unsigned wait_cleaner_writecache:1;
+	unsigned active_begin:1;
+	unsigned remove_cache:1;
 	struct dm_list poll_idls;
 };
 
@@ -4019,10 +4267,233 @@ int lvconvert_to_pool_cmd(struct cmd_context *cmd, int argc, char **argv)
 			       NULL, NULL, &_lvconvert_to_pool_single);
 }
 
-static int _lvconvert_to_cache_vol_single(struct cmd_context *cmd,
-					 struct logical_volume *lv,
-					 struct processing_handle *handle)
+#define MAX_CACHEDEVS 8
+
+static int _lv_create_cachevol(struct cmd_context *cmd,
+			       struct volume_group *vg,
+			       struct logical_volume *lv,
+			       struct logical_volume **cachevol_lv)
 {
+	char cvname[NAME_LEN];
+	char format[NAME_LEN];
+	struct dm_list *use_pvh;
+	struct pv_list *pvl;
+	char *device_name;
+	struct device *dev_fast;
+	char *dev_argv[MAX_CACHEDEVS];
+	int dev_argc = 0;
+	uint64_t cache_size_sectors = 0;
+	uint64_t full_size_sectors = 0;
+	uint64_t pv_size_sectors;
+	struct logical_volume *cachevol;
+	struct arg_value_group_list *group;
+	struct lvcreate_params lp = {
+		.activate = CHANGE_AN,
+		.alloc = ALLOC_INHERIT,
+		.major = -1,
+		.minor = -1,
+		.permission = LVM_READ | LVM_WRITE,
+		.pvh = &vg->pvs,
+		.read_ahead = DM_READ_AHEAD_NONE,
+		.stripes = 1,
+		.vg_name = vg->name,
+		.zero = 0,
+		.wipe_signatures = 0,
+		.suppress_zero_warn = 1,
+	};
+
+	/*
+	 * If cache size is not set, and all cachedevice's are unused,
+	 * then the cache size is the sum of all cachedevice sizes.
+	 */
+	cache_size_sectors = arg_uint64_value(cmd, cachesize_ARG, 0);
+
+	dm_list_iterate_items(group, &cmd->arg_value_groups) {
+		if (!grouped_arg_is_set(group->arg_values, cachedevice_ARG))
+			continue;
+
+		if (!(device_name = (char *)grouped_arg_str_value(group->arg_values, cachedevice_ARG, NULL)))
+			break;
+
+		if (device_name[0] == '@') {
+			if (!cache_size_sectors) {
+				log_error("With tag as cachedevice, --cachesize is required.");
+				return 0;
+			}
+			goto add_dev_arg;
+		}
+
+		if (!(dev_fast = dev_cache_get(cmd, device_name, cmd->filter))) {
+			log_error("Device %s not found.", device_name);
+			return 0;
+		}
+
+		if (!(pvl = find_pv_in_vg(vg, device_name))) {
+			log_error("PV %s not found in VG.", device_name);
+			return 0;
+		}
+
+		/*
+		 * If the dev is used in the VG, then require a cachesize to allocate
+		 * from it.  If it is not used in the VG, then prompt asking if the
+		 * entire dev should be used.
+		 */
+		if (!cache_size_sectors && pvl->pv->pe_alloc_count) {
+			log_error("PV %s is in use, --cachesize is required.", device_name);
+			return 0;
+		}
+
+		if (!cache_size_sectors) {
+			pv_size_sectors = (pvl->pv->pe_count * (uint64_t)vg->extent_size);
+
+			if (!arg_is_set(cmd, yes_ARG) &&
+			    yes_no_prompt("Use all %s from %s for cache? [y/n]: ",
+					  display_size(cmd, pv_size_sectors), device_name) == 'n') {
+				log_print("Use --cachesize SizeMB to use a part of the cachedevice.");
+				log_error("Conversion aborted.");
+				return 0;
+			}
+			full_size_sectors += pv_size_sectors;
+		}
+ add_dev_arg:
+		if (dev_argc >= MAX_CACHEDEVS) {
+			log_error("Cannot allocate from more than %u cache devices.", MAX_CACHEDEVS);
+			return 0;
+		}
+
+		dev_argv[dev_argc++] = device_name;
+	}
+
+	if (!cache_size_sectors)
+		cache_size_sectors = full_size_sectors;
+
+	if (!dev_argc) {
+		log_error("No cachedevice specified to create a cachevol.");
+		return 0;
+	}
+
+	if (!(use_pvh = create_pv_list(cmd->mem, vg, dev_argc, dev_argv, 1))) {
+		log_error("cachedevice not found in VG %s.", device_name);
+		return 0;
+	}
+
+	if (dm_snprintf(cvname, NAME_LEN, "%s_cache", lv->name) < 0) {
+		log_error("Failed to create cachevol LV name.");
+		return 0;
+	}
+
+	if (find_lv(vg, cvname)) {
+		memset(format, 0, sizeof(cvname));
+		memset(cvname, 0, sizeof(cvname));
+		if (dm_snprintf(format, sizeof(format), "%s_cache%%d", lv->name) < 0) {
+			log_error("Failed to generate cachevol LV format.");
+			return 0;
+		}
+		if (!generate_lv_name(vg, format, cvname, sizeof(cvname))) {
+			log_error("Failed to generate cachevol LV name.");
+			return 0;
+		}
+	}
+
+	lp.lv_name = cvname;
+	lp.pvh = use_pvh;
+	lp.extents = cache_size_sectors / vg->extent_size;
+
+	log_print("Creating cachevol LV %s with size %s.",
+		  cvname, display_size(cmd, cache_size_sectors));
+
+	dm_list_init(&lp.tags);
+
+	if (!(lp.segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_STRIPED)))
+		return_0;
+
+	if (!(cachevol = lv_create_single(vg, &lp))) {
+		log_error("Failed to create cachevol LV");
+		return 0;
+	}
+
+	*cachevol_lv = cachevol;
+	return 1;
+}
+
+int lvconvert_cachevol_attach_single(struct cmd_context *cmd,
+				     struct logical_volume *lv,
+				     struct processing_handle *handle)
+{
+	struct volume_group *vg = lv->vg;
+	struct logical_volume *lv_fast;
+	const char *fast_name;
+
+	/*
+	 * User specifies an existing cachevol to use or a cachedevice
+	 * to create a cachevol from.
+	 */
+	if ((fast_name = arg_str_value(cmd, cachevol_ARG, NULL))) {
+		if (!validate_lvname_param(cmd, &vg->name, &fast_name))
+			goto_bad;
+
+		if (!(lv_fast = find_lv(vg, fast_name))) {
+			log_error("LV %s not found.", fast_name);
+			goto bad;
+		}
+
+		if (lv_is_cache_vol(lv_fast)) {
+			log_error("LV %s is already used as a cachevol.", display_lvname(lv_fast));
+			goto bad;
+		}
+
+		if (!dm_list_empty(&lv_fast->segs_using_this_lv)) {
+			log_error("LV %s is already in use.", display_lvname(lv_fast));
+			goto bad;
+		}
+
+		if (!arg_is_set(cmd, yes_ARG) &&
+		    yes_no_prompt("Erase all existing data on %s? [y/n]: ", display_lvname(lv_fast)) == 'n') {
+			log_error("Conversion aborted.");
+			goto bad;
+		}
+
+		if (!lockd_lv(cmd, lv_fast, "ex", 0))
+			goto_bad;
+	} else {
+		if (!_lv_create_cachevol(cmd, vg, lv, &lv_fast))
+			goto_bad;
+	}
+
+	/* Ensure the LV is not active elsewhere. */
+	if (!lockd_lv(cmd, lv, "ex", 0))
+		goto_bad;
+
+	if (!wipe_cache_pool(lv_fast))
+		goto_bad;
+
+	/* When the lv arg is a thinpool, redirect command to data sub lv. */
+
+	if (lv_is_thin_pool(lv)) {
+		lv = seg_lv(first_seg(lv), 0);
+		log_verbose("Redirecting operation to data sub LV %s.", display_lvname(lv));
+	}
+
+	if (!_raid_split_image_conversion(lv))
+		goto_bad;
+
+	/* Attach the cache to the main LV. */
+
+	if (!_cache_vol_attach(cmd, lv, lv_fast))
+		goto_bad;
+
+	log_print_unless_silent("Logical volume %s is now cached.", display_lvname(lv));
+
+	return ECMD_PROCESSED;
+ bad:
+	return ECMD_FAILED;
+}
+
+static int _lvconvert_cachepool_attach_single(struct cmd_context *cmd,
+					  struct logical_volume *lv,
+					  struct processing_handle *handle)
+{
+	struct lv_segment *seg;
 	struct volume_group *vg = lv->vg;
 	struct logical_volume *cachepool_lv;
 	const char *cachepool_name;
@@ -4037,6 +4508,10 @@ static int _lvconvert_to_cache_vol_single(struct cmd_context *cmd,
 		log_error("Cache pool %s not found.", cachepool_name);
 		goto out;
 	}
+
+	/* Ensure the LV is not active elsewhere. */
+	if (!lockd_lv(cmd, lv, "ex", 0))
+		goto_out;
 
 	/*
 	 * If cachepool_lv is not yet a cache pool, convert it to one.
@@ -4053,6 +4528,11 @@ static int _lvconvert_to_cache_vol_single(struct cmd_context *cmd,
 			goto out;
 		}
 
+		if (lv_is_cache_vol(cachepool_lv)) {
+			log_error("LV %s is already used as a cachevol.", display_lvname(cachepool_lv));
+			goto out;
+		}
+
 		if (cachepool_lv == lv) {
 			log_error("Use a different LV for cache pool LV and cache LV %s.",
 				  display_lvname(cachepool_lv));
@@ -4065,15 +4545,14 @@ static int _lvconvert_to_cache_vol_single(struct cmd_context *cmd,
 			goto out;
 		}
 
-		if (!(cachepool_lv = find_lv(vg, cachepool_name))) {
-			log_error("LV %s cannot be found.", display_lvname(cachepool_lv));
+		/* cachepool_lv is converted into cache-pool data LV */
+		if (!(seg = get_only_segment_using_this_lv(cachepool_lv))) {
+			log_error(INTERNAL_ERROR "LV %s is not a cache pool data volume.",
+				  display_lvname(cachepool_lv));
 			goto out;
 		}
 
-		if (!lv_is_cache_pool(cachepool_lv)) {
-			log_error("LV %s is not a cache pool.", display_lvname(cachepool_lv));
-			goto out;
-		}
+		cachepool_lv = seg->lv;
 	} else {
 		if (!dm_list_empty(&cachepool_lv->segs_using_this_lv)) {
 			log_error("Cache pool %s is already in use.", cachepool_name);
@@ -4107,23 +4586,30 @@ static int _lvconvert_to_cache_vol_single(struct cmd_context *cmd,
 	if (lv_is_thin_pool(lv)) {
 		lv = seg_lv(first_seg(lv), 0);
 		log_verbose("Redirecting operation to data sub LV %s.", display_lvname(lv));
+	} else if (lv_is_vdo_pool(lv)) {
+		lv = seg_lv(first_seg(lv), 0);
+		log_verbose("Redirecting operation to data sub LV %s.", display_lvname(lv));
 	}
 
-	/* Convert lv to cache vol using cachepool_lv. */
-
-	if (!_lvconvert_to_cache_vol(cmd, lv, cachepool_lv))
+	if (!_raid_split_image_conversion(lv))
 		goto_out;
 
-	return ECMD_PROCESSED;
+	/* Attach the cache to the main LV. */
 
+	if (!_cache_pool_attach(cmd, lv, cachepool_lv))
+		goto_out;
+
+	log_print_unless_silent("Logical volume %s is now cached.", display_lvname(lv));
+
+	return ECMD_PROCESSED;
  out:
 	return ECMD_FAILED;
 }
 
-int lvconvert_to_cache_vol_cmd(struct cmd_context *cmd, int argc, char **argv)
+int lvconvert_to_cache_with_cachepool_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
 	return process_each_lv(cmd, 1, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
-			       NULL, NULL, &_lvconvert_to_cache_vol_single);
+			       NULL, NULL, &_lvconvert_cachepool_attach_single);
 }
 
 static int _lvconvert_to_thin_with_external_single(struct cmd_context *cmd,
@@ -4274,24 +4760,66 @@ static int _lvconvert_to_pool_or_swap_metadata_single(struct cmd_context *cmd,
 	struct dm_list *use_pvh = NULL;
 	int to_thinpool = 0;
 	int to_cachepool = 0;
+	int lvt_enum = get_lvt_enum(lv);
+	struct lv_type *lvtype;
 
 	switch (cmd->command->command_enum) {
 	case lvconvert_to_thinpool_or_swap_metadata_CMD:
+		if (lv_is_cache(lv))
+			/* For cached LV check the cache origin LV type */
+			lvt_enum = get_lvt_enum(seg_lv(first_seg(lv), 0));
 		to_thinpool = 1;
 		break;
 	case lvconvert_to_cachepool_or_swap_metadata_CMD:
+		if (lv_is_cache(lv))
+			goto_bad; /* Cache over cache is not supported */
 		to_cachepool = 1;
 		break;
 	default:
-		log_error(INTERNAL_ERROR "Invalid lvconvert pool command");
-		return 0;
-	};
+		log_error(INTERNAL_ERROR "Invalid lvconvert pool command.");
+		return ECMD_FAILED;
+	}
+
+	switch (lvt_enum) {
+	case thinpool_LVT:
+		if (!to_thinpool)
+			goto_bad; /* can't accept cache-pool */
+		break; /* swap thin-pool */
+	case cachepool_LVT:
+		if (!to_cachepool)
+			goto_bad; /* can't accept thin-pool */
+		break; /* swap cache-pool */
+	case linear_LVT:
+	case raid_LVT:
+	case striped_LVT:
+	case zero_LVT:
+		break;
+	default:
+bad:
+		lvtype = get_lv_type(lvt_enum);
+		log_error("LV %s with type %s cannot be used as a %s pool LV.",
+			  display_lvname(lv), lvtype ? lvtype->name : "unknown",
+			  to_thinpool ? "thin" : "cache");
+		return ECMD_FAILED;
+	}
 
 	if (lv_is_origin(lv)) {
 		log_error("Cannot convert logical volume %s under snapshot.",
 			  display_lvname(lv));
-		return 0;
-	};
+		return ECMD_FAILED;
+	}
+
+	if (!lv_is_visible(lv)) {
+		log_error("Can't convert internal LV %s.",
+			  display_lvname(lv));
+		return ECMD_FAILED;
+	}
+
+	if (lv_is_locked(lv)) {
+		log_error("Can't convert locked LV %s.",
+			  display_lvname(lv));
+		return ECMD_FAILED;
+	}
 
 	if (cmd->position_argc > 1) {
 		/* First pos arg is required LV, remaining are optional PVs. */
@@ -4380,56 +4908,110 @@ int lvconvert_merge_thin_cmd(struct cmd_context *cmd, int argc, char **argv)
 			       NULL, NULL, &_lvconvert_merge_thin_single);
 }
 
-static int _lvconvert_split_cachepool_single(struct cmd_context *cmd,
+static int _lvconvert_detach_writecache(struct cmd_context *cmd, struct processing_handle *handle,
+					struct logical_volume *lv,
+					struct logical_volume *lv_fast);
+static int _lvconvert_detach_writecache_when_clean(struct cmd_context *cmd,
+						   struct lvconvert_result *lr);
+
+static int _lvconvert_split_cache_single(struct cmd_context *cmd,
 					 struct logical_volume *lv,
 					 struct processing_handle *handle)
 {
-	struct logical_volume *cache_lv = NULL;
-	struct logical_volume *cachepool_lv = NULL;
+	struct logical_volume *lv_main = NULL;
+	struct logical_volume *lv_fast = NULL;
 	struct lv_segment *seg;
 	int ret;
 
-	if (lv_is_cache(lv)) {
-		cache_lv = lv;
-		cachepool_lv = first_seg(cache_lv)->pool_lv;
+	if (lv_is_writecache(lv)) {
+		lv_main = lv;
+		lv_fast = first_seg(lv_main)->writecache;
+
+	} else if (lv_is_cache(lv)) {
+		lv_main = lv;
+		lv_fast = first_seg(lv_main)->pool_lv;
 
 	} else if (lv_is_cache_pool(lv)) {
-		cachepool_lv = lv;
+		lv_fast = lv;
 
-		if ((dm_list_size(&cachepool_lv->segs_using_this_lv) == 1) &&
-		    (seg = get_only_segment_using_this_lv(cachepool_lv)) &&
+		if ((dm_list_size(&lv_fast->segs_using_this_lv) == 1) &&
+		    (seg = get_only_segment_using_this_lv(lv_fast)) &&
 		    seg_is_cache(seg))
-			cache_lv = seg->lv;
+			lv_main = seg->lv;
 
 	} else if (lv_is_thin_pool(lv)) {
-		cache_lv = seg_lv(first_seg(lv), 0); /* cached _tdata */
-		cachepool_lv = first_seg(cache_lv)->pool_lv;
+		lv_main = seg_lv(first_seg(lv), 0); /* cached _tdata */
+		lv_fast = first_seg(lv_main)->pool_lv;
+
+	} else if (lv_is_vdo_pool(lv)) {
+		lv_main = seg_lv(first_seg(lv), 0); /* cached _vdata */
+		lv_fast = first_seg(lv_main)->pool_lv;
 	}
 
-	if (!cache_lv) {
-		log_error("Cannot find cache LV from %s.", display_lvname(lv));
+	if (!lv_main) {
+		log_error("Cannot find LV with cache from %s.", display_lvname(lv));
 		return ECMD_FAILED;
 	}
 
-	if (!cachepool_lv) {
-		log_error("Cannot find cache pool LV from %s.", display_lvname(lv));
+	if (!lv_fast) {
+		log_error("Cannot find cache %s.", display_lvname(lv));
 		return ECMD_FAILED;
 	}
 
 	/* If LV is inactive here, ensure it's not active elsewhere. */
-	if (!lockd_lv(cmd, cache_lv, "ex", 0))
-		return_0;
+	if (!lockd_lv(cmd, lv_main, "ex", 0))
+		return ECMD_FAILED;
 
-	switch (cmd->command->command_enum) {
-	case lvconvert_split_and_keep_cachepool_CMD:
-		ret = _lvconvert_split_and_keep_cachepool(cmd, cache_lv, cachepool_lv);
-		break;
+	if (lv_is_writecache(lv_main)) {
+		if (!_lvconvert_detach_writecache(cmd, handle, lv_main, lv_fast))
+			return ECMD_FAILED;
 
-	case lvconvert_split_and_remove_cachepool_CMD:
-		ret = _lvconvert_split_and_remove_cachepool(cmd, cache_lv, cachepool_lv);
-		break;
-	default:
-		log_error(INTERNAL_ERROR "Unknown cache pool split.");
+		if (cmd->command->command_enum == lvconvert_split_and_remove_cache_CMD) {
+			struct lvconvert_result *lr = (struct lvconvert_result *) handle->custom_handle;
+			/*
+			 * If detach is ongoing, then the remove needs to wait
+			 * until _lvconvert_detach_writecache_when_clean(),
+			 * after the detach has finished. When lr->remove_cache
+			 * has been set, when_clean() knows it should remove
+			 * lv_fast at the end.
+			 */
+			if (!lr->wait_cleaner_writecache) {
+				if (lvremove_single(cmd, lv_fast, NULL) != ECMD_PROCESSED)
+					return ECMD_FAILED;
+			}
+		}
+		ret = 1;
+	} else if (lv_is_cache(lv_main) && lv_is_cache_vol(lv_fast)) {
+		if (cmd->command->command_enum == lvconvert_split_and_remove_cache_CMD) {
+			ret = _lvconvert_split_and_remove_cachevol(cmd, lv_main, lv_fast);
+
+			log_print_unless_silent("Logical volume %s is not cached and %s is removed.",
+						display_lvname(lv), display_lvname(lv_fast));
+
+		} else if (cmd->command->command_enum == lvconvert_split_and_keep_cache_CMD) {
+			ret = _lvconvert_split_and_keep_cachevol(cmd, lv_main, lv_fast);
+
+			log_print_unless_silent("Logical volume %s is not cached and %s is unused.",
+						display_lvname(lv), display_lvname(lv_fast));
+
+		} else  {
+			log_error(INTERNAL_ERROR "Unknown cache split command.");
+			ret = 0;
+		}
+
+	} else if (lv_is_cache(lv_main) && lv_is_cache_pool(lv_fast)) {
+		if (cmd->command->command_enum == lvconvert_split_and_remove_cache_CMD)
+			ret = _lvconvert_split_and_remove_cachepool(cmd, lv_main, lv_fast);
+
+		else if (cmd->command->command_enum == lvconvert_split_and_keep_cache_CMD)
+			ret = _lvconvert_split_and_keep_cachepool(cmd, lv_main, lv_fast);
+
+		else  {
+			log_error(INTERNAL_ERROR "Unknown cache split command.");
+			ret = 0;
+		}
+	} else {
+		log_error(INTERNAL_ERROR "Unknown cache split command.");
 		ret = 0;
 	}
 
@@ -4439,15 +5021,35 @@ static int _lvconvert_split_cachepool_single(struct cmd_context *cmd,
 	return ECMD_PROCESSED;
 }
 
-int lvconvert_split_cachepool_cmd(struct cmd_context *cmd, int argc, char **argv)
+int lvconvert_split_cache_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
-	if (cmd->command->command_enum == lvconvert_split_and_remove_cachepool_CMD) {
-		cmd->handles_missing_pvs = 1;
-		cmd->partial_activation = 1;
+	struct processing_handle *handle;
+	struct lvconvert_result lr = { 0 };
+	int ret;
+
+	cmd->handles_missing_pvs = 1;
+	cmd->partial_activation = 1;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
 	}
 
-	return process_each_lv(cmd, 1, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
-			       NULL, NULL, &_lvconvert_split_cachepool_single);
+	handle->custom_handle = &lr;
+
+	ret = process_each_lv(cmd, 1, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
+			       handle, NULL, &_lvconvert_split_cache_single);
+
+	destroy_processing_handle(cmd, handle);
+
+	if (ret == ECMD_FAILED)
+		return ret;
+
+	if (lr.wait_cleaner_writecache)
+		if (!_lvconvert_detach_writecache_when_clean(cmd, &lr))
+			ret = ECMD_FAILED;
+
+	return ret;
 }
 
 static int _lvconvert_raid_types_single(struct cmd_context *cmd, struct logical_volume *lv,
@@ -4502,6 +5104,7 @@ static int _lvconvert_raid_types_check(struct cmd_context *cmd, struct logical_v
 		    !lv_is_cache_pool_data(lv) &&
 		    !lv_is_thin_pool_metadata(lv) &&
 		    !lv_is_thin_pool_data(lv) &&
+		    !lv_is_vdo_pool_data(lv) &&
 		    !lv_is_used_cache_pool(lv) &&
 		    !lv_is_mirrored(lv) &&
 		    !lv_is_raid(lv))
@@ -4864,7 +5467,9 @@ static int _lvconvert_to_vdopool_single(struct cmd_context *cmd,
 		goto out;
 	}
 
-	if (!wipe_lv(lv, (struct wipe_params) { .do_zero = 1, .do_wipe_signatures = 1 })) {
+	if (!wipe_lv(lv, (struct wipe_params) { .do_zero = 1, .do_wipe_signatures = 1,
+		     .yes = arg_count(cmd, yes_ARG),
+		     .force = arg_count(cmd, force_ARG)})) {
 		log_error("Aborting. Failed to wipe VDO data store.");
 		goto out;
 	}
@@ -4908,6 +5513,883 @@ int lvconvert_to_vdopool_param_cmd(struct cmd_context *cmd, int argc, char **arg
 
 	return process_each_lv(cmd, 1, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
 			       NULL, NULL, &_lvconvert_to_vdopool_single);
+}
+
+/*
+ * Starts the detach process, and may complete it, or may defer the completion
+ * if cleaning is required, by returning a poll id.  If deferred, the caller
+ * will notice the poll id and call lvconvert_detach_writecache_when_clean
+ * to wait for the cleaning and complete the detach.  The command can be cancelled
+ * while waiting for cleaning and the same command be repeated to continue the
+ * process.
+ */
+static int _lvconvert_detach_writecache(struct cmd_context *cmd,
+					struct processing_handle *handle,
+					struct logical_volume *lv,
+					struct logical_volume *lv_fast)
+{
+	struct lvconvert_result *lr = (struct lvconvert_result *) handle->custom_handle;
+	struct writecache_settings settings;
+	struct convert_poll_id_list *idl;
+	uint32_t block_size_sectors;
+	int active_begin = 0;
+	int active_clean = 0;
+	int is_clean = 0;
+	int noflush = 0;
+
+	dm_list_init(&lr->poll_idls);
+
+	memset(&settings, 0, sizeof(settings));
+
+	if (!get_writecache_settings(cmd, &settings, &block_size_sectors)) {
+		log_error("Invalid writecache settings.");
+		return 0;
+	}
+
+	if (!archive(lv->vg))
+		return_0;
+
+	if (lv_is_partial(lv_fast)) {
+		if (!arg_count(cmd, force_ARG)) {
+			log_warn("WARNING: writecache on %s is not complete and cannot be flushed.", display_lvname(lv_fast));
+			log_warn("WARNING: cannot detach writecache from %s without --force.", display_lvname(lv));
+			log_error("Conversion aborted.");
+			return 0;
+		}
+
+		log_warn("WARNING: Data may be lost by detaching writecache without flushing.");
+
+		if (!arg_count(cmd, yes_ARG) &&
+		     yes_no_prompt("Detach writecache %s from %s without flushing data?",
+				   display_lvname(lv_fast), display_lvname(lv)) == 'n') {
+			log_error("Conversion aborted.");
+			return 0;
+		}
+		
+		noflush = 1;
+	}
+
+	/*
+	 * If the LV is inactive when we begin, then we want to
+	 * deactivate the LV at the end.
+	 */
+	active_begin = lv_is_active(lv);
+
+	if (!noflush) {
+		/*
+		 * --cachesettings cleaner=0 means to skip the use of the cleaner
+		 * and go directly to detach which will use a flush message.
+		 * (This is currently the only cachesetting used during detach.)
+		 */
+		if (settings.cleaner_set && !settings.cleaner) {
+			log_print_unless_silent("Detaching writecache skipping cleaner...");
+			goto detach;
+		}
+
+		if (!writecache_cleaner_supported(cmd)) {
+			log_print_unless_silent("Detaching writecache without cleaner...");
+			goto detach;
+		}
+
+		if (!active_begin && !activate_lv(cmd, lv)) {
+			log_error("Failed to activate LV to clean writecache.");
+			return 0;
+		}
+		active_clean = 1;
+
+		/*
+		 * If the user ran this command previously (or set cleaner
+		 * directly) the cache may already be empty and ready for
+		 * detach.
+		 */
+		if (lv_writecache_is_clean(cmd, lv, NULL)) {
+			log_print_unless_silent("Detaching writecache already clean.");
+			is_clean = 1;
+			goto detach;
+		}
+
+		/*
+		 * If the user has not already done lvchange --cachesettings cleaner=1
+		 * then do that here.  If the LV is inactive, this activates it
+		 * so that cache writeback can be done.
+		 */
+		log_print_unless_silent("Detaching writecache setting cleaner.");
+
+		if (!lv_writecache_set_cleaner(lv)) {
+			log_error("Failed to set cleaner cachesetting to flush cache.");
+			log_error("See lvchange --cachesettings cleaner=1");
+
+			if (!active_begin && active_clean && !deactivate_lv(cmd, lv))
+				stack;
+			return 0;
+		}
+
+		/*
+		 * The cache may have been nearly clean and will be empty with
+		 * a short dely.
+		 */
+		usleep(10000);
+		if (lv_writecache_is_clean(cmd, lv, NULL)) {
+			log_print_unless_silent("Detaching writecache finished cleaning.");
+			is_clean = 1;
+			goto detach;
+		}
+
+		if (!(idl = _convert_poll_id_list_create(cmd, lv))) {
+			log_error("Failed to monitor writecache cleaner progress.");
+			return 0;
+		}
+
+		/*
+		 * Monitor the writecache status until the cache is unused.
+		 * This is done at the end of the command where locks are not
+		 * held since the writeback can take some time.
+		 */
+		lr->wait_cleaner_writecache = 1;
+		lr->active_begin = active_begin;
+
+		/* The command wants to remove the cache after detaching. */
+		if (cmd->command->command_enum == lvconvert_split_and_remove_cache_CMD)
+			lr->remove_cache = 1;
+
+		dm_list_add(&lr->poll_idls, &idl->list);
+		return 1;
+	}
+
+ detach:
+
+	/*
+	 * If the LV was inactive before cleaning and activated to do cleaning,
+	 * then deactivate before the detach.
+	 */
+	if (!active_begin && active_clean && !deactivate_lv(cmd, lv))
+		stack;
+
+	if (is_clean)
+		noflush = 1;
+
+	if (!lv_detach_writecache_cachevol(lv, noflush))
+		return_0;
+
+	backup(lv->vg);
+
+	log_print_unless_silent("Logical volume %s writecache has been detached.",
+				display_lvname(lv));
+	return 1;
+}
+
+/*
+ * _lvconvert_detach_writecache() set the cleaner option for the LV
+ * so writecache will begin writing back data from cache to origin.
+ * It then saved the LV name/id (lvconvert_result/poll_id), and
+ * exited process_each_lv (releasing the VG and VG lock).  Then
+ * this is called to monitor the progress of the cache writeback.
+ * When the cache is clean, this does the detach (writecache is removed
+ * in metadata and LV in kernel is updated.)
+ */
+static int _lvconvert_detach_writecache_when_clean(struct cmd_context *cmd,
+						   struct lvconvert_result *lr)
+{
+	struct convert_poll_id_list *idl;
+	struct poll_operation_id *id;
+	struct volume_group *vg;
+	struct logical_volume *lv;
+	struct logical_volume *lv_fast;
+	uint32_t lockd_state, error_flags;
+	uint64_t dirty;
+	int ret;
+
+	idl = dm_list_item(dm_list_first(&lr->poll_idls), struct convert_poll_id_list);
+	id = idl->id;
+
+	/*
+	 * TODO: we should be able to save info about the dm device for this LV
+	 * and monitor the dm device status without doing vg lock/read around
+	 * each check.  The vg lock/read/write would then happen only once when
+	 * status was finished and we want to finish the detach.  If the dm
+	 * device goes away while monitoring, it's no different and no worse
+	 * than the LV going away here.
+	 */
+
+ retry:
+	lockd_state = 0;
+	error_flags = 0;
+
+	if (!lockd_vg(cmd, id->vg_name, "ex", 0, &lockd_state)) {
+		log_error("Detaching writecache interrupted - locking VG failed.");
+		return 0;
+	}
+
+	vg = vg_read(cmd, id->vg_name, NULL, READ_FOR_UPDATE, lockd_state, &error_flags, NULL);
+
+	if (!vg) {
+		log_error("Detaching writecache interrupted - reading VG failed.");
+		ret = 0;
+		goto out_lockd;
+	}
+
+	if (error_flags) {
+		log_error("Detaching writecache interrupted - reading VG error %x.", error_flags);
+		ret = 0;
+		goto out_release;
+	}
+
+	lv = find_lv(vg, id->lv_name);
+
+	if (lv && id->uuid && strcmp(id->uuid, (char *)&lv->lvid))
+		lv = NULL;
+
+	if (!lv) {
+		log_error("Detaching writecache interrupted - LV not found.");
+		ret = 0;
+		goto out_release;
+	}
+
+	if (!lv_is_active(lv)) {
+		log_error("Detaching writecache interrupted - LV not active.");
+		ret = 0;
+		goto out_release;
+	}
+
+	if (!lv_writecache_is_clean(cmd, lv, &dirty)) {
+		unlock_and_release_vg(cmd, vg, vg->name);
+
+		if (!lockd_vg(cmd, id->vg_name, "un", 0, &lockd_state))
+			stack;
+
+		log_print_unless_silent("Detaching writecache cleaning %llu blocks", (unsigned long long)dirty);
+		log_print_unless_silent("This command can be cancelled and rerun to complete writecache detach.");
+		sleep(5);
+		goto retry;
+	}
+
+	if (!lr->active_begin) {
+		/*
+		 * The LV was not active to begin so we should leave it inactive at the end.
+		 * It will remain inactive during detach since it's clean and doesn't need
+		 * a flush message.
+		 */
+		if (!deactivate_lv(cmd, lv))
+			stack;
+	}
+
+	log_print("Detaching writecache completed cleaning.");
+
+	lv_fast = first_seg(lv)->writecache;
+
+	/*
+	 * When the cleaner has finished, we can detach with noflush since
+	 * the cleaner has done the flushing.
+	 */
+
+	if (!lv_detach_writecache_cachevol(lv, 1)) {
+		log_error("Detaching writecache cachevol failed.");
+		ret = 0;
+		goto out_release;
+	}
+
+	/*
+	 * The detach was started by an uncache command that wants to remove
+	 * the cachevol after detaching.
+	 */
+	if (lr->remove_cache) {
+		if (lvremove_single(cmd, lv_fast, NULL) != ECMD_PROCESSED) {
+			log_error("Removing the writecache cachevol failed.");
+			ret = 0;
+		}
+	}
+
+	ret = 1;
+	backup(vg);
+
+out_release:
+	if (ret)
+		log_print_unless_silent("Logical volume %s write cache has been detached.", display_lvname(lv));
+
+	unlock_and_release_vg(cmd, vg, vg->name);
+
+out_lockd:
+	if (!lockd_vg(cmd, id->vg_name, "un", 0, &lockd_state))
+		stack;
+
+	return ret;
+}
+
+static int _writecache_zero(struct cmd_context *cmd, struct logical_volume *lv)
+{
+	struct wipe_params wp = {
+		.do_wipe_signatures = 1, /* optional, to print warning if clobbering something */
+		.do_zero = 1,            /* required for dm-writecache to work */
+		.yes = arg_count(cmd, yes_ARG),
+		.force = arg_count(cmd, force_ARG)
+	};
+	int ret;
+
+	if (!(lv->status & LVM_WRITE)) {
+		log_error("Cannot initialize readonly LV %s", display_lvname(lv));
+		return 0;
+	}
+
+	if (test_mode())
+		return 1;
+
+	if (!activate_lv(cmd, lv)) {
+		log_error("Failed to activate LV %s for zeroing.", display_lvname(lv));
+		return 0;
+	}
+
+	if (!(ret = wipe_lv(lv, wp)))
+		stack;
+
+	if (!deactivate_lv(cmd, lv)) {
+		log_error("Failed to deactivate LV %s for zeroing.", display_lvname(lv));
+		ret = 0;
+	}
+
+	return ret;
+}
+
+static struct logical_volume *_lv_writecache_create(struct cmd_context *cmd,
+					    struct logical_volume *lv,
+					    struct logical_volume *lv_fast,
+					    uint32_t block_size_sectors,
+					    struct writecache_settings *settings)
+{
+	struct logical_volume *lv_wcorig;
+	const struct segment_type *segtype;
+	struct lv_segment *seg;
+
+	/* should lv_fast get a new status flag indicating it's the cache in a writecache LV? */
+
+	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_WRITECACHE)))
+		return_NULL;
+
+	lv->status |= WRITECACHE;
+
+	/*
+	 * "lv_wcorig" is a new LV with new id, but with the segments from "lv".
+	 * "lv" keeps the existing name and id, but gets a new writecache segment,
+	 * in place of the segments that were moved to lv_wcorig.
+	 */
+
+	if (!(lv_wcorig = insert_layer_for_lv(cmd, lv, WRITECACHE, "_wcorig")))
+		return_NULL;
+
+	lv_set_hidden(lv_fast);
+
+	seg = first_seg(lv);
+	seg->segtype = segtype;
+
+	seg->writecache = lv_fast;
+
+	/* writecache_block_size is in bytes */
+	seg->writecache_block_size = block_size_sectors * 512;
+
+	memcpy(&seg->writecache_settings, settings, sizeof(struct writecache_settings));
+
+	if (!add_seg_to_segs_using_this_lv(lv_fast, seg))
+		return_NULL;
+
+	return lv_wcorig;
+}
+
+/*
+ * Currently only supports writecache block sizes 512 and 4096.
+ * This could be expanded later.
+ */
+static int _set_writecache_block_size(struct cmd_context *cmd,
+				      struct logical_volume *lv,
+				      uint32_t *block_size_sectors)
+{
+	char pathname[PATH_MAX];
+	struct device *fs_dev;
+	struct dm_list pvs_list;
+	struct pv_list *pvl;
+	uint32_t fs_block_size = 0;
+	uint32_t block_size_setting = 0;
+	uint32_t block_size = 0;
+	int lbs_unknown = 0, lbs_4k = 0, lbs_512 = 0;
+	int pbs_unknown = 0, pbs_4k = 0, pbs_512 = 0;
+	int rv = 0;
+
+	/* This is set if the user specified a writecache block size on the command line. */
+	if (*block_size_sectors)
+		block_size_setting = *block_size_sectors * 512;
+
+	dm_list_init(&pvs_list);
+
+	if (!get_pv_list_for_lv(cmd->mem, lv, &pvs_list)) {
+		log_error("Failed to build list of PVs for %s.", display_lvname(lv));
+		goto_bad;
+	}
+
+	dm_list_iterate_items(pvl, &pvs_list) {
+		unsigned int pbs = 0;
+		unsigned int lbs = 0;
+
+		if (!dev_get_direct_block_sizes(pvl->pv->dev, &pbs, &lbs)) {
+			lbs_unknown++;
+			pbs_unknown++;
+			continue;
+		}
+
+		if (lbs == 4096)
+			lbs_4k++;
+		else if (lbs == 512)
+			lbs_512++;
+		else
+			lbs_unknown++;
+
+		if (pbs == 4096)
+			pbs_4k++;
+		else if (pbs == 512)
+			pbs_512++;
+		else
+			pbs_unknown++;
+	}
+
+	if (lbs_4k && lbs_512) {
+		log_error("Writecache requires consistent logical block size for LV devices.");
+		goto_bad;
+	}
+
+	if (lbs_4k && block_size_setting && (block_size_setting < 4096)) {
+		log_error("Writecache block size %u not allowed with device logical block size 4096.",
+			  block_size_setting);
+		goto_bad;
+	}
+
+	if (dm_snprintf(pathname, sizeof(pathname), "%s/%s/%s", cmd->dev_dir,
+			lv->vg->name, lv->name) < 0) {
+		log_error("Path name too long to get LV block size %s", display_lvname(lv));
+		goto_bad;
+	}
+
+	if (!sync_local_dev_names(cmd))
+		stack;
+
+	if (!(fs_dev = dev_cache_get(cmd, pathname, NULL))) {
+		if (test_mode()) {
+			log_print("Test mode skips checking fs block size.");
+			fs_block_size = 0;
+			goto skip_fs;
+		}
+		log_error("Device for LV not found to check block size %s", pathname);
+		goto_bad;
+	}
+
+	/*
+	 * get_fs_block_size() returns the libblkid BLOCK_SIZE value,
+	 * where libblkid has fs-specific code to set BLOCK_SIZE to the
+	 * value we need here.
+	 *
+	 * The term "block size" here may not equate directly to what the fs
+	 * calls the block size, e.g. xfs calls this the sector size (and
+	 * something different the block size); while ext4 does call this
+	 * value the block size, but it's possible values are not the same
+	 * as xfs's, and do not seem to relate directly to the device LBS.
+	 *
+	 * With 512 LBS and 4K PBS, mkfs.xfs will use xfs sector size 4K.
+	 */
+	rv = get_fs_block_size(fs_dev, &fs_block_size);
+skip_fs:
+	if (!rv || !fs_block_size) {
+		if (lbs_4k && pbs_4k && !pbs_512) {
+			block_size = 4096;
+		} else if (lbs_512 && pbs_512 && !pbs_4k) {
+			block_size = 512;
+		} else if (lbs_512 && pbs_4k) {
+			if (block_size_setting == 4096)
+				block_size = 4096;
+			else
+				block_size = 512;
+		} else {
+			block_size = 512;
+		}
+
+		if (block_size_setting && (block_size_setting != block_size)) {
+			log_error("Cannot use writecache block size %u with unknown file system block size, logical block size %u, physical block size %u.",
+				  block_size_setting, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
+			goto bad;
+		}
+
+		if (block_size != 512) {
+			log_warn("WARNING: unable to detect a file system block size on %s", display_lvname(lv));
+			log_warn("WARNING: using a writecache block size larger than the file system block size may corrupt the file system.");
+			if (!arg_is_set(cmd, yes_ARG) &&
+			    yes_no_prompt("Use writecache block size %u? [y/n]: ", block_size) == 'n')  {
+				log_error("Conversion aborted.");
+				goto bad;
+			}
+		}
+
+		log_print("Using writecache block size %u for unknown file system block size, logical block size %u, physical block size %u.",
+			 block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
+		goto out;
+	}
+
+	if (!block_size_setting) {
+		/* User did not specify a block size, so choose according to fs block size. */
+		if (fs_block_size == 4096)
+			block_size = 4096;
+		else if (fs_block_size == 512)
+			block_size = 512;
+		else if (fs_block_size > 4096)
+			block_size = 4096;
+		else if (fs_block_size < 4096)
+			block_size = 512;
+		else
+			goto_bad;
+	} else {
+		if (block_size_setting <= fs_block_size)
+			block_size = block_size_setting;
+		else {
+			log_error("Writecache block size %u cannot be larger than file system block size %u.",
+				  block_size_setting, fs_block_size);
+			goto_bad;
+		}
+	}
+
+out:
+	if (block_size == 512)
+		*block_size_sectors = 1;
+	else if (block_size == 4096)
+		*block_size_sectors = 8;
+	else
+		goto_bad;
+
+	return 1;
+bad:
+	return 0;
+}
+
+int lvconvert_writecache_attach_single(struct cmd_context *cmd,
+					struct logical_volume *lv,
+					struct processing_handle *handle)
+{
+	struct volume_group *vg = lv->vg;
+	struct logical_volume *lv_wcorig;
+	struct logical_volume *lv_fast;
+	struct writecache_settings settings;
+	const char *fast_name;
+	uint32_t block_size_sectors = 0;
+	char *lockd_fast_args = NULL;
+	char *lockd_fast_name = NULL;
+	struct id lockd_fast_id;
+	char cvol_name[NAME_LEN];
+	int is_active;
+
+	/*
+	 * User specifies an existing cachevol to use or a cachedevice
+	 * to create a cachevol from.
+	 */
+	if ((fast_name = arg_str_value(cmd, cachevol_ARG, NULL))) {
+		if (!validate_lvname_param(cmd, &vg->name, &fast_name))
+			goto_bad;
+
+		if (!(lv_fast = find_lv(vg, fast_name))) {
+			log_error("LV %s not found.", fast_name);
+			goto bad;
+		}
+
+		if (lv_fast == lv) {
+			log_error("Invalid cachevol LV.");
+			goto bad;
+		}
+
+		if (lv_is_cache_vol(lv_fast)) {
+			log_error("LV %s is already used as a cachevol.", display_lvname(lv_fast));
+			goto bad;
+		}
+
+		if (!seg_is_linear(first_seg(lv_fast))) {
+			log_error("LV %s must be linear to use as a writecache.", display_lvname(lv_fast));
+			goto bad;
+		}
+
+		/* fast LV shouldn't generally be active by itself, but just in case. */
+		if (lv_is_active(lv_fast)) {
+			log_error("LV %s must be inactive to attach.", display_lvname(lv_fast));
+			goto bad;
+		}
+
+		if (!arg_is_set(cmd, yes_ARG) &&
+		     yes_no_prompt("Erase all existing data on %s? [y/n]: ", display_lvname(lv_fast)) == 'n') {
+			log_error("Conversion aborted.");
+			goto bad;
+		}
+	} else {
+		if (!_lv_create_cachevol(cmd, vg, lv, &lv_fast))
+			goto_bad;
+	}
+
+	is_active = lv_is_active(lv);
+
+	is_active = lv_is_active(lv);
+
+	memset(&settings, 0, sizeof(settings));
+
+	if (!get_writecache_settings(cmd, &settings, &block_size_sectors)) {
+		log_error("Invalid writecache settings.");
+		goto bad;
+	}
+
+	if (!is_active) {
+		/* checking block size of fs on the lv requires the lv to be active */
+		if (!activate_lv(cmd, lv)) {
+			log_error("Failed to activate LV to check block size %s", display_lvname(lv));
+			goto bad;
+		}
+	}
+
+	if (!_set_writecache_block_size(cmd, lv, &block_size_sectors)) {
+		if (!is_active && !deactivate_lv(cmd, lv))
+			stack;
+		goto_bad;
+	}
+
+	if (!is_active) {
+		if (!deactivate_lv(cmd, lv)) {
+			log_error("Failed to deactivate LV after checking block size %s", display_lvname(lv));
+			goto bad;
+		}
+	}
+
+	/* Ensure the LV is not active elsewhere. */
+	if (!lockd_lv(cmd, lv, "ex", 0))
+		goto_bad;
+	if (fast_name && !lockd_lv(cmd, lv_fast, "ex", 0))
+		goto_bad;
+
+	if (!archive(vg))
+		goto_bad;
+
+	/*
+	 * lv keeps the same lockd lock it had before, the lock for
+	 * lv_fast is kept but is not used while it's attached, and
+	 * lv_wcorig gets no lock.
+	 */
+	if (vg_is_shared(vg) && lv_fast->lock_args) {
+		lockd_fast_args = dm_pool_strdup(cmd->mem, lv_fast->lock_args);
+		lockd_fast_name = dm_pool_strdup(cmd->mem, lv_fast->name);
+		memcpy(&lockd_fast_id, &lv_fast->lvid.id[1], sizeof(struct id));
+	}
+
+	if (!_writecache_zero(cmd, lv_fast)) {
+		log_error("LV %s could not be zeroed.", display_lvname(lv_fast));
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * The lvm tradition is to rename an LV with a special role-specific
+	 * suffix when it becomes hidden.  Here the _cvol suffix is added to
+	 * the fast LV name.  When the cache is detached, it's renamed back.
+	 */
+	if (dm_snprintf(cvol_name, sizeof(cvol_name), "%s_cvol", lv_fast->name) < 0) {
+		log_error("Can't prepare new metadata name for %s.", display_lvname(lv_fast));
+		return ECMD_FAILED;
+	}
+	if (!lv_rename_update(cmd, lv_fast, cvol_name, 0))
+		return_ECMD_FAILED;
+
+	lv_fast->status |= LV_CACHE_VOL;
+
+	/*
+	 * Changes the vg struct to match the desired state.
+	 *
+	 * - lv keeps existing lv name and id, gets new segment with segtype
+	 *   "writecache".
+	 *
+	 * - lv_fast keeps its existing name and id, becomes hidden.
+	 *
+	 * - lv_wcorig gets new name (existing name + _wcorig suffix),
+	 *   gets new id, becomes hidden, gets segments from lv.
+	 */
+
+	if (!(lv_wcorig = _lv_writecache_create(cmd, lv, lv_fast, block_size_sectors, &settings)))
+		goto_bad;
+
+	/*
+	 * vg_write(), suspend_lv(), vg_commit(), resume_lv(),
+	 * where the old LV is suspended and the new LV is resumed.
+	 */
+
+	if (!lv_update_and_reload(lv))
+		goto_bad;
+
+	lockd_lv(cmd, lv, "un", 0);
+
+	if (lockd_fast_name) {
+		/* lockd unlock for lv_fast */
+		if (!lockd_lv_name(cmd, vg, lockd_fast_name, &lockd_fast_id, lockd_fast_args, "un", 0))
+			log_error("Failed to unlock fast LV %s/%s", vg->name, lockd_fast_name);
+	}
+
+	log_print_unless_silent("Logical volume %s now has writecache.",
+				display_lvname(lv));
+	return ECMD_PROCESSED;
+bad:
+	return ECMD_FAILED;
+
+}
+
+int lvconvert_to_writecache_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	struct lvconvert_result lr = { 0 };
+	int ret;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	handle->custom_handle = &lr;
+
+	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+
+	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE, handle, NULL,
+			      &lvconvert_writecache_attach_single);
+
+	destroy_processing_handle(cmd, handle);
+
+	return ret;
+}
+
+int lvconvert_to_cache_with_cachevol_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	struct lvconvert_result lr = { 0 };
+	int ret;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	handle->custom_handle = &lr;
+
+	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+
+	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE, handle, NULL,
+			      &lvconvert_cachevol_attach_single);
+
+	destroy_processing_handle(cmd, handle);
+
+	return ret;
+}
+
+static int _lvconvert_integrity_remove(struct cmd_context *cmd, struct logical_volume *lv)
+{
+	struct volume_group *vg = lv->vg;
+	int ret = 0;
+
+	if (!lv_is_integrity(lv) && !lv_is_raid(lv)) {
+		log_error("LV does not have integrity.");
+		return 0;
+	}
+
+	/* ensure it's not active elsewhere. */
+	if (!lockd_lv(cmd, lv, "ex", 0))
+		return_0;
+
+	if (!archive(vg))
+		return_0;
+
+	if (lv_is_raid(lv))
+		ret = lv_remove_integrity_from_raid(lv);
+	if (!ret)
+		return_0;
+
+	backup(vg);
+
+	log_print_unless_silent("Logical volume %s has removed integrity.", display_lvname(lv));
+	return 1;
+}
+
+static int _lvconvert_integrity_add(struct cmd_context *cmd, struct logical_volume *lv,
+				    struct integrity_settings *set)
+{
+	struct volume_group *vg = lv->vg;
+	struct dm_list *use_pvh;
+	int ret = 0;
+
+	/* ensure it's not active elsewhere. */
+	if (!lockd_lv(cmd, lv, "ex", 0))
+		return_0;
+
+	if (cmd->position_argc > 1) {
+		/* First pos arg is required LV, remaining are optional PVs. */
+		if (!(use_pvh = create_pv_list(cmd->mem, vg, cmd->position_argc - 1, cmd->position_argv + 1, 0)))
+			return_0;
+	} else
+		use_pvh = &vg->pvs;
+
+	if (!archive(vg))
+		return_0;
+
+	if (lv_is_partial(lv)) {
+		log_error("Cannot add integrity while LV is missing PVs.");
+		return 0;
+	}
+
+	if (lv_is_raid(lv))
+		ret = lv_add_integrity_to_raid(lv, set, use_pvh, NULL);
+	if (!ret)
+		return_0;
+
+	backup(vg);
+
+	log_print_unless_silent("Logical volume %s has added integrity.", display_lvname(lv));
+	return 1;
+}
+
+static int _lvconvert_integrity_single(struct cmd_context *cmd,
+					struct logical_volume *lv,
+					struct processing_handle *handle)
+{
+	struct integrity_settings settings;
+	int ret = 0;
+
+	memset(&settings, 0, sizeof(settings));
+
+	if (!integrity_mode_set(arg_str_value(cmd, raidintegritymode_ARG, NULL), &settings))
+		return_ECMD_FAILED;
+
+	if (arg_is_set(cmd, raidintegrityblocksize_ARG))
+		settings.block_size = arg_int_value(cmd, raidintegrityblocksize_ARG, 0);
+
+	if (arg_int_value(cmd, raidintegrity_ARG, 0))
+		ret = _lvconvert_integrity_add(cmd, lv, &settings);
+	else
+		ret = _lvconvert_integrity_remove(cmd, lv);
+
+	if (!ret)
+		return ECMD_FAILED;
+	return ECMD_PROCESSED;
+}
+
+int lvconvert_integrity_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	int ret;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	/* Want to be able to remove integrity from partial LV */
+	cmd->handles_missing_pvs = 1;
+
+	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+
+	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE, handle, NULL,
+			      &_lvconvert_integrity_single);
+
+	destroy_processing_handle(cmd, handle);
+
+	return ret;
 }
 
 /*

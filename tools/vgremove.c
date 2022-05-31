@@ -42,9 +42,6 @@ static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 	unsigned lv_count, missing;
 	int ret;
 
-	if (!vg_check_status(vg, EXPORTED_VG))
-		return_ECMD_FAILED;
-
 	lv_count = vg_visible_lvs(vg);
 
 	if (lv_count) {
@@ -94,31 +91,17 @@ int vgremove(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
-	/*
-	 * Needed to change the global VG namespace,
-	 * and to change the set of orphan PVs.
-	 */
-	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
-		return ECMD_FAILED;
+	if (!lock_global(cmd, "ex"))
+		return_ECMD_FAILED;
 
-	/*
-	 * This is a special case: if vgremove is given a tag, it causes
-	 * process_each_vg to do lockd_gl(sh) when getting a list of all
-	 * VG names.  We don't want the gl converted to sh, so disable it.
-	 */
-	cmd->lockd_gl_disable = 1;
+	clear_hint_file(cmd);
 
-	if (!lock_vol(cmd, VG_ORPHANS, LCK_VG_WRITE, NULL)) {
-		log_error("Can't get lock for orphan PVs");
-		return ECMD_FAILED;
-	}
+	cmd->wipe_outdated_pvs = 1;
 
 	cmd->handles_missing_pvs = 1;
 	ret = process_each_vg(cmd, argc, argv, NULL, NULL,
 			      READ_FOR_UPDATE, 0,
 			      NULL, &_vgremove_single);
-
-	unlock_vg(cmd, NULL, VG_ORPHANS);
 
 	return ret;
 }
