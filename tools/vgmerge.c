@@ -21,10 +21,8 @@ static struct volume_group *_vgmerge_vg_read(struct cmd_context *cmd,
 	struct volume_group *vg;
 	log_verbose("Checking for volume group \"%s\"", vg_name);
 	vg = vg_read_for_update(cmd, vg_name, NULL, 0, 0);
-	if (vg_read_error(vg)) {
-		release_vg(vg);
+	if (!vg)
 		return NULL;
-	}
 
 	if (vg_is_shared(vg)) {
 		log_error("vgmerge not allowed for lock_type %s", vg->lock_type);
@@ -206,9 +204,10 @@ int vgmerge(struct cmd_context *cmd, int argc, char **argv)
 		return EINVALID_CMD_LINE;
 	}
 
-	/* Needed change the global VG namespace. */
-	if (!lockd_gl(cmd, "ex", LDGL_UPDATE_NAMES))
+	if (!lock_global(cmd, "ex"))
 		return ECMD_FAILED;
+
+	clear_hint_file(cmd);
 
 	vg_name_to = skip_dev_dir(cmd, argv[0], NULL);
 	argc--;

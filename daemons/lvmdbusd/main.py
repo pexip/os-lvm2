@@ -29,7 +29,7 @@ from .utils import log_debug, log_error
 import argparse
 import os
 import sys
-from .cmdhandler import LvmFlightRecorder
+from .cmdhandler import LvmFlightRecorder, supports_vdo
 from .request import RequestEntry
 
 
@@ -44,10 +44,10 @@ def process_request():
 		try:
 			req = cfg.worker_q.get(True, 5)
 			log_debug(
-				"Running method: %s with args %s" %
-				(str(req.method), str(req.arguments)))
+				"Method start: %s with args %s (callback = %s)" %
+				(str(req.method), str(req.arguments), str(req.cb)))
 			req.run_cmd()
-			log_debug("Method complete ")
+			log_debug("Method complete: %s" % str(req.method))
 		except queue.Empty:
 			pass
 		except Exception:
@@ -127,6 +127,14 @@ def main():
 		log_error("You cannot specify --lvmshell and --nojson")
 		sys.exit(1)
 
+	# We will dynamically add interfaces which support vdo if it
+	# exists.
+	cfg.vdo_support = supports_vdo()
+
+	if cfg.vdo_support and not cfg.args.use_json:
+		log_error("You cannot specify --nojson when lvm has VDO support")
+		sys.exit(1)
+
 	# List of threads that we start up
 	thread_list = []
 
@@ -147,12 +155,12 @@ def main():
 	cfg.om = Lvm(BASE_OBJ_PATH)
 	cfg.om.register_object(Manager(MANAGER_OBJ_PATH))
 
-	cfg.db = lvmdb.DataStore(cfg.args.use_json)
+	cfg.db = lvmdb.DataStore(cfg.args.use_json, cfg.vdo_support)
 
 	# Using a thread to process requests, we cannot hang the dbus library
 	# thread that is handling the dbus interface
-	thread_list.append(threading.Thread(target=process_request,
-										name='process_request'))
+	thread_list.append(
+		threading.Thread(target=process_request, name='process_request'))
 
 	# Have a single thread handling updating lvm and the dbus model so we
 	# don't have multiple threads doing this as the same time

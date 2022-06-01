@@ -26,6 +26,8 @@ lvcreate -L10 -n cpool $vg
 lvcreate -L10 -n tpool $vg
 lvcreate -L10 -n $lv1 $vg
 
+lvconvert --yes --type cache-pool $vg/cpool
+
 lvconvert --yes --cache --cachepool cpool $vg/tpool
 
 # currently the only allowed stacking is cache thin data volume
@@ -36,14 +38,14 @@ lvcreate -V10 $vg/tpool
 # check cache pool remains same after thin-pool rename
 lvrename $vg/tpool  $vg/newpool
 
-check lv_exists $vg newpool cpool
+check lv_exists $vg newpool cpool_cpool
 check lv_not_exists $vg tpool
 
 # allowing rename of internal cache pool
-lvrename $vg/cpool  $vg/cachepool
+lvrename $vg/cpool_cpool  $vg/cachepool
 
 check lv_exists $vg cachepool
-check lv_not_exists $vg cpool
+check lv_not_exists $vg cpool_cpool
 
 lvs -a $vg
 

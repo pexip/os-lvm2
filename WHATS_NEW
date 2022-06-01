@@ -1,3 +1,163 @@
+Version 2.03.11 - 08th January 2021
+===================================
+  Fix pvck handling MDA at offset different from 4096.
+  Partial or degraded activation of writecache is not allowed.
+  Enhance error handling for fsadm and hanled correct fsck result.
+  Dmeventd lvm plugin ignores higher reserved_stack lvm.conf values.
+  Support using BLKZEROOUT for clearing devices.
+  Support interruption when wipping LVs.
+  Support interruption for bcache waiting.
+  Fix bcache when device has too many failing writes.
+  Fix bcache waiting for IO completion with failing disks.
+  Configure use own python path name order to prefer using python3.
+  Add configure --enable-editline support as an alternative to readline.
+  Enhance reporting and error handling when creating thin volumes.
+  Enable vgsplit for VDO volumes.
+  Lvextend of vdo pool volumes ensure at least 1 new VDO slab is added.
+  Use revert_lv() on reload error path after vg_revert().
+  Configure --with-integrity enabled.
+  Restore lost signal blocking while VG lock is held.
+  Improve estimation of needed extents when creating thin-pool.
+  Use extra 1% when resizing thin-pool metadata LV with --use-policy.
+  Enhance --use-policy percentage rounding.
+  Configure --with-vdo and --with-writecache as internal segments.
+  Improving VDO man page examples.
+  Allow pvmove of writecache origin.
+  Report integrity fields.
+  Integrity volumes defaults to journal mode.
+  Switch code base to use flexible array syntax.
+  Fix 64bit math when calculation cachevol size.
+  Preserve uint32_t for seqno handling.
+  Switch from mmap to plain read when loading regular files.
+  Update lvmvdo man page and better explain DISCARD usage.
+
+Version 2.03.10 - 09th August 2020
+==================================
+  Add writecache and integrity support to lvmdbusd.
+  Generate unique cachevol name when default required from lvcreate.
+  Converting RAID1 volume to one with same number of legs now succeeds with a
+  warning.
+  Fix conversion to raid from striped lagging type.
+  Fix conversion to 'mirrored' mirror log with larger regionsize.
+  Zero pool metadata on allocation (disable with allocation/zero_metadata=0).
+  Failure in zeroing or wiping will fail command (bypass with -Zn, -Wn).
+  Add lvcreate of new cache or writecache lv with single command.
+  Fix running out of free buffers for async writing for larger writes.
+  Add integrity with raid capability.
+  Fix support for lvconvert --repair used by foreign apps (i.e. Docker).
+
+Version 2.03.09 - 26th March 2020
+=================================
+  Fix formating of vdopool (vdo_slab_size_mb was smaller by 2 bits).
+  Fix showing of a dm kernel error when uncaching a volume with cachevol.
+
+Version 2.03.08 - 11th February 2020
+====================================
+  Prevent problematic snapshots of writecache volumes.
+  Add error handling for failing allocation in _reserve_area().
+  Fix memleak in syncing of internal cache.
+  Fix pvck dump_current_text memleak.
+  Fix lvmlockd result code on error path for _query_lock_lv().
+  Update pvck man page and help output.
+  Reject invalid writecache high/low_watermark setting.
+  Report writecache status.
+  Accept more output lines from vdo_format.
+  Prohibit reshaping of stacked raid LVs.
+  Avoid running cache input arg validation when creating vdo pool.
+  Prevent raid reshaping of stacked volumes.
+  Added VDO lvmdbusd methods for enable/disable compression & dedupe.
+  Added VDO lvmdbusd method for converting LV to VDO pool.
+
+Version 2.03.07 - 30th November 2019
+====================================
+  Subcommand in vgck for repairing headers and metadata.
+  Ensure minimum required region size on striped RaidLV creation.
+  Fix resize of thin-pool with data and metadata of different segtype.
+  Improve mirror type leg splitting.
+  Improve error path handling in daemons on shutdown.
+  Fix activation order when removing merged snapshot.
+  Experimental VDO support for lvmdbusd.
+
+Version 2.03.06 - 23rd October 2019
+===================================
+  Add _cpool suffix to cache-pool LV name when used by caching LV.
+  No longer store extra UUID for cmeta and cdata cachevol layer.
+  Enhance activation of cache devices with cachevols.
+  Add _cvol in list of protected suffixes and start use it with DM UUID.
+  Rename LV converted to cachevol to use _cvol suffix.
+  Use normal LVs for wiping of cachevols.
+  Reload cleanered cache DM only with cleaner policy.
+  Fix cmd return when zeroing of cachevol fails.
+  Extend lvs to show all VDO properties.
+  Preserve VDO write policy with vdopool.
+  Increase default vdo bio threads to 4.
+  Continue report when cache_status fails.
+  Add support for DM_DEVICE_GET_TARGET_VERSION into device_mapper.
+  Fix cmirrord usage of header files from device_mapper subdir.
+  Allow standalone activation of VDO pool just like for thin-pools.
+  Activate thin-pool layered volume as 'read-only' device.
+  Ignore crypto devices with UUID signature CRYPT-SUBDEV.
+  Enhance validation for thin and cache pool conversion and swapping.
+  Improve internal removal of cached devices.
+  Synchronize with udev when dropping snapshot.
+  Add missing device synchronization point before removing pvmove node.
+  Correctly set read_ahead for LVs when pvmove is finished.
+  Remove unsupported OPTIONS+="event_timeout" udev rule from 11-dm-lvm.rules.
+  Prevent creating VGs with PVs with different logical block sizes.
+  Fix metadata writes from corrupting with large physical block size.
+
+Version 2.03.05 - 15th June 2019
+================================
+  Fix command definition for pvchange -a.
+  Add vgck --updatemetadata command that will repair metadata problems.
+  Improve VG reading to work if one good copy of metadata is found.
+  Report/display/scan commands that read VGs will no longer write/repair.
+  Move metadata repairs from VG reading to VG writing.
+  Add config setting md_component_checks to control MD component checks.
+  Add end of device MD component checks when dev has no udev info.
+
+Version 2.03.04 - 10th June 2019
+================================
+  Remove unused_duplicate_devs from cmd causing segfault in dmeventd.
+
+Version 2.03.03 - 07th June 2019
+================================
+  Report no_discard_passdown for cache LVs with lvs -o+kernel_discards.
+  Add pvck --dump option to extract metadata.
+  Fix signal delivery checking race in libdaemon (lvmetad).
+  Add missing Before=shutdown.target to LVM2 services to fix shutdown ordering.
+  Skip autoactivation for a PV when PV size does not match device size.
+  Remove first-pvscan-initialization which should no longer be needed.
+  Add remote refresh through lvmlockd/dlm for shared LVs after lvextend.
+  Ignore foreign and shared PVs for pvscan online files.
+  Add config setting to control fields in debug file and verbose output.
+  Add command[pid] and timestamp to debug file and verbose output.
+  Fix missing growth of _pmsmare volume when extending _tmeta volume.
+  Automatically grow thin metadata, when thin data gets too big.
+  Add synchronization with udev before removing cached devices.
+  Add support for caching VDO LVs and VDOPOOL LVs.
+  Add support for vgsplit with cached devices.
+  Query mpath device only once per command for its state.
+  Use device INFO instead of STATUS when checking for mpath device uuid.
+  Change default io_memory_size from 4 to 8 MiB.
+  Add config setting io_memory_size to set bcache size.
+  Fix pvscan autoactivation for concurrent pvscans.
+  Change scan_lvs default to 0 so LVs are not scanned for PVs.
+  Thin-pool selects power-of-2 chunk size by default.
+  Cache selects power-of-2 chunk size by default.
+  Support reszing for VDOPoolLV and VDOLV.
+  Improve -lXXX%VG modifier which improves cache segment estimation.
+  Ensure migration_threshold for cache is at least 8 chunks.
+  Restore missing man info lvcreate --zero for thin-pools.
+  Drop misleadning comment for metadata minimum_io_size for VDO segment.
+  Add device hints to reduce scanning.
+  Introduce LVM_SUPPRESS_SYSLOG to suppress syslog usage by generator.
+  Fix generator quering lvmconfig unpresent config option.
+  Fix memleak on bcache error path code.
+  Fix missing unlock on lvm2 dmeventd plugin error path initialization.
+  Improve Makefile dependency tracking.
+  Move VDO support towards V2 target (6.2) support.
+
 Version 2.03.02 - 18th December 2018
 ====================================
   Fix missing proper initialization of pv_list struct when adding pv.

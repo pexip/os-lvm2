@@ -14,6 +14,7 @@ from . import cfg
 from .utils import MThreadRunner, log_debug, log_error
 import threading
 import queue
+import time
 import traceback
 
 
@@ -28,10 +29,25 @@ def _main_thread_load(refresh=True, emit_signal=True):
 		refresh=refresh,
 		emit_signal=emit_signal,
 		cache_refresh=False)[1]
-	num_total_changes += load_lvs(
+
+	lv_changes = load_lvs(
 		refresh=refresh,
 		emit_signal=emit_signal,
 		cache_refresh=False)[1]
+
+	num_total_changes += lv_changes
+
+	# When the LVs change it can cause another change in the VGs which is
+	# missed if we don't scan through the VGs again.  We could achieve this
+	# the other way and re-scan the LVs, but in general there are more LVs than
+	# VGs, thus this should be more efficient.  This happens when a LV interface
+	# changes causing the dbus object representing it to be removed and
+	# recreated.
+	if refresh and lv_changes > 0:
+		num_total_changes += load_vgs(
+			refresh=refresh,
+			emit_signal=emit_signal,
+			cache_refresh=False)[1]
 
 	return num_total_changes
 
@@ -82,6 +98,8 @@ class StateUpdate(object):
 
 	@staticmethod
 	def update_thread(obj):
+		exception_count = 0
+
 		queued_requests = []
 		while cfg.run.value != 0:
 			# noinspection PyBroadException
@@ -136,12 +154,26 @@ class StateUpdate(object):
 				# wake up if we get an exception
 				queued_requests = []
 
+				# We retrieved OK, clear exception count
+				exception_count = 0
+
 			except queue.Empty:
 				pass
-			except Exception:
+			except Exception as e:
 				st = traceback.format_exc()
 				log_error("update_thread exception: \n%s" % st)
 				cfg.blackbox.dump()
+				exception_count += 1
+				if exception_count >= 5:
+					for i in queued_requests:
+						i.set_result(e)
+
+					log_error("Too many errors in update_thread, exiting daemon")
+					cfg.exit_daemon()
+
+				else:
+					# Slow things down when encountering errors
+					time.sleep(1)
 
 	def __init__(self):
 		self.lock = threading.RLock()

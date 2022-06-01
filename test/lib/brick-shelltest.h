@@ -80,8 +80,6 @@
 #include <unistd.h>
 #endif
 
-#include "configure.h"
-
 /*  Timeout for the whole test suite in hours */
 static const time_t TEST_SUITE_TIMEOUT = 4;
 
@@ -378,20 +376,6 @@ struct Substitute {
     std::string prefix;
 
     std::string map( std::string line ) {
-        if ( std::string( line, 0, 9 ) == "@TESTDIR=" )
-            testdir = std::string( line, 9, line.length() - 10 ); // skip \n
-        else if ( std::string( line, 0, 8 ) == "@PREFIX=" )
-            prefix = std::string( line, 8, line.length() - 9 );  // skip \n
-        else {
-            size_t off;
-            if (!testdir.empty())
-                while ( (off = line.find( testdir )) != std::string::npos )
-                    line.replace( off, testdir.length(), "@TESTDIR@" );
-
-            if (!prefix.empty())
-                while ( (off = line.find( prefix )) != std::string::npos )
-                    line.replace( off, prefix.length(), "@PREFIX@" );
-        }
         return line;
     }
 };

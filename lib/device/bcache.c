@@ -33,6 +33,11 @@
 
 #define SECTOR_SHIFT 9L
 
+#define FD_TABLE_INC 1024
+static int _fd_table_size;
+static int *_fd_table;
+
+
 //----------------------------------------------------------------
 
 static void log_sys_warn(const char *call)
@@ -61,22 +66,16 @@ struct control_block {
 struct cb_set {
 	struct dm_list free;
 	struct dm_list allocated;
-	struct control_block *vec;
+	struct control_block vec[];
 } control_block_set;
 
 static struct cb_set *_cb_set_create(unsigned nr)
 {
-	int i;
-	struct cb_set *cbs = malloc(sizeof(*cbs));
+	unsigned i;
+	struct cb_set *cbs = malloc(sizeof(*cbs) + nr * sizeof(*cbs->vec));
 
-	if (!cbs)
+	if (!cbs->vec)
 		return NULL;
-
-	cbs->vec = malloc(nr * sizeof(*cbs->vec));
-	if (!cbs->vec) {
-		free(cbs);
-		return NULL;
-	}
 
 	dm_list_init(&cbs->free);
 	dm_list_init(&cbs->allocated);
@@ -97,7 +96,6 @@ static void _cb_set_destroy(struct cb_set *cbs)
 		return;
 	}
 
-	free(cbs->vec);
 	free(cbs);
 }
 
@@ -155,11 +153,11 @@ static void _async_destroy(struct io_engine *ioe)
 	free(e);
 }
 
-static int _last_byte_fd;
+static int _last_byte_di;
 static uint64_t _last_byte_offset;
 static int _last_byte_sector_size;
 
-static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
+static bool _async_issue(struct io_engine *ioe, enum dir d, int di,
 			 sector_t sb, sector_t se, void *data, void *context)
 {
 	int r;
@@ -169,6 +167,7 @@ static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
 	sector_t offset;
 	sector_t nbytes;
 	sector_t limit_nbytes;
+	sector_t orig_nbytes;
 	sector_t extra_nbytes = 0;
 
 	if (((uintptr_t) data) & e->page_mask) {
@@ -182,7 +181,7 @@ static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
 	/*
 	 * If bcache block goes past where lvm wants to write, then clamp it.
 	 */
-	if ((d == DIR_WRITE) && _last_byte_offset && (fd == _last_byte_fd)) {
+	if ((d == DIR_WRITE) && _last_byte_offset && (di == _last_byte_di)) {
 		if (offset > _last_byte_offset) {
 			log_error("Limit write at %llu len %llu beyond last byte %llu",
 				  (unsigned long long)offset,
@@ -191,10 +190,40 @@ static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
 			return false;
 		}
 
+		/*
+		 * If the bcache block offset+len goes beyond where lvm is
+		 * intending to write, then reduce the len being written
+		 * (which is the bcache block size) so we don't write past
+		 * the limit set by lvm.  If after applying the limit, the
+		 * resulting size is not a multiple of the sector size (512
+		 * or 4096) then extend the reduced size to be a multiple of
+		 * the sector size (we don't want to write partial sectors.)
+		 */
 		if (offset + nbytes > _last_byte_offset) {
 			limit_nbytes = _last_byte_offset - offset;
-			if (limit_nbytes % _last_byte_sector_size)
+
+			if (limit_nbytes % _last_byte_sector_size) {
 				extra_nbytes = _last_byte_sector_size - (limit_nbytes % _last_byte_sector_size);
+
+				/*
+				 * adding extra_nbytes to the reduced nbytes (limit_nbytes)
+				 * should make the final write size a multiple of the
+				 * sector size.  This should never result in a final size
+				 * larger than the bcache block size (as long as the bcache
+				 * block size is a multiple of the sector size).
+				 */
+				if (limit_nbytes + extra_nbytes > nbytes) {
+					log_warn("Skip extending write at %llu len %llu limit %llu extra %llu sector_size %llu",
+						 (unsigned long long)offset,
+						 (unsigned long long)nbytes,
+						 (unsigned long long)limit_nbytes,
+						 (unsigned long long)extra_nbytes,
+						 (unsigned long long)_last_byte_sector_size);
+					extra_nbytes = 0;
+				}
+			}
+
+			orig_nbytes = nbytes;
 
 			if (extra_nbytes) {
 				log_debug("Limit write at %llu len %llu to len %llu rounded to %llu",
@@ -210,6 +239,22 @@ static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
 					  (unsigned long long)limit_nbytes);
 				nbytes = limit_nbytes;
 			}
+
+			/*
+			 * This shouldn't happen, the reduced+extended
+			 * nbytes value should never be larger than the
+			 * bcache block size.
+			 */
+			if (nbytes > orig_nbytes) {
+				log_error("Invalid adjusted write at %llu len %llu adjusted %llu limit %llu extra %llu sector_size %llu",
+					  (unsigned long long)offset,
+					  (unsigned long long)orig_nbytes,
+					  (unsigned long long)nbytes,
+					  (unsigned long long)limit_nbytes,
+					  (unsigned long long)extra_nbytes,
+					  (unsigned long long)_last_byte_sector_size);
+				return false;
+			}
 		}
 	}
 
@@ -221,7 +266,7 @@ static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
 
 	memset(&cb->cb, 0, sizeof(cb->cb));
 
-	cb->cb.aio_fildes = (int) fd;
+	cb->cb.aio_fildes = (int) _fd_table[di];
 	cb->cb.u.c.buf = data;
 	cb->cb.u.c.offset = offset;
 	cb->cb.u.c.nbytes = nbytes;
@@ -229,13 +274,15 @@ static bool _async_issue(struct io_engine *ioe, enum dir d, int fd,
 
 #if 0
 	if (d == DIR_READ) {
-		log_debug("io R off %llu bytes %llu",
+		log_debug("io R off %llu bytes %llu di %d fd %d",
 			  (unsigned long long)cb->cb.u.c.offset,
-			  (unsigned long long)cb->cb.u.c.nbytes);
+			  (unsigned long long)cb->cb.u.c.nbytes,
+			  di, _fd_table[di]);
 	} else {
-		log_debug("io W off %llu bytes %llu",
+		log_debug("io W off %llu bytes %llu di %d fd %d",
 			  (unsigned long long)cb->cb.u.c.offset,
-			  (unsigned long long)cb->cb.u.c.nbytes);
+			  (unsigned long long)cb->cb.u.c.nbytes,
+			  di, _fd_table[di]);
 	}
 #endif
 
@@ -271,9 +318,7 @@ static bool _async_wait(struct io_engine *ioe, io_complete_fn fn)
 	struct async_engine *e = _to_async(ioe);
 
 	memset(&event, 0, sizeof(event));
-	do {
-		r = io_getevents(e->aio_context, 1, MAX_EVENT, event, NULL);
-	} while (r == -EINTR);
+	r = io_getevents(e->aio_context, 1, MAX_EVENT, event, NULL);
 
 	if (r < 0) {
 		log_sys_warn("io_getevents");
@@ -367,7 +412,7 @@ static void _sync_destroy(struct io_engine *ioe)
         free(e);
 }
 
-static bool _sync_issue(struct io_engine *ioe, enum dir d, int fd,
+static bool _sync_issue(struct io_engine *ioe, enum dir d, int di,
                         sector_t sb, sector_t se, void *data, void *context)
 {
 	int rv;
@@ -383,7 +428,7 @@ static bool _sync_issue(struct io_engine *ioe, enum dir d, int fd,
 	}
 
 	where = sb * 512;
-	off = lseek(fd, where, SEEK_SET);
+	off = lseek(_fd_table[di], where, SEEK_SET);
 	if (off == (off_t) -1) {
 		log_warn("Device seek error %d for offset %llu", errno, (unsigned long long)where);
 		free(io);
@@ -398,24 +443,47 @@ static bool _sync_issue(struct io_engine *ioe, enum dir d, int fd,
 	/*
 	 * If bcache block goes past where lvm wants to write, then clamp it.
 	 */
-	if ((d == DIR_WRITE) && _last_byte_offset && (fd == _last_byte_fd)) {
+	if ((d == DIR_WRITE) && _last_byte_offset && (di == _last_byte_di)) {
 		uint64_t offset = where;
 		uint64_t nbytes = len;
 		sector_t limit_nbytes = 0;
 		sector_t extra_nbytes = 0;
+		sector_t orig_nbytes = 0;
 
 		if (offset > _last_byte_offset) {
 			log_error("Limit write at %llu len %llu beyond last byte %llu",
 				  (unsigned long long)offset,
 				  (unsigned long long)nbytes,
 				  (unsigned long long)_last_byte_offset);
+			free(io);
 			return false;
 		}
 
 		if (offset + nbytes > _last_byte_offset) {
 			limit_nbytes = _last_byte_offset - offset;
-			if (limit_nbytes % _last_byte_sector_size)
+
+			if (limit_nbytes % _last_byte_sector_size) {
 				extra_nbytes = _last_byte_sector_size - (limit_nbytes % _last_byte_sector_size);
+
+				/*
+				 * adding extra_nbytes to the reduced nbytes (limit_nbytes)
+				 * should make the final write size a multiple of the
+				 * sector size.  This should never result in a final size
+				 * larger than the bcache block size (as long as the bcache
+				 * block size is a multiple of the sector size).
+				 */
+				if (limit_nbytes + extra_nbytes > nbytes) {
+					log_warn("Skip extending write at %llu len %llu limit %llu extra %llu sector_size %llu",
+						 (unsigned long long)offset,
+						 (unsigned long long)nbytes,
+						 (unsigned long long)limit_nbytes,
+						 (unsigned long long)extra_nbytes,
+						 (unsigned long long)_last_byte_sector_size);
+					extra_nbytes = 0;
+				}
+			}
+
+			orig_nbytes = nbytes;
 
 			if (extra_nbytes) {
 				log_debug("Limit write at %llu len %llu to len %llu rounded to %llu",
@@ -431,6 +499,23 @@ static bool _sync_issue(struct io_engine *ioe, enum dir d, int fd,
 					  (unsigned long long)limit_nbytes);
 				nbytes = limit_nbytes;
 			}
+
+			/*
+			 * This shouldn't happen, the reduced+extended
+			 * nbytes value should never be larger than the
+			 * bcache block size.
+			 */
+			if (nbytes > orig_nbytes) {
+				log_error("Invalid adjusted write at %llu len %llu adjusted %llu limit %llu extra %llu sector_size %llu",
+					  (unsigned long long)offset,
+					  (unsigned long long)orig_nbytes,
+					  (unsigned long long)nbytes,
+					  (unsigned long long)limit_nbytes,
+					  (unsigned long long)extra_nbytes,
+					  (unsigned long long)_last_byte_sector_size);
+				free(io);
+				return false;
+			}
 		}
 
 		where = offset;
@@ -439,9 +524,9 @@ static bool _sync_issue(struct io_engine *ioe, enum dir d, int fd,
 
 	while (pos < len) {
 		if (d == DIR_READ)
-			rv = read(fd, (char *)data + pos, len - pos);
+			rv = read(_fd_table[di], (char *)data + pos, len - pos);
 		else
-			rv = write(fd, (char *)data + pos, len - pos);
+			rv = write(_fd_table[di], (char *)data + pos, len - pos);
 
 		if (rv == -1 && errno == EINTR)
 			continue;
@@ -601,7 +686,7 @@ struct bcache {
 //----------------------------------------------------------------
 
 struct key_parts {
-	uint32_t fd;
+	uint32_t di;
 	uint64_t b;
 } __attribute__ ((packed));
 
@@ -610,12 +695,12 @@ union key {
         uint8_t bytes[12];
 };
 
-static struct block *_block_lookup(struct bcache *cache, int fd, uint64_t i)
+static struct block *_block_lookup(struct bcache *cache, int di, uint64_t i)
 {
 	union key k;
 	union radix_value v;
 
-	k.parts.fd = fd;
+	k.parts.di = di;
 	k.parts.b = i;
 
 	if (radix_tree_lookup(cache->rtree, k.bytes, k.bytes + sizeof(k.bytes), &v))
@@ -629,7 +714,7 @@ static bool _block_insert(struct block *b)
         union key k;
         union radix_value v;
 
-        k.parts.fd = b->fd;
+        k.parts.di = b->di;
         k.parts.b = b->index;
         v.ptr = b;
 
@@ -640,7 +725,7 @@ static void _block_remove(struct block *b)
 {
         union key k;
 
-        k.parts.fd = b->fd;
+        k.parts.di = b->di;
         k.parts.b = b->index;
 
 	radix_tree_remove(b->cache->rtree, k.bytes, k.bytes + sizeof(k.bytes));
@@ -782,7 +867,7 @@ static void _issue_low_level(struct block *b, enum dir d)
 
 	dm_list_move(&cache->io_pending, &b->list);
 
-	if (!cache->engine->issue(cache->engine, d, b->fd, sb, se, b->data, b)) {
+	if (!cache->engine->issue(cache->engine, d, b->di, sb, se, b->data, b)) {
 		/* FIXME: if io_submit() set an errno, return that instead of EIO? */
 		_complete_io(b, -EIO);
 		return;
@@ -858,21 +943,26 @@ static struct block *_find_unused_clean_block(struct bcache *cache)
 	return NULL;
 }
 
-static struct block *_new_block(struct bcache *cache, int fd, block_address i, bool can_wait)
+static struct block *_new_block(struct bcache *cache, int di, block_address i, bool can_wait)
 {
 	struct block *b;
 
 	b = _alloc_block(cache);
-	while (!b && !dm_list_empty(&cache->clean)) {
+	while (!b) {
 		b = _find_unused_clean_block(cache);
 		if (!b) {
 			if (can_wait) {
 				if (dm_list_empty(&cache->io_pending))
 					_writeback(cache, 16);  // FIXME: magic number
-				_wait_io(cache);
+				_wait_all(cache);
+				if (dm_list_size(&cache->errored) >= cache->max_io) {
+					log_debug("bcache no new blocks for di %d index %u with >%d errors.",
+						  di, (uint32_t) i, cache->max_io);
+					return NULL;
+				}
 			} else {
-				log_error("bcache no new blocks for fd %d index %u",
-					  fd, (uint32_t) i);
+				log_debug("bcache no new blocks for di %d index %u",
+					  di, (uint32_t) i);
 				return NULL;
 			}
 		}
@@ -881,7 +971,7 @@ static struct block *_new_block(struct bcache *cache, int fd, block_address i, b
 	if (b) {
 		dm_list_init(&b->list);
 		b->flags = 0;
-		b->fd = fd;
+		b->di = di;
 		b->index = i;
 		b->ref_count = 0;
 		b->error = 0;
@@ -927,10 +1017,10 @@ static void _miss(struct bcache *cache, unsigned flags)
 }
 
 static struct block *_lookup_or_read_block(struct bcache *cache,
-				  	   int fd, block_address i,
+				  	   int di, block_address i,
 					   unsigned flags)
 {
-	struct block *b = _block_lookup(cache, fd, i);
+	struct block *b = _block_lookup(cache, di, i);
 
 	if (b) {
 		// FIXME: this is insufficient.  We need to also catch a read
@@ -955,7 +1045,7 @@ static struct block *_lookup_or_read_block(struct bcache *cache,
 	} else {
 		_miss(cache, flags);
 
-		b = _new_block(cache, fd, i, true);
+		b = _new_block(cache, di, i, true);
 		if (b) {
 			if (flags & GF_ZERO)
 				_zero_block(b);
@@ -1000,6 +1090,7 @@ struct bcache *bcache_create(sector_t block_sectors, unsigned nr_cache_blocks,
 	struct bcache *cache;
 	unsigned max_io = engine->max_io(engine);
 	long pgsize = sysconf(_SC_PAGESIZE);
+	int i;
 
 	if (pgsize < 0) {
 		log_warn("WARNING: _SC_PAGESIZE returns negative value.");
@@ -1060,6 +1151,18 @@ struct bcache *bcache_create(sector_t block_sectors, unsigned nr_cache_blocks,
 		return NULL;
 	}
 
+	_fd_table_size = FD_TABLE_INC;
+
+	if (!(_fd_table = malloc(sizeof(int) * _fd_table_size))) {
+		cache->engine->destroy(cache->engine);
+		radix_tree_destroy(cache->rtree);
+		free(cache);
+		return NULL;
+	}
+
+	for (i = 0; i < _fd_table_size; i++)
+		_fd_table[i] = -1;
+
 	return cache;
 }
 
@@ -1075,6 +1178,9 @@ void bcache_destroy(struct bcache *cache)
 	radix_tree_destroy(cache->rtree);
 	cache->engine->destroy(cache->engine);
 	free(cache);
+	free(_fd_table);
+	_fd_table = NULL;
+	_fd_table_size = 0;
 }
 
 sector_t bcache_block_sectors(struct bcache *cache)
@@ -1092,13 +1198,13 @@ unsigned bcache_max_prefetches(struct bcache *cache)
 	return cache->max_io;
 }
 
-void bcache_prefetch(struct bcache *cache, int fd, block_address i)
+void bcache_prefetch(struct bcache *cache, int di, block_address i)
 {
-	struct block *b = _block_lookup(cache, fd, i);
+	struct block *b = _block_lookup(cache, di, i);
 
 	if (!b) {
 		if (cache->nr_io_pending < cache->max_io) {
-			b = _new_block(cache, fd, i, false);
+			b = _new_block(cache, di, i, false);
 			if (b) {
 				cache->prefetches++;
 				_issue_read(b);
@@ -1116,12 +1222,15 @@ static void _recycle_block(struct bcache *cache, struct block *b)
 	_free_block(b);
 }
 
-bool bcache_get(struct bcache *cache, int fd, block_address i,
+bool bcache_get(struct bcache *cache, int di, block_address i,
 	        unsigned flags, struct block **result)
 {
 	struct block *b;
 
-	b = _lookup_or_read_block(cache, fd, i, flags);
+	if (di >= _fd_table_size)
+		goto bad;
+
+	b = _lookup_or_read_block(cache, di, i, flags);
 	if (b) {
 		if (b->error) {
 			if (b->io_dir == DIR_READ) {
@@ -1140,10 +1249,10 @@ bool bcache_get(struct bcache *cache, int fd, block_address i,
 		*result = b;
 		return true;
 	}
-
+bad:
 	*result = NULL;
 
-	log_error("bcache failed to get block %u fd %d", (uint32_t) i, fd);
+	log_error("bcache failed to get block %u di %d", (uint32_t) i, di);
 	return false;
 }
 
@@ -1207,7 +1316,7 @@ static bool _invalidate_block(struct bcache *cache, struct block *b)
 
 	if (b->ref_count) {
 		log_warn("bcache_invalidate: block (%d, %llu) still held",
-			 b->fd, (unsigned long long) b->index);
+			 b->di, (unsigned long long) b->index);
 		return false;
 	}
 
@@ -1224,9 +1333,9 @@ static bool _invalidate_block(struct bcache *cache, struct block *b)
 	return true;
 }
 
-bool bcache_invalidate(struct bcache *cache, int fd, block_address i)
+bool bcache_invalidate(struct bcache *cache, int di, block_address i)
 {
-	return _invalidate_block(cache, _block_lookup(cache, fd, i));
+	return _invalidate_block(cache, _block_lookup(cache, di, i));
 }
 
 //----------------------------------------------------------------
@@ -1255,14 +1364,14 @@ static bool _invalidate_v(struct radix_tree_iterator *it,
 
 	if (b->error || _test_flags(b, BF_DIRTY)) {
         	log_warn("bcache_invalidate: block (%d, %llu) still dirty",
-                         b->fd, (unsigned long long) b->index);
+                         b->di, (unsigned long long) b->index);
         	iit->success = false;
         	return true;
 	}
 
 	if (b->ref_count) {
 		log_warn("bcache_invalidate: block (%d, %llu) still held",
-			 b->fd, (unsigned long long) b->index);
+			 b->di, (unsigned long long) b->index);
 		iit->success = false;
 		return true;
 	}
@@ -1275,42 +1384,138 @@ static bool _invalidate_v(struct radix_tree_iterator *it,
 	return true;
 }
 
-bool bcache_invalidate_fd(struct bcache *cache, int fd)
+bool bcache_invalidate_di(struct bcache *cache, int di)
 {
         union key k;
 	struct invalidate_iterator it;
 
-	k.parts.fd = fd;
+	k.parts.di = di;
 
 	it.it.visit = _writeback_v;
-	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.fd), &it.it);
+	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it.it);
 
 	_wait_all(cache);
 
 	it.success = true;
 	it.it.visit = _invalidate_v;
-	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.fd), &it.it);
-	radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.fd));
+	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it.it);
+
+	if (it.success)
+		radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
+
 	return it.success;
 }
 
 //----------------------------------------------------------------
 
-void bcache_set_last_byte(struct bcache *cache, int fd, uint64_t offset, int sector_size)
+static bool _abort_v(struct radix_tree_iterator *it,
+                     uint8_t *kb, uint8_t *ke, union radix_value v)
 {
-	_last_byte_fd = fd;
+	struct block *b = v.ptr;
+
+	if (b->ref_count) {
+		log_fatal("bcache_abort: block (%d, %llu) still held",
+			 b->di, (unsigned long long) b->index);
+		return true;
+	}
+
+	_unlink_block(b);
+	_free_block(b);
+
+	// We can't remove the block from the radix tree yet because
+	// we're in the middle of an iteration.
+	return true;
+}
+
+void bcache_abort_di(struct bcache *cache, int di)
+{
+        union key k;
+	struct radix_tree_iterator it;
+
+	k.parts.di = di;
+
+	it.visit = _abort_v;
+	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it);
+	radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
+}
+
+//----------------------------------------------------------------
+
+void bcache_set_last_byte(struct bcache *cache, int di, uint64_t offset, int sector_size)
+{
+	_last_byte_di = di;
 	_last_byte_offset = offset;
 	_last_byte_sector_size = sector_size;
 	if (!sector_size)
 		_last_byte_sector_size = 512;
 }
 
-void bcache_unset_last_byte(struct bcache *cache, int fd)
+void bcache_unset_last_byte(struct bcache *cache, int di)
 {
-	if (_last_byte_fd == fd) {
-		_last_byte_fd = 0;
+	if (_last_byte_di == di) {
+		_last_byte_di = 0;
 		_last_byte_offset = 0;
 		_last_byte_sector_size = 0;
 	}
+}
+
+int bcache_set_fd(int fd)
+{
+	int *new_table = NULL;
+	int new_size = 0;
+	int i;
+
+ retry:
+	for (i = 0; i < _fd_table_size; i++) {
+		if (_fd_table[i] == -1) {
+			_fd_table[i] = fd;
+			return i;
+		}
+	}
+
+	/* already tried once, shouldn't happen */
+	if (new_size)
+		return -1;
+
+	new_size = _fd_table_size + FD_TABLE_INC;
+
+	new_table = realloc(_fd_table, sizeof(int) * new_size);
+	if (!new_table) {
+		log_error("Cannot extend bcache fd table");
+		return -1;
+	}
+
+	for (i = _fd_table_size; i < new_size; i++)
+		new_table[i] = -1;
+
+	_fd_table = new_table;
+	_fd_table_size = new_size;
+
+	goto retry;
+}
+
+/*
+ * Should we check for unflushed or inprogress io on an fd
+ * prior to doing clear_fd or change_fd?  (To catch mistakes;
+ * the caller should be smart enough to not do that.)
+ */
+
+void bcache_clear_fd(int di)
+{
+	if (di >= _fd_table_size)
+		return;
+	_fd_table[di] = -1;
+}
+
+int bcache_change_fd(int di, int fd)
+{
+	if (di >= _fd_table_size)
+		return 0;
+	if (di < 0) {
+		log_error(INTERNAL_ERROR "Cannot change not openned DI with FD:%d", fd);
+		return 0;
+	}
+	_fd_table[di] = fd;
+	return 1;
 }
 

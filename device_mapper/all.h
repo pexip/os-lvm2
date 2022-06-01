@@ -17,8 +17,6 @@
 #ifndef LIB_DEVICE_MAPPER_H
 #define LIB_DEVICE_MAPPER_H
 
-#include "configure.h"
-
 #include "base/data-struct/list.h"
 #include "base/data-struct/hash.h"
 #include "vdo/target.h"
@@ -123,7 +121,9 @@ enum {
 
 	DM_DEVICE_SET_GEOMETRY,
 
-	DM_DEVICE_ARM_POLL
+	DM_DEVICE_ARM_POLL,
+
+	DM_DEVICE_GET_TARGET_VERSION
 };
 
 /*
@@ -164,20 +164,20 @@ struct dm_info {
 struct dm_deps {
 	uint32_t count;
 	uint32_t filler;
-	uint64_t device[0];
+	uint64_t device[];
 };
 
 struct dm_names {
 	uint64_t dev;
 	uint32_t next;		/* Offset to next struct from start of this struct */
-	char name[0];
+	char name[];
 };
 
 struct dm_versions {
 	uint32_t next;		/* Offset to next struct from start of this struct */
 	uint32_t version[3];
 
-	char name[0];
+	char name[];
 };
 
 int dm_get_library_version(char *version, size_t size);
@@ -234,6 +234,7 @@ int dm_task_suppress_identical_reload(struct dm_task *dmt);
 int dm_task_secure_data(struct dm_task *dmt);
 int dm_task_retry_remove(struct dm_task *dmt);
 int dm_task_deferred_remove(struct dm_task *dmt);
+void dm_task_skip_reload_params_compare(struct dm_task *dmt);
 
 /*
  * Record timestamp immediately after the ioctl returns.
@@ -381,6 +382,25 @@ struct dm_status_cache {
 
 int dm_get_status_cache(struct dm_pool *mem, const char *params,
 			struct dm_status_cache **status);
+
+struct dm_status_writecache {
+	uint64_t error;
+	uint64_t total_blocks;
+	uint64_t free_blocks;
+	uint64_t writeback_blocks;
+};
+
+int dm_get_status_writecache(struct dm_pool *mem, const char *params,
+                             struct dm_status_writecache **status);
+
+struct dm_status_integrity {
+	uint64_t number_of_mismatches;
+	uint64_t provided_data_sectors;
+	uint64_t recalc_sector;
+};
+
+int dm_get_status_integrity(struct dm_pool *mem, const char *params,
+                            struct dm_status_integrity **status);
 
 /*
  * Parse params from STATUS call for snapshot target
@@ -895,6 +915,7 @@ int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
 #define DM_CACHE_FEATURE_WRITETHROUGH 0x00000002
 #define DM_CACHE_FEATURE_PASSTHROUGH  0x00000004
 #define DM_CACHE_FEATURE_METADATA2    0x00000008 /* cache v1.10 */
+#define DM_CACHE_FEATURE_NO_DISCARD_PASSDOWN 0x00000010
 
 struct dm_config_node;
 /*
@@ -916,14 +937,91 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				  const char *origin_uuid,
 				  const char *policy_name,
 				  const struct dm_config_node *policy_settings,
+				  uint64_t metadata_start,
+				  uint64_t metadata_len,
+				  uint64_t data_start,
+				  uint64_t data_len,
 				  uint32_t data_block_size);
+
+struct writecache_settings {
+	uint64_t high_watermark;
+	uint64_t low_watermark;
+	uint64_t writeback_jobs;
+	uint64_t autocommit_blocks;
+	uint64_t autocommit_time; /* in milliseconds */
+	uint32_t fua;
+	uint32_t nofua;
+	uint32_t cleaner;
+	uint32_t max_age;
+
+	/*
+	 * Allow an unrecognized key and its val to be passed to the kernel for
+	 * cases where a new kernel setting is added but lvm doesn't know about
+	 * it yet.
+	 */
+	char *new_key;
+	char *new_val;
+
+	/*
+	 * Flag is 1 if a value has been set.
+	 */
+	unsigned high_watermark_set:1;
+	unsigned low_watermark_set:1;
+	unsigned writeback_jobs_set:1;
+	unsigned autocommit_blocks_set:1;
+	unsigned autocommit_time_set:1;
+	unsigned fua_set:1;
+	unsigned nofua_set:1;
+	unsigned cleaner_set:1;
+	unsigned max_age_set:1;
+};
+
+int dm_tree_node_add_writecache_target(struct dm_tree_node *node,
+				uint64_t size,
+				const char *origin_uuid,
+				const char *cache_uuid,
+				int pmem,
+				uint32_t writecache_block_size,
+				struct writecache_settings *settings);
+
+struct integrity_settings {
+	char mode[8];
+	uint32_t tag_size;
+	uint32_t block_size;       /* optional table param always set by lvm */
+	const char *internal_hash; /* optional table param always set by lvm */
+
+	uint32_t journal_sectors;
+	uint32_t interleave_sectors;
+	uint32_t buffer_sectors;
+	uint32_t journal_watermark;
+	uint32_t commit_time;
+	uint32_t bitmap_flush_interval;
+	uint64_t sectors_per_bit;
+
+	unsigned journal_sectors_set:1;
+	unsigned interleave_sectors_set:1;
+	unsigned buffer_sectors_set:1;
+	unsigned journal_watermark_set:1;
+	unsigned commit_time_set:1;
+	unsigned bitmap_flush_interval_set:1;
+	unsigned sectors_per_bit_set:1;
+};
+
+int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
+				uint64_t size,
+				const char *origin_uuid,
+				const char *meta_uuid,
+				struct integrity_settings *settings,
+				int recalculate);
 
 /*
  * VDO target
  */
 int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
 				uint64_t size,
+				const char *vdo_pool_name,
 				const char *data_uuid,
+				uint64_t data_size,
 				const struct dm_vdo_target_params *param);
 
 /*
@@ -1220,7 +1318,7 @@ int dm_bit_get_next(dm_bitset_t bs, int last_bit);
 int dm_bit_get_last(dm_bitset_t bs);
 int dm_bit_get_prev(dm_bitset_t bs, int last_bit);
 
-#define DM_BITS_PER_INT (sizeof(int) * CHAR_BIT)
+#define DM_BITS_PER_INT ((unsigned)sizeof(int) * CHAR_BIT)
 
 #define dm_bit(bs, i) \
    ((bs)[((i) / DM_BITS_PER_INT) + 1] & (0x1 << ((i) & (DM_BITS_PER_INT - 1))))

@@ -24,6 +24,7 @@
  * link with non-threaded version of library, libdlm_lt.
  */
 #include "libdlm.h"
+#include "libdlmcontrol.h"
 
 #include <stddef.h>
 #include <poll.h>
@@ -127,16 +128,18 @@ static int read_cluster_name(char *clustername)
 	return 0;
 }
 
+#define MAX_VERSION 16
+
 int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args)
 {
 	char clustername[MAX_ARGS+1];
-	char lock_args_version[MAX_ARGS+1];
+	char lock_args_version[MAX_VERSION+1];
 	int rv;
 
 	memset(clustername, 0, sizeof(clustername));
 	memset(lock_args_version, 0, sizeof(lock_args_version));
 
-	snprintf(lock_args_version, MAX_ARGS, "%u.%u.%u",
+	snprintf(lock_args_version, MAX_VERSION, "%u.%u.%u",
 		 VG_LOCK_ARGS_MAJOR, VG_LOCK_ARGS_MINOR, VG_LOCK_ARGS_PATCH);
 
 	rv = read_cluster_name(clustername);
@@ -148,7 +151,9 @@ int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args)
 		return -EARGS;
 	}
 
-	snprintf(vg_args, MAX_ARGS, "%s:%s", lock_args_version, clustername);
+	rv = snprintf(vg_args, MAX_ARGS, "%s:%s", lock_args_version, clustername);
+	if (rv >= MAX_ARGS)
+		log_debug("init_vg_dlm vg_args may be too long %d %s", rv, vg_args);
 	rv = 0;
 
 	log_debug("init_vg_dlm done %s vg_args %s", ls_name, vg_args);
@@ -272,10 +277,9 @@ static int lm_add_resource_dlm(struct lockspace *ls, struct resource *r, int wit
 	int rv;
 
 	if (r->type == LD_RT_GL || r->type == LD_RT_VG) {
-		buf = malloc(sizeof(struct val_blk) + DLM_LVB_LEN);
+		buf = zalloc(sizeof(struct val_blk) + DLM_LVB_LEN);
 		if (!buf)
 			return -ENOMEM;
-		memset(buf, 0, sizeof(struct val_blk) + DLM_LVB_LEN);
 
 		rdd->vb = (struct val_blk *)buf;
 		rdd->lksb.sb_lvbptr = buf + sizeof(struct val_blk);
@@ -394,10 +398,16 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 			  (void *)1, (void *)1, (void *)1,
 			  NULL, NULL);
 
-	if (rv == -1 && errno == -EAGAIN) {
+	if (rv == -1 && (errno == EAGAIN)) {
 		log_debug("S %s R %s adopt_dlm adopt mode %d try other mode",
 			  ls->name, r->name, ld_mode);
 		rv = -EUCLEAN;
+		goto fail;
+	}
+	if (rv == -1 && (errno == ENOENT)) {
+		log_debug("S %s R %s adopt_dlm adopt mode %d no lock",
+			  ls->name, r->name, ld_mode);
+		rv = -ENOENT;
 		goto fail;
 	}
 	if (rv < 0) {
@@ -777,3 +787,107 @@ int lm_is_running_dlm(void)
 	return 1;
 }
 
+#ifdef LOCKDDLM_CONTROL_SUPPORT
+
+int lm_refresh_lv_start_dlm(struct action *act)
+{
+	char path[PATH_MAX];
+	char command[DLMC_RUN_COMMAND_LEN];
+	char run_uuid[DLMC_RUN_UUID_LEN];
+	char *p, *vgname, *lvname;
+	int rv;
+
+	/* split /dev/vgname/lvname into vgname and lvname strings */
+	strncpy(path, act->path, strlen(act->path));
+
+	/* skip past dev */
+	p = strchr(path + 1, '/');
+
+	/* skip past slashes */
+	while (*p == '/')
+		p++;
+
+	/* start of vgname */
+	vgname = p;
+
+	/* skip past vgname */
+	while (*p != '/')
+		p++;
+
+	/* terminate vgname */
+	*p = '\0';
+	p++;
+
+	/* skip past slashes */
+	while (*p == '/')
+		p++;
+
+	lvname = p;
+
+	memset(command, 0, sizeof(command));
+	memset(run_uuid, 0, sizeof(run_uuid));
+
+	/* todo: add --readonly */
+
+	snprintf(command, DLMC_RUN_COMMAND_LEN,
+		 "lvm lvchange --refresh --partial --nolocking %s/%s",
+		 vgname, lvname);
+
+	rv = dlmc_run_start(command, strlen(command), 0,
+			    DLMC_FLAG_RUN_START_NODE_NONE,
+			    run_uuid);
+	if (rv < 0) {
+		log_debug("refresh_lv run_start error %d", rv);
+		return rv;
+	}
+
+	log_debug("refresh_lv run_start %s", run_uuid);
+
+	/* Bit of a hack here, we don't need path once started,
+	   but we do need to save the run_uuid somewhere, so just
+	   replace the path with the uuid. */
+
+	free(act->path);
+	act->path = strdup(run_uuid);
+	return 0;
+}
+
+int lm_refresh_lv_check_dlm(struct action *act)
+{
+	uint32_t check_status = 0;
+	int rv;
+
+	/* NB act->path was replaced with run_uuid */
+
+	rv = dlmc_run_check(act->path, strlen(act->path), 0,
+			    DLMC_FLAG_RUN_CHECK_CLEAR,
+			    &check_status);
+	if (rv < 0) {
+		log_debug("refresh_lv check error %d", rv);
+		return rv;
+	}
+
+	log_debug("refresh_lv check %s status %x", act->path, check_status);
+
+	if (!(check_status & DLMC_RUN_STATUS_DONE))
+		return -EAGAIN;
+
+	if (check_status & DLMC_RUN_STATUS_FAILED)
+		return -1;
+
+	return 0;
+}
+
+#else /* LOCKDDLM_CONTROL_SUPPORT */
+
+int lm_refresh_lv_start_dlm(struct action *act)
+{
+	return 0;
+}
+
+int lm_refresh_lv_check_dlm(struct action *act)
+{
+	return 0;
+}
+
+#endif /* LOCKDDLM_CONTROL_SUPPORT */

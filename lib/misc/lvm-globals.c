@@ -31,12 +31,12 @@ static int _fwraid_filtering = 0;
 static int _pvmove = 0;
 static int _obtain_device_list_from_udev = DEFAULT_OBTAIN_DEVICE_LIST_FROM_UDEV;
 static enum dev_ext_e _external_device_info_source = DEV_EXT_NONE;
-static int _trust_cache = 0; /* Don't scan when incomplete VGs encountered */
 static int _debug_level = 0;
 static int _debug_classes_logged = 0;
-static int _log_cmd_name = 0;
 static int _security_level = SECURITY_LEVEL;
-static char _cmd_name[30] = "";
+static char _log_command_info[40] = "";
+static char _log_command_file[40] = "";
+static char _cmd_name[30] = "none";
 static int _mirror_in_sync = 0;
 static int _dmeventd_monitor = DEFAULT_DMEVENTD_MONITOR;
 /* When set, disables update of _dmeventd_monitor & _ignore_suspended_devices */
@@ -47,11 +47,13 @@ static int _ignore_lvm_mirrors = DEFAULT_IGNORE_LVM_MIRRORS;
 static int _error_message_produced = 0;
 static unsigned _is_static = 0;
 static int _udev_checking = 1;
+static int _udev_sleeping = 1;
 static int _retry_deactivation = DEFAULT_RETRY_DEACTIVATION;
 static int _activation_checks = 0;
 static char _sysfs_dir_path[PATH_MAX] = "";
 static uint64_t _pv_min_size = (DEFAULT_PV_MIN_SIZE_KB * 1024L >> SECTOR_SHIFT);
 static const char *_unknown_device_name = DEFAULT_UNKNOWN_DEVICE_NAME;
+static int _io_memory_size_kb = DEFAULT_IO_MEMORY_SIZE_KB;
 
 void init_verbose(int level)
 {
@@ -105,11 +107,6 @@ void init_external_device_info_source(enum dev_ext_e src)
 	_external_device_info_source = src;
 }
 
-void init_trust_cache(int trustcache)
-{
-	_trust_cache = trustcache;
-}
-
 void init_security_level(int level)
 {
 	_security_level = level;
@@ -147,9 +144,34 @@ void init_ignore_lvm_mirrors(int scan)
 	_ignore_lvm_mirrors = scan;
 }
 
-void init_cmd_name(int status)
+void init_log_command(int log_name, int log_pid)
 {
-	_log_cmd_name = status;
+	memset(_log_command_info, 0, sizeof(_log_command_info));
+	memset(_log_command_file, 0, sizeof(_log_command_file));
+
+	/*
+	 * Always include command name and pid in file and verbose output.
+	 */
+
+	(void) dm_snprintf(_log_command_file, sizeof(_log_command_file), "%s[%d]",
+			   _cmd_name, getpid());
+
+	/*
+	 * This is the prefix that can be configured for each line of stdout.
+	 */
+
+	if (!log_name && !log_pid)
+		return;
+
+	else if (log_name && !log_pid)
+		(void) dm_strncpy(_log_command_info, _cmd_name, sizeof(_log_command_info));
+
+	else if (!log_name && log_pid)
+		(void) dm_snprintf(_log_command_info, sizeof(_log_command_info), "%d", getpid());
+
+	else
+		(void) dm_snprintf(_log_command_info, sizeof(_log_command_info), "%s[%d]",
+				   _cmd_name, getpid());
 }
 
 void init_is_static(unsigned value)
@@ -163,6 +185,11 @@ void init_udev_checking(int checking)
 		log_debug_activation("LVM udev checking enabled");
 	else
 		log_debug_activation("LVM udev checking disabled");
+}
+
+void init_udev_sleeping(int sleeping)
+{
+	_udev_sleeping = sleeping;
 }
 
 void init_retry_deactivation(int retry)
@@ -198,12 +225,14 @@ void set_sysfs_dir_path(const char *path)
 	(void) dm_strncpy(_sysfs_dir_path, path, sizeof(_sysfs_dir_path));
 }
 
-const char *log_command_name(void)
+const char *log_command_info(void)
 {
-	if (!_log_cmd_name)
-		return "";
+	return _log_command_info;
+}
 
-	return _cmd_name;
+const char *log_command_file(void)
+{
+	return _log_command_file;
 }
 
 void init_error_message_produced(int value)
@@ -254,11 +283,6 @@ int obtain_device_list_from_udev(void)
 enum dev_ext_e external_device_info_source(void)
 {
 	return _external_device_info_source;
-}
-
-int trust_cache(void)
-{
-	return _trust_cache;
 }
 
 int background_polling(void)
@@ -335,6 +359,11 @@ int udev_checking(void)
 	return _udev_checking;
 }
 
+int udev_sleeping(void)
+{
+	return _udev_sleeping;
+}
+
 int retry_deactivation(void)
 {
 	return _retry_deactivation;
@@ -365,3 +394,12 @@ void init_unknown_device_name(const char *name)
 	_unknown_device_name = name;
 }
 
+int io_memory_size(void)
+{
+	return _io_memory_size_kb;
+}
+
+void init_io_memory_size(int val)
+{
+	_io_memory_size_kb = val;
+}

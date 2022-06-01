@@ -45,9 +45,6 @@
 /* Name of default metadata cache subdirectory. */
 #undef DEFAULT_CACHE_SUBDIR
 
-/* Default data alignment. */
-#undef DEFAULT_DATA_ALIGNMENT
-
 /* Define default node creation behavior with dmsetup create */
 #undef DEFAULT_DM_ADD_NODE
 
@@ -129,6 +126,9 @@
 /* Library version */
 #undef DM_LIB_VERSION
 
+/* Define to 1 to include the LVM editline shell. */
+#undef EDITLINE_SUPPORT
+
 /* Path to fsadm binary. */
 #undef FSADM_PATH
 
@@ -154,6 +154,9 @@
 /* Define to 1 if you have the `atexit' function. */
 #undef HAVE_ATEXIT
 
+/* Define if ioctl BLKZEROOUT can be used for device zeroing. */
+#undef HAVE_BLKZEROOUT
+
 /* Define to 1 if canonicalize_file_name is available. */
 #undef HAVE_CANONICALIZE_FILE_NAME
 
@@ -178,6 +181,12 @@
 
 /* Define to 1 if you don't have `vprintf' but do have `_doprnt.' */
 #undef HAVE_DOPRNT
+
+/* Define to 1 if you have the <editline/history.h> header file. */
+#undef HAVE_EDITLINE_HISTORY_H
+
+/* Define to 1 if you have the <editline/readline.h> header file. */
+#undef HAVE_EDITLINE_READLINE_H
 
 /* Define to 1 if you have the <errno.h> header file. */
 #undef HAVE_ERRNO_H
@@ -294,6 +303,12 @@
 
 /* Define to 1 if you have the <paths.h> header file. */
 #undef HAVE_PATHS_H
+
+/* Define to 1 if you have the `prlimit' function. */
+#undef HAVE_PRLIMIT
+
+/* Define to 1 if you have the `pselect' function. */
+#undef HAVE_PSELECT
 
 /* Define to 1 if the system has the type `ptrdiff_t'. */
 #undef HAVE_PTRDIFF_T
@@ -528,11 +543,17 @@
 /* Define to 1 if the system has the `__builtin_clzll' built-in function */
 #undef HAVE___BUILTIN_CLZLL
 
+/* Define to 1 to include built-in support for integrity. */
+#undef INTEGRITY_INTERNAL
+
 /* Internalization package */
 #undef INTL_PACKAGE
 
 /* Locale-dependent data */
 #undef LOCALEDIR
+
+/* Define to 1 to include code that uses lvmlockd dlm control option. */
+#undef LOCKDDLM_CONTROL_SUPPORT
 
 /* Define to 1 to include code that uses lvmlockd dlm option. */
 #undef LOCKDDLM_SUPPORT

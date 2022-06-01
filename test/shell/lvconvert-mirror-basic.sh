@@ -14,6 +14,8 @@
 
 . lib/inittest
 
+aux lvmconf "global/support_mirrored_mirror_log=1"
+
 log_name_to_count() {
 	case "$1"  in
 	mirrored) echo 2 ;;
@@ -122,11 +124,15 @@ test_lvconvert() {
 aux prepare_vg 5 5
 get_devs
 
+MIRRORED="mirrored"
+# FIXME: Cluster is not supporting exlusive activation of mirrored log
+test -e LOCAL_CLVMD && MIRRORED=
+
 test_many() {
 	i=$1
 	for j in $(seq 0 3); do
-		for k in core disk; do
-			for l in core disk; do
+		for k in core disk $MIRRORED; do
+			for l in core disk $MIRRORED; do
 				if test "$i" -eq "$j" && test "$k" = "$l"; then continue; fi
 				: ----------------------------------------------------
 				: "Testing mirror conversion -m$i/$k -> -m$j/$l"

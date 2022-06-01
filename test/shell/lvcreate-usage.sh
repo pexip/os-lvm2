@@ -175,15 +175,21 @@ check lv_field $vg/$lv2 lv_kernel_read_ahead "0"
 lvcreate -L 8 -n $lv3 --readahead 8k $vg
 check lv_field $vg/$lv3 lv_read_ahead "8.00k"
 check lv_field $vg/$lv3 lv_kernel_read_ahead "8.00k"
-lvcreate -L 8 -n $lv4 --readahead auto $vg
+lvcreate -L 8 -n $lv4 --readahead auto $vg "$dev1"
 check lv_field $vg/$lv4 lv_read_ahead "auto"
-check lv_field $vg/$lv4 lv_kernel_read_ahead "128.00k"
-lvcreate -L 8 -n $lv5 -i2 --stripesize 16k --readahead auto $vg
+# figure RA value of a PV origin device
+DEVICE=$(dmsetup deps -o blkdevname "$dev1" | sed -e "s,.*:\ (\(.*\)),/dev/\1,")
+RASZ=$(( $(blockdev --getra "$DEVICE" ) / 2 ))
+test "$RASZ" -ge 128 || RASZ="128"
+check lv_field $vg/$lv4 lv_kernel_read_ahead "${RASZ}.00k" --units k
+lvcreate -vvvvv -L 8 -n $lv5 -i2 --stripesize 16k --readahead auto $vg
 check lv_field $vg/$lv5 lv_read_ahead "auto"
-check lv_field $vg/$lv5 lv_kernel_read_ahead "128.00k"
+# For 16k stripe we set '128k' as the is the minimum size we get when creating DM device
+check lv_field $vg/$lv5 lv_kernel_read_ahead "128.00k" --units k
 lvcreate -L 8 -n $lv6 -i2 --stripesize 128k --readahead auto $vg
 check lv_field $vg/$lv6 lv_read_ahead "auto"
-check lv_field $vg/$lv6 lv_kernel_read_ahead "512.00k"
+# For striped device we set double of strip size unrelated to underlaying dev RA size
+check lv_field $vg/$lv6 lv_kernel_read_ahead "512.00k" --units k
 lvremove -ff $vg
 
 #
@@ -215,7 +221,7 @@ lvremove -f $vg
 for i in pvmove snapshot ; do
 	invalid lvcreate -l1 -n ${i}1 $vg
 done
-for i in _cdata _cmeta _mimage _mlog _pmspare _tdata _tmeta _vorigin ; do
+for i in _cdata _cmeta _cpool _cvol _mimage _mlog _pmspare _tdata _tmeta _vorigin ; do
 	invalid lvcreate -l1 -n s_${i}_1 $vg
 done
 

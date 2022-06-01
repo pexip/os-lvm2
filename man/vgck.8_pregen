@@ -3,7 +3,7 @@
 vgck - Check the consistency of volume group(s)
 .
 .SH SYNOPSIS
-\fBvgck\fP
+\fBvgck\fP \fIoption_args\fP \fIposition_args\fP
 .br
     [ \fIoption_args\fP ]
 .br
@@ -12,6 +12,9 @@ vgck - Check the consistency of volume group(s)
 .SH DESCRIPTION
 vgck checks LVM metadata for consistency.
 .SH USAGE
+Read and display information about a VG.
+.br
+.P
 \fBvgck\fP
 .br
 .RS 4
@@ -24,6 +27,21 @@ vgck checks LVM metadata for consistency.
 .br
 .RS 4
 [ \fIVG\fP|\fITag\fP ... ]
+.RE
+
+Rewrite VG metadata to correct problems.
+.br
+.P
+\fBvgck\fP \fB--updatemetadata\fP \fIVG\fP
+.br
+.RS 4
+[ COMMON_OPTIONS ]
+.RE
+.br
+
+Common options for command:
+.
+.RS 4
 .RE
 
 Common options for lvm:
@@ -178,6 +196,21 @@ back metadata it believes has changed but hasn't.
 .ad b
 .HP
 .ad l
+\fB--updatemetadata\fP
+.br
+Update VG metadata to correct problems.
+If VG metadata was updated while a PV was missing, and the PV
+reappears with an old version of metadata, then this option
+(or any other command that writes metadata) will update the
+metadata on the previously missing PV. If a PV was removed
+from a VG while it was missing, and the PV reappears, using
+this option will clear the outdated metadata from the previously
+missing PV. If metadata text is damaged on one PV, using this
+option will replace the damaged metadata text. For more severe
+damage, e.g. with headers, see \fBpvck\fP(8).
+.ad b
+.HP
+.ad l
 \fB-v\fP|\fB--verbose\fP ...
 .br
 Set verbose level. Repeat from 1 to 4 times to increase the detail
@@ -219,9 +252,8 @@ Input units are always treated as base two values, regardless of
 capitalization, e.g. 'k' and 'K' both refer to 1024.
 The default input unit is specified by letter, followed by |UNIT.
 UNIT represents other possible input units: \fBbBsSkKmMgGtTpPeE\fP.
-b|B is bytes, s|S is sectors of 512 bytes, k|K is kilobytes,
-m|M is megabytes, g|G is gigabytes, t|T is terabytes,
-p|P is petabytes, e|E is exabytes.
+b|B is bytes, s|S is sectors of 512 bytes, k|K is KiB,
+m|M is MiB, g|G is GiB, t|T is TiB, p|P is PiB, e|E is EiB.
 (This should not be confused with the output control --units, where
 capital letters mean multiple of 1000.)
 .SH ENVIRONMENT VARIABLES

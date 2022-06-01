@@ -22,6 +22,7 @@
 #include "lib/activate/activate.h"
 #include "lib/filters/filter.h"
 #include "lib/label/label.h"
+#include "lib/label/hints.h"
 #include "lib/misc/lvm-file.h"
 #include "lib/format_text/format-text.h"
 #include "lib/display/display.h"
@@ -231,6 +232,45 @@ static void _get_sysfs_dir(struct cmd_context *cmd, char *buf, size_t buf_size)
 	strncpy(buf, sys_mnt, buf_size);
 }
 
+static uint32_t _parse_debug_fields(struct cmd_context *cmd, int cfg, const char *cfgname)
+{
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	uint32_t debug_fields = 0;
+
+	if (!(cn = find_config_tree_array(cmd, cfg, NULL))) {
+		log_error(INTERNAL_ERROR "Unable to find configuration for log/%s.", cfgname);
+		return 0;
+	}
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (cv->type != DM_CFG_STRING) {
+			log_verbose("log/%s contains a value which is not a string.  Ignoring.", cfgname);
+			continue;
+		}
+
+		if (!strcasecmp(cv->v.str, "all"))
+			return 0;
+
+		if (!strcasecmp(cv->v.str, "time"))
+			debug_fields |= LOG_DEBUG_FIELD_TIME;
+
+		else if (!strcasecmp(cv->v.str, "command"))
+			debug_fields |= LOG_DEBUG_FIELD_COMMAND;
+
+		else if (!strcasecmp(cv->v.str, "fileline"))
+			debug_fields |= LOG_DEBUG_FIELD_FILELINE;
+
+		else if (!strcasecmp(cv->v.str, "message"))
+			debug_fields |= LOG_DEBUG_FIELD_MESSAGE;
+
+		else
+			log_verbose("Unrecognised value for log/%s: %s", cfgname, cv->v.str);
+	}
+
+	return debug_fields;
+}
+
 static int _parse_debug_classes(struct cmd_context *cmd)
 {
 	const struct dm_config_node *cn;
@@ -319,15 +359,13 @@ static void _init_logging(struct cmd_context *cmd)
 	cmd->default_settings.msg_prefix = find_config_tree_str_allow_empty(cmd, log_prefix_CFG, NULL);
 	init_msg_prefix(cmd->default_settings.msg_prefix);
 
-	cmd->default_settings.cmd_name = find_config_tree_bool(cmd, log_command_names_CFG, NULL);
-	init_cmd_name(cmd->default_settings.cmd_name);
+	/* so that file and verbose output have a command prefix */
+	init_log_command(0, 0);
 
 	/* Test mode */
 	cmd->default_settings.test =
 	    find_config_tree_bool(cmd, global_test_CFG, NULL);
 	init_test(cmd->default_settings.test);
-
-	init_use_aio(find_config_tree_bool(cmd, global_use_aio_CFG, NULL));
 
 	/* Settings for logging to file */
 	if (find_config_tree_bool(cmd, log_overwrite_CFG, NULL))
@@ -336,20 +374,18 @@ static void _init_logging(struct cmd_context *cmd)
 	log_file = find_config_tree_str(cmd, log_file_CFG, NULL);
 
 	if (log_file) {
-		release_log_memory();
 		fin_log();
 		init_log_file(log_file, append);
 	}
-
-	log_file = find_config_tree_str(cmd, log_activate_file_CFG, NULL);
-	if (log_file)
-		init_log_direct(log_file, append);
 
 	init_log_while_suspended(find_config_tree_bool(cmd, log_activation_CFG, NULL));
 
 	cmd->default_settings.debug_classes = _parse_debug_classes(cmd);
 	log_debug("Setting log debug classes to %d", cmd->default_settings.debug_classes);
 	init_debug_classes_logged(cmd->default_settings.debug_classes);
+
+	init_debug_file_fields(_parse_debug_fields(cmd, log_debug_file_fields_CFG, "debug_file_fields"));
+	init_debug_output_fields(_parse_debug_fields(cmd, log_debug_output_fields_CFG, "debug_output_fields"));
 
 	t = time(NULL);
 	ctime_r(&t, &timebuf[0]);
@@ -678,6 +714,8 @@ static int _process_config(struct cmd_context *cmd)
 
 	if (!_init_system_id(cmd))
 		return_0;
+
+	init_io_memory_size(find_config_tree_int(cmd, global_io_memory_size_CFG, NULL));
 
 	return 1;
 }
@@ -1238,7 +1276,7 @@ int init_lvmcache_orphans(struct cmd_context *cmd)
 	struct format_type *fmt;
 
 	dm_list_iterate_items(fmt, &cmd->formats)
-		if (!lvmcache_add_orphan_vginfo(fmt->orphan_vg_name, fmt))
+		if (!lvmcache_add_orphan_vginfo(cmd, fmt->orphan_vg_name, fmt))
 			return_0;
 
 	return 1;
@@ -1317,6 +1355,16 @@ static int _init_segtypes(struct cmd_context *cmd)
 #ifdef VDO_INTERNAL
 	if (!init_vdo_segtypes(cmd, &seglib))
 		return_0;
+#endif
+
+#ifdef WRITECACHE_INTERNAL
+	if (!init_writecache_segtypes(cmd, &seglib))
+		return 0;
+#endif
+
+#ifdef INTEGRITY_INTERNAL
+	if (!init_integrity_segtypes(cmd, &seglib))
+		return 0;
 #endif
 
 	return 1;
@@ -1449,6 +1497,8 @@ void destroy_config_context(struct cmd_context *cmd)
 		dm_pool_destroy(cmd->mem);
 	if (cmd->libmem)
 		dm_pool_destroy(cmd->libmem);
+	if (cmd->pending_delete_mem)
+		dm_pool_destroy(cmd->pending_delete_mem);
 
 	free(cmd);
 }
@@ -1477,8 +1527,12 @@ struct cmd_context *create_config_context(void)
 	if (!(cmd->mem = dm_pool_create("command", 4 * 1024)))
 		goto out;
 
+	if (!(cmd->pending_delete_mem = dm_pool_create("pending_delete", 1024)))
+		goto_out;
+
 	dm_list_init(&cmd->config_files);
 	dm_list_init(&cmd->tags);
+	dm_list_init(&cmd->hints);
 
 	if (!_init_lvm_conf(cmd))
 		goto_out;
@@ -1544,6 +1598,7 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	dm_list_init(&cmd->formats);
 	dm_list_init(&cmd->segtypes);
 	dm_list_init(&cmd->tags);
+	dm_list_init(&cmd->hints);
 	dm_list_init(&cmd->config_files);
 	label_init();
 
@@ -1623,6 +1678,9 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 		goto out;
 	}
 
+	if (!(cmd->pending_delete_mem = dm_pool_create("pending_delete", 1024)))
+		goto_out;
+
 	if (!_init_lvm_conf(cmd))
 		goto_out;
 
@@ -1654,6 +1712,8 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 						find_config_tree_array(cmd, devices_types_CFG, NULL))))
 		goto_out;
 
+	init_use_aio(find_config_tree_bool(cmd, global_use_aio_CFG, NULL));
+
 	if (!_init_dev_cache(cmd))
 		goto_out;
 
@@ -1668,8 +1728,6 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	/* FIXME: move into lvmcache_init */
 	if (!init_lvmcache_orphans(cmd))
 		goto_out;
-
-	dm_list_init(&cmd->unused_duplicate_devs);
 
 	if (!_init_segtypes(cmd))
 		goto_out;
@@ -1690,6 +1748,8 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	cmd->current_settings = cmd->default_settings;
 
 	cmd->initialized.config = 1;
+
+	dm_list_init(&cmd->pending_delete);
 out:
 	if (!cmd->initialized.config) {
 		destroy_toolcontext(cmd);
@@ -1775,6 +1835,7 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	 */
 
 	activation_release();
+	hints_exit(cmd);
 	lvmcache_destroy(cmd, 0, 0);
 	label_scan_destroy(cmd);
 	label_exit();
@@ -1877,6 +1938,12 @@ int refresh_toolcontext(struct cmd_context *cmd)
 
 	cmd->initialized.config = 1;
 
+	if (!dm_list_empty(&cmd->pending_delete)) {
+		log_debug(INTERNAL_ERROR "Unprocessed pending delete for %d devices.",
+			  dm_list_size(&cmd->pending_delete));
+		dm_list_init(&cmd->pending_delete);
+	}
+
 	if (cmd->initialized.connections && !init_connections(cmd))
 		return_0;
 
@@ -1894,6 +1961,7 @@ void destroy_toolcontext(struct cmd_context *cmd)
 
 	archive_exit(cmd);
 	backup_exit(cmd);
+	hints_exit(cmd);
 	lvmcache_destroy(cmd, 0, 0);
 	label_scan_destroy(cmd);
 	label_exit();
@@ -1916,6 +1984,8 @@ void destroy_toolcontext(struct cmd_context *cmd)
 	if (cmd->libmem)
 		dm_pool_destroy(cmd->libmem);
 
+	if (cmd->pending_delete_mem)
+		dm_pool_destroy(cmd->pending_delete_mem);
 #ifndef VALGRIND_POOL
 	if (cmd->linebuffer) {
 		/* Reset stream buffering to defaults */
@@ -1944,7 +2014,6 @@ void destroy_toolcontext(struct cmd_context *cmd)
 
 	lvmpolld_disconnect();
 
-	release_log_memory();
 	activation_exit();
 	reset_log_duplicated();
 	fin_log();

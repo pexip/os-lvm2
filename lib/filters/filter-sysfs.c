@@ -260,9 +260,11 @@ static int _init_devs(struct dev_set *ds)
 }
 
 
-static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
+static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct device *dev, const char *use_filter_name)
 {
 	struct dev_set *ds = (struct dev_set *) f->private;
+
+	dev->filtered_flags &= ~DEV_FILTERED_SYSFS;
 
 	if (!ds->initialised)
 		_init_devs(ds);
@@ -273,6 +275,7 @@ static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct devic
 
 	if (!_set_lookup(ds, dev->dev)) {
 		log_debug_devs("%s: Skipping (sysfs)", dev_name(dev));
+		dev->filtered_flags |= DEV_FILTERED_SYSFS;
 		return 0;
 	}
 
@@ -323,6 +326,7 @@ struct dev_filter *sysfs_filter_create(void)
 	f->destroy = _destroy;
 	f->use_count = 0;
 	f->private = ds;
+	f->name = "sysfs";
 
 	log_debug_devs("Sysfs filter initialised.");
 

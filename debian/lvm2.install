@@ -56,6 +56,7 @@ sbin/vgsplit
 usr/lib/tmpfiles.d/lvm2.conf
 usr/share/man/man5/lvm.conf.5
 usr/share/man/man7/lvmcache.7
+usr/share/man/man7/lvmvdo.7
 usr/share/man/man7/lvmraid.7
 usr/share/man/man7/lvmreport.7
 usr/share/man/man7/lvmsystemid.7

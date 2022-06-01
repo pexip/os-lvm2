@@ -16,6 +16,7 @@
 #include "lib/misc/lib.h"
 #include "lib/device/dev-type.h"
 #include "lib/mm/xlate.h"
+#include "lib/misc/crc.h"
 #ifdef UDEV_SYNC_SUPPORT
 #include <libudev.h> /* for MD detection using udev db records */
 #include "lib/device/dev-ext-udev-constants.h"
@@ -48,48 +49,106 @@ static int _dev_has_md_magic(struct device *dev, uint64_t sb_offset)
 	return 0;
 }
 
-/*
- * Calculate the position of the superblock.
- * It is always aligned to a 4K boundary and
- * depending on minor_version, it can be:
- * 0: At least 8K, but less than 12K, from end of device
- * 1: At start of device
- * 2: 4K from start of device.
- */
-typedef enum {
-	MD_MINOR_VERSION_MIN,
-	MD_MINOR_V0 = MD_MINOR_VERSION_MIN,
-	MD_MINOR_V1,
-	MD_MINOR_V2,
-	MD_MINOR_VERSION_MAX = MD_MINOR_V2
-} md_minor_version_t;
+#define IMSM_SIGNATURE "Intel Raid ISM Cfg Sig. "
+#define IMSM_SIG_LEN (sizeof(IMSM_SIGNATURE) - 1)
 
-static uint64_t _v1_sb_offset(uint64_t size, md_minor_version_t minor_version)
+static int _dev_has_imsm_magic(struct device *dev, uint64_t devsize_sectors)
 {
-	uint64_t sb_offset;
+	char imsm_signature[IMSM_SIG_LEN];
+	uint64_t off = (devsize_sectors * 512) - 1024;
 
-	switch(minor_version) {
-	case MD_MINOR_V0:
-		sb_offset = (size - 8 * 2) & ~(4 * 2 - 1ULL);
-		break;
-	case MD_MINOR_V1:
-		sb_offset = 0;
-		break;
-	case MD_MINOR_V2:
-		sb_offset = 4 * 2;
-		break;
-	default:
-		log_warn(INTERNAL_ERROR "WARNING: Unknown minor version %d.",
-			 minor_version);
-		return 0;
-	}
-	sb_offset <<= SECTOR_SHIFT;
+	if (!dev_read_bytes(dev, off, IMSM_SIG_LEN, imsm_signature))
+		return_0;
 
-	return sb_offset;
+	if (!memcmp(imsm_signature, IMSM_SIGNATURE, IMSM_SIG_LEN))
+		return 1;
+
+	return 0;
 }
 
+#define DDF_MAGIC 0xDE11DE11
+struct ddf_header {
+	uint32_t magic;
+	uint32_t crc;
+	char guid[24];
+	char revision[8];
+	char padding[472];
+};
+
+static int _dev_has_ddf_magic(struct device *dev, uint64_t devsize_sectors, uint64_t *sb_offset)
+{
+	struct ddf_header hdr;
+	uint32_t crc, our_crc;
+	uint64_t off;
+	uint64_t devsize_bytes = devsize_sectors * 512;
+
+	if (devsize_bytes < 0x30000)
+		return 0;
+
+	/* 512 bytes before the end of device (from libblkid) */
+	off = ((devsize_bytes / 0x200) - 1) * 0x200;
+
+	if (!dev_read_bytes(dev, off, 512, &hdr))
+		return_0;
+
+	if ((hdr.magic == cpu_to_be32(DDF_MAGIC)) ||
+	    (hdr.magic == cpu_to_le32(DDF_MAGIC))) {
+		crc = hdr.crc;
+		hdr.crc = 0xffffffff;
+		our_crc = calc_crc(0, (const uint8_t *)&hdr, 512);
+
+		if ((cpu_to_be32(our_crc) == crc) ||
+		    (cpu_to_le32(our_crc) == crc)) {
+			*sb_offset = off;
+			return 1;
+		} else {
+			log_debug_devs("Found md ddf magic at %llu wrong crc %x disk %x %s",
+				       (unsigned long long)off, our_crc, crc, dev_name(dev));
+			return 0;
+		}
+	}
+
+	/* 128KB before the end of device (from libblkid) */
+	off = ((devsize_bytes / 0x200) - 257) * 0x200;
+
+	if (!dev_read_bytes(dev, off, 512, &hdr))
+		return_0;
+
+	if ((hdr.magic == cpu_to_be32(DDF_MAGIC)) ||
+	    (hdr.magic == cpu_to_le32(DDF_MAGIC))) {
+		crc = hdr.crc;
+		hdr.crc = 0xffffffff;
+		our_crc = calc_crc(0, (const uint8_t *)&hdr, 512);
+
+		if ((cpu_to_be32(our_crc) == crc) ||
+		    (cpu_to_le32(our_crc) == crc)) {
+			*sb_offset = off;
+			return 1;
+		} else {
+			log_debug_devs("Found md ddf magic at %llu wrong crc %x disk %x %s",
+				       (unsigned long long)off, our_crc, crc, dev_name(dev));
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * _udev_dev_is_md_component() only works if
+ *   external_device_info_source="udev"
+ *
+ * but
+ *
+ * udev_dev_is_md_component() in dev-type.c only works if
+ *   obtain_device_list_from_udev=1
+ *
+ * and neither of those config setting matches very well
+ * with what we're doing here.
+ */
+
 #ifdef UDEV_SYNC_SUPPORT
-static int _udev_dev_is_md(struct device *dev)
+static int _udev_dev_is_md_component(struct device *dev)
 {
 	const char *value;
 	struct dev_ext *ext;
@@ -97,14 +156,17 @@ static int _udev_dev_is_md(struct device *dev)
 	if (!(ext = dev_ext_get(dev)))
 		return_0;
 
-	if (!(value = udev_device_get_property_value((struct udev_device *)ext->handle, DEV_EXT_UDEV_BLKID_TYPE)))
+	if (!(value = udev_device_get_property_value((struct udev_device *)ext->handle, DEV_EXT_UDEV_BLKID_TYPE))) {
+		dev->flags |= DEV_UDEV_INFO_MISSING;
 		return 0;
+	}
 
 	return !strcmp(value, DEV_EXT_UDEV_BLKID_TYPE_SW_RAID);
 }
 #else
-static int _udev_dev_is_md(struct device *dev)
+static int _udev_dev_is_md_component(struct device *dev)
 {
+	dev->flags |= DEV_UDEV_INFO_MISSING;
 	return 0;
 }
 #endif
@@ -112,10 +174,9 @@ static int _udev_dev_is_md(struct device *dev)
 /*
  * Returns -1 on error
  */
-static int _native_dev_is_md(struct device *dev, uint64_t *offset_found, int full)
+static int _native_dev_is_md_component(struct device *dev, uint64_t *offset_found, int full)
 {
-	md_minor_version_t minor;
-	uint64_t size, sb_offset;
+	uint64_t size, sb_offset = 0;
 	int ret;
 
 	if (!scan_bcache)
@@ -130,9 +191,9 @@ static int _native_dev_is_md(struct device *dev, uint64_t *offset_found, int ful
 		return 0;
 
 	/*
-	 * Old md versions locate the magic number at the end of the device.
-	 * Those checks can't be satisfied with the initial bcache data, and
-	 * would require an extra read i/o at the end of every device.  Issuing
+	 * Some md versions locate the magic number at the end of the device.
+	 * Those checks can't be satisfied with the initial scan data, and
+	 * require an extra read i/o at the end of every device.  Issuing
 	 * an extra read to every device in every command, just to check for
 	 * the old md format is a bad tradeoff.
 	 *
@@ -143,42 +204,81 @@ static int _native_dev_is_md(struct device *dev, uint64_t *offset_found, int ful
 	 * and set it for commands that could possibly write to an md dev
 	 * (pvcreate/vgcreate/vgextend).
 	 */
-	if (!full) {
-		sb_offset = 0;
-		if (_dev_has_md_magic(dev, sb_offset)) {
-			log_debug_devs("Found md magic number at offset 0 of %s.", dev_name(dev));
-			ret = 1;
-			goto out;
-		}
 
-		sb_offset = 8 << SECTOR_SHIFT;
-		if (_dev_has_md_magic(dev, sb_offset)) {
-			log_debug_devs("Found md magic number at offset %d of %s.", (int)sb_offset, dev_name(dev));
-			ret = 1;
-			goto out;
-		}
+	/*
+	 * md superblock version 1.1 at offset 0 from start
+	 */
 
-		ret = 0;
-		goto out;
-	}
-
-	/* Check if it is an md component device. */
-	/* Version 0.90.0 */
-	sb_offset = MD_NEW_SIZE_SECTORS(size) << SECTOR_SHIFT;
-	if (_dev_has_md_magic(dev, sb_offset)) {
+	if (_dev_has_md_magic(dev, 0)) {
+		log_debug_devs("Found md magic number at offset 0 of %s.", dev_name(dev));
 		ret = 1;
 		goto out;
 	}
 
-	minor = MD_MINOR_VERSION_MIN;
-	/* Version 1, try v1.0 -> v1.2 */
-	do {
-		sb_offset = _v1_sb_offset(size, minor);
-		if (_dev_has_md_magic(dev, sb_offset)) {
-			ret = 1;
-			goto out;
-		}
-	} while (++minor <= MD_MINOR_VERSION_MAX);
+	/*
+	 * md superblock version 1.2 at offset 4KB from start
+	 */
+
+	if (_dev_has_md_magic(dev, 4096)) {
+		log_debug_devs("Found md magic number at offset 4096 of %s.", dev_name(dev));
+		ret = 1;
+		goto out;
+	}
+
+	if (!full) {
+		ret = 0;
+		goto out;
+	}
+
+	/*
+	 * Handle superblocks at the end of the device.
+	 */
+
+	/*
+	 * md superblock version 0 at 64KB from end of device
+	 * (after end is aligned to 64KB)
+	 */
+
+	sb_offset = MD_NEW_SIZE_SECTORS(size) << SECTOR_SHIFT;
+
+	if (_dev_has_md_magic(dev, sb_offset)) {
+		log_debug_devs("Found md magic number at offset %llu of %s.", (unsigned long long)sb_offset, dev_name(dev));
+		ret = 1;
+		goto out;
+	}
+
+	/*
+	 * md superblock version 1.0 at 8KB from end of device
+	 */
+
+	sb_offset = ((size - 8 * 2) & ~(4 * 2 - 1ULL)) << SECTOR_SHIFT;
+
+	if (_dev_has_md_magic(dev, sb_offset)) {
+		log_debug_devs("Found md magic number at offset %llu of %s.", (unsigned long long)sb_offset, dev_name(dev));
+		ret = 1;
+		goto out;
+	}
+
+	/*
+	 * md imsm superblock 1K from end of device
+	 */
+
+	if (_dev_has_imsm_magic(dev, size)) {
+		log_debug_devs("Found md imsm magic number at offset %llu of %s.", (unsigned long long)sb_offset, dev_name(dev));
+		sb_offset = 1024;
+		ret = 1;
+		goto out;
+	}
+
+	/*
+	 * md ddf superblock 512 bytes from end, or 128KB from end
+	 */
+
+	if (_dev_has_ddf_magic(dev, size, &sb_offset)) {
+		log_debug_devs("Found md ddf magic number at offset %llu of %s.", (unsigned long long)sb_offset, dev_name(dev));
+		ret = 1;
+		goto out;
+	}
 
 	ret = 0;
 out:
@@ -188,7 +288,7 @@ out:
 	return ret;
 }
 
-int dev_is_md(struct device *dev, uint64_t *offset_found, int full)
+int dev_is_md_component(struct device *dev, uint64_t *offset_found, int full)
 {
 	int ret;
 
@@ -198,19 +298,25 @@ int dev_is_md(struct device *dev, uint64_t *offset_found, int full)
 	 * information is not in udev db.
 	 */
 	if ((dev->ext.src == DEV_EXT_NONE) || offset_found) {
-		ret = _native_dev_is_md(dev, offset_found, full);
+		ret = _native_dev_is_md_component(dev, offset_found, full);
 
 		if (!full) {
 			if (!ret || (ret == -EAGAIN)) {
 				if (udev_dev_is_md_component(dev))
-					return 1;
+					ret = 1;
 			}
 		}
+		if (ret && (ret != -EAGAIN))
+			dev->flags |= DEV_IS_MD_COMPONENT;
 		return ret;
 	}
 
-	if (dev->ext.src == DEV_EXT_UDEV)
-		return _udev_dev_is_md(dev);
+	if (dev->ext.src == DEV_EXT_UDEV) {
+		ret = _udev_dev_is_md_component(dev);
+		if (ret && (ret != -EAGAIN))
+			dev->flags |= DEV_IS_MD_COMPONENT;
+		return ret;
+	}
 
 	log_error(INTERNAL_ERROR "Missing hook for MD device recognition "
 		  "using external device info source %s", dev_ext_name(dev));
@@ -280,12 +386,12 @@ static int _md_sysfs_attribute_scanf(struct dev_types *dt,
 		return ret;
 
 	if (!(fp = fopen(path, "r"))) {
-		log_sys_error("fopen", path);
+		log_debug("_md_sysfs_attribute_scanf fopen failed %s", path);
 		return ret;
 	}
 
 	if (!fgets(buffer, sizeof(buffer), fp)) {
-		log_sys_error("fgets", path);
+		log_debug("_md_sysfs_attribute_scanf fgets failed %s", path);
 		goto out;
 	}
 
@@ -427,7 +533,7 @@ int dev_is_md_with_end_superblock(struct dev_types *dt, struct device *dev)
 
 	if (_md_sysfs_attribute_scanf(dt, dev, attribute,
 				      "%s", &version_string) != 1)
-		return -1;
+		return 0;
 
 	log_very_verbose("Device %s %s is %s.",
 			 dev_name(dev), attribute, version_string);
@@ -439,7 +545,7 @@ int dev_is_md_with_end_superblock(struct dev_types *dt, struct device *dev)
 
 #else
 
-int dev_is_md(struct device *dev __attribute__((unused)),
+int dev_is_md_component(struct device *dev __attribute__((unused)),
 	      uint64_t *sb __attribute__((unused)))
 {
 	return 0;

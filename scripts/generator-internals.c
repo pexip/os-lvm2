@@ -1,5 +1,21 @@
+/*
+ * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
+ *
+ * This file is part of the device-mapper userspace tools.
+ *
+ * This copyrighted material is made available to anyone wishing to use,
+ * modify, copy, or redistribute it subject to the terms and conditions
+ * of the GNU General Public License v.2.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+*/
+
 // This file contains the unit testable parts of
 // lvm2_activation_generator_systemd_red_hat
+
+#include "device_mapper/all.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -55,6 +71,9 @@ static bool _open_child(struct child_process *child, const char *cmd, const char
 			(void) dup2(pipe_fd[1], STDOUT_FILENO);
 			(void) close(pipe_fd[1]);
 		}
+
+		/* Suppressing any use of syslog */
+		(void) setenv("LVM_SUPPRESS_SYSLOG", "1", 1);
 
 		if (execv(cmd, (char *const *) argv) < 0)
 			_error("execv failed: %s\n", strerror(errno));
@@ -170,7 +189,8 @@ static bool _parse_line(const char *line, struct config *cfg)
 static bool _get_config(struct config *cfg, const char *lvmconfig_path)
 {
 	static const char *_argv[] = {
-		"lvmconfig", LVM_CONF_EVENT_ACTIVATION, LVM_CONF_USE_LVMPOLLD, NULL
+		"lvmconfig", "--type", "full",
+		LVM_CONF_EVENT_ACTIVATION, LVM_CONF_USE_LVMPOLLD, NULL
 	};
 
 	bool r = true;

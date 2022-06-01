@@ -278,15 +278,6 @@ static int _add_log(struct dm_pool *mem, struct lv_segment *seg,
 	char *log_dlid = NULL;
 	uint32_t log_flags = 0;
 
-	if (seg->lv->vg->lock_type && !strcmp(seg->lv->vg->lock_type, "dlm")) {
-		/*
-		 * If shared lock was used due to -asy, then we set clustered
-		 * to use a clustered mirror log with cmirrod.
-		 */
-		if (seg->lv->vg->cmd->lockd_lv_sh)
-			clustered = 1;
-	}
-
 	if (seg->log_lv) {
 		/* If disk log, use its UUID */
 		if (!(log_dlid = build_dm_uuid(mem, seg->log_lv, NULL))) {
@@ -438,40 +429,10 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 		      sscanf(vsn, "%u.%u.%u", &maj2, &min2, &patchlevel2) == 3 &&
 		      maj2 == 4 && min2 == 5 && patchlevel2 == 0)))	/* RHEL4U3 */
 			_block_on_error_available = 1;
-
-#ifdef CMIRRORD_PIDFILE
-		/*
-		 * The cluster mirror log daemon must be running,
-		 * otherwise, the kernel module will fail to make
-		 * contact.
-		 */
-		if (cmirrord_is_running()) {
-			struct utsname uts;
-			unsigned kmaj, kmin, krel;
-			/*
-			 * The dm-log-userspace module was added to the
-			 * 2.6.31 kernel.
-			 */
-			if (!uname(&uts) &&
-			    (sscanf(uts.release, "%u.%u.%u", &kmaj, &kmin, &krel) == 3) &&
-			    KERNEL_VERSION(kmaj, kmin, krel) < KERNEL_VERSION(2, 6, 31)) {
-				if (module_present(cmd, MODULE_NAME_LOG_CLUSTERED))
-				_mirror_attributes |= MIRROR_LOG_CLUSTERED;
-			} else if (module_present(cmd, MODULE_NAME_LOG_USERSPACE))
-				_mirror_attributes |= MIRROR_LOG_CLUSTERED;
-
-			if (!(_mirror_attributes & MIRROR_LOG_CLUSTERED))
-				log_verbose("Cluster mirror log module is not available.");
-		} else
-			log_verbose("Cluster mirror log daemon is not running.");
-#else
-		log_verbose("Cluster mirror log daemon not included in build.");
-#endif
 	}
 
 	/*
 	 * Check only for modules if atttributes requested and no previous check.
-	 * FIXME: Fails incorrectly if cmirror was built into kernel.
 	 */
 	if (attributes)
 		*attributes = _mirror_attributes;

@@ -21,6 +21,10 @@ which md5sum || skip
 which mkfs.ext4 || skip
 aux have_raid 1 13 2 || skip
 
+case "$(uname -r)" in
+  5.[89]*|3.10.0-862*) die "Cannot run this test on unfixed kernel." ;;
+esac
+
 mount_dir="mnt"
 
 cleanup_mounted_and_teardown()
@@ -43,19 +47,20 @@ vgcreate $SHARED -s 1M "$vg" "${DEVICES[@]}"
 trap 'cleanup_mounted_and_teardown' EXIT
 
 # Create 10-way striped raid5 (11 legs total)
-lvcreate --yes --type raid5_ls --stripesize 64K --stripes 10 -L64M -n$lv1 $vg
+lvcreate --yes --type raid5_ls --stripesize 64K --stripes 10 -L4 -n$lv1 $vg
 check lv_first_seg_field $vg/$lv1 segtype "raid5_ls"
 check lv_first_seg_field $vg/$lv1 stripesize "64.00k"
 check lv_first_seg_field $vg/$lv1 data_stripes 10
 check lv_first_seg_field $vg/$lv1 stripes 11
-echo y|mkfs -t ext4 /dev/$vg/$lv1
+wipefs -a /dev/$vg/$lv1
+mkfs -t ext4 /dev/$vg/$lv1
 
 mkdir -p "$mount_dir"
 mount "$DM_DEV_DIR/$vg/$lv1" "$mount_dir"
 
 echo 3 >/proc/sys/vm/drop_caches
 # FIXME: This is filling up ram disk. Use sane amount of data please! Rate limit the data written!
-dd if=/dev/urandom of="$mount_dir/random" bs=1M count=50 conv=fdatasync
+dd if=/dev/urandom of="$mount_dir/random" bs=1M count=4 conv=fdatasync
 checksum_ "$mount_dir/random" >MD5
 
 # FIXME: wait_for_sync - is this really testing anything under load?
@@ -85,7 +90,7 @@ wait
 
 checksum_ "$mount_dir/random" >MD5_new
 
-umount $mount_dir
+umount "$mount_dir"
 
 fsck -fn "$DM_DEV_DIR/$vg/$lv1"
 

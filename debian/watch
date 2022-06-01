@@ -1,2 +1,2 @@
-version=3
-opts=pasv,pgpsigurlmangle=s/$/.asc/ ftp://sources.redhat.com/pub/lvm2/LVM2\.([\d\.]*)\.tgz
+version=4
+opts=pasv,pgpsigurlmangle=s/$/.asc/ https://sourceware.org/pub/lvm2/LVM2\.([\d\.]*)\.tgz

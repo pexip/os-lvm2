@@ -26,7 +26,7 @@ expect_failure() {
 check_daemon_in_builddir() {
 	# skip if we don't have our own deamon...
 	if test -z "${installed_testsuite+varset}"; then
-		(which "$1" 2>/dev/null | grep -q "$abs_builddir") || skip "$1 is not in executed path."
+		(which "$1" 2>/dev/null | grep "$abs_builddir" >/dev/null ) || skip "$1 is not in executed path."
 	fi
 	rm -f debug.log strace.log
 }
@@ -167,7 +167,7 @@ prepare_clvmd() {
 
 	test -e "$DM_DEV_DIR/control" || dmsetup table >/dev/null # create control node
 	# skip if singlenode is not compiled in
-	(clvmd --help 2>&1 | grep "Available cluster managers" | grep -q "singlenode") || \
+	(clvmd --help 2>&1 | grep "Available cluster managers" | grep "singlenode" >/dev/null) || \
 		skip "Compiled clvmd does not support singlenode for testing."
 
 #	lvmconf "activation/monitoring = 1"
@@ -382,7 +382,7 @@ teardown_devs_prefixed() {
 
 		while :; do
 			local sortby="name"
-			local num_devs=0
+			local progress=0
 
 			# HACK: sort also by minors - so we try to close 'possibly later' created device first
 			test "$i" = 0 || sortby="-minor"
@@ -392,23 +392,23 @@ teardown_devs_prefixed() {
 				DM_NAME=${dm##DM_NAME=}
 				DM_NAME=${DM_NAME%%;DM_OPEN*}
 				DM_OPEN=${dm##*;DM_OPEN=}
+				local force="-f"
 				if test "$i" = 0; then
 					if test "$once" = 1 ; then
 						once=0
 						echo "## removing stray mapped devices with names beginning with $prefix: "
 					fi
 					test "$DM_OPEN" = 0 || break  # stop loop with 1st. opened device
-					dmsetup remove "$DM_NAME" --mangle none || true # &>/dev/null || touch REMOVE_FAILED &
-				else
-					dmsetup remove -f "$DM_NAME" --mangle none || true
+					force=""
 				fi
 
-				num_devs=$(( num_devs + 1 ))
+				# Succesfull 'remove' signals progress
+				dmsetup remove $force "$DM_NAME" --mangle none && progress=1
 			done
 
 			test "$i" = 0 || break
 
-			test "$num_devs" -gt 0 || break
+			test "$progress" = 1 || break
 
 			udev_wait
 			wait
@@ -421,8 +421,15 @@ teardown_devs() {
 	teardown_udev_cookies
 
 	test ! -f MD_DEV || cleanup_md_dev
+
+	test ! -f WAIT_MD_DEV || mddev=$(< WAIT_MD_DEV)
+	udev_wait
+	test ! -f WAIT_MD_DEV || mdadm --stop $mddev || true
+	udev_wait
 	test ! -f DEVICES || teardown_devs_prefixed "$PREFIX"
 	test ! -f RAMDISK || { modprobe -r brd || true ; }
+
+	test ! -f WAIT_MD_DEV || mdadm --stop $mddev || true
 
 	# NOTE: SCSI_DEBUG_DEV test must come before the LOOP test because
 	# prepare_scsi_debug_dev() also sets LOOP to short-circuit prepare_loop()
@@ -513,7 +520,10 @@ teardown() {
 
 	if test ! -f SKIP_THIS_TEST ; then
 		# Evaluate left devices only for non-skipped tests
-		TEST_LEAKED_DEVICES=$(dmsetup table | grep "$PREFIX" | grep -v "${PREFIX}pv") || true
+		TEST_LEAKED_DEVICES=$(dmsetup table | grep "$PREFIX" | \
+			grep -Ev "${PREFIX}(pv|[0-9])" | \
+			grep -v "$(cat ERR_DEV_NAME 2>/dev/null)" | \
+			grep -v "$(cat ZERO_DEV_NAME 2>/dev/null)") || true
 	fi
 
 	kill_tagged_processes
@@ -531,7 +541,7 @@ teardown() {
 	dm_table | not grep -E -q "$vg|$vg1|$vg2|$vg3|$vg4" || {
 		# Avoid activation of dmeventd if there is no pid
 		cfg=$(test -s LOCAL_DMEVENTD || echo "--config activation{monitoring=0}")
-		if dm_info suspended,name | grep -q "^Suspended:.*$PREFIX" ; then
+		if dm_info suspended,name | grep "^Suspended:.*$PREFIX" >/dev/null ; then
 			echo "## skipping vgremove, suspended devices detected."
 		else
 			vgremove -ff "$cfg"  \
@@ -662,7 +672,7 @@ prepare_scsi_debug_dev() {
 
 	# Skip test if scsi_debug module is unavailable or is already in use
 	modprobe --dry-run scsi_debug || skip
-	lsmod | not grep -q scsi_debug || skip
+	lsmod | not grep scsi_debug >/dev/null || skip
 
 	# Create the scsi_debug device and determine the new scsi device's name
 	# NOTE: it will _never_ make sense to pass num_tgts param;
@@ -775,6 +785,33 @@ cleanup_md_dev() {
 	rm -f MD_DEV MD_DEVICES MD_DEV_PV
 }
 
+wait_md_create() {
+	local md=$1
+
+	while :; do
+		if ! grep `basename $md` /proc/mdstat; then
+			echo "$md not ready"
+			cat /proc/mdstat
+			sleep 2
+		else
+			break
+		fi
+	done
+	echo "$md" > WAIT_MD_DEV
+}
+
+wipefs_a() {
+	local dev=$1
+	shift
+
+	if wipefs -V >/dev/null; then
+		wipefs -a "$dev"
+	else
+		dd if=/dev/zero of="$dev" bs=4096 count=8 || true
+		mdadm --zero-superblock "$dev" || true
+	fi
+}
+
 prepare_backing_dev() {
 	local size=${1=32}
 	shift
@@ -840,7 +877,11 @@ prepare_devs() {
 	wait
 	finish_udev_transaction
 
-	if test -f CREATE_FAILED -a -n "$LVM_TEST_BACKING_DEVICE"; then
+	if test -f CREATE_FAILED ; then
+		if test -z "$LVM_TEST_BACKING_DEVICE"; then
+			echo "failed"
+			return 1
+		fi
 		LVM_TEST_BACKING_DEVICE=
 		rm -f BACKING_DEV CREATE_FAILED
 		prepare_devs "$@"
@@ -886,6 +927,11 @@ common_dev_() {
 		}
 		shift 2
 		;;
+	delayzero)
+		shift 2
+		# zero delay is just equivalent to 'zero_dev'
+		test "$read_ms" -eq 0 && test "$write_ms" -eq 0 && tgtype="zero"
+		;;
 	# error|zero target does not take read_ms & write_ms only offset list
 	esac
 
@@ -916,6 +962,10 @@ common_dev_() {
 		case "$tgtype" in
 		delay)
 			echo "$from $len delay $pvdev $(( pos + offset )) $read_ms $pvdev $(( pos + offset )) $write_ms" ;;
+		writeerror)
+			echo "$from $len delay $pvdev $(( pos + offset )) 0 $(cat ERR_DEV) 0 0" ;;
+		delayzero)
+			echo "$from $len delay $(cat ZERO_DEV) 0 $read_ms $(cat ZERO_DEV) 0 $write_ms" ;;
 		error|zero)
 			echo "$from $len $tgtype" ;;
 		esac
@@ -1028,7 +1078,13 @@ restore_from_devtable() {
 	for dev in "$@"; do
 		local name=${dev##*/}
 		dmsetup load "$name" "$name.devtable"
-		dmsetup resume "$name"
+		if not dmsetup resume "$name" ; then
+			dmsetup clear $name
+			dmsetup resume $name
+			finish_udev_transaction
+			echo "Device $name has unusable table \"$(cat $name.devtable)\""
+			return 1
+		fi
 	done
 	finish_udev_transaction
 }
@@ -1041,6 +1097,52 @@ restore_from_devtable() {
 # i.e.  error_dev "$dev1" 8:32 96:8
 error_dev() {
 	common_dev_ error "$@"
+}
+
+#
+# Convert device to device with write errors but normal reads.
+# For this 'delay' dev is used and reroutes 'reads' back to original device
+# and for writes it will use extra new TEST-errordev (huge error target)
+# i.e.  writeerror_dev "$dev1" 8:32
+writeerror_dev() {
+	local name=${PREFIX}-errordev
+
+	if test ! -e ERR_DEV; then
+		# delay target is used for error mapping
+		if test ! -f HAVE_DM_DELAY ; then
+			target_at_least dm-delay 1 1 0 || return 0
+			touch HAVE_DM_DELAY
+		fi
+		dmsetup create -u "TEST-$name" "$name" --table "0 4611686018427387904 error"
+		# Take major:minor of our error device
+		echo "$name" > ERR_DEV_NAME
+		dmsetup info -c  --noheadings -o major,minor "$name" > ERR_DEV
+	fi
+
+	common_dev_ writeerror "$@"
+}
+
+#
+# Convert device to device with sections of delayed zero read and writes.
+# For this 'delay' dev will use extra new TEST-zerodev (huge zero target)
+# and reroutes reads and writes
+# i.e.  delayzero_dev "$dev1" 8:32
+delayzero_dev() {
+	local name=${PREFIX}-zerodev
+
+	if test ! -e ZERO_DEV; then
+		# delay target is used for error mapping
+		if test ! -f HAVE_DM_DELAY ; then
+			target_at_least dm-delay 1 1 0 || return 0
+			touch HAVE_DM_DELAY
+		fi
+		dmsetup create -u "TEST-$name" "$name" --table "0 4611686018427387904 zero"
+		# Take major:minor of our error device
+		echo "$name" > ZERO_DEV_NAME
+		dmsetup info -c  --noheadings -o major,minor "$name" > ZERO_DEV
+	fi
+
+	common_dev_ delayzero "$@"
 }
 
 #
@@ -1090,7 +1192,18 @@ extend_filter() {
 	for rx in "$@"; do
 		filter=$(echo "$filter" | sed -e "s:\\[:[ \"$rx\", :")
 	done
+	lvmconf "$filter" "devices/scan_lvs = 1"
+}
+
+extend_filter_md() {
+	local filter
+
+	filter=$(grep ^devices/global_filter CONFIG_VALUES | tail -n 1)
+	for rx in "$@"; do
+		filter=$(echo "$filter" | sed -e "s:\\[:[ \"$rx\", :")
+	done
 	lvmconf "$filter"
+	lvmconf "devices/scan = [ \"$DM_DEV_DIR\", \"/dev\" ]"
 }
 
 extend_filter_LVMTEST() {
@@ -1157,6 +1270,8 @@ activation/udev_sync = 1
 activation/verify_udev_operations = $LVM_VERIFY_UDEV
 activation/raid_region_size = 512
 allocation/wipe_signatures_when_zeroing_new_lvs = 0
+allocation/vdo_slab_size_mb = 128
+allocation/zero_metadata = 0
 backup/archive = 0
 backup/backup = 0
 devices/cache_dir = "$TESTDIR/etc"
@@ -1164,7 +1279,7 @@ devices/default_data_alignment = 1
 devices/dir = "$DM_DEV_DIR"
 devices/filter = "a|.*|"
 devices/global_filter = [ "a|$DM_DEV_DIR/mapper/${PREFIX}.*pv[0-9_]*$|", "r|.*|" ]
-devices/md_component_detection  = 0
+devices/md_component_detection = 0
 devices/scan = "$DM_DEV_DIR"
 devices/sysfs_scan = 1
 devices/write_cache_state = 0
@@ -1352,6 +1467,14 @@ thin_pool_error_works_32() {
 	esac
 }
 
+thin_restore_needs_more_volumes() {
+	case $("$LVM_TEST_THIN_RESTORE_CMD" -V) in
+		# With older version of thin-tool we got slightly more compact metadata
+		0.[0-6]*|0.7.0*) return 0 ;;
+	esac
+	return 1
+}
+
 udev_wait() {
 	pgrep udev >/dev/null || return 0
 	which udevadm &>/dev/null || return 0
@@ -1371,6 +1494,7 @@ wait_for_sync() {
 	done
 
 	echo "Sync is taking too long - assume stuck"
+	echo t >/proc/sysrq-trigger 2>/dev/null
 	return 1
 }
 
@@ -1387,17 +1511,17 @@ version_at_least() {
 	IFS=".-" read -r major minor revision <<< "$1"
 	shift
 
-	test -z "$1" && return 0
+	test -n "${1:-}" || return 0
 	test -n "$major" || return 1
 	test "$major" -gt "$1" && return 0
 	test "$major" -eq "$1" || return 1
 
-	test -z "$2" && return 0
+	test -n "${2:-}" || return 0
 	test -n "$minor" || return 1
 	test "$minor" -gt "$2" && return 0
 	test "$minor" -eq "$2" || return 1
 
-	test -z "$3" && return 0
+	test -n "${3:-}" || return 0
 	test "$revision" -ge "$3" 2>/dev/null || return 1
 }
 #
@@ -1410,6 +1534,7 @@ version_at_least() {
 target_at_least() {
 	rm -f debug.log strace.log
 	case "$1" in
+	  dm-vdo) modprobe "kvdo" || true ;;
 	  dm-*) modprobe "$1" || true ;;
 	esac
 
@@ -1420,7 +1545,7 @@ target_at_least() {
 	fi
 
 	local version
-	version=$(dmsetup targets 2>/dev/null | grep "${1##dm-} " 2>/dev/null)
+	version=$(dmsetup targets 2>/dev/null | grep "^${1##dm-} " 2>/dev/null)
 	version=${version##* v}
 
 	version_at_least "$version" "${@:2}" || {
@@ -1446,7 +1571,7 @@ driver_at_least() {
 }
 
 have_thin() {
-	lvm segtypes 2>/dev/null | grep -q thin$ || {
+	lvm segtypes 2>/dev/null | grep thin$ >/dev/null || {
 		echo "Thin is not built-in." >&2
 		return 1
 	}
@@ -1470,11 +1595,27 @@ have_thin() {
 }
 
 have_vdo() {
-	lvm segtypes 2>/dev/null | grep -q vdo$ || {
+	lvm segtypes 2>/dev/null | grep 'vdo$' >/dev/null || {
 		echo "VDO is not built-in." >&2
 		return 1
 	}
 	target_at_least dm-vdo "$@"
+}
+
+have_writecache() {
+	lvm segtypes 2>/dev/null | grep 'writecache$' >/dev/null || {
+		echo "writecache is not built-in." >&2
+		return 1
+	}
+	target_at_least dm-writecache "$@"
+}
+
+have_integrity() {
+	lvm segtypes 2>/dev/null | grep 'integrity$' >/dev/null || {
+		echo "integrity is not built-in." >&2
+		return 1
+	}
+	target_at_least dm-integrity "$@"
 }
 
 have_raid() {
@@ -1498,7 +1639,7 @@ have_raid4 () {
 }
 
 have_cache() {
-	lvm segtypes 2>/dev/null | grep -q cache$ || {
+	lvm segtypes 2>/dev/null | grep ' cache-pool$' >/dev/null || {
 		echo "Cache is not built-in." >&2
 		return 1
 	}
@@ -1598,6 +1739,10 @@ wait_pvmove_lv_ready() {
 			retries=$((retries-1))
 		done
 	fi
+
+	# Adding settle here, to avoid remove, before processing of 'add' is finished
+	# (masking systemd-udevd issue)
+	udevadm settle --timeout=2 || true
 }
 
 # Holds device open with sleep which automatically expires after given timeout

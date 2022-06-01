@@ -1,9 +1,47 @@
+Version 1.02.175 - 08th January 2021
+====================================
+
+Version 1.02.173 - 09th August 2020
+===================================
+  Add support for VDO in blkdeactivate script.
+
+Version 1.02.171 - 26th March 2020
+==================================
+  Try to remove all created devices on dm preload tree error path.
+  Fix dm_list interators with gcc 10 optimization (-ftree-pta).
+  Dmeventd handles timer without looping on short intervals.
+
+Version 1.02.169 - 11th February 2020
+=====================================
+  Enhance error messages for device creation.
+
+Version 1.02.167 - 30th November 2019
+=====================================
+
+Version 1.02.165 - 23rd October 2019
+====================================
+  Add support for DM_DEVICE_GET_TARGET_VERSION.
+  Add debug of dmsetup udevcomplete with hexa print DM_COOKIE_COMPLETED.
+  Fix versioning of dm_stats_create_region and dm_stats_create_region.
+
+Version 1.02.163 - 15th June 2019
+=================================
+
+Version 1.02.161 - 10th June 2019
+=================================
+
+Version 1.02.159 - 07th June 2019
+=================================
+  Parsing of cache status understand no_discard_passdown.
+  Ensure migration_threshold for cache is at least 8 chunks.
+
 Version 1.02.155 - 18th December 2018
 =====================================
   Include correct internal header inside libdm list.c.
   Enhance ioctl flattening and add parameters only when needed.
   Add DM_DEVICE_ARM_POLL for API completness matching kernel.
   Do not add parameters for RESUME with DM_DEVICE_CREATE dm task.
+  Fix dmstats report printing no output.
 
 Version 1.02.153 - 31st October 2018
 ====================================

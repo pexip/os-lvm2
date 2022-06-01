@@ -24,23 +24,22 @@
 #include <stdarg.h>
 #include <syslog.h>
 #include <ctype.h>
+#include <time.h>
 
 static FILE *_log_file;
 static char _log_file_path[PATH_MAX];
-static struct device _log_dev;
-static struct dm_str_list _log_dev_alias;
 
 static int _syslog = 0;
 static int _log_to_file = 0;
 static uint64_t _log_file_max_lines = 0;
 static uint64_t _log_file_lines = 0;
-static int _log_direct = 0;
 static int _log_while_suspended = 0;
-static int _indent = 1;
+static int _indent = 0;
 static int _log_suppress = 0;
 static char _msg_prefix[30] = "  ";
-static int _already_logging = 0;
 static int _abort_on_internal_errors_config = 0;
+static uint32_t _debug_file_fields;
+static uint32_t _debug_output_fields;
 
 static lvm2_log_fn_t _lvm2_log_fn = NULL;
 
@@ -306,17 +305,6 @@ void unlink_log_file(int ret)
 	}
 }
 
-void init_log_direct(const char *log_file, int append)
-{
-	int open_flags = append ? 0 : O_TRUNC;
-
-	dev_create_file(log_file, &_log_dev, &_log_dev_alias, 1);
-	if (!dev_open_flags(&_log_dev, O_RDWR | O_CREAT | open_flags, 1, 0))
-		return;
-
-	_log_direct = 1;
-}
-
 void init_log_while_suspended(int log_while_suspended)
 {
 	_log_while_suspended = log_while_suspended;
@@ -324,6 +312,9 @@ void init_log_while_suspended(int log_while_suspended)
 
 void init_syslog(int facility)
 {
+	if (getenv("LVM_SUPPRESS_SYSLOG"))
+		return;
+
 	openlog("lvm", LOG_PID, facility);
 	_syslog = 1;
 }
@@ -337,22 +328,8 @@ int log_suppress(int suppress)
 	return old_suppress;
 }
 
-void release_log_memory(void)
-{
-	if (!_log_direct)
-		return;
-
-	free((char *) _log_dev_alias.str);
-	_log_dev_alias.str = "activate_log file";
-}
-
 void fin_log(void)
 {
-	if (_log_direct) {
-		(void) dev_close(&_log_dev);
-		_log_direct = 0;
-	}
-
 	if (_log_to_file) {
 		if (dm_fclose(_log_file)) {
 			if (errno)
@@ -468,13 +445,52 @@ const char *log_get_report_object_type_name(log_report_object_type_t object_type
 	return log_object_type_names[object_type];
 }
 
+void init_debug_file_fields(uint32_t debug_fields)
+{
+	_debug_file_fields = debug_fields;
+}
+
+void init_debug_output_fields(uint32_t debug_fields)
+{
+	_debug_output_fields = debug_fields;
+}
+
+static void _set_time_prefix(char *prefix, int buflen)
+{
+
+	struct timespec ts;
+	struct tm time_info;
+	int len;
+
+	if (clock_gettime(CLOCK_REALTIME, &ts) < 0)
+		goto fail;
+
+	if (!localtime_r(&ts.tv_sec, &time_info))
+		goto fail;
+
+	len = strftime(prefix, buflen, "%H:%M:%S", &time_info);
+	if (!len)
+		goto fail;
+
+	len = dm_snprintf(prefix + len, buflen - len, ".%ld ", ts.tv_nsec/1000);
+	if (len < 0)
+		goto fail;
+
+	return;
+
+fail:
+	*prefix = '\0';
+}
+
 __attribute__ ((format(printf, 5, 0)))
 static void _vprint_log(int level, const char *file, int line, int dm_errno_or_class,
 			const char *format, va_list orig_ap)
 {
 	va_list ap;
 	char buf[1024], message[4096];
-	int bufused, n;
+	char time_prefix[32] = "";
+	const char *command_prefix = NULL;
+	int n;
 	const char *trformat;		/* Translated format string */
 	char *newbuf;
 	int use_stderr = log_stderr(level);
@@ -595,10 +611,33 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
       log_it:
 	if (!logged_via_report && ((verbose_level() >= level) && !_log_suppress)) {
 		if (verbose_level() > _LOG_DEBUG) {
-			(void) dm_snprintf(buf, sizeof(buf), "#%s:%-5d ",
-					   file, line);
-		} else
-			buf[0] = '\0';
+			memset(buf, 0, sizeof(buf));
+
+			if (!_debug_output_fields || (_debug_output_fields & LOG_DEBUG_FIELD_TIME)) {
+				if (!time_prefix[0])
+					_set_time_prefix(time_prefix, sizeof(time_prefix));
+				else
+					time_prefix[0] = '\0';
+			}
+
+			if (!_debug_output_fields || (_debug_output_fields & LOG_DEBUG_FIELD_COMMAND))
+				command_prefix = log_command_file();
+			else
+				command_prefix = NULL;
+
+			if (!_debug_output_fields || (_debug_output_fields & LOG_DEBUG_FIELD_FILELINE))
+				(void) dm_snprintf(buf, sizeof(buf), "%s%s %s:%d",
+					   	   time_prefix, command_prefix ?: "", file, line);
+			else
+				(void) dm_snprintf(buf, sizeof(buf), "%s%s",
+					   	   time_prefix, command_prefix ?: "");
+		} else {
+			memset(buf, 0, sizeof(buf));
+
+			/* without -vvvv, command[pid] is controlled by config settings */
+
+			(void) dm_snprintf(buf, sizeof(buf), "%s", log_command_info());
+		}
 
 		if (_indent)
 			switch (level) {
@@ -624,8 +663,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 			stream = (use_stderr || (level != _LOG_WARN)) ? err_stream : out_stream;
 			if (stream == err_stream)
 				fflush(out_stream);
-			fprintf(stream, "%s%s%s%s", buf, log_command_name(),
-				_msg_prefix, indent_spaces);
+			fprintf(stream, "%s%s%s", buf, _msg_prefix, indent_spaces);
 			vfprintf(stream, trformat, ap);
 			fputc('\n', stream);
 		}
@@ -640,15 +678,30 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 	}
 
 	if (_log_to_file && (_log_while_suspended || !critical_section())) {
-		fprintf(_log_file, "%s:%-5d %s%s", file, line, log_command_name(),
-			_msg_prefix);
+
+		if (!_debug_file_fields || (_debug_file_fields & LOG_DEBUG_FIELD_TIME)) {
+			if (!time_prefix[0])
+				_set_time_prefix(time_prefix, sizeof(time_prefix));
+			else
+				time_prefix[0] = '\0';
+		}
+
+		if (!_debug_file_fields || (_debug_file_fields & LOG_DEBUG_FIELD_COMMAND))
+			command_prefix = log_command_file();
+		else
+			command_prefix = NULL;
+
+		if (!_debug_file_fields || (_debug_file_fields & LOG_DEBUG_FIELD_FILELINE))
+			fprintf(_log_file, "%s%s %s:%d%s", time_prefix, command_prefix ?: "", file, line, _msg_prefix);
+		else
+			fprintf(_log_file, "%s%s %s", time_prefix, command_prefix ?: "", _msg_prefix);
 
 		va_copy(ap, orig_ap);
 		vfprintf(_log_file, trformat, ap);
 		va_end(ap);
 
 		if (_log_file_max_lines && ++_log_file_lines >= _log_file_max_lines) {
-			fprintf(_log_file, "\n%s:%-5d %sAborting. Command has reached limit "
+			fprintf(_log_file, "\n%s:%d %sAborting. Command has reached limit "
 				"for logged lines (LVM_LOG_FILE_MAX_LINES=" FMTu64 ").",
 				file, line, _msg_prefix,
 				_log_file_max_lines);
@@ -667,37 +720,6 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 
 	if (fatal_internal_error)
 		abort();
-
-	/* FIXME This code is unfinished - pre-extend & condense. */
-	if (!_already_logging && _log_direct && critical_section()) {
-		_already_logging = 1;
-		memset(&buf, ' ', sizeof(buf));
-		bufused = 0;
-		if ((n = dm_snprintf(buf, sizeof(buf),
-				      "%s:%-5d %s%s", file, line, log_command_name(),
-				      _msg_prefix)) == -1)
-			goto done;
-
-		bufused += n;		/* n does not include '\0' */
-
-		va_copy(ap, orig_ap);
-		n = vsnprintf(buf + bufused, sizeof(buf) - bufused,
-			      trformat, ap);
-		va_end(ap);
-
-		if (n < 0)
-			goto done;
-
-		bufused += n;
-		if (n >= (int) sizeof(buf))
-			bufused = sizeof(buf) - 1;
-	      done:
-		buf[bufused] = '\n';
-		buf[sizeof(buf) - 1] = '\n';
-		/* FIXME real size bufused */
-		dev_append(&_log_dev, sizeof(buf), DEV_IO_LOG, buf);
-		_already_logging = 0;
-	}
 }
 
 void print_log(int level, const char *file, int line, int dm_errno_or_class,

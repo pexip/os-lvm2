@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2008 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2008,2018 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -16,6 +16,8 @@
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
+
+aux lvmconf "global/support_mirrored_mirror_log=1"
 
 cleanup_lvs() {
 	lvremove -ff $vg
@@ -35,5 +37,27 @@ lvcreate -aey -n$lv1 -l4 $vg "$dev1"
 lvcreate -n$lv2 -l4 -s $vg/$lv1
 lvcreate -n$lv3 -l4 --permission r -s $vg/$lv1
 cleanup_lvs
+
+# Skip the rest for cluster
+if test -e LOCAL_CLVMD; then
+
+# ---
+# Create mirror on two devices with mirrored log using --alloc anywhere - should always fail in cluster
+not lvcreate --type mirror -m 1 -l4 -n $lv1 --mirrorlog mirrored $vg --alloc anywhere "$dev1" "$dev2"
+cleanup_lvs
+
+else
+
+# ---
+# Create mirror on two devices with mirrored log using --alloc anywhere
+lvcreate --type mirror -m 1 -l4 -n $lv1 --mirrorlog mirrored $vg --alloc anywhere "$dev1" "$dev2"
+cleanup_lvs
+
+# --
+# Create mirror on one dev with mirrored log using --alloc anywhere, should fail
+not lvcreate --type mirror -m 1 -l4 -n $lv1 --mirrorlog mirrored $vg --alloc anywhere "$dev1"
+cleanup_lvs
+
+fi
 
 vgremove -ff $vg

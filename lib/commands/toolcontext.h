@@ -44,7 +44,6 @@ struct config_info {
 	const char *fmt_name;
 	const char *dmeventd_executable;
 	uint64_t unit_factor;
-	int cmd_name;		/* Show command name? */
 	mode_t umask;
 	char unit_type;
 	char _padding[1];
@@ -149,10 +148,12 @@ struct cmd_context {
 	unsigned unknown_system_id:1;
 	unsigned include_historical_lvs:1;	/* also process/report/display historical LVs */
 	unsigned record_historical_lvs:1;	/* record historical LVs */
+	unsigned include_exported_vgs:1;
 	unsigned include_foreign_vgs:1;		/* report/display cmds can reveal foreign VGs */
 	unsigned include_shared_vgs:1;		/* report/display cmds can reveal lockd VGs */
 	unsigned include_active_foreign_vgs:1;	/* cmd should process foreign VGs with active LVs */
 	unsigned vg_read_print_access_error:1;	/* print access errors from vg_read */
+	unsigned allow_mixed_block_sizes:1;
 	unsigned force_access_clustered:1;
 	unsigned lockd_gl_disable:1;
 	unsigned lockd_vg_disable:1;
@@ -160,7 +161,10 @@ struct cmd_context {
 	unsigned lockd_gl_removed:1;
 	unsigned lockd_vg_default_sh:1;
 	unsigned lockd_vg_enforce_sh:1;
-	unsigned lockd_lv_sh:1;
+	unsigned lockd_lv_sh_for_ex:1;
+	unsigned lockd_global_ex:1;		/* set while global lock held ex (lockd) */
+	unsigned lockf_global_ex:1;		/* set while global lock held ex (flock) */
+	unsigned nolocking:1;
 	unsigned vg_notify:1;
 	unsigned lv_notify:1;
 	unsigned pv_notify:1;
@@ -170,13 +174,22 @@ struct cmd_context {
 	unsigned pvscan_cache_single:1;
 	unsigned can_use_one_scan:1;
 	unsigned is_clvmd:1;
+	unsigned md_component_detection:1;
 	unsigned use_full_md_check:1;
 	unsigned is_activating:1;
+	unsigned enable_hints:1;		/* hints are enabled for cmds in general */
+	unsigned use_hints:1;			/* if hints are enabled this cmd can use them */
+	unsigned pvscan_recreate_hints:1;	/* enable special case hint handling for pvscan --cache */
+	unsigned scan_lvs:1;
+	unsigned wipe_outdated_pvs:1;
+	unsigned filter_nodata_only:1;          /* only use filters that do not require data from the dev */
 
 	/*
-	 * Filtering.
+	 * Devices and filtering.
 	 */
 	struct dev_filter *filter;
+	struct dm_list hints;
+	const char *md_component_checks;
 
 	/*
 	 * Configuration.
@@ -227,7 +240,8 @@ struct cmd_context {
 	const char *report_list_item_separator;
 	const char *time_format;
 	unsigned rand_seed;
-	struct dm_list unused_duplicate_devs; /* save preferences between lvmcache instances */
+	struct dm_list pending_delete;		/* list of LVs for removal */
+	struct dm_pool *pending_delete_mem;	/* memory pool for pending deletes */
 };
 
 /*

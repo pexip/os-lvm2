@@ -145,7 +145,7 @@ static int _lvchange_monitoring(struct cmd_context *cmd,
 {
 	struct lvinfo info;
 
-	if (!lv_info(cmd, lv, lv_is_thin_pool(lv) ? 1 : 0,
+	if (!lv_info(cmd, lv, (lv_is_thin_pool(lv) || lv_is_vdo_pool(lv)) ? 1 : 0,
 		     &info, 0, 0) || !info.exists) {
 		log_error("Logical volume %s is not active.", display_lvname(lv));
 		return 0;
@@ -202,7 +202,7 @@ static int _lvchange_activate(struct cmd_context *cmd, struct logical_volume *lv
 	    strcmp(lv->vg->system_id, cmd->system_id) &&
 	    is_change_activating(activate)) {
 		log_error("Cannot activate LVs in a foreign VG.");
-		return ECMD_FAILED;
+		return 0;
 	}
 
 	if (lv_activation_skip(lv, activate, arg_is_set(cmd, ignoreactivationskip_ARG)))
@@ -606,6 +606,88 @@ static int _lvchange_persistent(struct cmd_context *cmd,
 	return 1;
 }
 
+static int _lvchange_writecache(struct cmd_context *cmd,
+			   struct logical_volume *lv,
+			   uint32_t *mr)
+{
+	struct writecache_settings settings = { 0 };
+	uint32_t block_size_sectors = 0;
+	struct lv_segment *seg = first_seg(lv);
+	int set_count = 0;
+
+	if (!get_writecache_settings(cmd, &settings, &block_size_sectors))
+		return_0;
+
+	if (block_size_sectors && (seg->writecache_block_size != (block_size_sectors * 512))) {
+		log_error("Cannot change existing block size %u bytes.", seg->writecache_block_size);
+		return 0;
+	}
+
+	if (settings.high_watermark_set) {
+		seg->writecache_settings.high_watermark_set = settings.high_watermark_set;
+		seg->writecache_settings.high_watermark = settings.high_watermark;
+		set_count++;
+	}
+	if (settings.low_watermark_set) {
+		seg->writecache_settings.low_watermark_set = settings.low_watermark_set;
+		seg->writecache_settings.low_watermark = settings.low_watermark;
+		set_count++;
+	}
+	if (settings.writeback_jobs_set) {
+		seg->writecache_settings.writeback_jobs_set = settings.writeback_jobs_set;
+		seg->writecache_settings.writeback_jobs = settings.writeback_jobs;
+		set_count++;
+	}
+	if (settings.autocommit_blocks_set) {
+		seg->writecache_settings.autocommit_blocks_set = settings.autocommit_blocks_set;
+		seg->writecache_settings.autocommit_blocks = settings.autocommit_blocks;
+		set_count++;
+	}
+	if (settings.autocommit_time_set) {
+		seg->writecache_settings.autocommit_time_set = settings.autocommit_time_set;
+		seg->writecache_settings.autocommit_time = settings.autocommit_time;
+		set_count++;
+	}
+	if (settings.fua_set) {
+		seg->writecache_settings.fua_set = settings.fua_set;
+		seg->writecache_settings.fua = settings.fua;
+		set_count++;
+	}
+	if (settings.nofua_set) {
+		seg->writecache_settings.nofua_set = settings.nofua_set;
+		seg->writecache_settings.nofua = settings.nofua;
+		set_count++;
+	}
+	if (settings.cleaner_set) {
+		seg->writecache_settings.cleaner_set = settings.cleaner_set;
+		seg->writecache_settings.cleaner = settings.cleaner;
+		set_count++;
+	}
+	if (settings.max_age_set) {
+		seg->writecache_settings.max_age_set = settings.max_age_set;
+		seg->writecache_settings.max_age = settings.max_age;
+		set_count++;
+	}
+
+	if (!set_count) {
+		/*
+		 * Empty settings can be used to clear all current settings,
+		 * lvchange --cachesettings "" vg/lv
+		 */
+		if (!arg_count(cmd, yes_ARG) &&
+		    yes_no_prompt("Clear all writecache settings? ") == 'n') {
+			log_print("No settings changed.");
+			return 1;
+		}
+		memset(&seg->writecache_settings, 0, sizeof(struct writecache_settings));
+	}
+
+	/* Request caller to commit and reload metadata */
+	*mr |= MR_RELOAD;
+
+	return 1;
+}
+
 static int _lvchange_cache(struct cmd_context *cmd,
 			   struct logical_volume *lv,
 			   uint32_t *mr)
@@ -614,18 +696,40 @@ static int _lvchange_cache(struct cmd_context *cmd,
 	cache_mode_t mode;
 	const char *name;
 	struct dm_config_tree *settings = NULL;
-	struct lv_segment *pool_seg = first_seg(lv);
+	struct lv_segment *seg;
+	struct lv_segment *setting_seg = NULL;
 	int r = 0, is_clean;
 	uint32_t chunk_size = 0; /* FYI: lvchange does NOT support its change */
 
-	if (lv_is_cache(lv))
-		pool_seg = first_seg(pool_seg->pool_lv);
+	if (lv_is_writecache(lv))
+		return _lvchange_writecache(cmd, lv, mr);
+
+	seg = first_seg(lv);
+
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+	else
+		goto_out;
 
 	if (!get_cache_params(cmd, &chunk_size, &format, &mode, &name, &settings))
 		goto_out;
 
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv) && (mode == CACHE_MODE_WRITEBACK)) {
+		log_warn("WARNING: repairing a damaged cachevol is not yet possible.");
+		log_warn("WARNING: cache mode writethrough is suggested for safe operation.");
+		if (!arg_count(cmd, yes_ARG) &&
+			yes_no_prompt("Continue using writeback without repair?") == 'n')
+			goto_out;
+	}
+
 	if ((mode != CACHE_MODE_UNSELECTED) &&
-	    (mode != pool_seg->cache_mode) &&
+	    (mode != setting_seg->cache_mode) &&
 	    lv_is_cache(lv)) {
 		if (!lv_cache_wait_for_clean(lv, &is_clean))
 			return_0;
@@ -636,11 +740,11 @@ static int _lvchange_cache(struct cmd_context *cmd,
 		}
 	}
 
-	if (mode && !cache_set_cache_mode(first_seg(lv), mode))
+	if (mode && !cache_set_cache_mode(seg, mode))
 		goto_out;
 
 	if ((name || settings) &&
-	    !cache_set_policy(first_seg(lv), name, settings))
+	    !cache_set_policy(seg, name, settings))
 		goto_out;
 
 	/* Request caller to commit and reload metadata */
@@ -1073,7 +1177,7 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 	 */
 
 	/* First group of options which allow for one metadata commit/update for the whole group */
-	for (i = 0; i < cmd->command->ro_count; i++) {
+	for (i = 0; i < cmd->command->ro_count + cmd->command->any_ro_count; i++) {
 		opt_enum = cmd->command->required_opt_args[i].opt;
 
 		if (!arg_is_set(cmd, opt_enum))
@@ -1195,7 +1299,7 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 		return_ECMD_FAILED;
 
 	/* Second group of options which need per option metadata commit+reload(s) */
-	for (i = 0; i < cmd->command->ro_count; i++) {
+	for (i = 0; i < cmd->command->ro_count + cmd->command->any_ro_count; i++) {
 		opt_enum = cmd->command->required_opt_args[i].opt;
 
 		if (!arg_is_set(cmd, opt_enum))
@@ -1268,6 +1372,9 @@ static int _lvchange_properties_check(struct cmd_context *cmd,
 		 * is a cache lv and we need to change cache properties.
 		 */
 		if (lv_is_thin_pool_data(lv))
+			return 1;
+
+		if (lv_is_vdo_pool_data(lv))
 			return 1;
 
 		if (lv_is_named_arg)
@@ -1369,6 +1476,20 @@ static int _lvchange_activate_check(struct cmd_context *cmd,
 				     struct processing_handle *handle,
 				     int lv_is_named_arg)
 {
+	int do_activate = is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY));
+
+	if (lv_is_cache_vol(lv) && lv_is_named_arg) {
+		if (!do_activate)
+			return 1;
+
+		if (arg_is_set(cmd, yes_ARG) ||
+		    (yes_no_prompt("Do you want to activate component LV in read-only mode? [y/n]: ") == 'y')) {
+			log_print_unless_silent("Allowing activation of component LV.");
+			cmd->activate_component = 1;
+		}
+		return 1;
+	}
+
 	if (!lv_is_visible(lv) &&
 	    !cmd->activate_component && /* activation of named component LV */
 	    ((first_seg(lv)->status & MERGING) || /* merging already started */
@@ -1377,9 +1498,6 @@ static int _lvchange_activate_check(struct cmd_context *cmd,
 			log_error("Operation not permitted on hidden LV %s.", display_lvname(lv));
 		return 0;
 	}
-
-	if (lv_is_vdo_pool(lv) && !lv_is_named_arg)
-		return 0;	/* Skip VDO pool processing unless explicitely named */
 
 	return 1;
 }
@@ -1421,7 +1539,7 @@ int lvchange_activate_cmd(struct cmd_context *cmd, int argc, char **argv)
 	} else /* Component LVs might be active, support easy deactivation */
 		cmd->process_component_lvs = 1;
 
-	ret = process_each_lv(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE,
+	ret = process_each_lv(cmd, argc, argv, NULL, NULL, READ_FOR_ACTIVATE,
 			      NULL, &_lvchange_activate_check, &_lvchange_activate_single);
 
 	if (ret != ECMD_PROCESSED)
@@ -1540,11 +1658,18 @@ static int _lvchange_syncaction_single(struct cmd_context *cmd,
 				       struct logical_volume *lv,
 				       struct processing_handle *handle)
 {
+	const char *msg = arg_str_value(cmd, syncaction_ARG, NULL);
+
+	if (lv_raid_has_integrity(lv) && !strcmp(msg, "repair")) {
+		log_error("Use syncaction check to detect and correct integrity checksum mismatches.");
+		return_ECMD_FAILED;
+	}
+
 	/* If LV is inactive here, ensure it's not active elsewhere. */
 	if (!lockd_lv(cmd, lv, "ex", 0))
 		return_ECMD_FAILED;
 
-	if (!lv_raid_message(lv, arg_str_value(cmd, syncaction_ARG, NULL)))
+	if (!lv_raid_message(lv, msg))
 		return_ECMD_FAILED;
 
 	return ECMD_PROCESSED;

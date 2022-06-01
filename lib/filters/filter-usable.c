@@ -105,13 +105,16 @@ static int _check_pv_min_size(struct device *dev)
 	return 0;
 }
 
-static int _passes_usable_filter(struct cmd_context *cmd, struct dev_filter *f, struct device *dev)
+static int _passes_usable_filter(struct cmd_context *cmd, struct dev_filter *f, struct device *dev, const char *use_filter_name)
 {
 	struct filter_data *data = f->private;
 	filter_mode_t mode = data->mode;
 	int skip_lvs = data->skip_lvs;
 	struct dev_usable_check_params ucp = {0};
 	int r = 1;
+
+	dev->filtered_flags &= ~DEV_FILTERED_MINSIZE;
+	dev->filtered_flags &= ~DEV_FILTERED_UNUSABLE;
 
 	/* further checks are done on dm devices only */
 	if (dm_is_dm_major(MAJOR(dev->dev))) {
@@ -142,8 +145,10 @@ static int _passes_usable_filter(struct cmd_context *cmd, struct dev_filter *f, 
 			break;
 		}
 
-		if (!(r = device_is_usable(dev, ucp)))
+		if (!(r = device_is_usable(dev, ucp))) {
+			dev->filtered_flags |= DEV_FILTERED_UNUSABLE;
 			log_debug_devs("%s: Skipping unusable device.", dev_name(dev));
+		}
 	}
 
 	if (r) {
@@ -153,6 +158,8 @@ static int _passes_usable_filter(struct cmd_context *cmd, struct dev_filter *f, 
 			/* fall through */
 		case FILTER_MODE_PRE_LVMETAD:
 			r = _check_pv_min_size(dev);
+			if (!r)
+				dev->filtered_flags |= DEV_FILTERED_MINSIZE;
 			break;
 		case FILTER_MODE_POST_LVMETAD:
 			/* nothing to do here */
@@ -185,6 +192,7 @@ struct dev_filter *usable_filter_create(struct cmd_context *cmd, struct dev_type
 	f->passes_filter = _passes_usable_filter;
 	f->destroy = _usable_filter_destroy;
 	f->use_count = 0;
+	f->name = "usable";
 
 	if (!(data = zalloc(sizeof(struct filter_data)))) {
 		log_error("Usable device filter mode allocation failed");

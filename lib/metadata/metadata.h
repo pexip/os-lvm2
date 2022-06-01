@@ -76,12 +76,14 @@ struct cached_vg_fmtdata;
 /* Per-format per-metadata area operations */
 struct metadata_area_ops {
 	struct dm_list list;
-	struct volume_group *(*vg_read) (struct format_instance * fi,
+	struct volume_group *(*vg_read) (struct cmd_context *cmd,
+					 struct format_instance * fi,
 					 const char *vg_name,
 					 struct metadata_area * mda,
 					 struct cached_vg_fmtdata **vg_fmtdata,
 					 unsigned *use_previous_vg);
-	struct volume_group *(*vg_read_precommit) (struct format_instance * fi,
+	struct volume_group *(*vg_read_precommit) (struct cmd_context *cmd,
+					 struct format_instance * fi,
 					 const char *vg_name,
 					 struct metadata_area * mda,
 					 struct cached_vg_fmtdata **vg_fmtdata,
@@ -168,11 +170,30 @@ struct metadata_area_ops {
 #define MDA_CONTENT_REASON(primary_mda) ((primary_mda) ? DEV_IO_MDA_CONTENT : DEV_IO_MDA_EXTRA_CONTENT)
 #define MDA_HEADER_REASON(primary_mda)  ((primary_mda) ? DEV_IO_MDA_HEADER : DEV_IO_MDA_EXTRA_HEADER)
 
+/*
+ * Flags describing errors found while reading.
+ */
+#define BAD_MDA_INTERNAL	0x00000001 /* internal lvm error */
+#define BAD_MDA_READ		0x00000002 /* read io failed */
+#define BAD_MDA_HEADER		0x00000004 /* general problem with header */
+#define BAD_MDA_TEXT		0x00000008 /* general problem with text */
+#define BAD_MDA_CHECKSUM	0x00000010
+#define BAD_MDA_MAGIC		0x00000020
+#define BAD_MDA_VERSION		0x00000040
+#define BAD_MDA_START		0x00000080
+#define BAD_MDA_MISMATCH	0x00000100 /* lvmcache found difference from prev metadata */
+
 struct metadata_area {
 	struct dm_list list;
 	struct metadata_area_ops *ops;
 	void *metadata_locn;
 	uint32_t status;
+	uint64_t header_start; /* mda_header.start */
+	uint64_t scan_text_offset; /* rlocn->offset seen during scan */
+	uint32_t scan_text_checksum; /* rlocn->checksum seen during scan */
+	int mda_num;
+	uint32_t bad_fields; /* BAD_MDA_ flags are set to indicate errors found when reading */
+	uint32_t ignore_bad_fields; /* BAD_MDA_ flags are set to indicate errors to ignore */
 };
 struct metadata_area *mda_copy(struct dm_pool *mem,
 			       struct metadata_area *mda);
@@ -234,7 +255,7 @@ struct name_list {
 
 struct mda_list {
 	struct dm_list list;
-	struct device_area mda;
+	struct metadata_area *mda;
 };
 
 struct peg_list {
@@ -307,7 +328,7 @@ struct format_handler {
 	 * Write a PV structure to disk. Fails if the PV is in a VG ie
 	 * pv->vg_name must be a valid orphan VG name
 	 */
-	int (*pv_write) (const struct format_type * fmt,
+	int (*pv_write) (struct cmd_context *cmd, const struct format_type * fmt,
 			 struct physical_volume * pv);
 
 	/*
@@ -358,9 +379,10 @@ struct format_handler {
 /*
  * Utility functions
  */
-unsigned long set_pe_align(struct physical_volume *pv, unsigned long data_alignment);
-unsigned long set_pe_align_offset(struct physical_volume *pv,
-				  unsigned long data_alignment_offset);
+
+int get_default_pvmetadatasize_sectors(void);
+void set_pe_align(struct physical_volume *pv, uint64_t data_alignment);
+void set_pe_align_offset(struct physical_volume *pv, uint64_t data_alignment_offset);
 
 int pv_write_orphan(struct cmd_context *cmd, struct physical_volume *pv);
 
@@ -456,10 +478,11 @@ void lv_calculate_readahead(const struct logical_volume *lv, uint32_t *read_ahea
 /*
  * For internal metadata caching.
  */
-size_t export_vg_to_buffer(struct volume_group *vg, char **buf);
 struct dm_config_tree *export_vg_to_config_tree(struct volume_group *vg);
-struct volume_group *import_vg_from_config_tree(const struct dm_config_tree *cft,
-						struct format_instance *fid);
+struct volume_group *import_vg_from_config_tree(struct cmd_context *cmd,
+						struct format_instance *fid,
+						const struct dm_config_tree *cft);
+struct volume_group *vg_from_config_tree(struct cmd_context *cmd, const struct dm_config_tree *cft);
 
 /*
  * Mirroring functions
@@ -489,6 +512,7 @@ int pool_below_threshold(const struct lv_segment *pool_seg);
 int pool_check_overprovisioning(const struct logical_volume *lv);
 int create_pool(struct logical_volume *pool_lv, const struct segment_type *segtype,
 		struct alloc_handle *ah, uint32_t stripes, uint32_t stripe_size);
+uint64_t estimate_thin_pool_metadata_size(uint32_t data_extents, uint32_t extent_size, uint32_t chunk_size);
 
 /*
  * Begin skeleton for external LVM library
@@ -499,5 +523,7 @@ struct id pv_vgid(const struct physical_volume *pv);
 
 uint64_t find_min_mda_size(struct dm_list *mdas);
 char *tags_format_and_copy(struct dm_pool *mem, const struct dm_list *tagsl);
+
+void set_pv_devices(struct format_instance *fid, struct volume_group *vg, int *found_md_component);
 
 #endif

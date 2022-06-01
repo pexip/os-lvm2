@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2014 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2019 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -348,39 +348,39 @@ struct time_info {
 static int _is_time_num(time_id_t id)
 {
 	return ((id > TIME_NUM__START) && (id < TIME_NUM__END));
-};
+}
 
 /*
 static int _is_time_frame(time_id_t id)
 {
 	return ((id > TIME_FRAME__START) && (id < TIME_FRAME__END));
-};
+}
 */
 
 static int _is_time_label_date(time_id_t id)
 {
 	return ((id > TIME_LABEL_DATE__START) && (id < TIME_LABEL_DATE__END));
-};
+}
 
 static int _is_time_label_time(time_id_t id)
 {
 	return ((id > TIME_LABEL_TIME__START) && (id < TIME_LABEL_TIME__END));
-};
+}
 
 static int _is_time_unit(time_id_t id)
 {
 	return ((id > TIME_UNIT__START) && (id < TIME_UNIT__END));
-};
+}
 
 static int _is_time_weekday(time_id_t id)
 {
 	return ((id > TIME_WEEKDAY__START) && (id < TIME_WEEKDAY__END));
-};
+}
 
 static int _is_time_month(time_id_t id)
 {
 	return ((id > TIME_MONTH__START) && (id < TIME_MONTH__END));
-};
+}
 
 static const char *_skip_space(const char *s)
 {
@@ -1424,14 +1424,32 @@ static int _cache_settings_disp(struct dm_report *rh, struct dm_pool *mem,
 				const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
+	const struct lv_segment *setting_seg = NULL;
 	const struct dm_config_node *settings;
 	struct dm_list *result;
 	struct _str_list_append_baton baton;
 	struct dm_list dummy_list; /* dummy list to display "nothing" */
 
-	if (seg_is_cache(seg))
-		seg = first_seg(seg->pool_lv);
-	else if (!seg_is_cache_pool(seg)) {
+	if (seg_is_writecache(seg)) {
+		if (!(result = str_list_create(mem)))
+			return_0;
+
+		if (!writecache_settings_to_str_list((struct writecache_settings *)&seg->writecache_settings, result, mem))
+			return_0;
+
+		return _field_set_string_list(rh, field, result, private, 0, NULL);
+	}
+
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+
+	if (!setting_seg || !setting_seg->policy_settings) {
 		dm_list_init(&dummy_list);
 		return _field_set_string_list(rh, field, &dummy_list, private, 0, NULL);
 		/* TODO: once we have support for STR_LIST reserved values, replace with:
@@ -1439,15 +1457,7 @@ static int _cache_settings_disp(struct dm_report *rh, struct dm_pool *mem,
 		 */
 	}
 
-	if (seg->policy_settings)
-		settings = seg->policy_settings->child;
-	else {
-		dm_list_init(&dummy_list);
-		return _field_set_string_list(rh, field, &dummy_list, private, 0, NULL);
-		/* TODO: once we have support for STR_LIST reserved values, replace with:
-		 * return _field_set_value(field,  GET_FIRST_RESERVED_NAME(cache_settings_undef), GET_FIELD_RESERVED_VALUE(cache_settings_undef));
-		 */
-	}
+	settings = setting_seg->policy_settings->child;
 
 	if (!(result = str_list_create(mem)))
 		return_0;
@@ -1566,19 +1576,22 @@ static int _cache_policy_disp(struct dm_report *rh, struct dm_pool *mem,
 			      const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
+	const struct lv_segment *setting_seg = NULL;
 
-	if (seg_is_cache(seg))
-		seg = first_seg(seg->pool_lv);
-	else if (!seg_is_cache_pool(seg) || !seg->policy_name)
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
+
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+
+	if (!setting_seg || !setting_seg->policy_name)
 		return _field_set_value(field, GET_FIRST_RESERVED_NAME(cache_policy_undef),
 					GET_FIELD_RESERVED_VALUE(cache_policy_undef));
 
-	if (!seg->policy_name) {
-		log_error(INTERNAL_ERROR "Unexpected NULL policy name.");
-		return 0;
-	}
-
-	return _field_string(rh, field, seg->policy_name);
+	return _field_string(rh, field, setting_seg->policy_name);
 }
 
 static int _modules_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -2404,6 +2417,74 @@ static int _lvkreadahead_disp(struct dm_report *rh, struct dm_pool *mem,
 	return _size32_disp(rh, mem, field, &lvdm->info.read_ahead, private);
 }
 
+static int _vdo_operating_mode_disp(struct dm_report *rh, struct dm_pool *mem,
+				    struct dm_report_field *field,
+				    const void *data, void *private)
+{
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
+
+	if ((lv_is_vdo_pool(lvdm->lv) || lv_is_vdo(lvdm->lv)) &&
+	    (lvdm->seg_status.type == SEG_STATUS_VDO_POOL))
+		return _field_string(rh, field, get_vdo_operating_mode_name(lvdm->seg_status.vdo_pool.vdo->operating_mode));
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_compression_state_disp(struct dm_report *rh, struct dm_pool *mem,
+				       struct dm_report_field *field,
+				       const void *data, void *private)
+{
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
+
+	if ((lv_is_vdo_pool(lvdm->lv) || lv_is_vdo(lvdm->lv)) &&
+	    (lvdm->seg_status.type == SEG_STATUS_VDO_POOL))
+		return _field_string(rh, field, get_vdo_compression_state_name(lvdm->seg_status.vdo_pool.vdo->compression_state));
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_index_state_disp(struct dm_report *rh, struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data, void *private)
+{
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
+
+	if ((lv_is_vdo_pool(lvdm->lv) || lv_is_vdo(lvdm->lv)) &&
+	    (lvdm->seg_status.type == SEG_STATUS_VDO_POOL))
+		return _field_string(rh, field, get_vdo_index_state_name(lvdm->seg_status.vdo_pool.vdo->index_state));
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_used_size_disp(struct dm_report *rh, struct dm_pool *mem,
+			       struct dm_report_field *field,
+			       const void *data, void *private)
+{
+	uint64_t size;
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
+
+	if ((lv_is_vdo_pool(lvdm->lv) || lv_is_vdo(lvdm->lv)) &&
+	    (lvdm->seg_status.type == SEG_STATUS_VDO_POOL)) {
+		size = lvdm->seg_status.vdo_pool.vdo->used_blocks * DM_VDO_BLOCK_SIZE;
+		return _size64_disp(rh, mem, field, &size, private);
+	}
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_saving_percent_disp(struct dm_report *rh, struct dm_pool *mem,
+				    struct dm_report_field *field,
+				    const void *data, void *private)
+{
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data;
+
+	if ((lv_is_vdo_pool(lvdm->lv) || lv_is_vdo(lvdm->lv)) &&
+	    (lvdm->seg_status.type == SEG_STATUS_VDO_POOL))
+		return dm_report_field_percent(rh, field, &lvdm->seg_status.vdo_pool.saving);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
 static int _vgsize_disp(struct dm_report *rh, struct dm_pool *mem,
 			struct dm_report_field *field,
 			const void *data, void *private)
@@ -2747,21 +2828,30 @@ static int _cachemetadataformat_disp(struct dm_report *rh, struct dm_pool *mem,
 				     const void *data, void *private)
 {
 	const struct lv_segment *seg = (const struct lv_segment *) data;
+	const struct lv_segment *setting_seg = NULL;
 	const uint64_t *fmt;
 
-	if (seg_is_cache(seg))
-		seg = first_seg(seg->pool_lv);
+	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv))
+		setting_seg = seg;
 
-	if (seg_is_cache_pool(seg)) {
-		switch (seg->cache_metadata_format) {
-		case CACHE_METADATA_FORMAT_1:
-		case CACHE_METADATA_FORMAT_2:
-			fmt = (seg->cache_metadata_format == CACHE_METADATA_FORMAT_2) ? &_two64 : &_one64;
-			return dm_report_field_uint64(rh, field, fmt);
-		default: /* unselected/undefined for all other cases */;
-		}
+	else if (seg_is_cache_pool(seg))
+		setting_seg = seg;
+
+	else if (seg_is_cache(seg))
+		setting_seg = first_seg(seg->pool_lv);
+
+	else
+		goto undef;
+
+	switch (setting_seg->cache_metadata_format) {
+	case CACHE_METADATA_FORMAT_1:
+	case CACHE_METADATA_FORMAT_2:
+		fmt = (setting_seg->cache_metadata_format == CACHE_METADATA_FORMAT_2) ? &_two64 : &_one64;
+		return dm_report_field_uint64(rh, field, fmt);
+	default: /* unselected/undefined for all other cases */;
 	}
 
+ undef:
 	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
@@ -3093,7 +3183,7 @@ static int _copypercent_disp(struct dm_report *rh,
 	dm_percent_t percent = DM_PERCENT_INVALID;
 
 	/* TODO: just cache passes through lvseg_percent... */
-	if (lv_is_cache(lv) || lv_is_used_cache_pool(lv) ||
+	if (lv_is_integrity(lv) || lv_is_cache(lv) || lv_is_used_cache_pool(lv) ||
 	    (!lv_is_merging_origin(lv) && lv_is_raid(lv) && !seg_is_any_raid0(first_seg(lv))))
 		percent = lvseg_percent_with_info_and_seg_status(lvdm, PERCENT_GET_DIRTY);
 	else if (lv_is_raid(lv) && !seg_is_any_raid0(first_seg(lv)))
@@ -3181,6 +3271,80 @@ static int _raidmaxrecoveryrate_disp(struct dm_report *rh __attribute__((unused)
 	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
+static int _raidintegritymode_disp(struct dm_report *rh __attribute__((unused)),
+				   struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data,
+				   void *private __attribute__((unused)))
+{
+	struct logical_volume *lv = (struct logical_volume *) data;
+	struct integrity_settings *settings;
+	const char *mode = NULL;
+	char *repstr;
+
+	if (lv_raid_has_integrity(lv))
+		lv_get_raid_integrity_settings(lv, &settings);
+	else if (lv_is_integrity(lv))
+		settings = &first_seg(lv)->integrity_settings;
+	else
+		goto out;
+
+	if (settings->mode[0]) {
+		if (settings->mode[0] == 'B')
+			mode = "bitmap";
+		else if (settings->mode[0] == 'J')
+			mode = "journal";
+
+		if (mode) {
+			if (!(repstr = dm_pool_strdup(mem, mode))) {
+				log_error("Failed to allocate buffer for mode.");
+				return 0;
+			}
+			return _field_set_value(field, repstr, NULL);
+		}
+	}
+out:
+	return _field_set_value(field, "", NULL);
+}
+
+static int _raidintegrityblocksize_disp(struct dm_report *rh __attribute__((unused)),
+				   struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data,
+				   void *private __attribute__((unused)))
+{
+	struct logical_volume *lv = (struct logical_volume *) data;
+	struct integrity_settings *settings;
+
+	if (lv_raid_has_integrity(lv))
+		lv_get_raid_integrity_settings(lv, &settings);
+	else if (lv_is_integrity(lv))
+		settings = &first_seg(lv)->integrity_settings;
+	else
+		return dm_report_field_int32(rh, field, &GET_TYPE_RESERVED_VALUE(num_undef_32));
+
+	return dm_report_field_uint32(rh, field, &settings->block_size);
+}
+
+static int _integritymismatches_disp(struct dm_report *rh __attribute__((unused)),
+				   struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data,
+				   void *private __attribute__((unused)))
+{
+	struct logical_volume *lv = (struct logical_volume *) data;
+	uint64_t mismatches = 0;
+
+	if (lv_is_integrity(lv) && lv_integrity_mismatches(lv->vg->cmd, lv, &mismatches))
+		return dm_report_field_uint64(rh, field, &mismatches);
+
+	if (lv_is_raid(lv) && lv_raid_has_integrity(lv) &&
+	    lv_raid_integrity_total_mismatches(lv->vg->cmd, lv, &mismatches))
+		return dm_report_field_uint64(rh, field, &mismatches);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
 static int _datapercent_disp(struct dm_report *rh, struct dm_pool *mem,
 			     struct dm_report_field *field,
 			     const void *data, void *private)
@@ -3218,6 +3382,11 @@ static int _lvmetadatasize_disp(struct dm_report *rh, struct dm_pool *mem,
 {
 	const struct logical_volume *lv = (const struct logical_volume *) data;
 	uint64_t size;
+
+	if (lv_is_cache(lv) && lv_is_cache_vol(first_seg(lv)->pool_lv)) {
+		size = lv_metadata_size(lv);
+		return _size64_disp(rh, mem, field, &size, private);
+	}
 
 	if (lv_is_thin_pool(lv) || lv_is_cache_pool(lv)) {
 		size = lv_metadata_size(lv);
@@ -3337,7 +3506,7 @@ static int _pvduplicate_disp(struct dm_report *rh, struct dm_pool *mem,
 			    const void *data, void *private)
 {
 	const struct physical_volume *pv = (const struct physical_volume *) data;
-	int duplicate = lvmcache_dev_is_unchosen_duplicate(pv->dev);
+	int duplicate = lvmcache_dev_is_unused_duplicate(pv->dev);
 
 	return _binary_disp(rh, mem, field, duplicate, GET_FIRST_RESERVED_NAME(pv_duplicate_y), private);
 }
@@ -3717,6 +3886,12 @@ static int _lvhealthstatus_disp(struct dm_report *rh, struct dm_pool *mem,
 			health = "failed";
 		else if (lvdm->seg_status.cache->read_only)
 			health = "metadata_read_only";
+	} else if (lv_is_writecache(lv) && (lvdm->seg_status.type != SEG_STATUS_NONE)) {
+		if (lvdm->seg_status.type != SEG_STATUS_WRITECACHE)
+			return _field_set_value(field, GET_FIRST_RESERVED_NAME(health_undef),
+						GET_FIELD_RESERVED_VALUE(health_undef));
+		if (lvdm->seg_status.writecache->error)
+			health = "error";
 	} else if (lv_is_thin_pool(lv) && (lvdm->seg_status.type != SEG_STATUS_NONE)) {
 		if (lvdm->seg_status.type != SEG_STATUS_THIN_POOL)
 			return _field_set_value(field, GET_FIRST_RESERVED_NAME(health_undef),
@@ -3789,6 +3964,201 @@ GENERATE_CACHE_STATUS_DISP_FN(read_hits)
 GENERATE_CACHE_STATUS_DISP_FN(read_misses)
 GENERATE_CACHE_STATUS_DISP_FN(write_hits)
 GENERATE_CACHE_STATUS_DISP_FN(write_misses)
+
+/*
+ * Macro to generate '_writecache_<cache_status_field_name>_disp' reporting function.
+ * The 'writecache_status_field_name' is field name from struct dm_writecache_status.
+ */
+#define GENERATE_WRITECACHE_STATUS_DISP_FN(writecache_status_field_name) \
+static int _writecache_ ## writecache_status_field_name ## _disp (struct dm_report *rh, \
+							struct dm_pool *mem, \
+							struct dm_report_field *field, \
+							const void *data, \
+							void *private) \
+{ \
+	const struct lv_with_info_and_seg_status *lvdm = (const struct lv_with_info_and_seg_status *) data; \
+	if (lvdm->seg_status.type != SEG_STATUS_WRITECACHE) \
+		return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+	return dm_report_field_uint64(rh, field, &lvdm->seg_status.writecache->writecache_status_field_name); \
+}
+
+GENERATE_WRITECACHE_STATUS_DISP_FN(total_blocks)
+GENERATE_WRITECACHE_STATUS_DISP_FN(free_blocks)
+GENERATE_WRITECACHE_STATUS_DISP_FN(writeback_blocks)
+GENERATE_WRITECACHE_STATUS_DISP_FN(error)
+
+/*
+ * Macro to generate '_vdo_<vdo_field_name>_disp' reporting function.
+ * The 'vdo_field_name' is field name from struct lv_vdo_status.
+ */
+#define GENERATE_VDO_FIELD_DISP_FN(vdo_field_name) \
+static int _vdo_ ## vdo_field_name ## _disp (struct dm_report *rh, struct dm_pool *mem, \
+					     struct dm_report_field *field, \
+					     const void *data, void *private) \
+{ \
+	const struct lv_segment *seg = (const struct lv_segment *) data; \
+\
+	if (seg_is_vdo(seg)) \
+		seg = first_seg(seg_lv(seg, 0)); \
+\
+	if (!seg_is_vdo_pool(seg)) \
+		return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+\
+	return dm_report_field_uint32(rh, field, &seg->vdo_params.vdo_field_name); \
+}
+
+GENERATE_VDO_FIELD_DISP_FN(block_map_era_length)
+GENERATE_VDO_FIELD_DISP_FN(ack_threads)
+GENERATE_VDO_FIELD_DISP_FN(bio_threads)
+GENERATE_VDO_FIELD_DISP_FN(bio_rotation)
+GENERATE_VDO_FIELD_DISP_FN(cpu_threads)
+GENERATE_VDO_FIELD_DISP_FN(hash_zone_threads)
+GENERATE_VDO_FIELD_DISP_FN(logical_threads)
+GENERATE_VDO_FIELD_DISP_FN(physical_threads)
+GENERATE_VDO_FIELD_DISP_FN(max_discard)
+
+/*
+ * Macro to generate '_vdo_<vdo_field_name>_disp' reporting function.
+ * The 'vdo_field_name' is field name from struct lv_vdo_status.
+ */
+#define GENERATE_VDO_FIELDSZMB_DISP_FN(vdo_field_name) \
+static int _vdo_ ## vdo_field_name ## _disp (struct dm_report *rh, struct dm_pool *mem, \
+					     struct dm_report_field *field, \
+					     const void *data, void *private) \
+{ \
+	uint64_t size; \
+	const struct lv_segment *seg = (const struct lv_segment *) data; \
+\
+	if (seg_is_vdo(seg)) \
+		seg = first_seg(seg_lv(seg, 0)); \
+\
+	if (!seg_is_vdo_pool(seg)) \
+		return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+\
+	size = seg->vdo_params.vdo_field_name ## _mb * (UINT64_C(1024) * 1024 >> SECTOR_SHIFT); \
+\
+	return _size64_disp(rh, mem, field, &size, private);\
+}
+
+GENERATE_VDO_FIELDSZMB_DISP_FN(block_map_cache_size)
+GENERATE_VDO_FIELDSZMB_DISP_FN(index_memory_size)
+GENERATE_VDO_FIELDSZMB_DISP_FN(slab_size)
+
+static int _vdo_compression_disp(struct dm_report *rh, struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data; \
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _binary_disp(rh, mem, field, seg->vdo_params.use_compression,
+				    GET_FIRST_RESERVED_NAME(vdo_compression_y), private);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+}
+
+static int _vdo_deduplication_disp(struct dm_report *rh, struct dm_pool *mem,
+				   struct dm_report_field *field,
+				   const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data; \
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _binary_disp(rh, mem, field, seg->vdo_params.use_deduplication,
+				    GET_FIRST_RESERVED_NAME(vdo_deduplication_y), private);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+}
+
+static int _vdo_use_metadata_hints_disp(struct dm_report *rh, struct dm_pool *mem,
+					struct dm_report_field *field,
+					const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _binary_disp(rh, mem, field, seg->vdo_params.use_metadata_hints,
+				    GET_FIRST_RESERVED_NAME(vdo_use_metadata_hints_y),
+				    private);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_use_sparse_index_disp(struct dm_report *rh, struct dm_pool *mem,
+				      struct dm_report_field *field,
+				      const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _binary_disp(rh, mem, field, seg->vdo_params.use_sparse_index,
+				    GET_FIRST_RESERVED_NAME(vdo_use_sparse_index_y),
+				    private);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_minimum_io_size_disp(struct dm_report *rh, struct dm_pool *mem,
+				     struct dm_report_field *field,
+				     const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _size32_disp(rh, mem, field, &seg->vdo_params.minimum_io_size, private);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_header_size_disp(struct dm_report *rh,
+				 struct dm_pool *mem,
+				 struct dm_report_field *field,
+				 const void *data,
+				 void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _size32_disp(rh, mem, field, &seg->vdo_pool_header_size, private);
+
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
+}
+
+static int _vdo_write_policy_disp(struct dm_report *rh,
+				     struct dm_pool *mem,
+				     struct dm_report_field *field,
+				     const void *data,
+				     void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (seg_is_vdo_pool(seg))
+		return _field_string(rh, field, get_vdo_write_policy_name(seg->vdo_params.write_policy));
+
+	return  _field_set_value(field, GET_FIRST_RESERVED_NAME(vdo_write_policy_undef),
+				 GET_FIELD_RESERVED_VALUE(vdo_write_policy_undef));
+}
 
 /* Report object types */
 

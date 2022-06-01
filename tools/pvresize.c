@@ -36,20 +36,14 @@ static int _pvresize_single(struct cmd_context *cmd,
 	}
 	params->total++;
 
-	if (vg && vg_is_exported(vg)) {
-		log_error("Volume group %s is exported", vg->name);
-		return ECMD_FAILED;
-	}
-
 	/*
 	 * Needed to change a property on an orphan PV.
 	 * i.e. the global lock is only needed for orphans.
-	 * Convert sh to ex.
+	 * Convert sh to ex.  (sh was taken by process_each)
 	 */
 	if (is_orphan(pv)) {
-		if (!lockd_gl(cmd, "ex", 0))
+		if (!lock_global_convert(cmd, "ex"))
 			return_ECMD_FAILED;
-		cmd->lockd_gl_disable = 1;
 	}
 
 	if (!pv_resize_single(cmd, vg, pv, params->new_size, arg_is_set(cmd, yes_ARG)))
@@ -94,7 +88,7 @@ int pvresize(struct cmd_context *cmd, int argc, char **argv)
 
 	handle->custom_handle = &params;
 
-	ret = process_each_pv(cmd, argc, argv, NULL, 0, READ_FOR_UPDATE | READ_ALLOW_EXPORTED, handle, _pvresize_single);
+	ret = process_each_pv(cmd, argc, argv, NULL, 0, READ_FOR_UPDATE, handle, _pvresize_single);
 
 	log_print_unless_silent("%d physical volume(s) resized or updated / %d physical volume(s) "
 				"not resized", params.done, params.total - params.done);

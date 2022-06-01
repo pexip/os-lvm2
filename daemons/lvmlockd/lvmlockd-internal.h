@@ -11,6 +11,8 @@
 #ifndef _LVM_LVMLOCKD_INTERNAL_H
 #define _LVM_LVMLOCKD_INTERNAL_H
 
+#include "base/memory/container_of.h"
+
 #define MAX_NAME 64
 #define MAX_ARGS 64
 
@@ -53,6 +55,8 @@ enum {
 	LD_OP_KILL_VG,
 	LD_OP_DROP_VG,
 	LD_OP_BUSY,
+	LD_OP_QUERY_LOCK,
+	LD_OP_REFRESH_LV,
 };
 
 /* resource types */
@@ -105,6 +109,7 @@ struct client {
 #define LD_AF_WARN_GL_REMOVED	   0x00020000
 #define LD_AF_LV_LOCK              0x00040000
 #define LD_AF_LV_UNLOCK            0x00080000
+#define LD_AF_SH_EXISTS            0x00100000
 
 /*
  * Number of times to repeat a lock request after
@@ -127,6 +132,7 @@ struct action {
 	int max_retries;
 	int result;
 	int lm_rv;			/* return value from lm_ function */
+	char *path;
 	char vg_uuid[64];
 	char vg_name[MAX_NAME+1];
 	char lv_name[MAX_NAME+1];
@@ -141,6 +147,7 @@ struct resource {
 	char name[MAX_NAME+1];		/* vg name or lv name */
 	int8_t type;			/* resource type LD_RT_ */
 	int8_t mode;
+	int8_t adopt_mode;
 	unsigned int sh_count;		/* number of sh locks on locks list */
 	uint32_t version;
 	uint32_t last_client_id;	/* last client_id to lock or unlock resource */
@@ -151,7 +158,7 @@ struct resource {
 	struct list_head locks;
 	struct list_head actions;
 	char lv_args[MAX_ARGS+1];
-	char lm_data[0];		/* lock manager specific data */
+	char lm_data[];			/* lock manager specific data */
 };
 
 #define LD_LF_PERSISTENT 0x00000001
@@ -174,7 +181,9 @@ struct lockspace {
 	int8_t lm_type;			/* lock manager: LM_DLM, LM_SANLOCK */
 	void *lm_data;
 	uint64_t host_id;
-	uint64_t free_lock_offset;	/* start search for free lock here */
+	uint64_t free_lock_offset;	/* for sanlock, start search for free lock here */
+	int free_lock_sector_size;	/* for sanlock */
+	int free_lock_align_size;	/* for sanlock */
 
 	uint32_t start_client_id;	/* client_id that started the lockspace */
 	pthread_t thread;		/* makes synchronous lock requests */
@@ -209,10 +218,6 @@ struct val_blk {
 
 /* lm_unlock flags */
 #define LMUF_FREE_VG 0x00000001
-
-#define container_of(ptr, type, member) ({                      \
-	const typeof( ((type *)0)->member ) *__mptr = (ptr);    \
-	(type *)( (char *)__mptr - offsetof(type,member) );})
 
 static inline void INIT_LIST_HEAD(struct list_head *list)
 {
@@ -387,6 +392,8 @@ int lm_get_lockspaces_dlm(struct list_head *ls_rejoin);
 int lm_data_size_dlm(void);
 int lm_is_running_dlm(void);
 int lm_hosts_dlm(struct lockspace *ls, int notify);
+int lm_refresh_lv_start_dlm(struct action *act);
+int lm_refresh_lv_check_dlm(struct action *act);
 
 static inline int lm_support_dlm(void)
 {
@@ -463,12 +470,22 @@ static inline int lm_hosts_dlm(struct lockspace *ls, int notify)
 	return 0;
 }
 
+static inline int lm_refresh_lv_start_dlm(struct action *act)
+{
+	return 0;
+}
+
+static inline int lm_refresh_lv_check_dlm(struct action *act)
+{
+	return 0;
+}
+
 #endif /* dlm support */
 
 #ifdef LOCKDSANLOCK_SUPPORT
 
 int lm_init_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
-int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name, char *vg_args, char *lv_args, uint64_t free_offset);
+int lm_init_lv_sanlock(char *ls_name, char *vg_name, char *lv_name, char *vg_args, char *lv_args, int sector_size, int align_size, uint64_t free_offset);
 int lm_free_lv_sanlock(struct lockspace *ls, struct resource *r);
 int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
 int lm_prepare_lockspace_sanlock(struct lockspace *ls);
@@ -488,7 +505,7 @@ int lm_gl_is_enabled(struct lockspace *ls);
 int lm_get_lockspaces_sanlock(struct list_head *ls_rejoin);
 int lm_data_size_sanlock(void);
 int lm_is_running_sanlock(void);
-int lm_find_free_lock_sanlock(struct lockspace *ls, uint64_t *free_offset);
+int lm_find_free_lock_sanlock(struct lockspace *ls, uint64_t *free_offset, int *sector_size, int *align_size);
 
 static inline int lm_support_sanlock(void)
 {

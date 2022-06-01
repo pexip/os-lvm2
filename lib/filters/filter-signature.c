@@ -16,16 +16,22 @@
 #include "base/memory/zalloc.h"
 #include "lib/misc/lib.h"
 #include "lib/filters/filter.h"
+#include "lib/commands/toolcontext.h"
 
 #ifdef __linux__
 
 #define BUFSIZE 4096
 
 static int _ignore_signature(struct cmd_context *cmd, struct dev_filter *f __attribute__((unused)),
-		      struct device *dev)
+		      struct device *dev, const char *use_filter_name)
 {
 	char buf[BUFSIZE];
 	int ret = 0;
+
+	if (cmd->filter_nodata_only)
+		return 1;
+
+	dev->filtered_flags &= ~DEV_FILTERED_SIGNATURE;
 
 	if (!scan_bcache) {
 		/* let pass, call again after scan */
@@ -40,18 +46,21 @@ static int _ignore_signature(struct cmd_context *cmd, struct dev_filter *f __att
 		log_debug_devs("%s: Skipping: error in signature detection",
 			       dev_name(dev));
 		ret = 0;
+		dev->filtered_flags |= DEV_FILTERED_SIGNATURE;
 		goto out;
 	}
 
 	if (dev_is_lvm1(dev, buf, BUFSIZE)) {
 		log_debug_devs("%s: Skipping lvm1 device", dev_name(dev));
 		ret = 0;
+		dev->filtered_flags |= DEV_FILTERED_SIGNATURE;
 		goto out;
 	}
 
 	if (dev_is_pool(dev, buf, BUFSIZE)) {
 		log_debug_devs("%s: Skipping gfs-pool device", dev_name(dev));
 		ret = 0;
+		dev->filtered_flags |= DEV_FILTERED_SIGNATURE;
 		goto out;
 	}
 	ret = 1;
@@ -81,6 +90,7 @@ struct dev_filter *signature_filter_create(struct dev_types *dt)
 	f->destroy = _destroy;
 	f->use_count = 0;
 	f->private = dt;
+	f->name = "signature";
 
 	log_debug_devs("signature filter initialised.");
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2007 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2007,2018 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -16,6 +16,8 @@ SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
+
+aux lvmconf "global/support_mirrored_mirror_log=1"
 
 COMM() {
 	LAST_TEST="$*"
@@ -119,6 +121,58 @@ COMM "vgsplit correctly splits mirror (log+leg on same dev) into $i VG ($j args)
 		fi
 		lvremove -f $vg2/$lv1
 		vgremove -f $vg1 $vg2
+
+# Can't use mirrored log without cmirrord
+# TODO: Should work for inactive device, needs some fixes....
+if test ! -e LOCAL_CLVMD ; then
+COMM "vgsplit correctly splits mirror LV with mirrored log into $i VG ($j args)"
+		create_vg_ $vg1 "$dev1" "$dev2" "$dev3" "$dev4"
+		test $i = existing && create_vg_ $vg2 "$dev5"
+
+		lvcreate -an -Zn -l 64 --mirrorlog mirrored --type mirror -m1 -n $lv1 $vg1 \
+		    "$dev1" "$dev2" "$dev3" "$dev4"
+
+		if [ $j = PV ]; then
+		  # FIXME: Not an exhaustive check of possible bad combinations
+		  not vgsplit $vg1 $vg2 "$dev1" "$dev2"
+		  not vgsplit $vg1 $vg2 "$dev3" "$dev4"
+		  not vgsplit $vg1 $vg2 "$dev1" "$dev3"
+		  not vgsplit $vg1 $vg2 "$dev2" "$dev4"
+		  vgsplit $vg1 $vg2 "$dev1" "$dev2" "$dev3" "$dev4"
+		else
+		  vgsplit -n $lv1 $vg1 $vg2
+		fi
+		if [ $i = existing ]; then
+		  check pvlv_counts $vg2 5 1 0
+		else
+		  check pvlv_counts $vg2 4 1 0
+		fi
+		lvremove -f $vg2/$lv1
+		vgremove -f $vg2
+
+# RHBZ 875903
+COMM "vgsplit correctly splits mirror LV with mirrored log on same devs into $i VG ($j args)"
+		create_vg_ $vg1 "$dev1" "$dev2" "$dev3" "$dev4"
+		test $i = existing && create_vg_ $vg2 "$dev5"
+
+		lvcreate -an -Zn -l 64 --mirrorlog mirrored --type mirror -m1 -n $lv1 $vg1 \
+		    "$dev1" "$dev2"
+
+		if [ $j = PV ]; then
+		  not vgsplit $vg1 $vg2 "$dev1"
+		  not vgsplit $vg1 $vg2 "$dev2"
+		  vgsplit $vg1 $vg2 "$dev1" "$dev2"
+		else
+		  vgsplit -n $lv1 $vg1 $vg2
+		fi
+		if [ $i = existing ]; then
+		  check pvlv_counts $vg2 3 1 0
+		else
+		  check pvlv_counts $vg2 2 1 0
+		fi
+		lvremove -f $vg2/$lv1
+		vgremove -f $vg1 $vg2
+fi
 
 COMM "vgsplit correctly splits origin and snapshot LV into $i VG ($j args)"
 		create_vg_ $vg1 "$dev1" "$dev2"

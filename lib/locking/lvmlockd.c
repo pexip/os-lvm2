@@ -17,6 +17,8 @@
 #include "lib/cache/lvmcache.h"
 #include "daemons/lvmlockd/lvmlockd-client.h"
 
+#include <mntent.h>
+
 static daemon_handle _lvmlockd;
 static const char *_lvmlockd_socket = NULL;
 static int _use_lvmlockd = 0;         /* is 1 if command is configured to use lvmlockd */
@@ -118,6 +120,9 @@ static void _flags_str_to_lockd_flags(const char *flags_str, uint32_t *lockd_fla
 
 	if (strstr(flags_str, "WARN_GL_REMOVED"))
 		*lockd_flags |= LD_RF_WARN_GL_REMOVED;
+
+	if (strstr(flags_str, "SH_EXISTS"))
+		*lockd_flags |= LD_RF_SH_EXISTS;
 }
 
 /*
@@ -369,6 +374,7 @@ static int _remove_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg)
 		return 0;
 	}
 
+	log_debug("sanlock lvmlock LV removed");
 	return 1;
 }
 
@@ -629,10 +635,9 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 	const char *vg_lock_args = NULL;
 	const char *opts = NULL;
 	struct pv_list *pvl;
-	struct device *sector_dev;
 	uint32_t sector_size = 0;
-	unsigned int phys_block_size, block_size;
-	int num_mb;
+	unsigned int physical_block_size, logical_block_size;
+	int num_mb = 0;
 	int result;
 	int ret;
 
@@ -648,32 +653,22 @@ static int _init_vg_sanlock(struct cmd_context *cmd, struct volume_group *vg, in
 	 */
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		if (!dev_get_block_size(pvl->pv->dev, &phys_block_size, &block_size))
+		if (!dev_get_direct_block_sizes(pvl->pv->dev, &physical_block_size, &logical_block_size))
 			continue;
-
-		if (!sector_size) {
-			sector_size = phys_block_size;
-			sector_dev = pvl->pv->dev;
-		} else if (sector_size != phys_block_size) {
-			log_warn("Inconsistent sector sizes for %s and %s.",
-				 dev_name(pvl->pv->dev), dev_name(sector_dev));
-			return 1;
-		}
+		if ((physical_block_size == 4096) || (logical_block_size == 4096))
+			sector_size = 4096;
 	}
-
-	if ((sector_size != 512) && (sector_size != 4096)) {
-		log_error("Unknown sector size.");
-		return 1;
-	}
+	if (!sector_size)
+		sector_size = 512;
 
 	log_debug("Using sector size %u for sanlock LV", sector_size);
 
 	/* Base starting size of sanlock LV is 256MB/1GB for 512/4K sectors */
-	if (sector_size == 512)
-		num_mb = 256;
-	else if (sector_size == 4096)
-		num_mb = 1024;
-
+	switch (sector_size) {
+	case 512: num_mb = 256; break;
+	case 4096: num_mb = 1024; break;
+	default: log_error("Unknown sector size %u.", sector_size); return 0;
+	}
 
 	/*
 	 * Creating the sanlock LV writes the VG containing the new lvmlock
@@ -1028,6 +1023,13 @@ int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg,
 
 	switch (lock_type_num) {
 	case LOCK_TYPE_NONE:
+		/*
+		 * If a sanlock VG was forcibly changed to none,
+		 * the sanlock_lv may have been left behind.
+		 */
+		if (vg->sanlock_lv)
+			_remove_sanlock_lv(cmd, vg);
+		return 1;
 	case LOCK_TYPE_CLVM:
 		return 1;
 	case LOCK_TYPE_DLM:
@@ -1077,7 +1079,7 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
  * that the VG lockspace being started is new.
  */
 
-int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init)
+int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init, int *exists)
 {
 	char uuid[64] __attribute__((aligned(8)));
 	daemon_reply reply;
@@ -1150,6 +1152,12 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_i
 		break;
 	case -EEXIST:
 		log_debug("VG %s start error: already started", vg->name);
+		ret = 1;
+		break;
+	case -ESTARTING:
+		log_debug("VG %s start error: already starting", vg->name);
+		if (exists)
+			*exists = 1;
 		ret = 1;
 		break;
 	case -EARGS:
@@ -1309,7 +1317,7 @@ int lockd_start_wait(struct cmd_context *cmd)
  *    Future lockd_gl/lockd_gl_create calls will acquire the existing gl.
  */
 
-int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type)
+int lockd_global_create(struct cmd_context *cmd, const char *def_mode, const char *vg_lock_type)
 {
 	const char *mode = NULL;
 	uint32_t lockd_flags;
@@ -1454,6 +1462,12 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
 	/* --shared with vgcreate does not mean include_shared_vgs */
 	cmd->include_shared_vgs = 0;
 
+	/*
+	 * This is done to prevent converting an explicitly acquired
+	 * ex lock to sh in process_each.
+	 */
+	cmd->lockd_global_ex = 1;
+
 	return 1;
 }
 
@@ -1536,7 +1550,7 @@ int lockd_gl_create(struct cmd_context *cmd, const char *def_mode, const char *v
  * are unprotected.
  */
 
-int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
+int lockd_global(struct cmd_context *cmd, const char *def_mode)
 {
 	const char *mode = NULL;
 	const char *opts = NULL;
@@ -1566,9 +1580,15 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	if (!mode)
 		mode = def_mode;
 	if (!mode) {
-		log_error("Unknown lock-gl mode");
+		log_error("Unknown lvmlockd global lock mode");
 		return 0;
 	}
+
+	if (!strcmp(mode, "sh") && cmd->lockd_global_ex)
+		return 1;
+
+	if (!strcmp(mode, "un") && cmd->lockd_global_ex)
+		cmd->lockd_global_ex = 0;
 
  req:
 	log_debug("lockd global mode %s", mode);
@@ -1713,6 +1733,14 @@ int lockd_gl(struct cmd_context *cmd, const char *def_mode, uint32_t flags)
 	}
 
  allow:
+
+	/*
+	 * This is done to prevent converting an explicitly acquired
+	 * ex lock to sh in process_each.
+	 */
+	if (!strcmp(mode, "ex"))
+		cmd->lockd_global_ex = 1;
+
 	return 1;
 }
 
@@ -2030,6 +2058,56 @@ int lockd_vg_update(struct volume_group *vg)
 	return ret;
 }
 
+static int _query_lock_lv(struct cmd_context *cmd, struct volume_group *vg,
+			  const char *lv_name, char *lv_uuid,
+			  const char *lock_args, int *ex, int *sh)
+{
+	daemon_reply reply;
+	const char *opts = NULL;
+	const char *reply_str;
+	int result;
+	int ret;
+
+	log_debug("lockd query LV %s/%s", vg->name, lv_name);
+
+	reply = _lockd_send("query_lock_lv",
+				"pid = " FMTd64, (int64_t) getpid(),
+				"opts = %s", opts ?: "none",
+				"vg_name = %s", vg->name,
+				"lv_name = %s", lv_name,
+				"lv_uuid = %s", lv_uuid,
+				"vg_lock_type = %s", vg->lock_type,
+				"vg_lock_args = %s", vg->lock_args,
+				"lv_lock_args = %s", lock_args ?: "none",
+				NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		/* No result from lvmlockd, it is probably not running. */
+		log_error("Lock query failed for LV %s/%s", vg->name, lv_name);
+		return 0;
+	} else {
+		/* ENOENT => The lv was not active/locked. */
+		ret = (result < 0 && (result != -ENOENT)) ? 0 : 1;
+	}
+
+	if (!ret)
+		log_error("query_lock_lv lvmlockd result %d", result);
+
+	if (!(reply_str = daemon_reply_str(reply, "mode", NULL))) {
+		log_error("query_lock_lv mode not returned");
+		ret = 0;
+	}
+
+	if (reply_str && !strcmp(reply_str, "ex"))
+		*ex = 1;
+	else if (reply_str && !strcmp(reply_str, "sh"))
+		*sh = 1;
+
+	daemon_reply_destroy(reply);
+
+	return ret;
+}
+
 /*
  * When this is called directly (as opposed to being called from
  * lockd_lv), the caller knows that the LV has a lock.
@@ -2054,6 +2132,29 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
+	if (!id_write_format(lv_id, lv_uuid, sizeof(lv_uuid)))
+		return_0;
+
+	if (cmd->lockd_lv_disable && !strcmp(vg->lock_type, "dlm")) {
+		/*
+		 * If the command is updating an LV with a shared lock,
+		 * and using --lockopt skiplv to skip the incompat ex
+		 * lock, then check if an existing sh lock exists.
+		 */
+		if (!strcmp(cmd->name, "lvextend") || !strcmp(cmd->name, "lvresize") ||
+		    !strcmp(cmd->name, "lvchange") || !strcmp(cmd->name, "lvconvert")) {
+			int ex = 0, sh = 0;
+
+			if (!_query_lock_lv(cmd, vg, lv_name, lv_uuid, lock_args, &ex, &sh))
+				return 1;
+			if (sh) {
+				log_warn("WARNING: shared LV may require refresh on other hosts where it is active.");
+				return 1;
+			}
+		}
+		return 1;
+	}
+
 	if (cmd->lockd_lv_disable)
 		return 1;
 
@@ -2061,9 +2162,6 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
-
-	if (!id_write_format(lv_id, lv_uuid, sizeof(lv_uuid)))
-		return_0;
 
 	/*
 	 * For lvchange/vgchange activation, def_mode is "sh" or "ex"
@@ -2080,15 +2178,6 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 			  lv ? lvseg_name(first_seg(lv)) : "", vg->name, lv_name);
 		return 0;
 	}
-
-	/*
-	 * This is a hack for mirror LVs which need to know at a very low level
-	 * which lock mode the LV is being activated with so that it can pick
-	 * a mirror log type during activation.  Do not use this for anything
-	 * else.
-	 */
-	if (mode && !strcmp(mode, "sh"))
-		cmd->lockd_lv_sh = 1;
 
 	if (!mode)
 		mode = "ex";
@@ -2126,6 +2215,15 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		 * LV with an ex LV lock when the LV is already active with a
 		 * sh LV lock.
 		 */
+
+		if (lockd_flags & LD_RF_SH_EXISTS) {
+			if (flags & LDLV_SH_EXISTS_OK) {
+				log_warn("WARNING: extending LV with a shared lock, other hosts may require LV refresh.");
+				cmd->lockd_lv_sh_for_ex = 1;
+				return 1;
+			}
+		}
+
 		log_error("LV is already locked with incompatible mode: %s/%s", vg->name, lv_name);
 		return 0;
 	}
@@ -2213,29 +2311,47 @@ static int _lockd_lv_thin(struct cmd_context *cmd, struct logical_volume *lv,
 			     pool_lv->lock_args, def_mode, flags);
 }
 
-/*
- * Only the combination of dlm + corosync + cmirrord allows
- * mirror LVs to be activated in shared mode on multiple nodes.
- */
-static int _lockd_lv_mirror(struct cmd_context *cmd, struct logical_volume *lv,
-			    const char *def_mode, uint32_t flags)
+static int _lockd_lv_vdo(struct cmd_context *cmd, struct logical_volume *lv,
+			 const char *def_mode, uint32_t flags)
 {
-	if (!strcmp(lv->vg->lock_type, "sanlock"))
-		flags |= LDLV_MODE_NO_SH;
+	struct logical_volume *pool_lv = NULL;
 
-	else if (!strcmp(lv->vg->lock_type, "dlm") && def_mode && !strcmp(def_mode, "sh")) {
-#ifdef CMIRRORD_PIDFILE
-		if (!cmirrord_is_running()) {
-			log_error("cmirrord must be running to activate an LV in shared mode.");
-			return 0;
-		}
-#else
-		flags |= LDLV_MODE_NO_SH;
-#endif
+	if (lv_is_vdo(lv)) {
+		if (first_seg(lv))
+			pool_lv = seg_lv(first_seg(lv), 0);
+
+	} else if (lv_is_vdo_pool(lv)) {
+		pool_lv = lv;
+
+	} else if (lv_is_vdo_pool_data(lv)) {
+		return 1;
+
+	} else {
+		/* This should not happen AFAIK. */
+		log_error("Lock on incorrect vdo lv type %s/%s",
+			  lv->vg->name, lv->name);
+		return 0;
 	}
 
-	return lockd_lv_name(cmd, lv->vg, lv->name, &lv->lvid.id[1],
-			     lv->lock_args, def_mode, flags);
+	if (!pool_lv) {
+		/* This happens in lvremove where it's harmless. */
+		log_debug("No vdo pool for %s/%s", lv->vg->name, lv->name);
+		return 0;
+	}
+
+	/*
+	 * Locking a locked lv (pool in this case) is a no-op.
+	 * Unlock when the pool is no longer active.
+	 */
+
+	if (def_mode && !strcmp(def_mode, "un") &&
+	    lv_is_vdo_pool(pool_lv) && lv_is_active(lv_lock_holder(pool_lv)))
+		return 1;
+
+	flags |= LDLV_MODE_NO_SH;
+
+	return lockd_lv_name(cmd, pool_lv->vg, pool_lv->name, &pool_lv->lvid.id[1],
+			     pool_lv->lock_args, def_mode, flags);
 }
 
 /*
@@ -2279,10 +2395,21 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	if (lv_is_thin_type(lv))
 		return _lockd_lv_thin(cmd, lv, def_mode, flags);
 
+	if (lv_is_vdo_type(lv))
+		return _lockd_lv_vdo(cmd, lv, def_mode, flags);
+
 	/*
 	 * An LV with NULL lock_args does not have a lock of its own.
 	 */
 	if (!lv->lock_args)
+		return 1;
+
+	/*
+	 * A cachevol LV is one exception, where the LV keeps lock_args (so
+	 * they do not need to be reallocated on split) but the lvmlockd lock
+	 * is not used.
+	 */
+	if (lv_is_cache_vol(lv))
 		return 1;
 
 	/*
@@ -2291,16 +2418,119 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 	 */
 	if (lv_is_external_origin(lv) ||
 	    lv_is_thin_type(lv) ||
+	    lv_is_mirror_type(lv) ||
 	    lv_is_raid_type(lv) ||
+	    lv_is_vdo_type(lv) ||
 	    lv_is_cache_type(lv)) {
 		flags |= LDLV_MODE_NO_SH;
 	}
 
-	if (lv_is_mirror_type(lv))
-		return _lockd_lv_mirror(cmd, lv, def_mode, flags);
-	       
 	return lockd_lv_name(cmd, lv->vg, lv->name, &lv->lvid.id[1],
 			     lv->lock_args, def_mode, flags);
+}
+
+/*
+ * Check if the LV being resized is used by gfs2/ocfs2 which we
+ * know allow resizing under a shared lock.
+ */
+static int _shared_fs_can_resize(struct logical_volume *lv)
+{
+	FILE *f = NULL;
+	struct mntent *m;
+	int ret = 0;
+
+	if (!(f = setmntent("/etc/mtab", "r")))
+		return 0;
+
+	while ((m = getmntent(f))) {
+		if (!strcmp(m->mnt_type, "gfs2") || !strcmp(m->mnt_type, "ocfs2")) {
+			/* FIXME: check if this mntent is for lv */
+			ret = 1;
+			break;
+		}
+	}
+	endmntent(f);
+	return ret;
+}
+
+/*
+ * A special lockd_lv function is used for lvresize so that details can
+ * be saved for doing cluster "refresh" at the end of the command.
+ */
+
+int lockd_lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
+	     const char *def_mode, uint32_t flags,
+	     struct lvresize_params *lp)
+{
+	char lv_uuid[64] __attribute__((aligned(8)));
+	char path[PATH_MAX];
+	int shupdate = (lp->lockopt && strstr(lp->lockopt, "shupdate"));
+	int norefresh = (lp->lockopt && strstr(lp->lockopt, "norefresh"));
+	int rv;
+
+	if (!vg_is_shared(lv->vg))
+		return 1;
+
+	if (!_use_lvmlockd) {
+		log_error("LV in VG %s with lock_type %s requires lvmlockd.",
+			  lv->vg->name, lv->vg->lock_type);
+		return 0;
+	}
+
+	if (!_lvmlockd_connected)
+		return 0;
+
+	/*
+	 * A special case for gfs2 where we want to allow lvextend
+	 * of an LV that has an existing shared lock, which is normally
+	 * incompatible with the ex lock required by lvextend.
+	 *
+	 * Check if gfs2 or ocfs2 is mounted on the LV, and enable this
+	 * SH_EXISTS_OK flag if so.  Other users of the LV may not want
+	 * to allow this.  --lockopt shupdate allows the shared lock in
+	 * place of ex even we don't detect gfs2/ocfs2.
+	 */
+	if (lp->resize == LV_EXTEND) {
+		if (shupdate || _shared_fs_can_resize(lv))
+			flags |= LDLV_SH_EXISTS_OK;
+	}
+
+	rv = lockd_lv(cmd, lv, def_mode, flags);
+
+	if (norefresh)
+		return rv;
+
+	/*
+	 * If lockd_lv found an existing sh lock in lvmlockd and
+	 * used that in place of the usual ex lock (we allowed this
+	 * with SH_EXISTS_OK), then it sets this flag.
+	 *
+	 * We use this as a signal that we should try to refresh
+	 * the LV on remote nodes through dlm/corosync at the end
+	 * of the command.
+	 *
+	 * If lockd_lv sucessfully acquired the LV lock ex (did not
+	 * need to make use of SH_EXISTS_OK), then we know the LV
+	 * is active here only (or not active anywhere) and we
+	 * don't need to do any remote refresh.
+	 *
+	 * lvresize --lockopt norefresh disables the remote refresh.
+	 */
+	if (cmd->lockd_lv_sh_for_ex) {
+		if (!id_write_format(&lv->lvid.id[1], lv_uuid, sizeof(lv_uuid)))
+			return 0;
+		if (dm_snprintf(path, sizeof(path), "%s/%s/%s",
+				cmd->dev_dir, lv->vg->name, lv->name) < 0) {
+			log_error("LV path too long for lvmlockd refresh.");
+			return 0;
+		}
+
+		/* These will be used at the end of lvresize to do lockd_lv_refresh */
+		lp->lockd_lv_refresh_path = dm_pool_strdup(cmd->mem, path);
+		lp->lockd_lv_refresh_uuid = dm_pool_strdup(cmd->mem, lv_uuid);
+	}
+
+	return rv;
 }
 
 static int _init_lv_sanlock(struct cmd_context *cmd, struct volume_group *vg,
@@ -2490,7 +2720,7 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logic
 			log_error("Failed to find origin LV %s/%s", vg->name, lp->origin_name);
 			return 0;
 		}
-		if (!lockd_lv(cmd, origin_lv, "ex", LDLV_PERSISTENT)) {
+		if (!lockd_lv(cmd, origin_lv, "ex", 0)) {
 			log_error("Failed to lock origin LV %s/%s", vg->name, lp->origin_name);
 			return 0;
 		}
@@ -2539,6 +2769,27 @@ int lockd_init_lv(struct cmd_context *cmd, struct volume_group *vg, struct logic
 			log_error("Unknown thin options for lock init.");
 			return 0;
 		}
+
+	} else if (seg_is_vdo(lp)) {
+		struct lv_list *lvl;
+
+		/*
+		 * A vdo lv is being created in a vdo pool.  The vdo lv does
+		 * not have its own lock, the lock of the vdo pool is used, and
+		 * the vdo pool needs to be locked to create a vdo lv in it.
+		 */
+
+		if (!(lvl = find_lv_in_vg(vg, lp->pool_name))) {
+			log_error("Failed to find vdo pool %s/%s", vg->name, lp->pool_name);
+			return 0;
+		}
+
+		if (!lockd_lv(cmd, lvl->lv, "ex", LDLV_PERSISTENT)) {
+			log_error("Failed to lock vdo pool %s/%s", vg->name, lp->pool_name);
+			return 0;
+		}
+		lv->lock_args = NULL;
+		return 1;
 
 	} else {
 		/* Creating a normal lv. */
@@ -2673,7 +2924,7 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 		 * Depending on the problem that caused the rename to
 		 * fail, it may make sense to not restart the VG here.
 		 */
-		if (!lockd_start_vg(cmd, vg, 0))
+		if (!lockd_start_vg(cmd, vg, 0, NULL))
 			log_error("Failed to restart VG %s lockspace.", vg->name);
 		return 1;
 	}
@@ -2713,7 +2964,7 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 		}
 	}
 
-	if (!lockd_start_vg(cmd, vg, 1))
+	if (!lockd_start_vg(cmd, vg, 1, NULL))
 		log_error("Failed to start VG %s lockspace.", vg->name);
 
 	return 1;
@@ -2779,6 +3030,15 @@ int lockd_lv_uses_lock(struct logical_volume *lv)
 	if (lv_is_pool_metadata_spare(lv))
 		return 0;
 
+	if (lv_is_vdo(lv))
+		return 0;
+
+	if (lv_is_vdo_pool_data(lv))
+		return 0;
+
+	if (lv_is_cache_vol(lv))
+		return 0;
+
 	if (lv_is_cache_pool(lv))
 		return 0;
 
@@ -2816,3 +3076,44 @@ int lockd_lv_uses_lock(struct logical_volume *lv)
 
 	return 1;
 }
+
+/*
+ * send lvmlockd a request to use libdlmcontrol dlmc_run_start/dlmc_run_check
+ * to run a command on all nodes running dlm_controld:
+ * lvm lvchange --refresh --nolocking <path>
+ */
+
+int lockd_lv_refresh(struct cmd_context *cmd, struct lvresize_params *lp)
+{
+	daemon_reply reply;
+	char *lv_uuid = lp->lockd_lv_refresh_uuid;
+	char *path = lp->lockd_lv_refresh_path;
+	int result;
+
+	if (!lv_uuid || !path)
+		return 1;
+
+	log_warn("Refreshing LV %s on other hosts...", path);
+
+	reply = _lockd_send("refresh_lv",
+				"pid = " FMTd64, (int64_t) getpid(),
+				"opts = %s", "none",
+				"lv_uuid = %s", lv_uuid,
+				"path = %s", path,
+				NULL);
+
+	if (!_lockd_result(reply, &result, NULL)) {
+		/* No result from lvmlockd, it is probably not running. */
+		log_error("LV refresh failed for LV %s", path);
+		return 0;
+	}
+	daemon_reply_destroy(reply);
+
+	if (result < 0) {
+		log_error("Failed to refresh LV on all hosts.");
+		log_error("Manual lvchange --refresh required on all hosts for %s.", path);
+		return 0;
+	}
+	return 1;
+}
+

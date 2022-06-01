@@ -35,7 +35,7 @@ xx(help,
 
 xx(fullreport,
    "Display full report",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_HINTS | ALLOW_EXPORTED)
 
 xx(lastlog,
    "Display last command's log report",
@@ -43,7 +43,7 @@ xx(lastlog,
 
 xx(lvchange,
    "Change the attributes of logical volume(s)",
-   PERMITTED_READ_ONLY)
+   PERMITTED_READ_ONLY | ALLOW_HINTS)
 
 xx(lvconvert,
    "Change logical volume layout",
@@ -51,15 +51,15 @@ xx(lvconvert,
 
 xx(lvcreate,
    "Create a logical volume",
-   0)
+   ALLOW_HINTS)
 
 xx(lvdisplay,
    "Display information about a logical volume",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS)
 
 xx(lvextend,
    "Add space to a logical volume",
-   0)
+   ALLOW_HINTS)
 
 xx(lvmchange,
    "With the device mapper, this is obsolete and does nothing.",
@@ -71,7 +71,7 @@ xx(lvmconfig,
 
 xx(lvmdiskscan,
    "List devices that may be used as physical volumes",
-   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS)
+   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ALLOW_EXPORTED)
 
 xx(lvmsadc,
    "Collect activity data",
@@ -83,23 +83,23 @@ xx(lvmsar,
 
 xx(lvreduce,
    "Reduce the size of a logical volume",
-   0)
+   ALLOW_HINTS)
 
 xx(lvremove,
    "Remove logical volume(s) from the system",
-   ALL_VGS_IS_DEFAULT) /* all VGs only with --select */
+   ALL_VGS_IS_DEFAULT | ALLOW_HINTS) /* all VGs only with --select */
 
 xx(lvrename,
    "Rename a logical volume",
-   0)
+   ALLOW_HINTS)
 
 xx(lvresize,
    "Resize a logical volume",
-   0)
+   ALLOW_HINTS)
 
 xx(lvs,
    "Display information about logical volumes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS)
 
 xx(lvscan,
    "List all logical volumes in all volume groups",
@@ -114,8 +114,8 @@ xx(pvresize,
    0)
 
 xx(pvck,
-   "Check the consistency of physical volume(s)",
-   LOCKD_VG_SH)
+   "Check metadata on physical volumes",
+   LOCKD_VG_SH | ALLOW_EXPORTED)
 
 xx(pvcreate,
    "Initialize physical volume(s) for use by LVM",
@@ -127,7 +127,7 @@ xx(pvdata,
 
 xx(pvdisplay,
    "Display various attributes of physical volume(s)",
-   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN)
+   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
 
 /* ALL_VGS_IS_DEFAULT is for polldaemon to find pvmoves in-progress using process_each_vg. */
 
@@ -145,11 +145,11 @@ xx(pvremove,
 
 xx(pvs,
    "Display information about physical volumes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
 
 xx(pvscan,
    "List all physical volumes",
-   PERMITTED_READ_ONLY | LOCKD_VG_SH)
+   PERMITTED_READ_ONLY | LOCKD_VG_SH | ALLOW_EXPORTED)
 
 xx(segtypes,
    "List available segment types",
@@ -165,15 +165,15 @@ xx(tags,
 
 xx(vgcfgbackup,
    "Backup volume group configuration(s)",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_EXPORTED)
 
 xx(vgcfgrestore,
    "Restore volume group configuration",
-   0)
+   ALLOW_EXPORTED)
 
 xx(vgchange,
    "Change volume group attributes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ALLOW_HINTS)
 
 xx(vgck,
    "Check the consistency of volume group(s)",
@@ -189,7 +189,7 @@ xx(vgcreate,
 
 xx(vgdisplay,
    "Display volume group information",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
 
 xx(vgexport,
    "Unregister volume group(s) from the system",
@@ -201,10 +201,11 @@ xx(vgextend,
 
 xx(vgimport,
    "Register exported volume group with system",
-   ALL_VGS_IS_DEFAULT)
+   ALL_VGS_IS_DEFAULT | ALLOW_EXPORTED)
 
 xx(vgimportclone,
-   "Import a VG from cloned PVs", 0)
+   "Import a VG from cloned PVs",
+   ALLOW_EXPORTED)
 
 xx(vgmerge,
    "Merge volume groups",
@@ -224,15 +225,15 @@ xx(vgremove,
 
 xx(vgrename,
    "Rename a volume group",
-   ALLOW_UUID_AS_NAME)
+   ALLOW_UUID_AS_NAME | ALLOW_EXPORTED)
 
 xx(vgs,
    "Display information about volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
 
 xx(vgscan,
    "Search for all volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_EXPORTED)
 
 xx(vgsplit,
    "Move physical volumes into a new or existing volume group",

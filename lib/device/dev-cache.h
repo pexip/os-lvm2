@@ -17,6 +17,7 @@
 #define _LVM_DEV_CACHE_H
 
 #include "lib/device/device.h"
+#include "lib/device/dev-type.h"
 #include "lib/misc/lvm-wrappers.h"
 
 struct cmd_context;
@@ -25,11 +26,12 @@ struct cmd_context;
  * predicate for devices.
  */
 struct dev_filter {
-	int (*passes_filter) (struct cmd_context *cmd, struct dev_filter *f, struct device *dev);
+	int (*passes_filter) (struct cmd_context *cmd, struct dev_filter *f, struct device *dev, const char *use_filter_name);
 	void (*destroy) (struct dev_filter *f);
-	void (*wipe) (struct dev_filter *f);
+	void (*wipe) (struct cmd_context *cmd, struct dev_filter *f, struct device *dev, const char *use_filter_name);
 	void *private;
 	unsigned use_count;
+	const char *name;
 };
 
 int dev_cache_index_devs(void);
@@ -52,10 +54,10 @@ int dev_cache_has_scanned(void);
 
 int dev_cache_add_dir(const char *path);
 struct device *dev_cache_get(struct cmd_context *cmd, const char *name, struct dev_filter *f);
-const char *dev_cache_filtered_reason(const char *name);
 
-// TODO
-struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t device, struct dev_filter *f);
+struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t device, struct dev_filter *f, int *filtered);
+
+struct device *dev_hash_get(const char *name);
 
 void dev_set_preferred_name(struct dm_str_list *sl, struct device *dev);
 
@@ -70,5 +72,7 @@ struct device *dev_iter_get(struct cmd_context *cmd, struct dev_iter *iter);
 void dev_reset_error_count(struct cmd_context *cmd);
 
 void dev_cache_failed_path(struct device *dev, const char *path);
+
+bool dev_cache_has_md_with_end_superblock(struct dev_types *dt);
 
 #endif

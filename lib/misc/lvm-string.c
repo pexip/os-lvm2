@@ -157,13 +157,18 @@ static const char *_lvname_has_reserved_component_string(const char *lvname)
 		"_cdata",
 		"_cmeta",
 		"_corig",
+		"_cpool",
+		"_cvol",
+		"_wcorig",
 		"_mimage",
 		"_mlog",
 		"_rimage",
 		"_rmeta",
 		"_tdata",
 		"_tmeta",
-		"_vdata"
+		"_vdata",
+		"_imeta",
+		"_iorig"
 	};
 	unsigned i;
 
@@ -248,9 +253,11 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 		 */
 		/* Suffixes used here MUST match lib/activate/dev_manager.c */
 		layer = lv_is_cache_origin(lv) ? "real" :
+			lv_is_writecache_origin(lv) ? "real" :
 			(lv_is_cache(lv) && lv_is_pending_delete(lv)) ? "real" :
 			lv_is_cache_pool_data(lv) ? "cdata" :
 			lv_is_cache_pool_metadata(lv) ? "cmeta" :
+			lv_is_cache_vol(lv) ? "cvol" :
 			// FIXME: dm-tree needs fixes for mirrors/raids
 			//lv_is_mirror_image(lv) ? "mimage" :
 			//lv_is_mirror_log(lv) ? "mlog" :
@@ -259,7 +266,7 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 			lv_is_thin_pool(lv) ? "pool" :
 			lv_is_thin_pool_data(lv) ? "tdata" :
 			lv_is_thin_pool_metadata(lv) ? "tmeta" :
-			lv_is_vdo_pool(lv) ? "vpool" :
+			lv_is_vdo_pool(lv) ? "pool" :
 			lv_is_vdo_pool_data(lv) ? "vdata" :
 			NULL;
 	}
@@ -285,4 +292,28 @@ char *first_substring(const char *str, ...)
 	va_end(ap);
 
 	return r;
+}
+
+/* Cut suffix (if present) and write the name into NAME_LEN sized new_name buffer
+ * When suffix is NULL, everythin past the last '_' is removed.
+ * Returns 1 when suffix was removed, 0 otherwise.
+ */
+int drop_lvname_suffix(char *new_name, const char *name, const char *suffix)
+{
+	char *c;
+
+	if (!dm_strncpy(new_name, name, NAME_LEN)) {
+		log_debug(INTERNAL_ERROR "Name is too long.");
+		return 0;
+	}
+
+	if (!(c = strrchr(new_name, '_')))
+		return 0;
+
+	if (suffix && strcmp(c + 1, suffix))
+		return 0;
+
+	*c = 0; /* remove suffix */
+
+	return 1;
 }

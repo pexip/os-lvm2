@@ -38,6 +38,8 @@ typedef enum {
 	SEG_STATUS_THIN,
 	SEG_STATUS_THIN_POOL,
 	SEG_STATUS_VDO_POOL,
+	SEG_STATUS_WRITECACHE,
+	SEG_STATUS_INTEGRITY,
 	SEG_STATUS_UNKNOWN
 } lv_seg_status_type_t;
 
@@ -51,6 +53,8 @@ struct lv_seg_status {
 		struct dm_status_snapshot *snapshot;
 		struct dm_status_thin *thin;
 		struct dm_status_thin_pool *thin_pool;
+		struct dm_status_writecache *writecache;
+		struct dm_status_integrity *integrity;
 		struct lv_status_vdo vdo_pool;
 	};
 };
@@ -142,8 +146,8 @@ int revert_lv(struct cmd_context *cmd, const struct logical_volume *lv);
  */
 int lv_info(struct cmd_context *cmd, const struct logical_volume *lv, int use_layer,
 	    struct lvinfo *info, int with_open_count, int with_read_ahead);
-int lv_info_by_lvid(struct cmd_context *cmd, const char *lvid_s, int use_layer,
-		    struct lvinfo *info, int with_open_count, int with_read_ahead);
+int lv_info_with_name_check(struct cmd_context *cmd, const struct logical_volume *lv,
+			    int use_layer, struct lvinfo *info);
 
 /*
  * Returns 1 if lv_info_and_seg_status structure has been populated,
@@ -184,17 +188,17 @@ int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health);
 int lv_raid_mismatch_count(const struct logical_volume *lv, uint64_t *cnt);
 int lv_raid_sync_action(const struct logical_volume *lv, char **sync_action);
 int lv_raid_message(const struct logical_volume *lv, const char *msg);
+int lv_writecache_message(const struct logical_volume *lv, const char *msg);
 int lv_cache_status(const struct logical_volume *cache_lv,
 		    struct lv_status_cache **status);
-int lv_thin_pool_percent(const struct logical_volume *lv, int metadata,
-			 dm_percent_t *percent);
-int lv_thin_percent(const struct logical_volume *lv, int mapped,
-		    dm_percent_t *percent);
-int lv_thin_pool_transaction_id(const struct logical_volume *lv,
-				uint64_t *transaction_id);
 int lv_thin_device_id(const struct logical_volume *lv, uint32_t *device_id);
+int lv_thin_status(const struct logical_volume *lv, int flush,
+		   struct lv_status_thin **status);
+int lv_thin_pool_status(const struct logical_volume *lv, int flush,
+			struct lv_status_thin_pool **status);
 int lv_vdo_pool_status(const struct logical_volume *lv, int flush,
 		       struct lv_status_vdo **status);
+int lv_vdo_pool_percent(const struct logical_volume *lv, dm_percent_t *percent);
 
 /*
  * Return number of LVs in the VG that are active.
@@ -255,6 +259,8 @@ int device_is_usable(struct device *dev, struct dev_usable_check_params check);
 void fs_unlock(void);
 
 #define TARGET_NAME_CACHE "cache"
+#define TARGET_NAME_WRITECACHE "writecache"
+#define TARGET_NAME_INTEGRITY "integrity"
 #define TARGET_NAME_ERROR "error"
 #define TARGET_NAME_ERROR_OLD "erro"	/* Truncated in older kernels */
 #define TARGET_NAME_LINEAR "linear"
@@ -271,6 +277,8 @@ void fs_unlock(void);
 
 #define MODULE_NAME_CLUSTERED_MIRROR "clog"
 #define MODULE_NAME_CACHE TARGET_NAME_CACHE
+#define MODULE_NAME_WRITECACHE TARGET_NAME_WRITECACHE
+#define MODULE_NAME_INTEGRITY TARGET_NAME_INTEGRITY
 #define MODULE_NAME_ERROR TARGET_NAME_ERROR
 #define MODULE_NAME_LOG_CLUSTERED "log-clustered"
 #define MODULE_NAME_LOG_USERSPACE "log-userspace"

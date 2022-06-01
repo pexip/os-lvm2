@@ -40,26 +40,14 @@ struct pvmove_params {
 static int _pvmove_target_present(struct cmd_context *cmd, int clustered)
 {
 	const struct segment_type *segtype;
-	unsigned attr = 0;
 	int found = 1;
-	static int _clustered_found = -1;
-
-	if (clustered && _clustered_found >= 0)
-		return _clustered_found;
 
 	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
 		return_0;
 
 	if (activation() && segtype->ops->target_present &&
-	    !segtype->ops->target_present(cmd, NULL, clustered ? &attr : NULL))
+	    !segtype->ops->target_present(cmd, NULL, NULL))
 		found = 0;
-
-	if (activation() && clustered) {
-		if (found && (attr & MIRROR_LOG_CLUSTERED))
-			_clustered_found = found = 1;
-		else
-			_clustered_found = found = 0;
-	}
 
 	return found;
 }
@@ -338,6 +326,7 @@ static struct logical_volume *_set_up_pvmove_lv(struct cmd_context *cmd,
 	int lv_skipped = 0;
 	int needs_exclusive = *exclusive;
 	const struct logical_volume *holder;
+	const char *new_lv_name;
 
 	/* FIXME Cope with non-contiguous => splitting existing segments */
 	if (!(lv_mirr = lv_create_empty("pvmove%d", NULL,
@@ -375,8 +364,13 @@ static struct logical_volume *_set_up_pvmove_lv(struct cmd_context *cmd,
 		if (lv == lv_mirr)
 			continue;
 
-		if (lv_name && strcmp(lv->name, top_level_lv_name(vg, lv_name)))
-			continue;
+		if (lv_name) {
+			if (!(new_lv_name = top_level_lv_name(vg, lv_name)))
+				return_NULL;
+
+			if (strcmp(lv->name, new_lv_name))
+				continue;
+		}
 
 		if (!lv_is_on_pvs(lv, source_pvl))
 			continue;
@@ -385,6 +379,16 @@ static struct logical_volume *_set_up_pvmove_lv(struct cmd_context *cmd,
 			log_error("Unable to pvmove when %s volume %s is present.",
 				  lv_is_converting(lv) ? "converting" : "merging",
 				  display_lvname(lv));
+			return NULL;
+		}
+
+		if (lv_is_writecache_cachevol(lv)) {
+			log_error("Unable to pvmove device used for writecache.");
+			return NULL;
+		}
+
+		if (lv_is_raid(lv) && lv_raid_has_integrity(lv)) {
+			log_error("Unable to pvmove device used for raid with integrity.");
 			return NULL;
 		}
 
@@ -625,6 +629,11 @@ static int _pvmove_setup_single(struct cmd_context *cmd,
 
 		if (!(lv = find_lv(vg, lv_name))) {
 			log_error("Logical volume %s not found.", lv_name);
+			return ECMD_FAILED;
+		}
+
+		if (lv_is_raid(lv) && lv_raid_has_integrity(lv)) {
+			log_error("pvmove not allowed on raid LV with integrity.");
 			return ECMD_FAILED;
 		}
 	}
@@ -913,10 +922,10 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 
 		/*
 		 * The command may sit and report progress for some time,
-		 * and we do not want or need the lockd locks held during
+		 * and we do not want or need the global lock held during
 		 * that time.
 		 */
-		lockd_gl(cmd, "un", 0);
+		lock_global(cmd, "un");
 	}
 
 	return pvmove_poll(cmd, pv_name, lvid ? lvid->s : NULL,

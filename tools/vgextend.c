@@ -28,16 +28,25 @@ static int _restore_pv(struct volume_group *vg, const char *pv_name)
 		return 0;
 	}
 
-	if (!(pvl->pv->status & MISSING_PV)) {
-		log_warn("WARNING: PV %s was not missing in VG %s", pv_name, vg->name);
-		return 0;
-	}
-
 	if (!pvl->pv->dev) {
 		log_warn("WARNING: The PV %s is still missing.", pv_name);
 		return 0;
 	}
 
+	if (pvl->pv->status & MISSING_PV)
+		goto clear_flag;
+
+	/*
+	 * when the PV has no used PE's vg_read clears the MISSING_PV flag
+	 * and sets this so we know.
+	 */
+	if (pvl->pv->unused_missing_cleared)
+		goto clear_flag;
+
+	log_warn("WARNING: PV %s was not missing in VG %s", pv_name, vg->name);
+	return 0;
+
+clear_flag:
 	pvl->pv->status &= ~MISSING_PV;
 	return 1;
 }
@@ -102,7 +111,7 @@ static int _vgextend_single(struct cmd_context *cmd, const char *vg_name,
 
 		if ((mda_copies != VGMETADATACOPIES_UNMANAGED) &&
 		    (mda_copies != mda_used)) {
-			log_warn("WARNING: Changing preferred number of copies of VG %s metadata from %"PRIu32" to %"PRIu32,
+			log_warn("WARNING: Changing preferred number of copies of VG %s metadata from %" PRIu32 " to %" PRIu32,
 				 vg_name, mda_copies, mda_used);
 			vg_set_mda_copies(vg, mda_used);
 		}
@@ -152,19 +161,14 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 	pp->preserve_existing = 1;
 
 	/* pvcreate within vgextend cannot be forced. */
-	pp->force = 0;
+	pp->force = PROMPT;
 
-	/* Check for old md signatures at the end of devices. */
-	cmd->use_full_md_check = 1;
-
-	/*
-	 * Needed to change the set of orphan PVs.
-	 * (disable afterward to prevent process_each_pv from doing
-	 * a shared global lock since it's already acquired it ex.)
-	 */
-	if (!lockd_gl(cmd, "ex", 0))
+	if (!lock_global(cmd, "ex"))
 		return_ECMD_FAILED;
-	cmd->lockd_gl_disable = 1;
+
+	clear_hint_file(cmd);
+
+	lvmcache_label_scan(cmd);
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
@@ -179,12 +183,6 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	/*
-	 * pvcreate_each_device returns with the VG_ORPHANS write lock held,
-	 * which was used to do pvcreate.  Now to create the VG using those
-	 * PVs, the VG lock will be taken (with the orphan lock already held.)
-	 */
-
-	/*
 	 * It is always ok to add new PVs to a VG - even if there are
 	 * missing PVs.  No LVs are affected by this operation, but
 	 * repair processes - particularly for RAID segtypes - can
@@ -195,12 +193,10 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 	handle->custom_handle = &vp;
 
 	ret = process_each_vg(cmd, 0, NULL, vg_name, NULL,
-			      READ_FOR_UPDATE, 0, handle,
+			      READ_FOR_UPDATE | PROCESS_SKIP_SCAN, 0, handle,
 			      restoremissing ? &_vgextend_restoremissing : &_vgextend_single);
 
 	destroy_processing_handle(cmd, handle);
 
-	if (!restoremissing)
-		unlock_vg(cmd, NULL, VG_ORPHANS);
 	return ret;
 }

@@ -226,8 +226,6 @@ or vgchange to activate thin snapshots with the "k" attribute.
 
 .SH Thin Topics
 
-.B Alternate syntax for specifying type thin-pool
-.br
 .B Automatic pool metadata LV
 .br
 .B Specify devices for data and metadata LVs
@@ -904,7 +902,7 @@ To change these values globally, edit
 To change these values on a per-VG or per-LV basis, attach a "profile" to
 the VG or LV.  A profile is a collection of config settings, saved in a
 local text file (using the lvm.conf format).  lvm looks for profiles in
-the profile_dir directory, e.g. /etc/lvm/profile/.  Once attached to a VG
+the profile_dir directory, e.g. #DEFAULT_SYS_DIR#/profile/.  Once attached to a VG
 or LV, lvm will process the VG or LV using the settings from the attached
 profile.  A profile is named and referenced by its file name.
 
@@ -932,9 +930,9 @@ Extend the LV using the profile settings:
 .br
 .nf
 # lvmconfig config/profile_dir
-profile_dir="/etc/lvm/profile"
+profile_dir="#DEFAULT_SYS_DIR#/profile"
 
-# cat /etc/lvm/profile/pool0extend.profile
+# cat #DEFAULT_SYS_DIR#/profile/pool0extend.profile
 activation {
         thin_pool_autoextend_threshold=50
         thin_pool_autoextend_percent=10
@@ -1332,11 +1330,15 @@ dummy transaction, but will require skipping the uuid check:
 
 mount /dev/VG/SnapLV /mnt -o nouuid
 
-Or, the uuid can be changed on disk before mounting:
+After the first mount with the above approach, the UUID can subsequently be
+changed using:
 
 xfs_admin -U generate /dev/VG/SnapLV
 .br
 mount /dev/VG/SnapLV /mnt
+
+Once the UUID has been changed, the mount command will no longer require
+the nouuid option.
 
 If the snapshot LV is readonly, the log recovery and uuid check need to be
 skipped while mounting readonly:

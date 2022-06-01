@@ -3,32 +3,44 @@ set -euE
 set -o pipefail
 
 PACKAGE=lvm2
+VERSION=$1
 
 error() {
   echo "$@" >&2
   exit 1
 }
 
-if [[ $(git rev-parse --abbrev-ref HEAD) != master ]]; then
-  error "Current branch is not master!"
-fi
+TMP=
+clean_on_exit() {
+  for path in "${TMP}"; do
+    test -z "${path}" || rm -rf "${path}"
+  done
+}
+trap clean_on_exit EXIT INT TERM
+TMP="$(mktemp -d --suffix=.lvm2.orig)"
 
-version=$1
-tar=../${PACKAGE}_${version}.orig.tar.gz
+(
+  cd $TMP
+  curl --fail -O https://sourceware.org/pub/lvm2/LVM2.${VERSION}.tgz
+  curl --fail -O https://sourceware.org/pub/lvm2/LVM2.${VERSION}.tgz.asc
+  gpg --verify LVM2.${VERSION}.tgz.asc
+  gunzip -c LVM2.${VERSION}.tgz | xz > lvm2_${VERSION}.orig.tar.xz
+)
 
-if [ -e ${tar} ]; then
-  error "${tar} already exists!"
-fi
+pristine-lfs commit ${TMP}/lvm2_${VERSION}.orig.tar.xz
 
-curl -o ${tar} ftp://sources.redhat.com/pub/lvm2/LVM2.${version}.tgz
-curl -o ${tar}.asc ftp://sources.redhat.com/pub/lvm2/LVM2.${version}.tgz.asc
-gpg --verify ${tar}.asc
+git clone -b upstream . ${TMP}/upstream
 
-git-dpm import-new-upstream ${tar}
-pristine-tar commit ${tar} upstream
+(
+  cd ${TMP}/upstream
+  git rm -rfq .
+  tar --strip-components=1 -xaf ${TMP}/lvm2_${VERSION}.orig.tar.xz
+  git add -A
+  git commit -m "Import lvm2_${VERSION}.orig.tar"
+  git tag upstream/${VERSION}
+  git push origin refs/heads/upstream refs/tags/upstream/${VERSION}
+)
 
-dch -v ${version}-1 "New upstream release."
+git merge --no-ff --no-commit -m "Import ${VERSION}" upstream/${VERSION} || :
+dch -v ${VERSION}-1 "New upstream release."
 git add debian/changelog
-git commit --amend --message "Import ${version}"
-
-git-dpm rebase-patched

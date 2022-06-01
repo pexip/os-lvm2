@@ -84,14 +84,16 @@ arg(binary_ARG, '\0', "binary", 0, 0, 0,
     "the \"unknown\" value which denotes that the value could not be determined).\n")
 
 arg(bootloaderareasize_ARG, '\0', "bootloaderareasize", sizemb_VAL, 0, 0,
-    "Create a separate bootloader area of specified size besides PV's data\n"
-    "area. The bootloader area is an area of reserved space on the PV from\n"
-    "which LVM will not allocate any extents and it's kept untouched. This is\n"
-    "primarily aimed for use with bootloaders to embed their own data or metadata.\n"
+    "Reserve space for the bootloader between the LVM metadata area and the first PE.\n"
+    "The bootloader area is reserved for bootloaders to embed their own data or\n"
+    "metadata; LVM will not use it.\n"
+    "The bootloader area begins where the first PE would otherwise be located.\n"
+    "The first PE is moved out by the size of the bootloader area, and then moved\n"
+    "out further if necessary to match the data alignment.\n"
     "The start of the bootloader area is always aligned, see also --dataalignment\n"
-    "and --dataalignmentoffset. The bootloader area size may eventually\n"
-    "end up increased due to the alignment, but it's never less than the\n"
-    "size that is requested. To see the bootloader area start and size of\n"
+    "and --dataalignmentoffset. The bootloader area may be larger than requested\n"
+    "due to the alignment, but it's never less than the requested size.\n"
+    "To see the bootloader area start and size of\n"
     "an existing PV use pvs -o +pv_ba_start,pv_ba_size.\n")
 
 arg(cache_long_ARG, '\0', "cache", 0, 0, 0,
@@ -119,7 +121,16 @@ arg(cachemode_ARG, '\0', "cachemode", cachemode_VAL, 0, 0,
     "block invalidates. See \\fBlvmcache\\fP(7) for more information.\n")
 
 arg(cachepool_ARG, '\0', "cachepool", lv_VAL, 0, 0,
-    "The name of a cache pool LV.\n")
+    "The name of a cache pool.\n")
+
+arg(cachevol_ARG, '\0', "cachevol", lv_VAL, 0, 0,
+    "The name of a cache volume.\n")
+
+arg(cachedevice_ARG, '\0', "cachedevice", pv_VAL, ARG_GROUPABLE, 0,
+    "The name of a device to use for a cache.\n")
+
+arg(cachesize_ARG, '\0', "cachesize", sizemb_VAL, 0, 0,
+    "The size of cache to use.\n")
 
 arg(commandprofile_ARG, '\0', "commandprofile", string_VAL, 0, 0,
     "The command profile to use for command configuration.\n"
@@ -173,14 +184,14 @@ arg(configtype_ARG, '\0', "typeconfig", configtype_VAL, 0, 0,
     "Also see \\fBlvm.conf\\fP(5).\n")
 
 arg(dataalignment_ARG, '\0', "dataalignment", sizekb_VAL, 0, 0,
-    "Align the start of the data to a multiple of this number.\n"
-    "Also specify an appropriate Physical Extent size when creating a VG.\n"
-    "To see the location of the first Physical Extent of an existing PV,\n"
-    "use pvs -o +pe_start. In addition, it may be shifted by an alignment offset.\n"
-    "See lvm.conf/data_alignment_offset_detection and --dataalignmentoffset.\n")
+    "Align the start of a PV data area with a multiple of this number.\n"
+    "To see the location of the first Physical Extent (PE) of an existing PV,\n"
+    "use pvs -o +pe_start. In addition, it may be shifted by an alignment offset,\n"
+    "see --dataalignmentoffset.\n"
+    "Also specify an appropriate PE size when creating a VG.\n")
 
 arg(dataalignmentoffset_ARG, '\0', "dataalignmentoffset", sizekb_VAL, 0, 0,
-    "Shift the start of the data area by this additional offset.\n")
+    "Shift the start of the PV data area by this additional offset.\n")
 
 arg(deduplication_ARG, '\0', "deduplication", bool_VAL, 0, 0,
     "Controls whether deduplication is enabled or disable for VDO volume.\n"
@@ -207,6 +218,15 @@ arg(discards_ARG, '\0', "discards", discards_VAL, 0, 0,
 arg(driverloaded_ARG, '\0', "driverloaded", bool_VAL, 0, 0,
     "If set to no, the command will not attempt to use device-mapper.\n"
     "For testing and debugging.\n")
+
+arg(dump_ARG, '\0', "dump", dumptype_VAL, 0, 0,
+    "Dump headers and metadata from a PV for debugging and repair.\n"
+    "Option values include: \\fBheaders\\fP to print and check LVM headers,\n"
+    "\\fBmetadata\\fP to print or save the current text metadata,\n"
+    "\\fBmetadata_all\\fP to list or save all versions of metadata,\n"
+    "\\fBmetadata_search\\fP to list or save all versions of metadata,\n"
+    "searching standard locations in case of damaged headers,\n"
+    "\\fBmetadata_area\\fP to save an entire text metadata area to a file.\n")
 
 arg(errorwhenfull_ARG, '\0', "errorwhenfull", bool_VAL, 0, 0,
     "Specifies thin pool behavior when data space is exhausted.\n"
@@ -447,6 +467,11 @@ arg(setphysicalvolumesize_ARG, '\0', "setphysicalvolumesize", sizemb_VAL, 0, 0,
     "Overrides the automatically detected size of the PV.\n"
     "Use with care, or prior to reducing the physical size of the device.\n")
 
+arg(settings_ARG, '\0', "settings", string_VAL, ARG_GROUPABLE, 0,
+    "Specifies command specific settings in \"Key = Value\" form.\n"
+    "Combine multiple settings in quotes, or repeat the settings\n"
+    "option for each.\n")
+
 arg(poll_ARG, '\0', "poll", bool_VAL, 0, 0,
     "When yes, start the background transformation of an LV.\n"
     "An incomplete transformation, e.g. pvmove or lvconvert interrupted\n"
@@ -488,11 +513,30 @@ arg(pvmetadatacopies_ARG, '\0', "pvmetadatacopies", pvmetadatacopies_VAL, 0, 0,
     "The number of metadata areas to set aside on a PV for storing VG metadata.\n"
     "When 2, one copy of the VG metadata is stored at the front of the PV\n"
     "and a second copy is stored at the end.\n"
-    "When 1, one copy of the VG metadata is stored at the front of the PV\n"
-    "(starting in the 5th sector).\n"
+    "When 1, one copy of the VG metadata is stored at the front of the PV.\n"
     "When 0, no copies of the VG metadata are stored on the given PV.\n"
     "This may be useful in VGs containing many PVs (this places limitations\n"
     "on the ability to use vgsplit later.)\n")
+
+arg(raidintegrity_ARG, '\0', "raidintegrity", bool_VAL, 0, 0,
+    "Enable or disable data integrity checksums for raid images.\n")
+
+arg(raidintegrityblocksize_ARG, '\0', "raidintegrityblocksize", number_VAL, 0, 0,
+    "The block size to use for dm-integrity on raid images.\n"
+    "The integrity block size should usually match the device\n"
+    "logical block size, or the file system block size.\n"
+    "It may be less than the file system block size, but not\n"
+    "less than the device logical block size.\n"
+    "Possible values: 512, 1024, 2048, 4096.\n")
+
+arg(raidintegritymode_ARG, '\0', "raidintegritymode", string_VAL, 0, 0,
+    "Use a journal (default) or bitmap for keeping integrity checksums consistent\n"
+    "in case of a crash. The bitmap areas are recalculated after a crash, so corruption\n"
+    "in those areas would not be detected. A journal does not have this problem.\n"
+    "The journal mode doubles writes to storage, but can improve performance for\n"
+    "scattered writes packed into a single journal write.\n"
+    "bitmap mode can in theory achieve full write throughput of the device,\n"
+    "but would not benefit from the potential scattered write optimization.\n")
 
 arg(readonly_ARG, '\0', "readonly", 0, 0, 0,
     "Run the command in a special read-only mode which will read on-disk\n"
@@ -529,9 +573,15 @@ arg(rebuild_ARG, '\0', "rebuild", pv_VAL, ARG_GROUPABLE, 0,
     "See \\fBlvmraid\\fP(7) for more information.\n")
 
 arg(repair_ARG, '\0', "repair", 0, 0, 0,
+    "#lvconvert\n"
     "Replace failed PVs in a raid or mirror LV, or run a repair\n"
     "utility on a thin pool. See \\fBlvmraid\\fP(7) and \\fBlvmthin\\fP(7)\n"
-    "for more information.\n")
+    "for more information.\n"
+    "#pvck\n"
+    "Repair headers and metadata on a PV.\n")
+
+arg(repairtype_ARG, '\0', "repairtype", repairtype_VAL, 0, 0,
+    "Repair headers and metadata on a PV. See command description.\n")
 
 arg(replace_ARG, '\0', "replace", pv_VAL, ARG_GROUPABLE, 0,
     "Replace a specific PV in a raid LV with another PV.\n"
@@ -702,9 +752,8 @@ arg(trackchanges_ARG, '\0', "trackchanges", 0, 0, 0,
     "merging the split image (see --mergemirrors) or permanently splitting\n"
     "the image (see --splitmirrors with --name.\n")
 
-/* TODO: hide this? */
 arg(trustcache_ARG, '\0', "trustcache", 0, 0, 0,
-    "Avoids certain device scanning during command processing. Do not use.\n")
+    "No longer used.\n")
 
 arg(type_ARG, '\0', "type", segtype_VAL, 0, 0,
     "The LV type, also known as \"segment type\" or \"segtype\".\n"
@@ -713,9 +762,10 @@ arg(type_ARG, '\0', "type", segtype_VAL, 0, 0,
     "For thin provisioning (\\fBthin\\fP, \\fBthin-pool\\fP) see \\fBlvmthin\\fP(7).\n"
     "For performance caching (\\fBcache\\fP, \\fBcache-pool\\fP) see \\fBlvmcache\\fP(7).\n"
     "For copy-on-write snapshots (\\fBsnapshot\\fP) see usage definitions.\n"
+    "For VDO (\\fBvdo\\fP) see \\fBlvmvdo\\fP(7).\n"
     "Several commands omit an explicit type option because the type\n"
     "is inferred from other options or shortcuts\n"
-    "(e.g. --stripes, --mirrors, --snapshot, --virtualsize, --thin, --cache).\n"
+    "(e.g. --stripes, --mirrors, --snapshot, --virtualsize, --thin, --cache, --vdo).\n"
     "Use inferred types with care because it can lead to unexpected results.\n")
 
 arg(unbuffered_ARG, '\0', "unbuffered", 0, 0, 0,
@@ -986,6 +1036,8 @@ arg(exported_ARG, 'e', "exported", 0, 0, 0,
 arg(physicalextent_ARG, 'E', "physicalextent", 0, 0, 0, NULL)
 
 arg(file_ARG, 'f', "file", string_VAL, 0, 0,
+    "#pvck\n"
+    "Metadata file to read or write.\n"
     "#lvmconfig\n"
     "#dumpconfig\n"
     "#config\n"
@@ -1381,6 +1433,18 @@ arg(thin_ARG, 'T', "thin", 0, 0, 0,
     "See --type thin, --type thin-pool, and --virtualsize.\n"
     "See \\fBlvmthin\\fP(7) for more information about LVM thin provisioning.\n")
 
+arg(updatemetadata_ARG, '\0', "updatemetadata", 0, 0, 0,
+    "Update VG metadata to correct problems.\n"
+    "If VG metadata was updated while a PV was missing, and the PV\n"
+    "reappears with an old version of metadata, then this option\n"
+    "(or any other command that writes metadata) will update the\n"
+    "metadata on the previously missing PV. If a PV was removed\n"
+    "from a VG while it was missing, and the PV reappears, using\n"
+    "this option will clear the outdated metadata from the previously\n"
+    "missing PV. If metadata text is damaged on one PV, using this\n"
+    "option will replace the damaged metadata text. For more severe\n"
+    "damage, e.g. with headers, see \\fBpvck\\fP(8).\n")
+
 arg(uuid_ARG, 'u', "uuid", 0, 0, 0,
     "#pvchange\n"
     "Generate new random UUID for specified PVs.\n"
@@ -1463,6 +1527,7 @@ arg(zero_ARG, 'Z', "zero", bool_VAL, 0, 0,
     "Controls zeroing of the first 4KiB of data in the new LV.\n"
     "Default is \\fBy\\fP.\n"
     "Snapshot COW volumes are always zeroed.\n"
+    "For thin pools, this controls zeroing of provisioned blocks.\n"
     "LV is not zeroed if the read only flag is set.\n"
     "Warning: trying to mount an unzeroed LV can cause the system to hang.\n"
     "#pvcreate\n"

@@ -223,15 +223,10 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 	}
 	handle->custom_handle = &vp;
 
-	if (!lock_vol(cmd, VG_GLOBAL, LCK_VG_WRITE, NULL)) {
-		log_error("Unable to obtain global lock.");
+	if (!lock_global(cmd, "ex")) {
 		destroy_processing_handle(cmd, handle);
 		return ECMD_FAILED;
 	}
-
-	if (!lockd_gl(cmd, "ex", 0))
-		goto_out;
-	cmd->lockd_gl_disable = 1;
 
 	/*
 	 * Find the devices being imported which are named on the command line.
@@ -240,7 +235,7 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 
 	log_debug("Finding devices to import.");
 	cmd->cname->flags |= ENABLE_DUPLICATE_DEVS;
-	process_each_pv(cmd, argc, argv, NULL, 0, READ_ALLOW_EXPORTED, handle, _vgimportclone_pv_single);
+	process_each_pv(cmd, argc, argv, NULL, 0, 0, handle, _vgimportclone_pv_single);
 
 	if (vp.found_args != argc) {
 		log_error("Failed to find all devices.");
@@ -301,7 +296,7 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 		vgname_count = 1;
 	}
 
-	if (!get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
+	if (!lvmcache_get_vgnameids(cmd, &vgnameids_on_system, NULL, 0))
 		goto_out;
 
 retry_name:
@@ -320,6 +315,8 @@ retry_name:
 		goto_out;
 	log_debug("Using new VG name %s.", vp.new_vgname);
 
+	lvmcache_destroy(cmd, 1, 0);
+
 	/*
 	 * Create a device filter so that we are only working with the devices
 	 * in arg_import.  With the original devs hidden (that arg_import were
@@ -330,7 +327,7 @@ retry_name:
 	init_internal_filtering(1);
 	dm_list_iterate_items(vd, &vp.arg_import)
 		internal_filter_allow(cmd->mem, vd->dev);
-	lvmcache_destroy(cmd, 1, 0);
+	refresh_filters(cmd);
 
 	log_debug("Changing VG %s to %s.", vp.old_vgname, vp.new_vgname);
 
@@ -345,11 +342,12 @@ retry_name:
 	 */
 	cmd->lockd_vg_disable = 1;
 
-	ret = process_each_vg(cmd, 0, NULL, vp.old_vgname, NULL, READ_FOR_UPDATE | READ_ALLOW_EXPORTED, 0, handle, _vgimportclone_vg_single);
+	clear_hint_file(cmd);
+
+	ret = process_each_vg(cmd, 0, NULL, vp.old_vgname, NULL, READ_FOR_UPDATE, 0, handle, _vgimportclone_vg_single);
 
 	unlock_vg(cmd, NULL, vp.new_vgname);
 out:
-	unlock_vg(cmd, NULL, VG_GLOBAL);
 	internal_filter_clear();
 	init_internal_filtering(0);
 	destroy_processing_handle(cmd, handle);

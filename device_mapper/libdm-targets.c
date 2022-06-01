@@ -296,6 +296,8 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 			s->feature_flags |= DM_CACHE_FEATURE_PASSTHROUGH;
 		else if (!strncmp(p, "metadata2 ", 10))
 			s->feature_flags |= DM_CACHE_FEATURE_METADATA2;
+		else if (!strncmp(p, "no_discard_passdown ", 20))
+			s->feature_flags |= DM_CACHE_FEATURE_NO_DISCARD_PASSDOWN;
 		else
 			log_error("Unknown feature in status: %s", params);
 
@@ -344,6 +346,65 @@ bad:
 	*status = NULL;
 
 	return 0;
+}
+
+/*
+ * From linux/Documentation/device-mapper/writecache.txt
+ *
+ * Status:
+ * 1. error indicator - 0 if there was no error, otherwise error number
+ * 2. the number of blocks
+ * 3. the number of free blocks
+ * 4. the number of blocks under writeback
+ */
+
+int dm_get_status_writecache(struct dm_pool *mem, const char *params,
+			     struct dm_status_writecache **status)
+{
+	struct dm_status_writecache *s;
+
+	if (!(s = dm_pool_zalloc(mem, sizeof(struct dm_status_writecache))))
+		return_0;
+
+	if (sscanf(params, "%llu %llu %llu %llu",
+		   (unsigned long long *)&s->error,
+		   (unsigned long long *)&s->total_blocks,
+		   (unsigned long long *)&s->free_blocks,
+		   (unsigned long long *)&s->writeback_blocks) != 4) {
+		log_error("Failed to parse writecache params: %s.", params);
+		dm_pool_free(mem, s);
+		return 0;
+	}
+
+	*status = s;
+	return 1;
+}
+
+int dm_get_status_integrity(struct dm_pool *mem, const char *params,
+			     struct dm_status_integrity **status)
+{
+	struct dm_status_integrity *s;
+	char recalc_str[16] = "\0";
+
+	if (!(s = dm_pool_zalloc(mem, sizeof(*s))))
+		return_0;
+
+	if (sscanf(params, "%llu %llu %s",
+		   (unsigned long long *)&s->number_of_mismatches,
+		   (unsigned long long *)&s->provided_data_sectors,
+		   recalc_str) != 3) {
+		log_error("Failed to parse integrity params: %s.", params);
+		dm_pool_free(mem, s);
+		return 0;
+	}
+
+	if (recalc_str[0] == '-')
+		s->recalc_sector = 0;
+	else
+		s->recalc_sector = strtoull(recalc_str, NULL, 0);
+
+	*status = s;
+	return 1;
 }
 
 int parse_thin_pool_status(const char *params, struct dm_status_thin_pool *s)

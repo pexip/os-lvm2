@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2008-2013 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2008-2013,2018 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -11,6 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 . lib/inittest
+
+aux lvmconf "global/support_mirrored_mirror_log=1"
 
 recreate_vg_()
 {
@@ -67,6 +69,17 @@ _check_mlog
 vgreduce --removemissing $vg
 aux enable_dev "$dev4"
 
+# 3-way, mirrored log => 3-way, core log
+recreate_vg_
+lvcreate -aey --type mirror -m 2 --mirrorlog mirrored --ignoremonitoring -L 1 -n 3way $vg \
+    "$dev1" "$dev2" "$dev3" "$dev4":0 "$dev5":0
+aux disable_dev "$dev4" "$dev5"
+echo n | lvconvert --repair $vg/3way
+check mirror $vg 3way core
+_check_mlog
+vgreduce --removemissing $vg
+aux enable_dev "$dev4" "$dev5"
+
 # 2-way, disk log => 2-way, core log
 recreate_vg_
 lvcreate -aey --type mirror -m 1 --ignoremonitoring -L 1 -n 2way $vg "$dev1" "$dev2" "$dev3":0
@@ -93,17 +106,23 @@ lvconvert -y --repair $vg/mirror
 vgreduce --removemissing $vg
 
 aux enable_dev "$dev1"
+# clear the outdated dev before we can reuse it
+vgck --updatemetadata $vg
 vgextend $vg "$dev1"
 aux disable_dev "$dev2"
 lvconvert -y --repair $vg/mirror
 vgreduce --removemissing $vg
 
 aux enable_dev "$dev2"
+# clear the outdated dev before we can reuse it
+vgck --updatemetadata $vg
 vgextend $vg "$dev2"
 aux disable_dev "$dev3"
 lvconvert -y --repair $vg/mirror
 vgreduce --removemissing $vg
 aux enable_dev "$dev3"
+# clear the outdated dev before we can reuse it
+vgck --updatemetadata $vg
 vgextend $vg "$dev3"
 
 vgremove -ff $vg

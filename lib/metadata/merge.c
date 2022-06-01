@@ -73,7 +73,7 @@ int lv_merge_segments(struct logical_volume *lv)
 
 #define seg_error(msg) do { \
 		log_error("LV %s, segment %u invalid: %s for %s segment.", \
-			  seg->lv->name, seg_count, (msg), lvseg_name(seg)); \
+			  display_lvname(seg->lv), seg_count, (msg), lvseg_name(seg)); \
 		if ((*error_count)++ > ERROR_MAX) \
 			return; \
 	} while (0)
@@ -86,14 +86,14 @@ int lv_merge_segments(struct logical_volume *lv)
  */
 #define raid_seg_error(msg) do { \
 	log_error("LV %s invalid: %s for %s segment", \
-		  seg->lv->name, (msg), lvseg_name(seg)); \
+		  display_lvname(seg->lv), (msg), lvseg_name(seg)); \
 	if ((*error_count)++ > ERROR_MAX) \
 		return; \
 } while (0)
 
 #define raid_seg_error_val(msg, val) do { \
 	log_error("LV %s invalid: %s (is %u) for %s segment", \
-		  seg->lv->name, (msg), (val), lvseg_name(seg)); \
+		  display_lvname(seg->lv), (msg), (val), lvseg_name(seg)); \
 	if ((*error_count)++ > ERROR_MAX) \
 		return; \
 } while(0)
@@ -351,6 +351,8 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			      unsigned seg_count, int *error_count)
 {
 	struct lv_segment *seg2;
+	struct lv_segment *cache_setting_seg = NULL;
+	int no_metadata_format = 0;
 
 	if (lv_is_mirror_image(lv) &&
 	    (!(seg2 = find_mirror_seg(seg)) || !seg_is_mirrored(seg2)))
@@ -362,23 +364,31 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 
 		if (!seg->pool_lv) {
 			seg_error("is missing cache pool LV");
-		} else if (!lv_is_cache_pool(seg->pool_lv))
+		} else if (!lv_is_cache_pool(seg->pool_lv) && !lv_is_cache_vol(seg->pool_lv))
 			seg_error("is not referencing cache pool LV");
 	} else { /* !cache */
 		if (seg->cleaner_policy)
 			seg_error("sets cleaner_policy");
 	}
 
-	if (seg_is_cache_pool(seg)) {
-		if (!dm_list_empty(&seg->lv->segs_using_this_lv)) {
-			switch (seg->cache_metadata_format) {
+	if (lv_is_cache(lv) && seg->pool_lv && lv_is_cache_vol(seg->pool_lv)) {
+		cache_setting_seg = seg;
+		no_metadata_format = 1;
+	}
+
+	else if (lv_is_cache_pool(lv))
+		cache_setting_seg = seg;
+
+	if (cache_setting_seg) {
+		if (!dm_list_empty(&cache_setting_seg->lv->segs_using_this_lv)) {
+			switch (cache_setting_seg->cache_metadata_format) {
 			case CACHE_METADATA_FORMAT_2:
 			case CACHE_METADATA_FORMAT_1:
 				break;
 			default:
 				seg_error("has invalid cache metadata format");
 			}
-			switch (seg->cache_mode) {
+			switch (cache_setting_seg->cache_mode) {
 			case CACHE_MODE_WRITETHROUGH:
 			case CACHE_MODE_WRITEBACK:
 			case CACHE_MODE_PASSTHROUGH:
@@ -386,17 +396,24 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			default:
 				seg_error("has invalid cache's feature flag");
 			}
-			if (!seg->policy_name)
+			if (!cache_setting_seg->policy_name)
 				seg_error("is missing cache policy name");
 		}
-		if (!validate_cache_chunk_size(lv->vg->cmd, seg->chunk_size))
+
+		if (!validate_cache_chunk_size(lv->vg->cmd, cache_setting_seg->chunk_size))
 			seg_error("has invalid chunk size.");
-		if (seg->lv->status & LV_METADATA_FORMAT) {
-			if (seg->cache_metadata_format != CACHE_METADATA_FORMAT_2)
+
+		if (cache_setting_seg->lv->status & LV_METADATA_FORMAT) {
+			if (cache_setting_seg->cache_metadata_format != CACHE_METADATA_FORMAT_2)
 				seg_error("sets METADATA_FORMAT flag");
-		} else if (seg->cache_metadata_format == CACHE_METADATA_FORMAT_2)
+		}
+
+		if (!no_metadata_format &&
+		    (cache_setting_seg->cache_metadata_format == CACHE_METADATA_FORMAT_2) &&
+		    !(cache_setting_seg->lv->status & LV_METADATA_FORMAT))
 			seg_error("is missing METADATA_FORMAT flag");
-	} else { /* !cache_pool */
+
+	} else {
 		if (seg->cache_metadata_format)
 			seg_error("sets cache metadata format");
 		if (seg->cache_mode)
@@ -424,7 +441,8 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 		if (seg_is_mirror(seg)) {
 			if (!seg->region_size)
 				seg_error("region size is zero");
-			else if (seg->region_size > seg->lv->size)
+			/* Avoid regionsize check in case of 'mirrored' mirror log or larger than mlog regionsize will fail */
+			else if (!strstr(seg->lv->name, "_mlog") && (seg->region_size > seg->lv->size))
 				seg_error("region size is bigger then LV itself");
 			else if (!is_power_of_2(seg->region_size))
 				seg_error("region size is non power of 2");
@@ -523,11 +541,61 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			seg_error("is missing a VDO pool data LV");
 		} else if (!lv_is_vdo_pool_data(seg_lv(seg, 0)))
 			seg_error("is not VDO pool data LV");
+		if ((seg->vdo_params.minimum_io_size != (512 >> SECTOR_SHIFT)) &&
+		    (seg->vdo_params.minimum_io_size != (4096 >> SECTOR_SHIFT)))
+			seg_error("sets unsupported VDO minimum io size");
+		if ((seg->vdo_params.block_map_cache_size_mb < DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB) ||
+		    (seg->vdo_params.block_map_cache_size_mb > DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB))
+			seg_error("sets unsupported VDO block map cache size");
+		if ((seg->vdo_params.block_map_era_length < DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM) ||
+		    (seg->vdo_params.block_map_era_length > DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM))
+			seg_error("sets unsupported VDO block map era length");
+		if ((seg->vdo_params.index_memory_size_mb < DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB) ||
+		    (seg->vdo_params.index_memory_size_mb > DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB))
+			seg_error("sets unsupported VDO index memory size");
+		if ((seg->vdo_params.slab_size_mb < DM_VDO_SLAB_SIZE_MINIMUM_MB) ||
+		    (seg->vdo_params.slab_size_mb > DM_VDO_SLAB_SIZE_MAXIMUM_MB))
+			seg_error("sets unsupported VDO slab size");
+		if ((seg->vdo_params.max_discard < DM_VDO_MAX_DISCARD_MINIMUM) ||
+		    (seg->vdo_params.max_discard > DM_VDO_MAX_DISCARD_MAXIMUM))
+			seg_error("sets unsupported VDO max discard");
+		if (seg->vdo_params.ack_threads > DM_VDO_ACK_THREADS_MAXIMUM)
+			seg_error("sets unsupported VDO ack threads");
+		if ((seg->vdo_params.bio_threads < DM_VDO_BIO_THREADS_MINIMUM) ||
+		    (seg->vdo_params.bio_threads > DM_VDO_BIO_THREADS_MAXIMUM))
+			seg_error("sets unsupported VDO bio threads");
+		if ((seg->vdo_params.bio_rotation < DM_VDO_BIO_ROTATION_MINIMUM) ||
+		    (seg->vdo_params.bio_rotation > DM_VDO_BIO_ROTATION_MAXIMUM))
+			seg_error("sets unsupported VDO bio rotation");
+		if ((seg->vdo_params.cpu_threads < DM_VDO_CPU_THREADS_MINIMUM) ||
+		    (seg->vdo_params.cpu_threads > DM_VDO_CPU_THREADS_MAXIMUM))
+			seg_error("sets unsupported VDO cpu threads");
+		if (seg->vdo_params.hash_zone_threads > DM_VDO_HASH_ZONE_THREADS_MAXIMUM)
+			seg_error("sets unsupported VDO hash zone threads");
+		if (seg->vdo_params.logical_threads > DM_VDO_LOGICAL_THREADS_MAXIMUM)
+			seg_error("sets unsupported VDO logical threads");
+		if (seg->vdo_params.physical_threads > DM_VDO_PHYSICAL_THREADS_MAXIMUM)
+			seg_error("sets unsupported VDO physical threads");
 	} else { /* !VDO pool */
 		if (seg->vdo_pool_header_size)
 			seg_error("sets vdo_pool_header_size");
 		if (seg->vdo_pool_virtual_extents)
 			seg_error("sets vdo_pool_virtual_extents");
+		if (seg->vdo_params.minimum_io_size |
+		    seg->vdo_params.block_map_cache_size_mb |
+		    seg->vdo_params.block_map_era_length |
+		    seg->vdo_params.check_point_frequency |
+		    seg->vdo_params.index_memory_size_mb |
+		    seg->vdo_params.slab_size_mb |
+		    seg->vdo_params.max_discard |
+		    seg->vdo_params.ack_threads |
+		    seg->vdo_params.bio_threads |
+		    seg->vdo_params.bio_rotation |
+		    seg->vdo_params.cpu_threads |
+		    seg->vdo_params.hash_zone_threads |
+		    seg->vdo_params.logical_threads |
+		    seg->vdo_params.physical_threads)
+			seg_error("sets vdo_params");
 	}
 
 	if (seg_is_vdo(seg)) {
@@ -549,7 +617,8 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 	if (!seg_is_pool(seg) &&
 	    /* FIXME: format_pool/import_export.c  _add_linear_seg() sets chunk_size */
 	    !seg_is_linear(seg) &&
-	    !seg_is_snapshot(seg)) {
+	    !seg_is_snapshot(seg) &&
+	    !seg_is_cache(seg)) {
 		if (seg->chunk_size)
 			seg_error("sets chunk_size");
 	}
@@ -722,7 +791,9 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 		}
 		if (seg->log_lv == lv)
 			seg_found++;
-		if (seg->metadata_lv == lv || seg->pool_lv == lv)
+		if (seg->metadata_lv == lv || seg->pool_lv == lv || seg->writecache == lv)
+			seg_found++;
+		if (seg->integrity_meta_dev == lv)
 			seg_found++;
 		if (seg_is_thin_volume(seg) && (seg->origin == lv || seg->external_lv == lv))
 			seg_found++;
