@@ -1,3 +1,9 @@
+lvm2 (2.03.11-2.1pexip2) pexip-bullseye; urgency=medium
+
+  * Main bullseye build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Fri, 24 Jun 2022 14:03:48 +0100
+
 lvm2 (2.03.11-2.1pexip1) pexip; urgency=medium
 
   * Initial bullseye build
