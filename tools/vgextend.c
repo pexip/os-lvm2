@@ -60,9 +60,6 @@ static int _vgextend_restoremissing(struct cmd_context *cmd __attribute__((unuse
 	int fixed = 0;
 	unsigned i;
 
-	if (!archive(vg))
-		return_0;
-
 	for (i = 0; i < pp->pv_count; i++)
 		if (_restore_pv(vg, pp->pv_names[i]))
 			fixed++;
@@ -74,8 +71,6 @@ static int _vgextend_restoremissing(struct cmd_context *cmd __attribute__((unuse
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		return_ECMD_FAILED;
-
-	backup(vg);
 
 	log_print_unless_silent("Volume group \"%s\" successfully extended", vg_name);
 
@@ -99,9 +94,6 @@ static int _vgextend_single(struct cmd_context *cmd, const char *vg_name,
 		return ECMD_FAILED;
 	}
 
-	if (!archive(vg))
-		return_ECMD_FAILED;
-
 	if (!vg_extend_each_pv(vg, pp))
 		goto_out;
 
@@ -121,8 +113,6 @@ static int _vgextend_single(struct cmd_context *cmd, const char *vg_name,
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_out;
-
-	backup(vg);
 
 	log_print_unless_silent("Volume group \"%s\" successfully extended", vg_name);
 	ret = ECMD_PROCESSED;
@@ -168,6 +158,8 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 
 	clear_hint_file(cmd);
 
+	cmd->edit_devices_file = 1;
+
 	lvmcache_label_scan(cmd);
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
@@ -181,6 +173,8 @@ int vgextend(struct cmd_context *cmd, int argc, char **argv)
 			return_ECMD_FAILED;
 		}
 	}
+
+	unlock_devices_file(cmd);
 
 	/*
 	 * It is always ok to add new PVs to a VG - even if there are

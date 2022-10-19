@@ -12,6 +12,8 @@
 
 test_description='Check lvmlockd lock_args for different LV types'
 
+SKIP_WITH_LVMPOLLD=1
+
 . lib/inittest
 
 [ -z "$LVM_TEST_LVMLOCKD" ] && skip;
@@ -32,6 +34,12 @@ if test -n "$LVM_TEST_LVMLOCKD_TEST" ; then
 LOCKARGS1="dlm"
 LOCKARGS2="dlm"
 LOCKARGS3="dlm"
+fi
+
+if test -n "$LVM_TEST_LOCK_TYPE_IDM" ; then
+LOCKARGS1="idm"
+LOCKARGS2="idm"
+LOCKARGS3="idm"
 fi
 
 aux prepare_devs 5
@@ -182,4 +190,3 @@ lvchange -an $vg/lv4
 lvremove $vg/lv4
 
 vgremove $vg
-

@@ -22,17 +22,26 @@ struct dm_hash_node {
 	void *data;
 	unsigned data_len;
 	unsigned keylen;
-	char key[];
+	unsigned hash;
+	char key[0];
 };
 
 struct dm_hash_table {
 	unsigned num_nodes;
-	unsigned num_slots;
+	unsigned num_hint;
+	unsigned mask_slots;    /* (slots - 1) -> used as hash mask */
+	unsigned collisions;    /* Collissions of hash keys */
+	unsigned search;        /* How many keys were searched */
+	unsigned found;         /* How many nodes were found */
+	unsigned same_hash;     /* Was there a colision with same masked hash and len ? */
 	struct dm_hash_node **slots;
 };
 
-/* Permutation of the Integers 0 through 255 */
-static unsigned char _nums[] = {
+#if 0 /* TO BE REMOVED */
+static unsigned _hash(const void *key, unsigned len)
+{
+	/* Permutation of the Integers 0 through 255 */
+	static unsigned char _nums[] = {
 	1, 14, 110, 25, 97, 174, 132, 119, 138, 170, 125, 118, 27, 233, 140, 51,
 	87, 197, 177, 107, 234, 169, 56, 68, 30, 7, 173, 73, 188, 40, 36, 65,
 	49, 213, 104, 190, 57, 211, 148, 223, 48, 115, 15, 2, 67, 186, 210, 28,
@@ -57,7 +66,79 @@ static unsigned char _nums[] = {
 	44, 38, 31, 149, 135, 0, 216, 52, 63, 23, 37, 69, 39, 117, 146, 184,
 	163, 200, 222, 235, 248, 243, 219, 10, 152, 131, 123, 229, 203, 76, 120,
 	209
-};
+	};
+
+	const uint8_t *str = key;
+	unsigned h = 0, g;
+	unsigned i;
+
+	for (i = 0; i < len; i++) {
+		h <<= 4;
+		h += _nums[*str++];
+		g = h & ((unsigned) 0xf << 16u);
+		if (g) {
+			h ^= g >> 16u;
+			h ^= g >> 5u;
+		}
+	}
+
+	return h;
+}
+
+/* In-kernel DM hashing, still lots of collisions */
+static unsigned _hash_in_kernel(const char *key, unsigned len)
+{
+	const unsigned char *str = (unsigned char *)key;
+	const unsigned hash_mult = 2654435387U;
+	unsigned hash = 0, i;
+
+	for (i = 0; i < len; ++i)
+		hash = (hash + str[i]) * hash_mult;
+
+	return hash;
+}
+#endif
+
+#undef get16bits
+#if (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
+#define get16bits(d) (*((const uint16_t *) (d)))
+#endif
+
+#if !defined (get16bits)
+#define get16bits(d) ((((uint32_t)(((const uint8_t *)(d))[1])) << 8)\
+                       +(uint32_t)(((const uint8_t *)(d))[0]) )
+#endif
+
+/*
+ * Adapted Bob Jenkins hash to read by 2 bytes if possible.
+ * https://secure.wikimedia.org/wikipedia/en/wiki/Jenkins_hash_function
+ *
+ * Reduces amount of hash collisions
+ */
+static unsigned _hash(const void *key, unsigned len)
+{
+	const uint8_t *str = (uint8_t*) key;
+	unsigned hash = 0, i;
+	unsigned sz = len / 2;
+
+	for(i = 0; i < sz; ++i) {
+		hash += get16bits(str + 2 * i);
+		hash += (hash << 10);
+		hash ^= (hash >> 6);
+	}
+
+	if (len & 1) {
+		hash += str[len - 1];
+		hash += (hash << 10);
+		hash ^= (hash >> 6);
+	}
+
+	hash += (hash << 3);
+	hash ^= (hash >> 11);
+	hash += (hash << 15);
+
+	return hash;
+}
 
 static struct dm_hash_node *_create_node(const void *key, unsigned len)
 {
@@ -71,49 +152,32 @@ static struct dm_hash_node *_create_node(const void *key, unsigned len)
 	return n;
 }
 
-static unsigned long _hash(const void *key, unsigned len)
-{
-	const unsigned char *str = key;
-	unsigned long h = 0, g;
-	unsigned i;
-
-	for (i = 0; i < len; i++) {
-		h <<= 4;
-		h += _nums[*str++];
-		g = h & ((unsigned long) 0xf << 16u);
-		if (g) {
-			h ^= g >> 16u;
-			h ^= g >> 5u;
-		}
-	}
-
-	return h;
-}
-
 struct dm_hash_table *dm_hash_create(unsigned size_hint)
 {
 	size_t len;
 	unsigned new_size = 16u;
 	struct dm_hash_table *hc = zalloc(sizeof(*hc));
 
-	if (!hc)
-		return_0;
+	if (!hc) {
+		log_error("Failed to allocate memory for hash.");
+		return 0;
+	}
+
+	hc->num_hint = size_hint;
 
 	/* round size hint up to a power of two */
 	while (new_size < size_hint)
 		new_size = new_size << 1;
 
-	hc->num_slots = new_size;
+	hc->mask_slots = new_size - 1;
 	len = sizeof(*(hc->slots)) * new_size;
-	if (!(hc->slots = zalloc(len)))
-		goto_bad;
+	if (!(hc->slots = zalloc(len))) {
+		free(hc);
+		log_error("Failed to allocate slots for hash.");
+		return 0;
+	}
 
 	return hc;
-
-      bad:
-	free(hc->slots);
-	free(hc);
-	return 0;
 }
 
 static void _free_nodes(struct dm_hash_table *t)
@@ -121,7 +185,16 @@ static void _free_nodes(struct dm_hash_table *t)
 	struct dm_hash_node *c, *n;
 	unsigned i;
 
-	for (i = 0; i < t->num_slots; i++)
+#ifdef DEBUG
+	log_debug("Free hash hint:%d slots:%d nodes:%d (s:%d f:%d c:%d h:%d)",
+		  t->num_hint, t->mask_slots + 1, t->num_nodes,
+		  t->search, t->found, t->collisions, t->same_hash);
+#endif
+
+	if (!t->num_nodes)
+		return;
+
+	for (i = 0; i <= t->mask_slots; i++)
 		for (c = t->slots[i]; c; c = n) {
 			n = c->next;
 			free(c);
@@ -135,21 +208,30 @@ void dm_hash_destroy(struct dm_hash_table *t)
 	free(t);
 }
 
-static struct dm_hash_node **_find(struct dm_hash_table *t, const void *key,
-				   uint32_t len)
+static struct dm_hash_node **_findh(struct dm_hash_table *t, const void *key,
+				    uint32_t len, unsigned hash)
 {
-	unsigned h = _hash(key, len) & (t->num_slots - 1);
 	struct dm_hash_node **c;
 
-	for (c = &t->slots[h]; *c; c = &((*c)->next)) {
-		if ((*c)->keylen != len)
-			continue;
-
-		if (!memcmp(key, (*c)->key, len))
-			break;
+	++t->search;
+	for (c = &t->slots[hash & t->mask_slots]; *c; c = &((*c)->next)) {
+		if ((*c)->keylen == len && (*c)->hash == hash) {
+			if (!memcmp(key, (*c)->key, len)) {
+				++t->found;
+				break;
+			}
+			++t->same_hash;
+		}
+		++t->collisions;
 	}
 
 	return c;
+}
+
+static struct dm_hash_node **_find(struct dm_hash_table *t, const void *key,
+				   uint32_t len)
+{
+	return _findh(t, key, len, _hash(key, len));
 }
 
 void *dm_hash_lookup_binary(struct dm_hash_table *t, const void *key,
@@ -163,7 +245,8 @@ void *dm_hash_lookup_binary(struct dm_hash_table *t, const void *key,
 int dm_hash_insert_binary(struct dm_hash_table *t, const void *key,
 			  uint32_t len, void *data)
 {
-	struct dm_hash_node **c = _find(t, key, len);
+	unsigned hash = _hash(key, len);
+	struct dm_hash_node **c = _findh(t, key, len, hash);
 
 	if (*c)
 		(*c)->data = data;
@@ -174,6 +257,7 @@ int dm_hash_insert_binary(struct dm_hash_table *t, const void *key,
 			return 0;
 
 		n->data = data;
+		n->hash = hash;
 		n->next = 0;
 		*c = n;
 		t->num_nodes++;
@@ -217,7 +301,7 @@ static struct dm_hash_node **_find_str_with_val(struct dm_hash_table *t,
 	struct dm_hash_node **c;
 	unsigned h;
        
-	h = _hash(key, len) & (t->num_slots - 1);
+	h = _hash(key, len) & t->mask_slots;
 
 	for (c = &t->slots[h]; *c; c = &((*c)->next)) {
 		if ((*c)->keylen != len)
@@ -248,7 +332,7 @@ int dm_hash_insert_allow_multiple(struct dm_hash_table *t, const char *key,
 	n->data = (void *)val;
 	n->data_len = val_len;
 
-	h = _hash(key, len) & (t->num_slots - 1);
+	h = _hash(key, len) & t->mask_slots;
 
 	first = t->slots[h];
 
@@ -316,7 +400,7 @@ void *dm_hash_lookup_with_count(struct dm_hash_table *t, const char *key, int *c
 
 	*count = 0;
 
-	h = _hash(key, len) & (t->num_slots - 1);
+	h = _hash(key, len) & t->mask_slots;
 
 	for (c = &t->slots[h]; *c; c = &((*c)->next)) {
 		if ((*c)->keylen != len)
@@ -345,7 +429,7 @@ void dm_hash_iter(struct dm_hash_table *t, dm_hash_iterate_fn f)
 	struct dm_hash_node *c, *n;
 	unsigned i;
 
-	for (i = 0; i < t->num_slots; i++)
+	for (i = 0; i <= t->mask_slots; i++)
 		for (c = t->slots[i]; c; c = n) {
 			n = c->next;
 			f(c->data);
@@ -355,8 +439,8 @@ void dm_hash_iter(struct dm_hash_table *t, dm_hash_iterate_fn f)
 void dm_hash_wipe(struct dm_hash_table *t)
 {
 	_free_nodes(t);
-	memset(t->slots, 0, sizeof(struct dm_hash_node *) * t->num_slots);
-	t->num_nodes = 0u;
+	memset(t->slots, 0, sizeof(struct dm_hash_node *) * (t->mask_slots + 1));
+	t->num_nodes = t->collisions = t->search = t->same_hash = 0u;
 }
 
 char *dm_hash_get_key(struct dm_hash_table *t __attribute__((unused)),
@@ -376,7 +460,7 @@ static struct dm_hash_node *_next_slot(struct dm_hash_table *t, unsigned s)
 	struct dm_hash_node *c = NULL;
 	unsigned i;
 
-	for (i = s; i < t->num_slots && !c; i++)
+	for (i = s; i <= t->mask_slots && !c; i++)
 		c = t->slots[i];
 
 	return c;
@@ -389,7 +473,5 @@ struct dm_hash_node *dm_hash_get_first(struct dm_hash_table *t)
 
 struct dm_hash_node *dm_hash_get_next(struct dm_hash_table *t, struct dm_hash_node *n)
 {
-	unsigned h = _hash(n->key, n->keylen) & (t->num_slots - 1);
-
-	return n->next ? n->next : _next_slot(t, h + 1);
+	return n->next ? n->next : _next_slot(t, (n->hash & t->mask_slots) + 1);
 }

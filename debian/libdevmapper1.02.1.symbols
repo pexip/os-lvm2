@@ -1,6 +1,5 @@
 libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  Base@Base 2:1.02.20
- Local@Local 2:1.02.110
  *@DM_1_02_97 2:1.02.97
  *@DM_1_02_98 2:1.02.98
  *@DM_1_02_99 2:1.02.99
@@ -22,6 +21,8 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  *@DM_1_02_138 2:1.02.138
  *@DM_1_02_141 2:1.02.141
  *@DM_1_02_147 2:1.02.147
+ *@DM_1_02_172 2:1.02.172
+ *@DM_1_02_181 2:1.02.181
  dm_asprintf@Base 2:1.02.20
  dm_basename@Base 2:1.02.20
  dm_bit_and@Base 2:1.02.47
@@ -292,7 +293,6 @@ libdevmapper.so.1.02.1 libdevmapper1.02.1 #MINVER#
  dm_tree_node_set_thin_pool_discard@Base 2:1.02.77
  dm_tree_node_set_thin_pool_error_if_no_space@Base 2:1.02.99
  dm_tree_node_set_udev_flags@Base 2:1.02.74
- dm_tree_node_size_changed@Base 2:1.02.36
  dm_tree_preload_children@Base 2:1.02.20
  dm_tree_retry_remove@Base 2:1.02.74
  dm_tree_set_cookie@Base 2:1.02.36

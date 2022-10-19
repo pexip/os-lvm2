@@ -31,6 +31,10 @@ _clear_online_files() {
 
 aux prepare_devs 8 16
 
+# Check 'pvscan' is ignored when event_activation is 0
+pvscan --cache -aay -v --config 'global/event_activation=0' 2>&1 | tee out
+grep "Ignoring pvscan" out
+
 vgcreate $vg1 "$dev1" "$dev2"
 lvcreate -n $lv1 -l 4 -a n $vg1
 
@@ -121,7 +125,7 @@ vgremove -f $vg1
 
 pvcreate "$dev3"
 
-PVID3=`pvs $dev3 --noheading -o uuid | tr -d - | awk '{print $1}'`
+PVID3=$(pvs "$dev3" --noheading -o uuid | tr -d - | awk '{print $1}')
 echo $PVID3
 
 not ls "$RUNDIR/lvm/pvs_online/$PVID3"
@@ -216,7 +220,7 @@ vgremove -ff $vg3
 pvremove "$dev8"
 pvcreate -y --setphysicalvolumesize 8M "$dev8"
 
-PVID8=`pvs $dev8 --noheading -o uuid | tr -d - | awk '{print $1}'`
+PVID8=$(pvs "$dev8" --noheading -o uuid | tr -d - | awk '{print $1}')
 echo $PVID8
 
 vgcreate $vg3 "$dev8"
@@ -234,4 +238,3 @@ ls "$RUNDIR/lvm/vgs_online/$vg3"
 vgchange -an $vg3
 
 vgremove -ff $vg3
-

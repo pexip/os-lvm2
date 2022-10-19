@@ -42,15 +42,18 @@ struct volume_group {
 	struct lvmcache_vginfo *vginfo;
 	uint32_t seqno;		/* Metadata sequence number */
 	unsigned skip_validate_lock_args : 1;
+	unsigned needs_backup : 1;
+	unsigned needs_write_and_commit : 1;
 	uint32_t write_count; /* count the number of vg_write calls */
+	uint32_t buffer_size_hint; /* hint with buffer size of parsed VG */
 
 	/*
 	 * The parsed committed (on-disk) copy of this VG; is NULL if this VG is committed
 	 * version (i.e. vg_committed == NULL *implies* this is the committed copy,
 	 * there is no guarantee that if this VG is the same as the committed one
-	 * this will be NULL). The pointer is maintained by calls to
-	 * _vg_update_vg_committed.
+	 * this will be NULL). The pointer is maintained by calls to vg_write & vg_commit
 	 */
+	struct dm_config_tree *committed_cft;
 	struct volume_group *vg_committed;
 	struct volume_group *vg_precommitted;
 
@@ -128,6 +131,7 @@ struct volume_group {
 	struct dm_hash_table *hostnames; /* map of creation hostnames */
 	struct logical_volume *pool_metadata_spare_lv; /* one per VG */
 	struct logical_volume *sanlock_lv; /* one per VG */
+	struct dm_list msg_list;
 };
 
 struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
@@ -167,6 +171,7 @@ uint32_t vg_mda_used_count(const struct volume_group *vg);
 uint32_t vg_mda_copies(const struct volume_group *vg);
 int vg_set_mda_copies(struct volume_group *vg, uint32_t mda_copies);
 char *vg_profile_dup(const struct volume_group *vg);
+void vg_backup_if_needed(struct volume_group *vg);
 
 /*
  * Returns visible LV count - number of LVs from user perspective

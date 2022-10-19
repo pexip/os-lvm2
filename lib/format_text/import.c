@@ -157,13 +157,12 @@ struct volume_group *text_read_metadata(struct format_instance *fid,
 		if (!config_file_read_fd(cft, dev, MDA_CONTENT_REASON(primary_mda), offset, size,
 					 offset2, size2, checksum_fn, checksum,
 					 skip_parse, 1)) {
-			/* FIXME: handle errors */
-			log_error("Couldn't read volume group metadata from %s.", dev_name(dev));
+			log_warn("WARNING: couldn't read volume group metadata from %s.", dev_name(dev));
 			goto out;
 		}
 	} else {
 		if (!config_file_read(cft)) {
-			log_error("Couldn't read volume group metadata from file.");
+			log_warn("WARNING: couldn't read volume group metadata from file.");
 			goto out;
 		}
 	}
@@ -186,6 +185,9 @@ struct volume_group *text_read_metadata(struct format_instance *fid,
 			goto_out;
 
 		(*vsn)->read_desc(vg->vgmem, cft, when, desc);
+		vg->committed_cft = cft; /* Reuse CFT for recreation of committed VG */
+		vg->buffer_size_hint = size + size2;
+		cft = NULL;
 		break;
 	}
 
@@ -198,7 +200,8 @@ struct volume_group *text_read_metadata(struct format_instance *fid,
 		*use_previous_vg = 0;
 
       out:
-	config_destroy(cft);
+	if (cft)
+		config_destroy(cft);
 	return vg;
 }
 
@@ -231,7 +234,7 @@ static struct volume_group *_import_vg_from_config_tree(struct cmd_context *cmd,
 		if (!(vg = (*vsn)->read_vg(cmd, fid->fmt, fid, cft)))
 			stack;
 		else {
-			set_pv_devices(fid, vg, NULL);
+			set_pv_devices(fid, vg);
 
 			if ((vg_missing = vg_missing_pv_count(vg)))
 				log_verbose("There are %d physical volumes missing.", vg_missing);

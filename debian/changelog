@@ -1,9 +1,32 @@
-lvm2 (2.03.11-2.1) unstable; urgency=medium
+lvm2 (2.03.16-2) unstable; urgency=medium
 
-  * Non-maintainer upload.
-  * Add patch to fix path to sort in blkdeactivate. (closes: #946882)
+  * Remove remaining unused init scripts.
+  * Call update-initramfs trigger directly.
 
- -- Ivo De Decker <ivodd@debian.org>  Mon, 22 Feb 2021 21:39:14 +0000
+ -- Bastian Blank <waldi@debian.org>  Wed, 19 Oct 2022 21:37:31 +0200
+
+lvm2 (2.03.16-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Disable systemd usage in udeb. (closes: #1015174)
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 26 Jul 2022 20:46:14 +0200
+
+lvm2 (2.03.15-2) unstable; urgency=medium
+
+  * Actually fix filename in lvm2 initamfs-tools integration, fixing
+    installation error. (closes: #1014314)
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 04 Jul 2022 20:11:20 +0200
+
+lvm2 (2.03.15-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Remove traces of systemd generator.
+  * Fix installation of lvmdbusd.
+  * Support new udev activation without systemd.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 03 Jul 2022 20:09:13 +0200
 
 lvm2 (2.03.11-2) unstable; urgency=medium
 

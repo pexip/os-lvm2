@@ -212,7 +212,7 @@ static int _mirrored_transient_status(struct dm_pool *mem, struct lv_segment *se
 
 	if (!strcmp(sm->log_type, "disk")) {
 		log = first_seg(lv)->log_lv;
-		if (!lv_info(lv->vg->cmd, log, 0, &info, 0, 0)) {
+		if (!lv_info(lv->vg->cmd, log, 0, &info, 0, 0) || !info.exists) {
 			log_error("Check for existence of mirror log %s failed.",
 				  display_lvname(log));
 			goto out;
@@ -235,7 +235,7 @@ static int _mirrored_transient_status(struct dm_pool *mem, struct lv_segment *se
 	}
 
 	for (i = 0; i < seg->area_count; ++i) {
-		if (!lv_info(lv->vg->cmd, seg_lv(seg, i), 0, &info, 0, 0)) {
+		if (!lv_info(lv->vg->cmd, seg_lv(seg, i), 0, &info, 0, 0) || !info.exists) {
 			log_error("Check for existence of mirror image %s failed.",
 				  seg_lv(seg, i)->name);
 			goto out;
@@ -405,7 +405,8 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 	if (!_mirrored_checked) {
 		_mirrored_checked = 1;
 
-		if (!(_mirrored_present = target_present(cmd, TARGET_NAME_MIRROR, 1)))
+		if (!(_mirrored_present = target_present_version(cmd, TARGET_NAME_MIRROR, 1,
+								 &maj, &min, &patchlevel)))
 			return 0;
 
 		/*

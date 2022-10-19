@@ -270,8 +270,10 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 	if (!seg->area_count)
 		raid_seg_error("zero area count");
 
-	if (!seg->areas)
+	if (!seg->areas) {
 		raid_seg_error("zero areas");
+		return;
+	}
 
 	if (seg->extents_copied > seg->len)
 		raid_seg_error_val("extents_copied too large", seg->extents_copied);
@@ -371,7 +373,7 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			seg_error("sets cleaner_policy");
 	}
 
-	if (lv_is_cache(lv) && seg->pool_lv && lv_is_cache_vol(seg->pool_lv)) {
+	if (seg->pool_lv && lv_is_cache(lv) && lv_is_cache_vol(seg->pool_lv)) {
 		cache_setting_seg = seg;
 		no_metadata_format = 1;
 	}
@@ -495,6 +497,8 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			seg_error("sets discards");
 		if (!dm_list_empty(&seg->thin_messages))
 			seg_error("sets thin_messages list");
+		if (seg->lv->status & LV_CROP_METADATA)
+			seg_error("sets CROP_METADATA flag");
 	}
 
 	if (seg_is_thin_volume(seg)) {

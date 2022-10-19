@@ -247,6 +247,63 @@ static void _raid_destroy(struct segment_type *segtype)
 	free(segtype);
 }
 
+/* Check availability of raid10 taking data copies into consideration. */
+static bool _raid10_is_available(const struct logical_volume *lv)
+{
+	uint32_t i, rebuilds_per_group = 0, s;
+	const uint32_t copies = 2; /* FIXME: we only support 2-way mirrors (i.e. 2 data copies) in RAID10 for now. */
+	struct lv_segment *seg = first_seg(lv); /* We only have one segment in RaidLVs for now. */
+
+	for (i = 0; i < seg->area_count * copies; ++i) {
+		s = i % seg->area_count;
+
+		if (!(i % copies))
+			rebuilds_per_group = 0;
+
+		if (seg_type(seg, s) == AREA_LV &&
+		    (lv_is_partial(seg_lv(seg, s)) ||
+		     lv_is_virtual(seg_lv(seg, s))))
+			rebuilds_per_group++;
+
+		if (rebuilds_per_group >= copies)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Return true in case RaidLV with specific RAID level is available.
+ *
+ * - raid0: all legs have to be live
+ * - raid1 : minimum of 1 leg live
+ * - raid4/5: maximum of 1 leg unavailable
+ * - raid6:  maximum of 2 legs unavailable
+ * - raid10: minimum of 1 leg per mirror group available
+ *
+ */
+bool raid_is_available(const struct logical_volume *lv)
+{
+	uint32_t s, missing_legs = 0;
+	struct lv_segment *seg = first_seg(lv); /* We only have one segment in RaidLVs for now. */
+
+	/* Be cautious about bogus calls. */
+	if (!seg || !seg_is_raid(seg))
+		return false;
+
+	if (seg_is_any_raid10(seg))
+		return _raid10_is_available(lv);
+
+	/* Count missing RAID legs */
+	for (s = 0; s < seg->area_count; ++s)
+		if (seg_type(seg, s) == AREA_LV &&
+		    lv_is_partial(seg_lv(seg, s)))
+			missing_legs++;
+
+	/* Degradation: segtype raid1 may miss legs-1, raid0/4/5/6 may loose parity devices. */
+	return missing_legs <= (seg_is_raid1(seg) ? seg->area_count - 1 : seg->segtype->parity_devs);
+}
+
 #ifdef DEVMAPPER_SUPPORT
 static int _raid_target_present(struct cmd_context *cmd,
 				const struct lv_segment *seg __attribute__((unused)),
@@ -384,12 +441,10 @@ static int _raid_target_percent(void **target_state,
 
 	*total_numerator += sr->insync_regions;
 	*total_denominator += sr->total_regions;
+	*percent = dm_make_percent(sr->insync_regions, sr->total_regions);
 
 	if (seg)
-		seg->extents_copied = (uint64_t) seg->area_len
-			* dm_make_percent(sr->insync_regions , sr->total_regions) / DM_PERCENT_100;
-
-	*percent = dm_make_percent(sr->insync_regions, sr->total_regions);
+		seg->extents_copied = (uint64_t) seg->area_len * *percent / DM_PERCENT_100;
 
 	dm_pool_free(mem, sr);
 
@@ -402,7 +457,6 @@ static int _raid_transient_status(struct dm_pool *mem,
 {
 	int failed = 0, r = 0;
 	unsigned i;
-	struct lvinfo info;
 	struct logical_volume *lv;
 	struct dm_status_raid *sr;
 
@@ -421,7 +475,7 @@ static int _raid_transient_status(struct dm_pool *mem,
 	if (seg->meta_areas)
 		for (i = 0; i < seg->area_count; ++i) {
 			lv = seg_metalv(seg, i);
-			if (!lv_info(lv->vg->cmd, lv, 0, &info, 0, 0)) {
+			if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0)) {
 				log_error("Check for existence of raid meta %s failed.",
 					  display_lvname(lv));
 				goto out;
@@ -430,7 +484,7 @@ static int _raid_transient_status(struct dm_pool *mem,
 
 	for (i = 0; i < seg->area_count; ++i) {
 		lv = seg_lv(seg, i);
-		if (!lv_info(lv->vg->cmd, lv, 0, &info, 0, 0)) {
+		if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0)) {
 			log_error("Check for existence of raid image %s failed.",
 				  display_lvname(lv));
 			goto out;
@@ -494,10 +548,8 @@ static int _raid_target_present(struct cmd_context *cmd,
 	if (!_raid_checked) {
 		_raid_checked = 1;
 
-		if (!(_raid_present = target_present(cmd, TARGET_NAME_RAID, 1)))
-			return 0;
-
-		if (!target_version("raid", &maj, &min, &patchlevel))
+		if (!(_raid_present = target_present_version(cmd, TARGET_NAME_RAID, 1,
+							     &maj, &min, &patchlevel)))
 			return_0;
 
 		for (i = 0; i < DM_ARRAY_SIZE(_features); ++i)

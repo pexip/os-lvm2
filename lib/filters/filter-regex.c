@@ -15,11 +15,16 @@
 
 #include "lib/misc/lib.h"
 #include "lib/filters/filter.h"
+#include "lib/commands/toolcontext.h"
 
 struct rfilter {
 	struct dm_pool *mem;
 	dm_bitset_t accept;
 	struct dm_regex *engine;
+	unsigned config_filter:1;
+	unsigned config_global_filter:1;
+	unsigned warned_filter:1;
+	unsigned warned_global_filter:1;
 };
 
 static int _extract_pattern(struct dm_pool *mem, const char *pat,
@@ -153,6 +158,22 @@ static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct devic
 
 	dev->filtered_flags &= ~DEV_FILTERED_REGEX;
 
+	if (cmd->enable_devices_list)
+		return 1;
+
+	if (cmd->enable_devices_file && !cmd->filter_regex_with_devices_file) {
+		/* can't warn in create_filter because enable_devices_file is set later */
+		if (rf->config_filter && !rf->warned_filter) {
+			log_warn("Please remove the lvm.conf filter, it is ignored with the devices file.");
+			rf->warned_filter = 1;
+		}
+		if (rf->config_global_filter && !rf->warned_global_filter) {
+			log_warn("Please remove the lvm.conf global_filter, it is ignored with the devices file.");
+			rf->warned_global_filter = 1;
+		}
+		return 1;
+	}
+
 	dm_list_iterate_items(sl, &dev->aliases) {
 		m = dm_regex_match(rf->engine, sl->str);
 
@@ -192,7 +213,7 @@ static void _regex_destroy(struct dev_filter *f)
 	dm_pool_destroy(rf->mem);
 }
 
-struct dev_filter *regex_filter_create(const struct dm_config_value *patterns)
+struct dev_filter *regex_filter_create(const struct dm_config_value *patterns, int config_filter, int config_global_filter)
 {
 	struct dm_pool *mem = dm_pool_create("filter regex", 10 * 1024);
 	struct rfilter *rf;
@@ -205,6 +226,9 @@ struct dev_filter *regex_filter_create(const struct dm_config_value *patterns)
 		goto_bad;
 
 	rf->mem = mem;
+
+	rf->config_filter = config_filter;
+	rf->config_global_filter = config_global_filter;
 
 	if (!_build_matcher(rf, patterns))
 		goto_bad;

@@ -26,6 +26,7 @@
 #include "lib/metadata/vg.h"
 #include "lib/metadata/lv.h"
 #include "lib/misc/lvm-percent.h"
+#include <stdbool.h>
 
 #define MAX_STRIPES 128U
 #define SECTOR_SHIFT 9L
@@ -56,7 +57,9 @@
 #define ALLOCATABLE_PV		UINT64_C(0x0000000000000008)	/* PV */
 #define ARCHIVED_VG		ALLOCATABLE_PV		/* VG, reuse same bit */
 
-//#define SPINDOWN_LV		UINT64_C(0x0000000000000010)	/* LV */
+#define LV_NOAUTOACTIVATE	UINT64_C(0x0000000000000010)   /* LV - also a PV flag */
+#define NOAUTOACTIVATE		UINT64_C(0x0000000000000010)   /* VG - also a PV flag */
+
 //#define BADBLOCK_ON		UINT64_C(0x0000000000000020)	/* LV */
 #define VISIBLE_LV		UINT64_C(0x0000000000000040)	/* LV */
 #define FIXED_MINOR		UINT64_C(0x0000000000000080)	/* LV */
@@ -143,6 +146,7 @@
 
 #define LV_REMOVE_AFTER_RESHAPE	UINT64_C(0x0400000000000000)	/* LV needs to be removed after a shrinking reshape */
 #define LV_METADATA_FORMAT	UINT64_C(0x0800000000000000)    /* LV has segments with metadata format */
+#define LV_CROP_METADATA	UINT64_C(0x0000000000000400)	/* LV - also VG CLUSTERED */
 
 #define LV_RESHAPE		UINT64_C(0x1000000000000000)    /* Ongoing reshape (number of stripes, stripesize or raid algorithm change):
 								   used as SEGTYPE_FLAG to prevent activation on old runtime */
@@ -155,6 +159,7 @@
 
 #define LV_CACHE_VOL		UINT64_C(0x0010000000000000)	/* LV - also a PV flag */
 #define LV_CACHE_USES_CACHEVOL	UINT64_C(0x4000000000000000)	/* LV - also a PV flag */
+
 
 
 /* Format features flags */
@@ -326,6 +331,12 @@ typedef enum {
 } thin_discards_t;
 
 typedef enum {
+	THIN_CROP_METADATA_UNSELECTED = 0,  /* 'auto' selects */
+	THIN_CROP_METADATA_NO,
+	THIN_CROP_METADATA_YES,
+} thin_crop_metadata_t;
+
+typedef enum {
 	CACHE_MODE_UNSELECTED = 0,
 	CACHE_MODE_WRITETHROUGH,
 	CACHE_MODE_WRITEBACK,
@@ -345,6 +356,7 @@ typedef enum {
 	LOCK_TYPE_CLVM = 1,
 	LOCK_TYPE_DLM = 2,
 	LOCK_TYPE_SANLOCK = 3,
+	LOCK_TYPE_IDM = 4,
 } lock_type_t;
 
 struct cmd_context;
@@ -359,7 +371,7 @@ struct format_type {
 	struct labeller *labeller;
 	const char *name;
 	const char *alias;
-	const char *orphan_vg_name;
+	char orphan_vg_name[ID_LEN];
 	struct volume_group *orphan_vg; /* Only one ever exists. */
 	uint32_t features;
 	void *library;
@@ -502,6 +514,7 @@ struct lv_segment {
 	uint64_t transaction_id;		/* For thin_pool, thin */
 	thin_zero_t zero_new_blocks;		/* For thin_pool */
 	thin_discards_t discards;		/* For thin_pool */
+	thin_crop_metadata_t crop_metadata;	/* For thin_pool */
 	struct dm_list thin_messages;		/* For thin_pool */
 	struct logical_volume *external_lv;	/* For thin */
 	struct logical_volume *pool_lv;		/* For thin, cache */
@@ -885,6 +898,8 @@ int update_thin_pool_params(struct cmd_context *cmd,
 			    unsigned attr,
 			    uint32_t pool_data_extents,
 			    uint32_t *pool_metadata_extents,
+			    struct logical_volume *metadata_lv,
+			    unsigned *crop_metadata,
 			    int *chunk_size_calc_method, uint32_t *chunk_size,
 			    thin_discards_t *discards, thin_zero_t *zero_new_blocks);
 
@@ -912,6 +927,8 @@ int handle_pool_metadata_spare(struct volume_group *vg, uint32_t extents,
 			       struct dm_list *pvh, int poolmetadataspare);
 int vg_set_pool_metadata_spare(struct logical_volume *lv);
 int vg_remove_pool_metadata_spare(struct volume_group *vg);
+
+struct logical_volume *data_lv_from_thin_pool(struct logical_volume *pool_lv);
 
 int attach_thin_external_origin(struct lv_segment *seg,
 				struct logical_volume *external_lv);
@@ -961,6 +978,7 @@ struct lvcreate_params {
 #define ACTIVATION_SKIP_SET_ENABLED	0x02 /* set the LV activation skip flag state to 'enabled' */
 #define ACTIVATION_SKIP_IGNORE		0x04 /* request to ignore LV activation skip flag (if any) */
 	int activation_skip; /* activation skip flags */
+	int noautoactivate; /* 1 if --setautoactivation n */
 	activation_change_t activate; /* non-snapshot, non-mirror */
 	thin_discards_t discards;     /* thin */
 	thin_zero_t zero_new_blocks;
@@ -1011,10 +1029,12 @@ struct lvcreate_params {
 
 	uint64_t permission; /* all */
 	unsigned error_when_full; /* when segment supports it */
+	thin_crop_metadata_t crop_metadata;
 	uint32_t read_ahead; /* all */
 	int approx_alloc;     /* all */
 	alloc_policy_t alloc; /* all */
 	struct dm_vdo_target_params vdo_params; /* vdo */
+	uint64_t vdo_pool_header_size; /* VDO */
 
 	int raidintegrity;
 	const char *raidintegritymode;
@@ -1227,6 +1247,11 @@ int collapse_mirrored_lv(struct logical_volume *lv);
 int shift_mirror_images(struct lv_segment *mirrored_seg, unsigned mimage);
 
 /* ++  metadata/raid_manip.c */
+struct lv_status_raid {
+	struct dm_pool *mem;
+	struct dm_status_raid *raid;
+	dm_percent_t in_sync;
+};
 int lv_is_raid_with_tracking(const struct logical_volume *lv);
 uint32_t lv_raid_image_count(const struct logical_volume *lv);
 int lv_raid_change_image_count(struct logical_volume *lv,
@@ -1308,6 +1333,7 @@ int update_cache_pool_params(struct cmd_context *cmd,
 			     unsigned attr,
 			     uint32_t pool_data_extents,
 			     uint32_t *pool_metadata_extents,
+			     struct logical_volume *metadata_lv,
 			     int *chunk_size_calc_method, uint32_t *chunk_size);
 int validate_lv_cache_chunk_size(struct logical_volume *pool_lv, uint32_t chunk_size);
 int validate_lv_cache_create_pool(const struct logical_volume *pool_lv);
@@ -1339,13 +1365,17 @@ const char *get_vdo_write_policy_name(enum dm_vdo_write_policy policy);
 uint64_t get_vdo_pool_virtual_size(const struct lv_segment *vdo_pool_seg);
 int update_vdo_pool_virtual_size(struct lv_segment *vdo_pool_seg);
 int parse_vdo_pool_status(struct dm_pool *mem, const struct logical_volume *vdo_pool_lv,
-			  const char *params, struct lv_status_vdo *status);
+			  const char *params, const struct dm_info *dminfo,
+			  struct lv_status_vdo *status);
 struct logical_volume *convert_vdo_pool_lv(struct logical_volume *data_lv,
 					   const struct dm_vdo_target_params *vtp,
-					   uint32_t *virtual_extents);
+					   uint32_t *virtual_extents,
+					   int format,
+					   uint64_t vdo_pool_header_size);
 int set_vdo_write_policy(enum dm_vdo_write_policy *vwp, const char *policy);
 int fill_vdo_target_params(struct cmd_context *cmd,
 			   struct dm_vdo_target_params *vtp,
+			   uint64_t *vdo_pool_header_size,
 			   struct profile *profile);
 /* --  metadata/vdo_manip.c */
 

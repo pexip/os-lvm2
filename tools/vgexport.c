@@ -45,10 +45,6 @@ static int vgexport_single(struct cmd_context *cmd __attribute__((unused)),
 		}
 	}
 
-
-	if (!archive(vg))
-		goto_bad;
-
 	vg->status |= EXPORTED_VG;
 	vg->system_id = NULL;
 
@@ -57,8 +53,6 @@ static int vgexport_single(struct cmd_context *cmd __attribute__((unused)),
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
-
-	backup(vg);
 
 	log_print_unless_silent("Volume group \"%s\" successfully exported", vg->name);
 

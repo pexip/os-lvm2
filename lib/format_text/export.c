@@ -23,6 +23,7 @@
 #include "lib/metadata/segtype.h"
 #include "lib/format_text/text_export.h"
 #include "lib/commands/toolcontext.h"
+#include "lib/device/device_id.h"
 #include "libdaemon/client/config-util.h"
 
 #include <stdarg.h>
@@ -527,6 +528,7 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 	struct physical_volume *pv;
 	char buffer[PATH_MAX * 2];
 	const char *name;
+	const char *idtype, *idname;
 
 	outf(f, "physical_volumes {");
 	_inc_indent(f);
@@ -554,6 +556,13 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 		outhint(f, "device = \"%s\"",
 			dm_escape_double_quotes(buffer, pv_dev_name(pv)));
 		outnl(f);
+
+		idtype = dev_idtype_for_metadata(vg->cmd, pv->dev);
+		idname = dev_idname_for_metadata(vg->cmd, pv->dev);
+		if (idtype && idname) {
+			outf(f, "device_id_type = \"%s\"", idtype);
+			outf(f, "device_id = \"%s\"", idname);
+		}
 
 		if (!_print_flag_config(f, pv->status, PV_FLAGS))
 			return_0;
@@ -871,45 +880,50 @@ bad:
 	return 0;
 }
 
-static int _print_historical_lv(struct formatter *f, struct historical_logical_volume *hlv)
+static int _print_historical_lv_with_descendants(struct formatter *f, struct historical_logical_volume *hlv,
+						 char *descendants_buffer)
 {
 	char buffer[40];
-	char *descendants_buffer = NULL;
-	int r = 0;
 
 	if (!id_write_format(&hlv->lvid.id[1], buffer, sizeof(buffer)))
-		goto_out;
+		return_0;
 
-	if (!_alloc_printed_indirect_descendants(&hlv->indirect_glvs, &descendants_buffer))
-		goto_out;
-
-	outnlgo(f);
-	outfgo(f, "%s {", hlv->name);
+	outnl(f);
+	outf(f, "%s {", hlv->name);
 	_inc_indent(f);
 
-	outfgo(f, "id = \"%s\"", buffer);
+	outf(f, "id = \"%s\"", buffer);
 
 	if (!_print_timestamp(f, "creation_time", hlv->timestamp, buffer, sizeof(buffer)))
-		goto_out;
+		return_0;
 
 	if (!_print_timestamp(f, "removal_time", hlv->timestamp_removed, buffer, sizeof(buffer)))
-		goto_out;
+		return_0;
 
 	if (hlv->indirect_origin) {
 		if (hlv->indirect_origin->is_historical)
-			outfgo(f, "origin = \"%s%s\"", HISTORICAL_LV_PREFIX, hlv->indirect_origin->historical->name);
+			outf(f, "origin = \"%s%s\"", HISTORICAL_LV_PREFIX, hlv->indirect_origin->historical->name);
 		else
-			outfgo(f, "origin = \"%s\"", hlv->indirect_origin->live->name);
+			outf(f, "origin = \"%s\"", hlv->indirect_origin->live->name);
 	}
 
 	if (descendants_buffer)
-		outfgo(f, "descendants = %s", descendants_buffer);
+		outf(f, "descendants = %s", descendants_buffer);
 
 	_dec_indent(f);
-	outfgo(f, "}");
+	outf(f, "}");
 
-	r = 1;
-out:
+	return 1;
+}
+
+static int _print_historical_lv(struct formatter *f, struct historical_logical_volume *hlv)
+{
+	char *descendants_buffer = NULL;
+	int r = 0;
+
+	if (_alloc_printed_indirect_descendants(&hlv->indirect_glvs, &descendants_buffer))
+		r = _print_historical_lv_with_descendants(f, hlv, descendants_buffer);
+
 	free(descendants_buffer);
 
 	return r;
@@ -946,12 +960,13 @@ static int _build_pv_names(struct formatter *f, struct volume_group *vg)
 	int count = 0;
 	struct pv_list *pvl;
 	struct physical_volume *pv;
-	char buffer[32], *uuid, *name;
+	char buffer[32], *name;
+	char uuid[64];
 
 	if (!(f->mem = dm_pool_create("text pv_names", 512)))
 		return_0;
 
-	if (!(f->pv_names = dm_hash_create(128)))
+	if (!(f->pv_names = dm_hash_create(115)))
 		return_0;
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
@@ -964,8 +979,7 @@ static int _build_pv_names(struct formatter *f, struct volume_group *vg)
 		if (!(name = dm_pool_strdup(f->mem, buffer)))
 			return_0;
 
-		if (!(uuid = dm_pool_zalloc(f->mem, 64)) ||
-		   !id_write_format(&pv->id, uuid, 64))
+		if (!id_write_format(&pv->id, uuid, sizeof(uuid)))
 			return_0;
 
 		if (!dm_hash_insert(f->pv_names, uuid, name))
@@ -1031,62 +1045,53 @@ static int _text_vg_export(struct formatter *f,
 
 int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp)
 {
-	struct formatter *f;
 	int r;
+	struct formatter f = {
+		.indent = 0,
+		.header = 1,
+		.out_with_comment = &_out_with_comment_file,
+		.nl = &_nl_file,
+		.data.fp = fp,
+	};
 
 	_init();
 
-	if (!(f = zalloc(sizeof(*f))))
-		return_0;
+	if ((r = _text_vg_export(&f, vg, desc)))
+		r = !ferror(f.data.fp);
 
-	f->data.fp = fp;
-	f->indent = 0;
-	f->header = 1;
-	f->out_with_comment = &_out_with_comment_file;
-	f->nl = &_nl_file;
-
-	r = _text_vg_export(f, vg, desc);
-	if (r)
-		r = !ferror(f->data.fp);
-	free(f);
 	return r;
 }
 
 /* Returns amount of buffer used incl. terminating NUL */
 size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf, uint32_t *buf_size)
 {
-	struct formatter *f;
-	size_t r = 0;
+	size_t r;
+	struct formatter f = {
+		.indent = 0,
+		.header = 0,
+		.out_with_comment = &_out_with_comment_raw,
+		.nl = &_nl_raw,
+		.data.buf.size = vg->buffer_size_hint + 16384,	/* Initial metadata limit */
+	};
 
 	_init();
 
-	if (!(f = zalloc(sizeof(*f))))
-		return_0;
-
-	f->data.buf.size = 65536;	/* Initial metadata limit */
-	if (!(f->data.buf.start = zalloc(f->data.buf.size))) {
+	if (!(f.data.buf.start = zalloc(f.data.buf.size))) {
 		log_error("text_export buffer allocation failed");
-		goto out;
+		return 0;
 	}
 
-	f->indent = 0;
-	f->header = 0;
-	f->out_with_comment = &_out_with_comment_raw;
-	f->nl = &_nl_raw;
-
-	if (!_text_vg_export(f, vg, desc)) {
-		free(f->data.buf.start);
-		goto_out;
+	if (!_text_vg_export(&f, vg, desc)) {
+		free(f.data.buf.start);
+		return 0;
 	}
 
-	r = f->data.buf.used + 1;
-	*buf = f->data.buf.start;
+	r = f.data.buf.used + 1;
+	*buf = f.data.buf.start;
 
 	if (buf_size)
-		*buf_size = f->data.buf.size;
+		*buf_size = f.data.buf.size;
 
-      out:
-	free(f);
 	return r;
 }
 

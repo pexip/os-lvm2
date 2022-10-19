@@ -17,10 +17,10 @@
 
 struct hint {
 	struct dm_list list;
-	char name[PATH_MAX];
-	char pvid[ID_LEN + 1];
-	char vgname[NAME_LEN];
 	dev_t devt;
+	char name[PATH_MAX]   __attribute__((aligned(8)));
+	char vgname[NAME_LEN] __attribute__((aligned(8)));
+	char pvid[ID_LEN + 1] __attribute__((aligned(8)));
 	unsigned chosen:1; /* this hint's dev was chosen for scanning */
 };
 
@@ -40,6 +40,9 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints);
 void hints_exit(struct cmd_context *cmd);
 
 void pvscan_recreate_hints_begin(struct cmd_context *cmd);
+
+void get_single_vgname_cmd_arg(struct cmd_context *cmd,
+                               struct dm_list *hints, char **vgname);
 
 #endif
 

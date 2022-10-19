@@ -29,13 +29,13 @@ xx(formats,
    "List available metadata formats",
    PERMITTED_READ_ONLY | NO_METADATA_PROCESSING)
 
+xx(fullreport,
+   "Display full report",
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_HINTS | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
+
 xx(help,
    "Display help for commands",
    PERMITTED_READ_ONLY | NO_METADATA_PROCESSING)
-
-xx(fullreport,
-   "Display full report",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_HINTS | ALLOW_EXPORTED)
 
 xx(lastlog,
    "Display last command's log report",
@@ -55,7 +55,7 @@ xx(lvcreate,
 
 xx(lvdisplay,
    "Display information about a logical volume",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(lvextend,
    "Add space to a logical volume",
@@ -69,9 +69,13 @@ xx(lvmconfig,
    "Display and manipulate configuration information",
    PERMITTED_READ_ONLY | NO_METADATA_PROCESSING)
 
+xx(lvmdevices,
+   "Manage the devices file",
+   DEVICE_ID_NOT_FOUND)
+
 xx(lvmdiskscan,
    "List devices that may be used as physical volumes",
-   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(lvmsadc,
    "Collect activity data",
@@ -79,6 +83,10 @@ xx(lvmsadc,
 
 xx(lvmsar,
    "Create activity report",
+   0)
+
+xx(lvpoll,
+   "Continue already initiated poll operation on a logical volume",
    0)
 
 xx(lvreduce,
@@ -99,18 +107,14 @@ xx(lvresize,
 
 xx(lvs,
    "Display information about logical volumes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(lvscan,
    "List all logical volumes in all volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(pvchange,
    "Change attributes of physical volume(s)",
-   0)
-
-xx(pvresize,
-   "Resize physical volume(s)",
    0)
 
 xx(pvck,
@@ -127,7 +131,7 @@ xx(pvdata,
 
 xx(pvdisplay,
    "Display various attributes of physical volume(s)",
-   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 /* ALL_VGS_IS_DEFAULT is for polldaemon to find pvmoves in-progress using process_each_vg. */
 
@@ -135,21 +139,21 @@ xx(pvmove,
    "Move extents from one physical volume to another",
    ALL_VGS_IS_DEFAULT | DISALLOW_TAG_ARGS)
 
-xx(lvpoll,
-   "Continue already initiated poll operation on a logical volume",
-   0)
-
 xx(pvremove,
    "Remove LVM label(s) from physical volume(s)",
    ENABLE_ALL_DEVS)
 
+xx(pvresize,
+   "Resize physical volume(s)",
+   0)
+
 xx(pvs,
    "Display information about physical volumes",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | ENABLE_ALL_DEVS | ENABLE_DUPLICATE_DEVS | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(pvscan,
    "List all physical volumes",
-   PERMITTED_READ_ONLY | LOCKD_VG_SH | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | LOCKD_VG_SH | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(segtypes,
    "List available segment types",
@@ -161,6 +165,10 @@ xx(systemid,
 
 xx(tags,
    "List tags defined on this host",
+   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING)
+
+xx(version,
+   "Display software and driver version information",
    PERMITTED_READ_ONLY | NO_METADATA_PROCESSING)
 
 xx(vgcfgbackup,
@@ -189,7 +197,7 @@ xx(vgcreate,
 
 xx(vgdisplay,
    "Display volume group information",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(vgexport,
    "Unregister volume group(s) from the system",
@@ -206,6 +214,10 @@ xx(vgimport,
 xx(vgimportclone,
    "Import a VG from cloned PVs",
    ALLOW_EXPORTED)
+
+xx(vgimportdevices,
+   "Add devices for a VG to the devices file.",
+   ALL_VGS_IS_DEFAULT | ALLOW_EXPORTED)
 
 xx(vgmerge,
    "Merge volume groups",
@@ -229,16 +241,12 @@ xx(vgrename,
 
 xx(vgs,
    "Display information about volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | CAN_USE_ONE_SCAN | ALLOW_HINTS | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(vgscan,
    "Search for all volume groups",
-   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_EXPORTED)
+   PERMITTED_READ_ONLY | ALL_VGS_IS_DEFAULT | LOCKD_VG_SH | ALLOW_EXPORTED | CHECK_DEVS_USED | DEVICE_ID_NOT_FOUND)
 
 xx(vgsplit,
    "Move physical volumes into a new or existing volume group",
    0)
-
-xx(version,
-   "Display software and driver version information",
-   PERMITTED_READ_ONLY | NO_METADATA_PROCESSING)

@@ -19,7 +19,7 @@ esac
 cp -a /etc/lvm/ ${DESTDIR}/etc/lvm/
 
 mkdir -p $DESTDIR/lib/udev/rules.d/
-for rules in 56-lvm.rules 69-lvm-metad.rules; do
+for rules in 56-lvm.rules 69-lvm.rules; do
 	if   [ -e /etc/udev/rules.d/$rules ]; then
 		cp -p /etc/udev/rules.d/$rules $DESTDIR/lib/udev/rules.d/
 	elif [ -e /lib/udev/rules.d/$rules ]; then

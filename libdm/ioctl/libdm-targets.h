@@ -47,7 +47,7 @@ struct dm_task {
 	mode_t mode;
 	uint32_t read_ahead;
 	uint32_t read_ahead_flags;
-	union {
+	union dmi_u {
 		struct dm_ioctl *v4;
 	} dmi;
 	char *newname;
@@ -69,6 +69,7 @@ struct dm_task {
 	int enable_checks;
 	int expected_errno;
 	int ioctl_errno;
+	int ima_measurement;
 
 	int record_timestamp;
 

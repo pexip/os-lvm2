@@ -32,6 +32,7 @@
 #include "lib/cache/lvmcache.h"
 #include "lib/format_text/archiver.h"
 #include "lib/lvmpolld/lvmpolld-client.h"
+#include "lib/device/device_id.h"
 
 #include <locale.h>
 #include <sys/stat.h>
@@ -39,6 +40,10 @@
 #include <sys/utsname.h>
 #include <syslog.h>
 #include <time.h>
+
+#ifdef APP_MACHINEID_SUPPORT
+#include <systemd/sd-id128.h>
+#endif
 
 #ifdef __linux__
 #  include <malloc.h>
@@ -128,9 +133,12 @@ static const char *_read_system_id_from_file(struct cmd_context *cmd, const char
 	return system_id;
 }
 
+/* systemd-id128 new produced: f64406832c2140e8ac5422d1089aae03 */
+#define LVM_APPLICATION_ID SD_ID128_MAKE(f6,44,06,83,2c,21,40,e8,ac,54,22,d1,08,9a,ae,03)
+
 static const char *_system_id_from_source(struct cmd_context *cmd, const char *source)
 {
-	char filebuf[PATH_MAX];
+	char buf[PATH_MAX];
 	const char *file;
 	const char *etc_str;
 	const char *str;
@@ -149,10 +157,25 @@ static const char *_system_id_from_source(struct cmd_context *cmd, const char *s
 		goto out;
 	}
 
+#ifdef APP_MACHINEID_SUPPORT
+	if (!strcasecmp(source, "appmachineid")) {
+		sd_id128_t id = { 0 };
+
+		if (sd_id128_get_machine_app_specific(LVM_APPLICATION_ID, &id) != 0)
+			log_warn("WARNING: sd_id128_get_machine_app_specific() failed %s (%d).",
+				 strerror(errno), errno);
+
+		if (dm_snprintf(buf, PATH_MAX, SD_ID128_FORMAT_STR, SD_ID128_FORMAT_VAL(id)) < 0)
+			stack;
+		system_id = system_id_from_string(cmd, buf);
+		goto out;
+	}
+#endif
+
 	if (!strcasecmp(source, "machineid") || !strcasecmp(source, "machine-id")) {
 		etc_str = find_config_tree_str(cmd, global_etc_CFG, NULL);
-		if (dm_snprintf(filebuf, sizeof(filebuf), "%s/machine-id", etc_str) != -1)
-			system_id = _read_system_id_from_file(cmd, filebuf);
+		if (dm_snprintf(buf, sizeof(buf), "%s/machine-id", etc_str) != -1)
+			system_id = _read_system_id_from_file(cmd, buf);
 		goto out;
 	}
 
@@ -229,7 +252,7 @@ static void _get_sysfs_dir(struct cmd_context *cmd, char *buf, size_t buf_size)
 		return;
 	}
 
-	strncpy(buf, sys_mnt, buf_size);
+	(void) dm_strncpy(buf, sys_mnt, buf_size);
 }
 
 static uint32_t _parse_debug_fields(struct cmd_context *cmd, int cfg, const char *cfgname)
@@ -319,6 +342,33 @@ static int _parse_debug_classes(struct cmd_context *cmd)
 	return debug_classes;
 }
 
+static uint32_t _parse_log_journal(struct cmd_context *cmd, int cfg, const char *cfgname)
+{
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	uint32_t fields = 0;
+	uint32_t val;
+
+	if (!(cn = find_config_tree_array(cmd, cfg, NULL))) {
+		log_debug("Unable to find configuration for log/%s.", cfgname);
+		return 0;
+	}
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (cv->type != DM_CFG_STRING) {
+			log_verbose("log/%s contains a value which is not a string.  Ignoring.", cfgname);
+			continue;
+		}
+
+		if ((val = log_journal_str_to_val(cv->v.str)))
+			fields |= val;
+		else
+			log_verbose("Unrecognised value for log/%s: %s", cfgname, cv->v.str);
+	}
+
+	return fields;
+}
+
 static void _init_logging(struct cmd_context *cmd)
 {
 	int append = 1;
@@ -329,11 +379,10 @@ static void _init_logging(struct cmd_context *cmd)
 
 	/* Syslog */
 	cmd->default_settings.syslog = find_config_tree_bool(cmd, log_syslog_CFG, NULL);
-	if (cmd->default_settings.syslog != 1)
+	if (cmd->default_settings.syslog)
+		init_syslog(1, DEFAULT_LOG_FACILITY);
+	else
 		fin_syslog();
-
-	if (cmd->default_settings.syslog > 1)
-		init_syslog(cmd->default_settings.syslog);
 
 	/* Debug level for log file output */
 	cmd->default_settings.debug = find_config_tree_int(cmd, log_level_CFG, NULL);
@@ -387,6 +436,9 @@ static void _init_logging(struct cmd_context *cmd)
 	init_debug_file_fields(_parse_debug_fields(cmd, log_debug_file_fields_CFG, "debug_file_fields"));
 	init_debug_output_fields(_parse_debug_fields(cmd, log_debug_output_fields_CFG, "debug_output_fields"));
 
+	cmd->default_settings.journal = _parse_log_journal(cmd, log_journal_CFG, "journal");
+	init_log_journal(cmd->default_settings.journal);
+
 	t = time(NULL);
 	ctime_r(&t, &timebuf[0]);
 	timebuf[24] = '\0';
@@ -401,15 +453,12 @@ static void _init_logging(struct cmd_context *cmd)
 	reset_lvm_errno(1);
 }
 
-static int _check_disable_udev(const char *msg) {
+static int _check_disable_udev(const char *msg)
+{
 	if (getenv("DM_DISABLE_UDEV")) {
-		log_very_verbose("DM_DISABLE_UDEV environment variable set. "
-				 "Overriding configuration to use "
-				 "udev_rules=0, udev_sync=0, verify_udev_operations=1.");
-		if (udev_is_running())
-			log_warn("Udev is running and DM_DISABLE_UDEV environment variable is set. "
-				 "Bypassing udev, LVM will %s.", msg);
-
+		log_very_verbose("DM_DISABLE_UDEV environment variable set.");
+		log_very_verbose("Overriding configuration to use udev_rules=0, udev_sync=0, verify_udev_operations=1.");
+		log_very_verbose("LVM will %s.", msg);
 		return 1;
 	}
 
@@ -562,7 +611,7 @@ static int _init_system_id(struct cmd_context *cmd)
 static int _process_config(struct cmd_context *cmd)
 {
 	mode_t old_umask;
-	const char *dev_ext_info_src;
+	const char *dev_ext_info_src = NULL;
 	const char *read_ahead;
 	struct stat st;
 	const struct dm_config_node *cn;
@@ -596,14 +645,25 @@ static int _process_config(struct cmd_context *cmd)
 #endif
 
 	dev_ext_info_src = find_config_tree_str(cmd, devices_external_device_info_source_CFG, NULL);
-	if (dev_ext_info_src && !strcmp(dev_ext_info_src, "none"))
-		init_external_device_info_source(DEV_EXT_NONE);
-	else if (dev_ext_info_src && !strcmp(dev_ext_info_src, "udev"))
-		init_external_device_info_source(DEV_EXT_UDEV);
-	else {
-		log_error("Invalid external device info source specification.");
-		return 0;
+
+	if (dev_ext_info_src &&
+	    strcmp(dev_ext_info_src, "none") &&
+	    strcmp(dev_ext_info_src, "udev")) {
+		log_warn("WARNING: unknown external device info source, using none.");
+		dev_ext_info_src = NULL;
 	}
+
+	if (dev_ext_info_src && !strcmp(dev_ext_info_src, "udev")) {
+		if (udev_init_library_context()) {
+			init_external_device_info_source(DEV_EXT_UDEV);
+		} else {
+			log_warn("WARNING: failed to init udev for external device info, using none.");
+			dev_ext_info_src = NULL;
+		}
+	}
+
+	if (!dev_ext_info_src || !strcmp(dev_ext_info_src, "none"))
+		init_external_device_info_source(DEV_EXT_NONE);
 
 	/* proc dir */
 	if (dm_snprintf(cmd->proc_dir, sizeof(cmd->proc_dir), "%s",
@@ -660,6 +720,8 @@ static int _process_config(struct cmd_context *cmd)
 	 */
 	cmd->default_settings.udev_fallback = udev_disabled ? 1 : -1;
 
+	cmd->default_settings.issue_discards = find_config_tree_bool(cmd, devices_issue_discards_CFG, NULL);
+
 	init_retry_deactivation(find_config_tree_bool(cmd, activation_retry_deactivation_CFG, NULL));
 
 	init_activation_checks(find_config_tree_bool(cmd, activation_checks_CFG, NULL));
@@ -705,6 +767,7 @@ static int _process_config(struct cmd_context *cmd)
 	init_pv_min_size((uint64_t)pv_min_kb * (1024 >> SECTOR_SHIFT));
 
 	cmd->check_pv_dev_sizes = find_config_tree_bool(cmd, metadata_check_pv_device_sizes_CFG, NULL);
+	cmd->event_activation = find_config_tree_bool(cmd, global_event_activation_CFG, NULL);
 
 	if (!process_profilable_config(cmd))
 		return_0;
@@ -963,8 +1026,13 @@ static void _destroy_config(struct cmd_context *cmd)
 	/* CONFIG_FILE/CONFIG_MERGED_FILES */
 	if ((cft = remove_config_tree_by_source(cmd, CONFIG_MERGED_FILES)))
 		config_destroy(cft);
-	else
-		remove_config_tree_by_source(cmd, CONFIG_FILE);
+	else if ((cft = remove_config_tree_by_source(cmd, CONFIG_FILE))) {
+		dm_list_iterate_items(cfl, &cmd->config_files) {
+			if (cfl->cft == cft)
+				dm_list_del(&cfl->list);
+		}
+		config_destroy(cft);
+	}
 
 	dm_list_iterate_items(cfl, &cmd->config_files)
 		config_destroy(cfl->cft);
@@ -1010,16 +1078,10 @@ static int _init_dev_cache(struct cmd_context *cmd)
 	if (!dev_cache_init(cmd))
 		return_0;
 
-	/*
-	 * Override existing config and hardcode device_list_from_udev = 0 if:
-	 *   - udev is not running
-	 *   - udev is disabled using DM_DISABLE_UDEV environment variable
-	 */
-	if (_check_disable_udev("obtain device list by scanning device directory"))
-		device_list_from_udev = 0;
-	else
-		device_list_from_udev = udev_is_running() ?
-			find_config_tree_bool(cmd, devices_obtain_device_list_from_udev_CFG, NULL) : 0;
+	if ((device_list_from_udev = find_config_tree_bool(cmd, devices_obtain_device_list_from_udev_CFG, NULL))) {
+		if (!udev_init_library_context())
+			device_list_from_udev = 0;
+	}
 
 	init_obtain_device_list_from_udev(device_list_from_udev);
 
@@ -1081,26 +1143,9 @@ static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 	 * Update MAX_FILTERS definition above when adding new filters.
 	 */
 
-	/*
-	 * sysfs filter. Only available on 2.6 kernels.  Non-critical.
-	 * Listed first because it's very efficient at eliminating
-	 * unavailable devices.
-	 */
-	if (find_config_tree_bool(cmd, devices_sysfs_scan_CFG, NULL)) {
-		if ((filters[nr_filt] = sysfs_filter_create()))
-			nr_filt++;
-	}
-
-	/* internal filter used by command processing. */
-	if (!(filters[nr_filt] = internal_filter_create())) {
-		log_error("Failed to create internal device filter");
-		goto bad;
-	}
-	nr_filt++;
-
 	/* global regex filter. Optional. */
 	if ((cn = find_config_tree_node(cmd, devices_global_filter_CFG, NULL))) {
-		if (!(filters[nr_filt] = regex_filter_create(cn->v))) {
+		if (!(filters[nr_filt] = regex_filter_create(cn->v, 0, 1))) {
 			log_error("Failed to create global regex device filter");
 			goto bad;
 		}
@@ -1109,7 +1154,7 @@ static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 
 	/* regex filter. Optional. */
 	if ((cn = find_config_tree_node(cmd, devices_filter_CFG, NULL))) {
-		if (!(filters[nr_filt] = regex_filter_create(cn->v))) {
+		if (!(filters[nr_filt] = regex_filter_create(cn->v, 1, 0))) {
 			log_error("Failed to create regex device filter");
 			goto bad;
 		}
@@ -1122,6 +1167,24 @@ static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 		goto bad;
 	}
 	nr_filt++;
+
+	/* filter based on the device_ids saved in the devices file */
+	if (!(filters[nr_filt] = deviceid_filter_create(cmd))) {
+		log_error("Failed to create deviceid device filter");
+		goto bad;
+	}
+	nr_filt++;
+
+	/*
+	 * sysfs filter. Only available on 2.6 kernels.  Non-critical.
+	 * Eliminates unavailable devices.
+	 * TODO: this may be unnecessary now with device ids
+	 * (currently not used for devs match to device id using syfs)
+	 */
+	if (find_config_tree_bool(cmd, devices_sysfs_scan_CFG, NULL)) {
+		if ((filters[nr_filt] = sysfs_filter_create()))
+			nr_filt++;
+	}
 
 	/* usable device filter. Required. */
 	if (!(filters[nr_filt] = usable_filter_create(cmd, cmd->dev_types, FILTER_MODE_NO_LVMETAD))) {
@@ -1164,7 +1227,7 @@ static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 			nr_filt++;
 	}
 
-	if (!(composite = composite_filter_create(nr_filt, 1, filters)))
+	if (!(composite = composite_filter_create(nr_filt, filters)))
 		goto_bad;
 
 	return composite;
@@ -1485,6 +1548,7 @@ int init_run_by_dmeventd(struct cmd_context *cmd)
 	init_dmeventd_monitor(DMEVENTD_MONITOR_IGNORE);
 	init_ignore_suspended_devices(1);
 	init_disable_dmeventd_monitoring(1); /* Lock settings */
+	cmd->run_by_dmeventd = 1;
 
 	return 0;
 }
@@ -1532,7 +1596,6 @@ struct cmd_context *create_config_context(void)
 
 	dm_list_init(&cmd->config_files);
 	dm_list_init(&cmd->tags);
-	dm_list_init(&cmd->hints);
 
 	if (!_init_lvm_conf(cmd))
 		goto_out;
@@ -1582,8 +1645,6 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	bindtextdomain(INTL_PACKAGE, LOCALEDIR);
 #endif
 
-	init_syslog(DEFAULT_LOG_FACILITY);
-
 	if (!(cmd = zalloc(sizeof(*cmd)))) {
 		log_error("Failed to allocate command context");
 		return NULL;
@@ -1594,11 +1655,11 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	cmd->handles_missing_pvs = 0;
 	cmd->handles_unknown_segments = 0;
 	cmd->hosttags = 0;
+	cmd->check_devs_used = 1;
 	dm_list_init(&cmd->arg_value_groups);
 	dm_list_init(&cmd->formats);
 	dm_list_init(&cmd->segtypes);
 	dm_list_init(&cmd->tags);
-	dm_list_init(&cmd->hints);
 	dm_list_init(&cmd->config_files);
 	label_init();
 
@@ -1716,6 +1777,8 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 
 	if (!_init_dev_cache(cmd))
 		goto_out;
+
+	devices_file_init(cmd);
 
 	memlock_init(cmd);
 
@@ -1842,6 +1905,7 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	_destroy_segtypes(&cmd->segtypes);
 	_destroy_formats(cmd, &cmd->formats);
 
+	devices_file_exit(cmd);
 	if (!dev_cache_exit())
 		stack;
 	_destroy_dev_types(cmd);
@@ -1921,6 +1985,8 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	if (!_init_dev_cache(cmd))
 		return_0;
 
+	devices_file_init(cmd);
+
 	if (!_init_formats(cmd))
 		return_0;
 
@@ -1968,24 +2034,18 @@ void destroy_toolcontext(struct cmd_context *cmd)
 	_destroy_segtypes(&cmd->segtypes);
 	_destroy_formats(cmd, &cmd->formats);
 	_destroy_filters(cmd);
-	if (cmd->mem)
-		dm_pool_destroy(cmd->mem);
+	devices_file_exit(cmd);
 	dev_cache_exit();
 	_destroy_dev_types(cmd);
 	_destroy_tags(cmd);
 
 	if ((cft_cmdline = remove_config_tree_by_source(cmd, CONFIG_STRING)))
 		config_destroy(cft_cmdline);
-	_destroy_config(cmd);
 
 	if (cmd->cft_def_hash)
 		dm_hash_destroy(cmd->cft_def_hash);
 
-	if (cmd->libmem)
-		dm_pool_destroy(cmd->libmem);
-
-	if (cmd->pending_delete_mem)
-		dm_pool_destroy(cmd->pending_delete_mem);
+	dm_device_list_destroy(&cmd->cache_dm_devs);
 #ifndef VALGRIND_POOL
 	if (cmd->linebuffer) {
 		/* Reset stream buffering to defaults */
@@ -2010,7 +2070,7 @@ void destroy_toolcontext(struct cmd_context *cmd)
 		free(cmd->linebuffer);
 	}
 #endif
-	free(cmd);
+	destroy_config_context(cmd);
 
 	lvmpolld_disconnect();
 

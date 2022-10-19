@@ -27,15 +27,17 @@ struct physical_volume {
 	struct id old_id;		/* Set during pvchange -u. */
 	struct device *dev;
 	const char *device_hint;	/* primary name last time metadata was written */
+	const char *device_id;
+	const char *device_id_type;
 	const struct format_type *fmt;
 	struct format_instance *fid;
 
 	/*
-	 * vg_name and vgid are used before the parent VG struct exists.
+	 * vg_name and vg_id are used before the parent VG struct exists.
 	 * FIXME: Investigate removal/substitution with 'vg' fields.
 	 */
 	const char *vg_name;
-	struct id vgid;
+	struct id vg_id; /* variables named "vgid" are char ID_LEN+1 */
 
 	/*
 	 * 'vg' is set and maintained when the PV belongs to a 'pvs'
@@ -77,6 +79,8 @@ char *pv_attr_dup(struct dm_pool *mem, const struct physical_volume *pv);
 const char *pv_dev_name(const struct physical_volume *pv);
 char *pv_uuid_dup(struct dm_pool *mem, const struct physical_volume *pv);
 char *pv_tags_dup(const struct physical_volume *pv);
+char *pv_deviceid_dup(struct dm_pool *mem, const struct physical_volume *pv);
+char *pv_deviceidtype_dup(struct dm_pool *mem, const struct physical_volume *pv);
 uint64_t pv_size(const struct physical_volume *pv);
 uint64_t pv_size_field(const struct physical_volume *pv);
 uint64_t pv_dev_size(const struct physical_volume *pv);

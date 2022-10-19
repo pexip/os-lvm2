@@ -13,6 +13,10 @@ case "$1" in
         if dpkg --compare-versions "$2" lt "2.03.02-3~"; then
             invoke-rc.d lvm2-lvmetad stop || true
         fi
+        if dpkg --compare-versions "$2" lt "2.03.16-2~"; then
+            invoke-rc.d lvm2 stop || true
+            invoke-rc.d lvm2-lvmpolld stop || true
+        fi
     ;;
 esac
 

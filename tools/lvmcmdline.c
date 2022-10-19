@@ -17,9 +17,12 @@
 
 #include "lvm2cmdline.h"
 #include "lib/label/label.h"
+#include "lib/device/device_id.h"
 #include "lvm-version.h"
 #include "lib/locking/lvmlockd.h"
+#include "lib/datastruct/str_list.h"
 
+/* coverity[unnecessary_header] */
 #include "stub.h"
 #include "lib/misc/last-path-component.h"
 
@@ -72,12 +75,13 @@ extern struct lv_type lv_types[LVT_COUNT + 1];
 /*
  * Table of command names
  */
-extern struct command_name command_names[MAX_COMMAND_NAMES];
+extern struct command_name command_names[];
 
 /*
  * Table of commands (as defined in command-lines.in)
  */
 struct command commands[COMMAND_COUNT];
+struct command *commands_idx[COMMAND_COUNT];
 
 static struct cmdline_context _cmdline;
 
@@ -1214,19 +1218,35 @@ static void _set_valid_args_for_command_name(int ci)
 	int opt_enum; /* foo_ARG from args.h */
 	int opt_syn;
 	int i, ro, oo, io;
+	int first = 0, last = COMMAND_COUNT - 1, middle;
+	const char *name = command_names[ci].name;
 
-	/*
-	 * all_args is indexed by the foo_ARG enum vals
-	 */
+	/* all_args is indexed by the foo_ARG enum vals */
+	/* Binary search in sorted array of long options (with duplicates) */
+	while (first <= last) {
+		middle = first + (last - first) / 2;
+		if ((i = strcmp(commands_idx[middle]->name, name)) < 0)
+			first = middle + 1;
+		else if (i > 0)
+			last = middle - 1;
+		else {
+			/* Matching command found.
+			 * As sorted array contains duplicates, found 1st. and last such cmd. */
+			i = middle;
+			while (middle > first && !strcmp(commands_idx[middle - 1]->name, name))
+				middle--;
+			while (i < last && !strcmp(commands_idx[i + 1]->name, name))
+				i++;
+			last = i;
+			break;
+		}
+	}
 
-	for (i = 0; i < COMMAND_COUNT; i++) {
-		if (strcmp(commands[i].name, command_names[ci].name))
-			continue;
-
+	while (middle <= last) {
+		i = commands_idx[middle++]->command_index;
 		for (ro = 0; ro < (commands[i].ro_count + commands[i].any_ro_count); ro++) {
 			opt_enum = commands[i].required_opt_args[ro].opt;
 			all_args[opt_enum] = 1;
-
 		}
 		for (oo = 0; oo < commands[i].oo_count; oo++) {
 			opt_enum = commands[i].optional_opt_args[oo].opt;
@@ -1273,19 +1293,6 @@ static void _set_valid_args_for_command_name(int ci)
 	command_names[ci].num_args = num_args;
 }
 
-static struct command_name *_find_command_name(const char *name)
-{
-	int i;
-	
-	for (i = 0; i < MAX_COMMAND_NAMES; i++) {
-		if (!command_names[i].name)
-			break;
-		if (!strcmp(command_names[i].name, name))
-			return &command_names[i];
-	}
-	return NULL;
-}
-
 static const struct command_function *_find_command_id_function(int command_enum)
 {
 	int i;
@@ -1307,6 +1314,14 @@ static void _unregister_commands(void)
 	_cmdline.command_names = NULL;
 	_cmdline.num_command_names = 0;
 	memset(&commands, 0, sizeof(commands));
+}
+
+static int _command_name_compare(const void *on1, const void *on2)
+{
+	const struct command * const *optname1 = on1;
+	const struct command * const *optname2 = on2;
+
+	return strcmp((*optname1)->name, (*optname2)->name);
 }
 
 int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
@@ -1332,6 +1347,8 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 	_cmdline.num_commands = COMMAND_COUNT;
 
 	for (i = 0; i < COMMAND_COUNT; i++) {
+		commands_idx[i] = &commands[i];
+		commands[i].command_index = i;
 		commands[i].command_enum = command_id_to_enum(commands[i].command_id);
 
 		if (!commands[i].command_enum) {
@@ -1346,23 +1363,20 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 
 		/* old style */
 		if (!commands[i].functions) {
-			struct command_name *cname = _find_command_name(commands[i].name);
+			struct command_name *cname = find_command_name(commands[i].name);
 			if (cname)
 				commands[i].fn = cname->fn;
 		}
 	}
 
-	_cmdline.command_names = command_names;
-	_cmdline.num_command_names = 0;
+	/* Sort all commands by its name for quick binary search */
+	qsort(commands_idx, COMMAND_COUNT, sizeof(long), _command_name_compare);
 
-	for (i = 0; i < MAX_COMMAND_NAMES; i++) {
-		if (!command_names[i].name)
-			break;
-		_cmdline.num_command_names++;
-	}
-
-	for (i = 0; i < _cmdline.num_command_names; i++)
+	for (i = 0; command_names[i].name; i++)
 		_set_valid_args_for_command_name(i);
+
+	_cmdline.num_command_names = i; /* Also counted how many command entries we have */
+	_cmdline.command_names = command_names;
 
 	return 1;
 }
@@ -1517,7 +1531,7 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 	 * the VG position is allowed to be empty if --name VG/LV is used, or if the
 	 * LVM_VG_NAME env var is set.
 	 *
-	 * --thinpool VG/LV and --cachepool VG/LV can also function like --name 
+	 * --thinpool|--cachepool|--vdopool VG/LV can also function like --name
 	 * to provide the VG name in place of the positional arg.
 	 */
 	if (!strcmp(cmd->name, "lvcreate") &&
@@ -1526,6 +1540,7 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 	    (arg_is_set(cmd, name_ARG) ||
 	     arg_is_set(cmd, thinpool_ARG) ||
 	     arg_is_set(cmd, cachepool_ARG) ||
+	     arg_is_set(cmd, vdopool_ARG) ||
 	     getenv("LVM_VG_NAME"))) {
 
 		if (getenv("LVM_VG_NAME"))
@@ -1545,6 +1560,9 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 			if (strstr(name, "/"))
 				return 1;
 		}
+
+		if ((name = arg_str_value(cmd, vdopool_ARG, NULL)) && strstr(name, "/"))
+			return 1;
 	}
 
 	return 0;
@@ -1690,6 +1708,15 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 			if (cmd->opt_count - cmd->opt_arg_values[verbose_ARG].count)
 				continue;
 		}
+
+		/*
+		 * If the cmd def has an implied type, specified in AUTOTYPE,
+		 * then if the user command has --type, it must match.
+		 */
+		if (type_arg && commands[i].autotype && strcmp(type_arg, commands[i].autotype))
+			continue;
+		if (type_arg && commands[i].autotype2 && strcmp(type_arg, commands[i].autotype2))
+			continue;
 
 		/*
 		 * '--type foo' is special.  If the user has set --type foo, then
@@ -1990,6 +2017,8 @@ out:
 	log_debug("Recognised command %s (id %d / enum %d).",
 		  commands[best_i].command_id, best_i, commands[best_i].command_enum);
 
+	log_command(cmd->cmd_line, commands[best_i].name, commands[best_i].command_id);
+
 	return &commands[best_i];
 }
 
@@ -2000,7 +2029,7 @@ static void _short_usage(const char *name)
 
 static int _usage(const char *name, int longhelp, int skip_notes)
 {
-	struct command_name *cname = _find_command_name(name);
+	struct command_name *cname = find_command_name(name);
 	struct command *cmd = NULL;
 	int show_full = longhelp;
 	int i;
@@ -2068,11 +2097,8 @@ static void _usage_all(void)
 {
 	int i;
 
-	for (i = 0; i < MAX_COMMAND_NAMES; i++) {
-		if (!command_names[i].name)
-			break;
+	for (i = 0; command_names[i].name; i++)
 		_usage(command_names[i].name, 1, 1);
-	}
 
 	print_usage_notes(NULL);
 }
@@ -2164,7 +2190,7 @@ static int _find_arg(const char *cmd_name, int goval)
 	int arg_enum;
 	int i;
 
-	if (!(cname = _find_command_name(cmd_name)))
+	if (!(cname = find_command_name(cmd_name)))
 		return -1;
 
 	for (i = 0; i < cname->num_args; i++) {
@@ -2212,7 +2238,7 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 	*ptr = '\0';
 	memset(o, 0, sizeof(*o));
 
-	optarg = 0;
+	optarg = (char*) "";
 	optind = OPTIND_INIT;
 	while ((goval = GETOPTLONG_FN(*argc, *argv, str, opts, NULL)) >= 0) {
 
@@ -2367,6 +2393,11 @@ static void _reset_current_settings_to_default(struct cmd_context *cmd)
 
 static void _get_current_output_settings_from_args(struct cmd_context *cmd)
 {
+	if (arg_is_set(cmd, udevoutput_ARG)) {
+		cmd->current_settings.suppress = 1;
+		cmd->udevoutput = 1;
+	}
+
 	if (arg_is_set(cmd, debug_ARG))
 		cmd->current_settings.debug = _LOG_FATAL + (arg_count(cmd, debug_ARG) - 1);
 
@@ -2378,25 +2409,63 @@ static void _get_current_output_settings_from_args(struct cmd_context *cmd)
 		cmd->current_settings.verbose = 0;
 		cmd->current_settings.silent = (arg_count(cmd, quiet_ARG) > 1) ? 1 : 0;
 	}
+
+	/*
+	 * default_settings.journal is already set from config and has already been
+	 * applied using init_log_journal().
+	 * current_settings have been set to default_settings.
+	 * now --journal value adds to current_settings.
+	 */
+	if (arg_is_set(cmd, journal_ARG))
+		cmd->current_settings.journal |= log_journal_str_to_val(arg_str_value(cmd, journal_ARG, ""));
 }
 
 static void _apply_current_output_settings(struct cmd_context *cmd)
 {
+	log_suppress(cmd->current_settings.suppress);
 	init_debug(cmd->current_settings.debug);
 	init_debug_classes_logged(cmd->default_settings.debug_classes);
 	init_verbose(cmd->current_settings.verbose + VERBOSE_BASE_LEVEL);
 	init_silent(cmd->current_settings.silent);
+	init_log_journal(cmd->current_settings.journal);
+}
+
+static int _read_devices_list(struct cmd_context *cmd)
+{
+	struct arg_value_group_list *group;
+	const char *names;
+	struct dm_list *names_list;
+
+	dm_list_iterate_items(group, &cmd->arg_value_groups) {
+		if (!grouped_arg_is_set(group->arg_values, devices_ARG))
+			continue;
+
+		if (!(names = (char *)grouped_arg_str_value(group->arg_values, devices_ARG, NULL)))
+			continue;
+
+		if (!strchr(names, ',')) {
+			if (!str_list_add(cmd->mem, &cmd->deviceslist, names))
+				return 0;
+		} else {
+			if ((names_list = str_to_str_list(cmd->mem, names, ",", 1)))
+				dm_list_splice(&cmd->deviceslist, names_list);
+		}
+	}
+	return 1;
 }
 
 static int _get_current_settings(struct cmd_context *cmd)
 {
 	const char *activation_mode;
 	const char *hint_mode;
+	const char *search_mode;
 
 	_get_current_output_settings_from_args(cmd);
 
 	if (arg_is_set(cmd, test_ARG))
 		cmd->current_settings.test = arg_is_set(cmd, test_ARG);
+
+	cmd->current_settings.yes = arg_count(cmd, yes_ARG);
 
 	if (arg_is_set(cmd, driverloaded_ARG)) {
 		cmd->current_settings.activation =
@@ -2425,15 +2494,21 @@ static int _get_current_settings(struct cmd_context *cmd)
 
 	cmd->allow_mixed_block_sizes = find_config_tree_bool(cmd, devices_allow_mixed_block_sizes_CFG, NULL);
 
+	cmd->check_devs_used = (cmd->cname->flags & CHECK_DEVS_USED) ? 1 : 0;
+
+	cmd->print_device_id_not_found = (cmd->cname->flags & DEVICE_ID_NOT_FOUND) ? 1 : 0;
+
 	/*
 	 * enable_hints is set to 1 if any commands are using hints.
-	 * use_hints is set to 1 if this command doesn't use the hints.
+	 * use_hints is set to 1 if this command should use the hints.
 	 * enable_hints=1 and use_hints=0 means that this command won't
 	 * use the hints, but it may invalidate the hints that are used
 	 * by other commands.
 	 *
 	 * enable_hints=0 means no commands are using hints, so this
 	 * command would not need to invalidate hints for other cmds.
+	 *
+	 * Code should check !enable_hints before checking use_hints.
 	 */
 	cmd->enable_hints = 1;
 
@@ -2443,9 +2518,31 @@ static int _get_current_settings(struct cmd_context *cmd)
 	else
 		cmd->use_hints = 0;
 
+	/* The hints file is associated with the default/system devices file. */
+	if (arg_is_set(cmd, devicesfile_ARG) || arg_is_set(cmd, devices_ARG))
+		cmd->use_hints = 0;
+
+	/*
+	 * During system init, hints are repeatedly invalidated due to PVs
+	 * appearing, so it's wasted effort to try to maintain hints.
+	 * Hints are only effective when devices are in a steady-state.
+	 */
+	if (arg_is_set(cmd, sysinit_ARG))
+		cmd->use_hints = 0;
+
+	/*
+	 * Don't use hints from this command, but enable_hints will
+	 * remain set unless hints=none in the config.  See above re
+	 * the meaning of use_hints=0 && enable_hints=1.
+	 */
+	if (arg_is_set(cmd, nohints_ARG))
+		cmd->use_hints = 0;
+
 	if ((hint_mode = find_config_tree_str(cmd, devices_hints_CFG, NULL))) {
-		if (!strcmp(hint_mode, "none"))
+		if (!strcmp(hint_mode, "none")) {
 			cmd->enable_hints = 0;
+			cmd->use_hints = 0;
+		}
 	}
 
 	cmd->partial_activation = 0;
@@ -2483,6 +2580,44 @@ static int _get_current_settings(struct cmd_context *cmd)
 	cmd->include_historical_lvs = arg_is_set(cmd, history_ARG) ? 1 : 0;
 	cmd->record_historical_lvs = find_config_tree_bool(cmd, metadata_record_lvs_history_CFG, NULL) ?
 							  (arg_is_set(cmd, nohistory_ARG) ? 0 : 1) : 0;
+
+	if (!(search_mode = find_config_tree_str(cmd, devices_search_for_devnames_CFG, NULL)))
+		cmd->search_for_devnames = DEFAULT_SEARCH_FOR_DEVNAMES;
+	else {
+		if (!strcmp(search_mode, "none") || !strcmp(search_mode, "auto") || !strcmp(search_mode, "all"))
+			cmd->search_for_devnames = search_mode;
+		else {
+			log_warn("Ignoring unknown search_for_devnames setting, using %s.", DEFAULT_SEARCH_FOR_DEVNAMES);
+			cmd->search_for_devnames = DEFAULT_SEARCH_FOR_DEVNAMES;
+		}
+	}
+
+	if (arg_is_set(cmd, devicesfile_ARG)) {
+		const char *devices_file = arg_str_value(cmd, devicesfile_ARG, NULL);
+		if (devices_file && !strlen(devices_file)) {
+			cmd->devicesfile = "";
+		} else if (!devices_file || !validate_name(devices_file)) {
+			log_error("Invalid devices file name.");
+			return EINVALID_CMD_LINE;
+		} else if (!(cmd->devicesfile = dm_pool_strdup(cmd->libmem, devices_file))) {
+			log_error("Failed to copy devices file name.");
+			return EINVALID_CMD_LINE;
+		}
+	}
+
+	dm_list_init(&cmd->deviceslist);
+
+	if (arg_is_set(cmd, devices_ARG)) {
+		if (cmd->devicesfile && strlen(cmd->devicesfile)) {
+			log_error("A --devices list cannot be used with --devicesfile.");
+			return EINVALID_CMD_LINE;
+		}
+		cmd->enable_devices_list = 1;
+		if (!_read_devices_list(cmd)) {
+			log_error("Failed to read --devices args.");
+			return EINVALID_CMD_LINE;
+		}
+	}
 
 	/*
 	 * This is set to zero by process_each which wants to print errors
@@ -2695,6 +2830,7 @@ static int _prepare_profiles(struct cmd_context *cmd)
 		 * The --commandprofile is assumed otherwise.
 		 */
 		if (!strcmp(cmd->command->name, "lvcreate") ||
+		    !strcmp(cmd->command->name, "lvconvert") ||
 		    !strcmp(cmd->command->name, "vgcreate") ||
 		    !strcmp(cmd->command->name, "lvchange") ||
 		    !strcmp(cmd->command->name, "vgchange")) {
@@ -2917,7 +3053,6 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	struct dm_config_tree *config_string_cft, *config_profile_command_cft, *config_profile_metadata_cft;
 	int ret = 0;
 	int locking_type;
-	int nolocking = 0;
 	int readonly = 0;
 	int sysinit = 0;
 	int monitoring;
@@ -2925,6 +3060,12 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	int i;
 	int skip_hyphens;
 	int refresh_done = 0;
+	int io;
+
+	/* Avoid excessive access to /etc/localtime and set TZ variable for glibc
+	 * so it does not need to check /etc/localtime everytime that needs that info */
+	if (!getenv("TZ"))
+		setenv("TZ", ":/etc/localtime", 0);
 
 	init_error_message_produced(0);
 
@@ -2980,7 +3121,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		return_ECMD_FAILED;
 
 	/* Look up command - will be NULL if not recognised */
-	if (!(cmd->cname = _find_command_name(cmd->name)))
+	if (!(cmd->cname = find_command_name(cmd->name)))
 		return ENO_SUCH_CMD;
 
 	if (!_process_command_line(cmd, &argc, &argv)) {
@@ -2996,10 +3137,25 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	_get_current_output_settings_from_args(cmd);
 	_apply_current_output_settings(cmd);
 
+	log_debug("Version: %s", LVM_VERSION);
 	log_debug("Parsing: %s", cmd->cmd_line);
 
 	if (!(cmd->command = _find_command(cmd, cmd->name, &argc, argv)))
 		return EINVALID_CMD_LINE;
+
+	/*
+	 * If option --foo is set which is listed in IO (ignore option) in
+	 * command-lines.in, then unset foo.  Commands won't usually use an
+	 * ignored option, but there can be shared code that checks for --foo,
+	 * and should not find it to be set.
+	 */
+	for (io = 0; io < cmd->command->io_count; io++) {
+		int opt = cmd->command->ignore_opt_args[io].opt;
+		if (arg_is_set(cmd, opt)) {
+			log_debug("Ignore opt %d", opt);
+			cmd->opt_arg_values[opt].count = 0;
+		}
+	}
 
 	/*
 	 * Remaining position args after command name and --options are removed.
@@ -3080,6 +3236,12 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	cmd->ignorelockingfailure = arg_is_set(cmd, ignorelockingfailure_ARG);
+	cmd->nolocking = arg_is_set(cmd, nolocking_ARG);
+
+	if (_cmd_no_meta_proc(cmd))
+		cmd->nolocking = 1;
+
 	/* Defaults to 1 if not set. */
 	locking_type = find_config_tree_int(cmd, global_locking_type_CFG, NULL);
 
@@ -3088,7 +3250,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 
 	if ((locking_type == 0) || (locking_type == 5)) {
 		log_warn("WARNING: locking_type (%d) is deprecated, using --nolocking.", locking_type);
-		nolocking = 1;
+		cmd->nolocking = 1;
 
 	} else if (locking_type == 4) {
 		log_warn("WARNING: locking_type (%d) is deprecated, using --sysinit --readonly.", locking_type);
@@ -3099,28 +3261,25 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		log_warn("WARNING: locking_type (%d) is deprecated, using file locking.", locking_type);
 	}
 
-	cmd->nolocking = arg_is_set(cmd, nolocking_ARG);
-
-	if (cmd->nolocking || _cmd_no_meta_proc(cmd))
-		nolocking = 1;
-
-	if (arg_is_set(cmd, sysinit_ARG))
+	if ((cmd->sysinit = arg_is_set(cmd, sysinit_ARG)))
 		sysinit = 1;
 
 	if (arg_is_set(cmd, readonly_ARG))
 		readonly = 1;
 
-	if (nolocking) {
-		if (!_cmd_no_meta_proc(cmd))
-			log_warn("WARNING: File locking is disabled.");
-	} else {
-		if (!init_locking(cmd, sysinit, readonly, arg_is_set(cmd, ignorelockingfailure_ARG))) {
+	if (!cmd->nolocking) {
+		if (!init_locking(cmd, sysinit, readonly, cmd->ignorelockingfailure)) {
 			ret = ECMD_FAILED;
 			goto_out;
 		}
 	}
 
 	_init_md_checks(cmd);
+
+	if (!dev_mpath_init(find_config_tree_str_allow_empty(cmd, devices_multipath_wwids_file_CFG, NULL))) {
+		ret = ECMD_FAILED;
+		goto_out;
+	}
 
 	if (!_cmd_no_meta_proc(cmd) && !_init_lvmlockd(cmd)) {
 		ret = ECMD_FAILED;
@@ -3142,6 +3301,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 
       out:
 
+	dev_mpath_exit();
 	hints_exit(cmd);
 	lvmcache_destroy(cmd, 1, 1);
 	label_scan_destroy(cmd);
@@ -3172,8 +3332,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	 * ignore everything supplied on the command line of the
 	 * completed command.
 	 */
-	_reset_current_settings_to_default(cmd);
-	_apply_current_settings(cmd);
+	//_reset_current_settings_to_default(cmd);
+	//_apply_current_settings(cmd);
 
 	/*
 	 * free off any memory the command used.
@@ -3423,7 +3583,7 @@ static int _close_stray_fds(const char *command, struct custom_fds *custom_fds)
 	}
 
 	if (closedir(d))
-		log_sys_error("closedir", _fd_dir);
+		log_sys_debug("closedir", _fd_dir);
 #endif
 
 	return 1;
@@ -3435,9 +3595,6 @@ struct cmd_context *init_lvm(unsigned set_connections,
 {
 	struct cmd_context *cmd;
 
-	if (!udev_init_library_context())
-		stack;
-
 	/*
 	 * It's not necessary to use name mangling for LVM:
 	 *   - the character set used for LV names is subset of udev character set
@@ -3445,9 +3602,7 @@ struct cmd_context *init_lvm(unsigned set_connections,
 	 */
 	dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
 
-	if (!(cmd = create_toolcontext(0, NULL, 1, threaded,
-			set_connections, set_filters))) {
-		udev_fin_library_context();
+	if (!(cmd = create_toolcontext(0, NULL, 1, threaded, set_connections, set_filters))) {
 		return_NULL;
 	}
 
@@ -3455,7 +3610,6 @@ struct cmd_context *init_lvm(unsigned set_connections,
 
 	if (stored_errno()) {
 		destroy_toolcontext(cmd);
-		udev_fin_library_context();
 		return_NULL;
 	}
 
@@ -3476,6 +3630,8 @@ static int _run_script(struct cmd_context *cmd, int argc, char **argv)
 	int ret = ENO_SUCH_CMD;
 	int magic_number = 0;
 	char *script_file = argv[0];
+	int largc;
+	char *largv[MAX_ARGS];
 
 	if ((script = fopen(script_file, "r")) == NULL)
 		return ENO_SUCH_CMD;
@@ -3497,17 +3653,17 @@ static int _run_script(struct cmd_context *cmd, int argc, char **argv)
 			ret = EINVALID_CMD_LINE;
 			break;
 		}
-		if (lvm_split(buffer, &argc, argv, MAX_ARGS) == MAX_ARGS) {
+		if (lvm_split(buffer, &largc, largv, MAX_ARGS) == MAX_ARGS) {
 			buffer[50] = '\0';
 			log_error("Too many arguments: %s", buffer);
 			ret = EINVALID_CMD_LINE;
 			break;
 		}
-		if (!argc)
+		if (!largc)
 			continue;
-		if (!strcmp(argv[0], "quit") || !strcmp(argv[0], "exit"))
+		if (!strcmp(largv[0], "quit") || !strcmp(largv[0], "exit"))
 			break;
-		ret = lvm_run_command(cmd, argc, argv);
+		ret = lvm_run_command(cmd, largc, largv);
 		/*
 		 * FIXME: handling scripts with invalid or failing commands
 		 * could use some cleaning up, e.g. error_message_produced
@@ -3627,7 +3783,7 @@ int lvm2_main(int argc, char **argv)
 	 */
 	if (!run_name)
 		run_shell = 1;
-	else if (!_find_command_name(run_name))
+	else if (!find_command_name(run_name))
 		run_script = 1;
 	else
 		run_command_name = run_name;

@@ -30,8 +30,6 @@ struct command_function {
 	command_id_fn fn;
 };
 
-#define MAX_COMMAND_NAMES 64
-
 struct command_name {
 	const char *name;
 	const char *desc; /* general command description from commands.h */
@@ -210,6 +208,10 @@ struct command {
 
 	struct cmd_rule rules[CMD_MAX_RULES];
 
+	/* usually only one autotype, in one case there are two */
+	char *autotype;
+	char *autotype2;
+
 	int any_ro_count;
 
 	int ro_count;
@@ -274,5 +276,6 @@ void print_usage_notes(struct command_name *cname);
 void factor_common_options(void);
 int command_has_alternate_extents(const char *name);
 void configure_command_option_values(const char *name);
+struct command_name *find_command_name(const char *name);
 
 #endif

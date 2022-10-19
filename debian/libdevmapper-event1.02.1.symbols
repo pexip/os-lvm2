@@ -1,6 +1,5 @@
 libdevmapper-event.so.1.02.1 libdevmapper-event1.02.1 #MINVER#
  Base@Base 2:1.02.20
- Local@Local 2:1.02.110
  dm_event_daemon_fini_fifos@Base 2:1.02.74
  dm_event_daemon_init_fifos@Base 2:1.02.74
  dm_event_daemon_talk@Base 2:1.02.74

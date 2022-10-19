@@ -115,6 +115,8 @@ struct dev_manager;
 #define SEG_TYPE_NAME_RAID6_N_6		"raid6_n_6"
 
 #define segtype_is_linear(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_LINEAR))
+#define segtype_is_error(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_ERROR))
+#define segtype_is_zero(segtype)	(!strcmp((segtype)->name, SEG_TYPE_NAME_ZERO))
 #define segtype_is_striped_target(segtype)	((segtype)->flags & SEG_STRIPED_TARGET ? 1 : 0)
 #define segtype_is_cache(segtype)	((segtype)->flags & SEG_CACHE ? 1 : 0)
 #define segtype_is_cache_pool(segtype)	((segtype)->flags & SEG_CACHE_POOL ? 1 : 0)
@@ -324,6 +326,7 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
  */
 #define RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD	(1U << 6) /* version 1.9.0 */
 
+bool raid_is_available(const struct logical_volume *lv);
 #ifdef RAID_INTERNAL
 int init_raid_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
@@ -348,6 +351,8 @@ int init_cache_segtypes(struct cmd_context *cmd, struct segtype_library *seglib)
 #ifdef VDO_INTERNAL
 int init_vdo_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
+
+#define VDO_FEATURE_ONLINE_RENAME		(1U << 0) /* version 6.2.3 */
 
 int init_writecache_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 

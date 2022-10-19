@@ -12,8 +12,10 @@
 
 SKIP_WITH_LVMPOLLD=1
 
-/* hints are currently disabled with lvmlockd */
+# hints are currently disabled with lvmlockd
 SKIP_WITH_LVMLOCKD=1
+
+. lib/inittest
 
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
@@ -21,8 +23,6 @@ HINTS="$RUNDIR/lvm/hints"
 NOHINTS="$RUNDIR/lvm/nohints"
 NEWHINTS="$RUNDIR/lvm/newhints"
 PREV="$RUNDIR/lvm/prev-hints"
-
-. lib/inittest
 
 # TODO:
 # Test commands that ignore hints
@@ -38,11 +38,64 @@ pvs
 not grep scan: $HINTS
 
 #
+# test --nohints option
+#
+
+pvcreate "$dev1"
+pvcreate "$dev2"
+# pvs --nohints does not create hints
+pvs --nohints |tee out
+grep "$dev1" out
+grep "$dev2" out
+not grep "$dev1" $HINTS
+not grep "$dev2" $HINTS
+# pvs creates hints
+pvs
+grep "$dev1" $HINTS
+grep "$dev2" $HINTS
+
+# save hints with dev1 and dev2 before dev3 is created
+cp $HINTS $PREV
+# pvcreate --nohints invalidates hints
+pvcreate --nohints "$dev3"
+ls $NEWHINTS
+# pvs --nohints does not update hints
+pvs --nohints |tee out
+grep "$dev1" out
+grep "$dev2" out
+grep "$dev3" out
+not grep "$dev3" $HINTS
+# restore old hint file without dev3
+cp $PREV $HINTS
+# pvs --nohints does not update hints
+pvs --nohints |tee out
+grep "$dev1" out
+grep "$dev2" out
+grep "$dev3" out
+grep "$dev1" $HINTS
+grep "$dev2" $HINTS
+not grep "$dev3" $HINTS
+# pvs updates hints
+pvs |tee out
+grep "$dev1" out
+grep "$dev2" out
+grep "$dev3" out
+grep "$dev1" $HINTS
+grep "$dev2" $HINTS
+grep "$dev3" $HINTS
+
+aux wipefs_a "$dev1"
+aux wipefs_a "$dev2"
+aux wipefs_a "$dev3"
+
+#
 # vg1 uses dev1,dev2
 #
 # Test basics that PVs are in hints, not non-PV devs,
 # and that only PVs are scanned when using hints.
 #
+
+rm $HINTS
 
 vgcreate $vg1 "$dev1" "$dev2"
 lvcreate -n $lv1 -l 4 $vg1
@@ -55,7 +108,7 @@ not grep scan: tmptest
 # test that 'pvs' submits only three reads, one for each PV in hints
 # for initial scan, and one more in vg_read rescan check
 
-if [ -e "/usr/bin/strace" ]; then
+if which strace; then
 strace -e io_submit pvs 2>&1|tee tmptest
 test "$(grep io_submit tmptest | wc -l)" -eq 3
 
@@ -141,12 +194,18 @@ not cat $NEWHINTS
 # Test that adding a new device and removing a device
 # causes hints to be recreated.
 #
+# with a devices file the appearance of a new device on
+# the system does not disturb lvm, so this test doesn't
+# apply
+#
+
+if ! lvmdevices; then
 
 not pvs "$dev5"
 
 # create a new temp device that will cause hint hash to change
 DEVNAME=${PREFIX}pv99
-echo "0 `blockdev --getsize $dev5` linear $dev5 0" | dmsetup create $DEVNAME
+echo "0 $(blockdev --getsize "$dev5") linear $dev5 0" | dmsetup create $DEVNAME
 dmsetup status $DEVNAME
 
 cp $HINTS $PREV
@@ -182,6 +241,9 @@ diff scan1 scan2
 grep devs_hash $PREV > devs_hash1
 grep devs_hash $HINTS > devs_hash2
 not diff devs_hash1 devs_hash2
+
+# end of new device test for non-devicesfile case
+fi
 
 #
 # Test that hints don't change from a bunch of commands
@@ -391,7 +453,7 @@ rm tmp-old tmp-new tmp-newuuid
 #
 
 # this vgcreate invalidates current hints
-vgcreate $vg3 $dev4
+vgcreate $vg3 "$dev4"
 # this pvs creates new hints
 pvs
 cp $HINTS tmp-old
@@ -413,4 +475,3 @@ grep $vg4 $HINTS
 vgremove -y $vg4
 vgremove -y $vg2
 vgremove -y $vg1
-

@@ -10,6 +10,8 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+SKIP_WITH_LVMPOLLD=1
+
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
 PVS_ONLINE_DIR="$RUNDIR/lvm/pvs_online"
@@ -42,7 +44,7 @@ sed 's/flags =/flagx =/' meta1 > meta1.bad
 dd if=meta1.bad of="$dev1"
 
 pvs 2>&1 | tee out
-grep "bad metadata text" out
+grep "Checksum error" out
 
 pvs "$dev1"
 pvs "$dev2"
@@ -56,7 +58,7 @@ lvcreate -l1 $vg
 vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
-not grep "bad metadata text" out
+not grep "Checksum error" out
 
 pvs "$dev1"
 pvs "$dev2"
@@ -90,7 +92,8 @@ dd if=meta1.bad of="$dev1"
 dd if=meta2.bad of="$dev2"
 
 pvs 2>&1 | tee out
-grep "bad metadata text" out > out2
+# FIXME: find a better test than looking for a specific message
+grep "Checksum error" out > out2
 grep "$dev1" out2
 grep "$dev2" out2
 
@@ -106,7 +109,7 @@ lvcreate -l1 $vg
 vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
-not grep "bad metadata text" out
+not grep "Checksum error" out
 
 pvs "$dev1"
 pvs "$dev2"
@@ -147,7 +150,7 @@ dd if=meta2.bad of="$dev2"
 dd if=meta3.bad of="$dev3"
 
 pvs 2>&1 | tee out
-grep "bad metadata text" out > out2
+grep "Checksum error" out > out2
 grep "$dev1" out2
 grep "$dev2" out2
 grep "$dev3" out2
@@ -164,7 +167,7 @@ lvcreate -l1 $vg
 vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
-not grep "bad metadata text" out
+not grep "Checksum error" out
 
 pvs "$dev1"
 pvs "$dev2"
@@ -195,7 +198,7 @@ sed 's/READ/RRRR/' meta1 > meta1.bad
 dd if=meta1.bad of="$dev1"
 
 pvs 2>&1 | tee out
-grep "bad metadata text" out > out2
+grep "Checksum error" out > out2
 grep "$dev1" out2
 
 # We can still use the VG with other available
@@ -222,7 +225,7 @@ aux enable_dev "$dev2"
 # Both old and bad metadata are reported.
 pvs 2>&1 | tee out
 grep "ignoring metadata seqno" out
-grep "bad metadata text" out
+grep "Checksum error" out
 pvs "$dev1"
 pvs "$dev2"
 pvs "$dev3"
@@ -236,7 +239,7 @@ vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
 not grep "ignoring metadata seqno" out
-not grep "bad metadata text" out
+not grep "Checksum error" out
 pvs "$dev1"
 pvs "$dev2"
 pvs "$dev3"
@@ -280,7 +283,7 @@ dd if=meta1.bad of="$dev1"
 dd if=meta2.bad of="$dev2"
 
 pvs 2>&1 | tee out
-grep "bad metadata text" out > out2
+grep "Checksum error" out > out2
 grep "$dev1" out2
 grep "$dev2" out2
 
@@ -317,7 +320,7 @@ not ls "$RUNDIR/lvm/vgs_online/$vg"
 vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
-not grep "bad metadata text" out
+not grep "Checksum error" out
 
 pvs "$dev1"
 pvs "$dev2"
