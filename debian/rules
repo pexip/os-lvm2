@@ -69,8 +69,10 @@ define CONFARGS.udeb
 	--with-optimisation="$(CFLAGS_OPT_UDEB)"
 	--with-lvm1=none
 	--with-pool=none
+	--disable-app-machineid
 	--disable-readline
 	--disable-selinux
+	--disable-systemd-journal
 endef
 
 BUILDS :=

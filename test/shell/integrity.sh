@@ -14,9 +14,11 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-aux have_integrity 1 5 0 || skip
 which mkfs.xfs || skip
 which xfs_growfs || skip
+aux have_integrity 1 5 0 || skip
+# Avoid 4K ramdisk devices on older kernels
+aux kernel_at_least  5 10 || export LVM_TEST_PREFER_BRD=0
 
 mnt="mnt"
 mkdir -p $mnt
@@ -621,7 +623,7 @@ vgremove -ff $vg
 # Repeat many of the tests above using bitmap mode
 
 _prepare_vg
-lvcreate --type raid1 -m1 --raidintegrity y --raidintegritymode bitmap -n $lv1 -l 8 $vg "$dev1 "$dev2"
+lvcreate --type raid1 -m1 --raidintegrity y --raidintegritymode bitmap -n $lv1 -l 8 $vg "$dev1" "$dev2"
 _wait_recalc $vg/${lv1}_rimage_0
 _wait_recalc $vg/${lv1}_rimage_1
 _wait_recalc $vg/$lv1

@@ -45,9 +45,6 @@ dev_vg_lv="$DM_DEV_DIR/$vg_lv"
 dev_vg_lv2="$DM_DEV_DIR/$vg_lv2"
 mount_dir="mnt"
 mount_space_dir="mnt space dir"
-# for recursive call
-LVM_BINARY=$(which lvm)
-export LVM_BINARY
 
 test ! -d "$mount_dir" && mkdir "$mount_dir"
 test ! -d "$mount_space_dir" && mkdir "$mount_space_dir"
@@ -101,6 +98,10 @@ fsadm
 
 # check needs arg
 not fsadm check
+
+# check needs arg
+not fsadm resize "$dev_vg_lv" 30M |& tee out
+grep "Cannot get FSTYPE" out
 
 if check_missing ext2; then
 	mkfs.ext2 -b4096 -j "$dev_vg_lv"

@@ -17,6 +17,7 @@
 #include "lib/format_text/archiver.h"
 #include "lib/format_text/format-text.h"
 #include "lib/misc/lvm-string.h"
+#include "lib/misc/lvm-signal.h"
 #include "lib/cache/lvmcache.h"
 #include "lib/mm/memlock.h"
 #include "lib/commands/toolcontext.h"
@@ -48,8 +49,6 @@ int archive_init(struct cmd_context *cmd, const char *dir,
 		log_error("archive_params alloc failed");
 		return 0;
 	}
-
-	cmd->archive_params->dir = NULL;
 
 	if (!*dir)
 		return 1;
@@ -102,12 +101,12 @@ static int _archive(struct volume_group *vg, int compulsory)
 {
 	char *desc;
 
+	if (vg_is_archived(vg))
+		return 1; /* VG has been already archived */
+
 	/* Don't archive orphan VGs. */
 	if (is_orphan_vg(vg->name))
 		return 1;
-
-	if (vg_is_archived(vg))
-		return 1; /* VG has been already archived */
 
 	if (!vg->cmd->archive_params->enabled || !vg->cmd->archive_params->dir) {
 		vg->status |= ARCHIVED_VG;
@@ -155,7 +154,13 @@ static int _archive(struct volume_group *vg, int compulsory)
 
 int archive(struct volume_group *vg)
 {
-	return _archive(vg, 1);
+	int r;
+
+	sigint_allow();
+	r  = _archive(vg, 1);
+	sigint_restore();
+
+	return r;
 }
 
 int archive_display(struct cmd_context *cmd, const char *vg_name)
@@ -188,7 +193,6 @@ int backup_init(struct cmd_context *cmd, const char *dir,
 		return 0;
 	}
 
-	cmd->backup_params->dir = NULL;
 	if (!*dir)
 		return 1;
 
@@ -218,6 +222,7 @@ static int _backup(struct volume_group *vg)
 {
 	char name[PATH_MAX];
 	char *desc;
+	int r;
 
 	if (!(desc = _build_desc(vg->cmd->mem, vg->cmd->cmd_line, 0)))
 		return_0;
@@ -229,7 +234,11 @@ static int _backup(struct volume_group *vg)
 		return 0;
 	}
 
-	return backup_to_file(name, desc, vg);
+	sigint_allow();
+	r = backup_to_file(name, desc, vg);
+	sigint_restore();
+
+	return r;
 }
 
 int backup_locally(struct volume_group *vg)
@@ -267,6 +276,7 @@ int backup_locally(struct volume_group *vg)
 
 int backup(struct volume_group *vg)
 {
+
 	/* Unlock memory if possible */
 	memlock_unlock(vg->cmd);
 
@@ -321,7 +331,7 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 	}
 
 	if (vg)
-		set_pv_devices(tf, vg, NULL);
+		set_pv_devices(tf, vg);
 
 	if (!vg)
 		tf->fmt->ops->destroy_instance(tf);
@@ -400,7 +410,8 @@ int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg,
 				return 0;
 			}
 			pv->vg_name = vg->name;
-			pv->vgid = vg->id;
+			/* both are struct id */
+			memcpy(&pv->vg_id, &vg->id, sizeof(struct id));
 
 			if (!(new_pvl = dm_pool_zalloc(vg->vgmem, sizeof(*new_pvl)))) {
 				log_error("Failed to allocate PV list item for \"%s\".",
@@ -615,7 +626,10 @@ void check_current_backup(struct volume_group *vg)
 	int old_suppress;
 
 	if (!vg->cmd->backup_params->enabled || !vg->cmd->backup_params->dir) {
-		log_debug("Skipping check for current backup, since backup is disabled.");
+		if (!vg->cmd->backup_disabled) {
+			log_debug("Skipping check for current backup, since backup is disabled.");
+			vg->cmd->backup_disabled = 1;
+		}
 		return;
 	}
 

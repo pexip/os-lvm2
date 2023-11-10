@@ -61,6 +61,7 @@ FIELD(LVS, lv, STR, "AllocPol", lvid, 10, lvallocationpolicy, lv_allocation_poli
 FIELD(LVS, lv, BIN, "AllocLock", lvid, 10, lvallocationlocked, lv_allocation_locked, "Set if LV is locked against allocation changes.", 0)
 FIELD(LVS, lv, BIN, "FixMin", lvid, 10, lvfixedminor, lv_fixed_minor, "Set if LV has fixed minor number assigned.", 0)
 FIELD(LVS, lv, BIN, "SkipAct", lvid, 15, lvskipactivation, lv_skip_activation, "Set if LV is skipped on activation.", 0)
+FIELD(LVS, lv, BIN, "AutoAct", lvid, 0, lvautoactivation, lv_autoactivation, "Set if LV autoactivation is enabled.", 0)
 FIELD(LVS, lv, STR, "WhenFull", lvid, 15, lvwhenfull, lv_when_full, "For thin pools, behavior when full.", 0)
 FIELD(LVS, lv, STR, "Active", lvid, 0, lvactive, lv_active, "Active state of the LV.", 0)
 FIELD(LVS, lv, BIN, "ActLocal", lvid, 10, lvactivelocally, lv_active_locally, "Set if the LV is active locally.", 0)
@@ -107,6 +108,7 @@ FIELD(LVS, lv, TIM, "RTime", lvid, 26, lvtimeremoved, lv_time_removed, "Removal 
 FIELD(LVS, lv, STR, "Host", lvid, 10, lvhost, lv_host, "Creation host of the LV, if known.", 0)
 FIELD(LVS, lv, STR_LIST, "Modules", lvid, 0, modules, lv_modules, "Kernel device-mapper modules required for this LV.", 0)
 FIELD(LVS, lv, BIN, "Historical", lvid, 0, lvhistorical, lv_historical, "Set if the LV is historical.", 0)
+FIELD(LVS, lv, NUM, "WCacheBlkSize", lvid, 0, writecache_block_size, writecache_block_size, "The writecache block size", 0)
 /*
  * End of LVS type fields
  */
@@ -206,6 +208,8 @@ FIELD(PVS, pv, SIZ, "BA Start", ba_start, 0, size64, pv_ba_start, "Offset to the
 FIELD(PVS, pv, SIZ, "BA Size", ba_size, 0, size64, pv_ba_size, "Size of PV Bootloader Area in current units.", 0)
 FIELD(PVS, pv, BIN, "PInUse", id, 0, pvinuse, pv_in_use, "Set if PV is used.", 0)
 FIELD(PVS, pv, BIN, "Duplicate", id, 0, pvduplicate, pv_duplicate, "Set if PV is an unchosen duplicate.", 0)
+FIELD(PVS, pv, STR, "DeviceID", id, 0, pvdeviceid, pv_device_id, "Device ID such as the WWID.", 0)
+FIELD(PVS, pv, STR, "DeviceIDType", id, 0, pvdeviceidtype, pv_device_id_type, "Type of device ID such as WWID.", 0)
 /*
  * End of PVS type fields
  */
@@ -220,6 +224,7 @@ FIELD(VGS, vg, STR, "Attr", cmd, 5, vgstatus, vg_attr, "Various attributes - see
 FIELD(VGS, vg, STR, "VPerms", cmd, 10, vgpermissions, vg_permissions, "VG permissions.", 0)
 FIELD(VGS, vg, BIN, "Extendable", cmd, 0, vgextendable, vg_extendable, "Set if VG is extendable.", 0)
 FIELD(VGS, vg, BIN, "Exported", cmd, 10, vgexported, vg_exported, "Set if VG is exported.", 0)
+FIELD(VGS, vg, BIN, "AutoAct", cmd, 0, vgautoactivation, vg_autoactivation, "Set if VG autoactivation is enabled.", 0)
 FIELD(VGS, vg, BIN, "Partial", cmd, 10, vgpartial, vg_partial, "Set if VG is partial.", 0)
 FIELD(VGS, vg, STR, "AllocPol", cmd, 10, vgallocationpolicy, vg_allocation_policy, "VG allocation policy.", 0)
 FIELD(VGS, vg, BIN, "Clustered", cmd, 10, vgclustered, vg_clustered, "Set if VG is clustered.", 0)

@@ -15,7 +15,7 @@ IFS_NL='
 '
 
 die() {
-	rm -f debug.log
+	rm -f debug.log*
 	echo -e "$@" >&2
 	return 1
 }
@@ -252,6 +252,11 @@ skip() {
 	exit 200
 }
 
+get_real_devs() {
+	REAL_DEVICES=( $(<REAL_DEVICES) )
+	export REAL_DEVICES
+}
+
 get_devs() {
 	local IFS=$IFS_NL
 	DEVICES=( $(<DEVICES) )
@@ -262,13 +267,24 @@ get_devs() {
 
 prepare_test_vars() {
 	vg="${PREFIX}vg"
-	lv=LV
+	lv="LV"
 
 	for i in {1..16}; do
-		eval "dev$i=\"$DM_DEV_DIR/mapper/${PREFIX}pv$i\""
 		eval "lv$i=\"LV$i\""
 		eval "vg$i=\"${PREFIX}vg$i\""
 	done
+
+	if test -n "$LVM_TEST_DEVICE_LIST"; then
+		local count=0
+		while read path; do
+			count=$((  count + 1 ))
+			eval "dev$count=\"$path\""
+		done < "$LVM_TEST_DEVICE_LIST"
+	else
+		for i in {1..16}; do
+			eval "dev$i=\"$DM_DEV_DIR/mapper/${PREFIX}pv$i\""
+		done
+	fi
 }
 
 if test -z "${abs_top_builddir+varset}" && test -z "${installed_testsuite+varset}"; then
@@ -280,10 +296,11 @@ if test -z "${installed_testsuite+varset}"; then
     *"$abs_top_builddir/test/lib"*) ;;
     *)
 	PATH="$abs_top_builddir/test/lib:$abs_top_builddir/test/api:$PATH"
+	LVM_BINARY=$(which lvm)
 	LD_LIBRARY_PATH=$(find -L "$abs_top_builddir/libdm/" "$abs_top_builddir/tools/"\
 		"$abs_top_builddir/daemons/" \
 		-name "*.so" -printf "%h:")"$LD_LIBRARY_PATH"
-	export PATH LD_LIBRARY_PATH ;;
+	export PATH LD_LIBRARY_PATH LVM_BINARY ;;
     esac
 fi
 

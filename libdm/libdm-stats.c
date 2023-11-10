@@ -2011,10 +2011,11 @@ out:
 	return r;
 }
 
-int dm_stats_create_region(struct dm_stats *dms, uint64_t *region_id,
-			   uint64_t start, uint64_t len, int64_t step,
-			   int precise, struct dm_histogram *bounds,
-			   const char *program_id, const char *user_data)
+DM_EXPORT_NEW_SYMBOL(int, dm_stats_create_region, 1_02_107)
+	(struct dm_stats *dms, uint64_t *region_id,
+	 uint64_t start, uint64_t len, int64_t step,
+	 int precise, struct dm_histogram *bounds,
+	 const char *program_id, const char *user_data)
 {
 	char *hist_arg = NULL;
 	int r = 0;
@@ -2036,6 +2037,7 @@ int dm_stats_create_region(struct dm_stats *dms, uint64_t *region_id,
 out:
 	return r;
 }
+
 
 static void _stats_clear_group_regions(struct dm_stats *dms, uint64_t group_id)
 {
@@ -4517,7 +4519,7 @@ static int _stats_unmap_regions(struct dm_stats *dms, uint64_t group_id,
 	struct dm_stats_region *region = NULL;
 	struct dm_stats_group *group = NULL;
 	uint64_t nr_kept, nr_old;
-	struct _extent ext;
+	struct _extent ext = { .id = 0 };
 	int64_t i;
 
 	group = &dms->groups[group_id];
@@ -4605,7 +4607,7 @@ static uint64_t *_stats_map_file_regions(struct dm_stats *dms, int fd,
 	struct dm_pool *extent_mem = NULL;
 	struct _extent *old_ext;
 	char *hist_arg = NULL;
-	struct statfs fsbuf;
+	struct statfs fsbuf = { 0 };
 	int64_t nr_kept = 0;
 	struct stat buf;
 	int update;
@@ -5069,7 +5071,9 @@ int dm_stats_start_filemapd(int fd, uint64_t group_id, const char *path,
  * current dm_stats_create_region() version.
  */
 
-#if defined(__GNUC__)
+#if defined(GNU_SYMVER)
+
+DM_EXPORT_SYMBOL(dm_stats_create_region, 1_02_106)
 int dm_stats_create_region_v1_02_106(struct dm_stats *dms, uint64_t *region_id,
 				     uint64_t start, uint64_t len, int64_t step,
 				     int precise, const char *program_id,
@@ -5083,8 +5087,8 @@ int dm_stats_create_region_v1_02_106(struct dm_stats *dms, uint64_t *region_id,
 	return _stats_create_region(dms, region_id, start, len, step, precise,
 				    NULL, program_id, aux_data);
 }
-DM_EXPORT_SYMBOL(dm_stats_create_region, 1_02_106);
 
+DM_EXPORT_SYMBOL(dm_stats_create_region, 1_02_104)
 int dm_stats_create_region_v1_02_104(struct dm_stats *dms, uint64_t *region_id,
 				     uint64_t start, uint64_t len, int64_t step,
 				     const char *program_id, const char *aux_data);
@@ -5096,5 +5100,4 @@ int dm_stats_create_region_v1_02_104(struct dm_stats *dms, uint64_t *region_id,
 	return _stats_create_region(dms, region_id, start, len, step, 0, NULL,
 				    program_id, aux_data);
 }
-DM_EXPORT_SYMBOL(dm_stats_create_region, 1_02_104);
 #endif

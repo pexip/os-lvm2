@@ -22,6 +22,7 @@
 #include "lib/metadata/lv_alloc.h"
 #include "lib/misc/lvm-string.h"
 #include "lib/locking/lvmlockd.h"
+#include "lib/misc/lvm-signal.h"
 
 typedef int (*fn_on_lv_t)(struct logical_volume *lv, void *data);
 static int _eliminate_extracted_lvs_optional_write_vg(struct volume_group *vg,
@@ -45,7 +46,7 @@ static int _check_restriping(uint32_t new_stripes, struct logical_volume *lv)
  */
 static int _reshape_is_supported(struct cmd_context *cmd, const struct segment_type *segtype)
 {
-	unsigned attrs;
+	unsigned attrs = 0;
 
 	if (!segtype->ops->target_present ||
             !segtype->ops->target_present(cmd, NULL, &attrs) ||
@@ -64,7 +65,7 @@ static int _reshape_is_supported(struct cmd_context *cmd, const struct segment_t
 static int _rebuild_with_emptymeta_is_supported(struct cmd_context *cmd,
 						const struct segment_type *segtype)
 {
-	unsigned attrs;
+	unsigned attrs = 0;
 
 	if (!segtype->ops->target_present ||
             !segtype->ops->target_present(cmd, NULL, &attrs) ||
@@ -356,12 +357,12 @@ static int _get_dev_health(struct logical_volume *lv, uint32_t *kernel_devs,
 
 	if (!lv_raid_dev_count(lv, kernel_devs)) {
 		log_error("Failed to get device count.");
-		return_0;
+		return 0;
 	}
 
 	if (!lv_raid_dev_health(lv, &rh)) {
 		log_error("Failed to get device health.");
-		return_0;
+		return 0;
 	}
 
 	d = (unsigned) strlen(rh);
@@ -392,28 +393,40 @@ static int _raid_in_sync(const struct logical_volume *lv)
 {
 	int retries = _RAID_IN_SYNC_RETRIES;
 	dm_percent_t sync_percent;
+	struct lv_status_raid *raid_status;
 
 	if (seg_is_striped(first_seg(lv)))
 		return 1;
 
-	do {
+	if (!lv_is_raid(lv)) {
+		/* For non raid - fallback to mirror percentage */
+		if (!lv_mirror_percent(lv->vg->cmd, lv, 0, &sync_percent, NULL)) {
+			log_error("Cannot determine sync percentage of %s.",
+				  display_lvname(lv));
+			return 0;
+		}
+	} else do {
 		/*
 		 * FIXME We repeat the status read here to workaround an
 		 * unresolved kernel bug when we see 0 even though the
 		 * the array is 100% in sync.
 		 * https://bugzilla.redhat.com/1210637
 		 */
-		if (!lv_raid_percent(lv, &sync_percent)) {
+		if (!lv_raid_status(lv, &raid_status)) {
 			log_error("Unable to determine sync status of %s.",
 				  display_lvname(lv));
 			return 0;
 		}
+		sync_percent = raid_status->in_sync;
+		dm_pool_destroy(raid_status->mem);
+
 		if (sync_percent > DM_PERCENT_0)
 			break;
 		if (retries == _RAID_IN_SYNC_RETRIES)
 			log_warn("WARNING: Sync status for %s is inconsistent.",
 				 display_lvname(lv));
-		usleep(500000);
+		if (interruptible_usleep(500000))
+			return_0;
 	} while (--retries);
 
 	return (sync_percent == DM_PERCENT_100) ? 1 : 0;
@@ -584,18 +597,18 @@ static int _lv_update_reload_fns_reset_eliminate_lvs(struct logical_volume *lv, 
 		 * Returning 2 from pre function -> lv is suspended and
 		 * metadata got updated, don't need to do it again
 		 */
-		if (!(r = (origin_only ? resume_lv_origin(lv->vg->cmd, lock_lv) :
-					 resume_lv(lv->vg->cmd, lock_lv)))) {
+		if (!(origin_only ? resume_lv_origin(lv->vg->cmd, lock_lv) :
+					 resume_lv(lv->vg->cmd, lock_lv))) {
 			log_error("Failed to resume %s.", display_lvname(lv));
 			return 0;
 		}
 
 	/* Update metadata and reload mappings including flags (e.g. LV_REBUILD, LV_RESHAPE_DELTA_DISKS_PLUS) */
-	} else if (!(r = (origin_only ? lv_update_and_reload_origin(lv) : lv_update_and_reload(lv))))
+	} else if (!(origin_only ? lv_update_and_reload_origin(lv) : lv_update_and_reload(lv)))
 		return_0;
 
 	/* Eliminate any residual LV and don't commit the metadata */
-	if (!(r = _eliminate_extracted_lvs_optional_write_vg(lv->vg, removal_lvs, 0)))
+	if (!_eliminate_extracted_lvs_optional_write_vg(lv->vg, removal_lvs, 0))
 		return_0;
 
 	/*
@@ -620,7 +633,7 @@ static int _lv_update_reload_fns_reset_eliminate_lvs(struct logical_volume *lv, 
 	/* Update and reload to clear out reset flags in the metadata and in the kernel */
 	log_debug_metadata("Updating metadata mappings for %s.", display_lvname(lv));
 	if ((r != 2 || flags_reset) &&
-	    !(r = (origin_only ? lv_update_and_reload_origin(lv) : lv_update_and_reload(lv))))
+	    !(origin_only ? lv_update_and_reload_origin(lv) : lv_update_and_reload(lv)))
 		return_0;
 
 	return 1;
@@ -1056,7 +1069,7 @@ static int _alloc_image_components(struct logical_volume *lv,
 	if (!(lvl_array = dm_pool_alloc(lv->vg->vgmem,
 					sizeof(*lvl_array) * count * 2))) {
 		log_error("Memory allocation failed.");
-		return_0;
+		return 0;
 	}
 
 	if (!(parallel_areas = build_parallel_areas_from_lv(lv, 0, 1)))
@@ -2186,7 +2199,7 @@ static int _vg_write_lv_suspend_commit_backup(struct volume_group *vg,
 
 	if (!vg_write(vg)) {
 		log_error("Write of VG %s failed.", vg->name);
-		return_0;
+		return 0;
 	}
 
 	if (!(r = (origin_only ? suspend_lv_origin(vg->cmd, lock_lv) :
@@ -2197,9 +2210,6 @@ static int _vg_write_lv_suspend_commit_backup(struct volume_group *vg,
 	} else if (!(r = vg_commit(vg)))
 		stack; /* !vg_commit() has implicit vg_revert() */
 
-	if (r && do_backup)
-		backup(vg);
-
 	return r;
 }
 
@@ -2207,8 +2217,6 @@ static int _vg_write_commit_backup(struct volume_group *vg)
 {
 	if (!vg_write(vg) || !vg_commit(vg))
 		return_0;
-
-	backup(vg);
 
 	return 1;
 }
@@ -2834,7 +2842,6 @@ static int _raid_add_images(struct logical_volume *lv,
 				  display_lvname(lv));
 			return 0;
 		}
-		backup(lv->vg);
 	}
 
 	return 1;
@@ -2939,11 +2946,16 @@ static int _raid_allow_extraction(struct logical_volume *lv,
 	    !lv_raid_dev_health(lv, &dev_health))
 		return_0;
 
-	if (!strcmp("resync", sync_action))
-		return 1;
+	if (!strcmp("resync", sync_action)) {
+		if (!lv_is_on_pvs(seg_lv(seg, 0), target_pvs) &&
+		    !lv_is_on_pvs(seg_metalv(seg, 0), target_pvs))
+			return 1;
+		log_error("Unable to remove primary RAID image while array resyncing.");
+		return 0;
+	}
 
 	/* If anything other than "recover", rebuild or "idle" */
-        /* Targets reports for a while 'idle' state, before recover starts */
+	/* Targets reports for a while 'idle' state, before recover starts */
 	if (strcmp("recover", sync_action) &&
 	    strcmp("rebuild", sync_action) &&
 	    strcmp("idle", sync_action)) {
@@ -3153,8 +3165,6 @@ static int _raid_remove_images(struct logical_volume *lv, int yes,
 
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
-
-	backup(lv->vg);
 
 	return 1;
 }
@@ -3412,8 +3422,6 @@ int lv_raid_split(struct logical_volume *lv, int yes, const char *split_name,
 
 	if (!vg_write(lv->vg) || !vg_commit(lv->vg))
 		return_0;
-
-	backup(lv->vg);
 
 	return 1;
 }
@@ -3897,8 +3905,6 @@ static int _eliminate_extracted_lvs_optional_write_vg(struct volume_group *vg,
 	if (vg_write_requested) {
 		if (!vg_write(vg) || !vg_commit(vg))
 			return_0;
-
-		backup(vg);
 	}
 
 	/* Wait for events following any deactivation. */
@@ -5445,7 +5451,7 @@ static int _takeover_upconvert_wrapper(TAKEOVER_FN_ARGS)
 	extents_copied = seg->extents_copied;
 	seg_len = seg->len;
 
-	/* In case of raid4/5, adjust to allow for allocation of additonal image pairs */
+	/* In case of raid4/5, adjust to allow for allocation of additional image pairs */
 	if (seg_is_raid4(seg) || seg_is_any_raid5(seg)) {
 		if (!(seg->segtype = get_segtype_from_flag(lv->vg->cmd, SEG_RAID0_META)))
 			return_0;
@@ -6957,7 +6963,7 @@ try_again:
 	 */
 	if (!_raid_extract_images(lv, force,
 				  raid_seg->area_count - match_count,
-				  (partial_segment_removed || !dm_list_size(remove_pvs)) ?
+				  (partial_segment_removed || dm_list_empty(remove_pvs)) ?
 				  &lv->vg->pvs : remove_pvs, 0,
 				  &old_lvs, &old_lvs)) {
 		log_error("Failed to remove the specified images from %s.",

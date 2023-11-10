@@ -171,9 +171,7 @@ static int _lvchange_monitoring(struct cmd_context *cmd,
 static int _lvchange_background_polling(struct cmd_context *cmd,
 					struct logical_volume *lv)
 {
-	struct lvinfo info;
-
-	if (!lv_info(cmd, lv, 0, &info, 0, 0) || !info.exists) {
+	if (!lv_is_active(lv)) {
 		log_error("Logical volume %s is not active.", display_lvname(lv));
 		return 0;
 	}
@@ -213,6 +211,10 @@ static int _lvchange_activate(struct cmd_context *cmd, struct logical_volume *lv
 
 	if ((activate == CHANGE_AAY) &&
 	    !lv_passes_auto_activation_filter(cmd, lv))
+		return 1;
+
+	if ((activate == CHANGE_AAY) &&
+	    ((lv->status & LV_NOAUTOACTIVATE) || (lv->vg->status & NOAUTOACTIVATE)))
 		return 1;
 
 	if (!lv_change_activate(cmd, lv, activate))
@@ -354,6 +356,8 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 	if (monitored != DMEVENTD_MONITOR_IGNORE)
 		init_dmeventd_monitor(monitored);
 	init_mirror_in_sync(0);
+	if (!sync_local_dev_names(cmd))
+		log_warn("Failed to sync local dev names.");
 
 	log_very_verbose("Starting resync of %s%s%s%s %s.",
 			 (active) ? "active " : "",
@@ -409,13 +413,6 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 
 	if (!activate_and_wipe_lvlist(&device_list, 0))
 		return 0;
-
-	/* Wait until devices are away */
-	if (!sync_local_dev_names(lv->vg->cmd)) {
-		log_error("Failed to sync local devices after updating %s.",
-			  display_lvname(lv));
-		return 0;
-	}
 
 	/* Put metadata sub-LVs back in place */
 	if (!_attach_metadata_devices(seg, &device_list)) {
@@ -758,6 +755,43 @@ out:
 	return r;
 }
 
+static int _lvchange_vdo(struct cmd_context *cmd,
+			 struct logical_volume *lv,
+			 uint32_t *mr)
+{
+	struct lv_segment *seg;
+	int updated = 0;
+
+	seg = first_seg(lv);
+
+	// With VDO LV given flip to VDO pool
+	if (seg_is_vdo(seg))
+		seg = first_seg(seg_lv(seg, 0));
+
+	if (!get_vdo_settings(cmd, &seg->vdo_params, &updated))
+		return_0;
+
+	if ((updated & VDO_CHANGE_OFFLINE) &&
+	    lv_info(cmd, seg->lv, 1, NULL, 0, 0)) {
+		log_error("Cannot change VDO settings for active VDO pool %s.",
+			  display_lvname(seg->lv));
+		// TODO maybe add --force support with prompt here
+		log_print_unless_silent("VDO pool %s with all its LVs needs to be deactivated.",
+					display_lvname(seg->lv));
+		return 0;
+	}
+
+	if (updated) {
+		if (!dm_vdo_validate_target_params(&seg->vdo_params, 0 /* vdo_size */))
+			return_0;
+
+		/* Request caller to commit and reload metadata */
+		*mr |= MR_RELOAD;
+	}
+
+	return 1;
+}
+
 static int _lvchange_tag(struct cmd_context *cmd, struct logical_volume *lv,
 			 int arg, uint32_t *mr)
 {
@@ -1016,6 +1050,28 @@ static int _lvchange_activation_skip(struct logical_volume *lv, uint32_t *mr)
 	return 1;
 }
 
+static int _lvchange_autoactivation(struct logical_volume *lv, uint32_t *mr)
+{
+	int aa_no_arg = !arg_int_value(lv->vg->cmd, setautoactivation_ARG, 0);
+	int aa_no_meta = (lv->status & LV_NOAUTOACTIVATE);
+
+	if ((aa_no_arg && aa_no_meta) || (!aa_no_arg && !aa_no_meta))
+		return 1;
+
+	if (aa_no_arg)
+		lv->status |= LV_NOAUTOACTIVATE;
+	else
+		lv->status &= ~LV_NOAUTOACTIVATE;
+
+	log_verbose("Changing autoactivation flag to %s for LV %s.",
+		    display_lvname(lv), aa_no_arg ? "no" : "yes");
+
+	/* Request caller to commit+backup metadata */
+	*mr |= MR_COMMIT;
+
+	return 1;
+}
+
 static int _lvchange_compression(struct logical_volume *lv, uint32_t *mr)
 {
 	struct cmd_context *cmd = lv->vg->cmd;
@@ -1119,6 +1175,7 @@ static int _option_allows_group_commit(int opt_enum)
 		metadataprofile_ARG,
 		detachprofile_ARG,
 		setactivationskip_ARG,
+		setautoactivation_ARG,
 		-1
 	};
 
@@ -1134,6 +1191,7 @@ static int _option_requires_direct_commit(int opt_enum)
 		cachemode_ARG,
 		cachepolicy_ARG,
 		cachesettings_ARG,
+		vdosettings_ARG,
 		-1
 	};
 
@@ -1257,6 +1315,11 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 			doit += _lvchange_activation_skip(lv, &mr);
 			break;
 
+		case setautoactivation_ARG:
+			docmds++;
+			doit += _lvchange_autoactivation(lv, &mr);
+			break;
+
 		case compression_ARG:
 			docmds++;
 			doit += _lvchange_compression(lv, &mr);
@@ -1329,7 +1392,10 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 			docmds++;
 			doit += _lvchange_cache(cmd, lv, &mr);
 			break;
-
+		case vdosettings_ARG:
+			docmds++;
+			doit += _lvchange_vdo(cmd, lv, &mr);
+			break;
 		default:
 			log_error(INTERNAL_ERROR "Failed to check for option %s",
 				  arg_long_option_name(i));
@@ -1510,6 +1576,7 @@ int lvchange_activate_cmd(struct cmd_context *cmd, int argc, char **argv)
 	init_background_polling(arg_is_set(cmd, sysinit_ARG) ? 0 : arg_int_value(cmd, poll_ARG, DEFAULT_BACKGROUND_POLLING));
 	cmd->handles_missing_pvs = 1;
 	cmd->lockd_vg_default_sh = 1;
+	cmd->ignore_device_name_mismatch = 1;
 
 	/*
 	 * Include foreign VGs that contain active LVs.
@@ -1594,8 +1661,9 @@ int lvchange_refresh_cmd(struct cmd_context *cmd, int argc, char **argv)
 	init_background_polling(arg_is_set(cmd, sysinit_ARG) ? 0 : arg_int_value(cmd, poll_ARG, DEFAULT_BACKGROUND_POLLING));
 	cmd->handles_missing_pvs = 1;
 	cmd->lockd_vg_default_sh = 1;
+	cmd->ignore_device_name_mismatch = 1;
 
-	return process_each_lv(cmd, argc, argv, NULL, NULL, 0,
+	return process_each_lv(cmd, argc, argv, NULL, NULL, READ_FOR_ACTIVATE,
 			       NULL, &_lvchange_refresh_check, &_lvchange_refresh_single);
 }
 
@@ -1660,9 +1728,14 @@ static int _lvchange_syncaction_single(struct cmd_context *cmd,
 {
 	const char *msg = arg_str_value(cmd, syncaction_ARG, NULL);
 
+	if (!msg) {
+		log_error(INTERNAL_ERROR "Missing syncaction arg.");
+		return ECMD_FAILED;
+	}
+
 	if (lv_raid_has_integrity(lv) && !strcmp(msg, "repair")) {
 		log_error("Use syncaction check to detect and correct integrity checksum mismatches.");
-		return_ECMD_FAILED;
+		return ECMD_FAILED;
 	}
 
 	/* If LV is inactive here, ensure it's not active elsewhere. */
@@ -1762,6 +1835,7 @@ int lvchange_monitor_poll_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
 	init_background_polling(arg_is_set(cmd, sysinit_ARG) ? 0 : arg_int_value(cmd, poll_ARG, DEFAULT_BACKGROUND_POLLING));
 	cmd->handles_missing_pvs = 1;
+	cmd->ignore_device_name_mismatch = 1;
 	return process_each_lv(cmd, argc, argv, NULL, NULL, 0,
 			       NULL, &_lvchange_monitor_poll_check, &_lvchange_monitor_poll_single);
 }

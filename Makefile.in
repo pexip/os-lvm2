@@ -18,7 +18,7 @@ top_builddir = @top_builddir@
 abs_top_builddir = @abs_top_builddir@
 abs_top_srcdir = @abs_top_srcdir@
 
-SUBDIRS = conf daemons include lib libdaemon libdm man scripts tools
+SUBDIRS = libdm conf daemons include lib libdaemon man scripts tools
 
 ifeq ("@UDEV_RULES@", "yes")
   SUBDIRS += udev
@@ -47,8 +47,6 @@ include $(top_srcdir)/base/Makefile
 include $(top_srcdir)/device_mapper/Makefile
 include $(top_srcdir)/test/unit/Makefile
 
-libdm: include
-libdaemon: include
 lib: libdaemon $(BASE_TARGET) $(DEVICE_MAPPER_TARGET)
 daemons: lib libdaemon tools
 scripts: lib
@@ -56,16 +54,13 @@ tools: lib libdaemon
 po: tools daemons
 man: tools
 all_man: tools
-scripts: libdm
 test: tools daemons
 unit-test  run-unit-test: test
 
-lib.device-mapper: include.device-mapper
-libdm.device-mapper: include.device-mapper
 daemons.device-mapper: libdm.device-mapper
 tools.device-mapper: libdm.device-mapper
-scripts.device-mapper: include.device-mapper
 device-mapper: tools.device-mapper daemons.device-mapper man.device-mapper
+device_mapper: device-mapper
 
 ifeq ("@INTL@", "yes")
 lib.pofile: include.pofile
@@ -81,9 +76,10 @@ daemons.cflow: tools.cflow
 cflow: include.cflow
 endif
 
+CSCOPE_DIRS = base daemons device_mapper include lib libdaemon scripts tools libdm test
 ifneq ("@CSCOPE_CMD@", "")
 cscope.out:
-	@CSCOPE_CMD@ -b -R -s$(top_srcdir)
+	@CSCOPE_CMD@ -b -R $(patsubst %,-s%,$(addprefix $(srcdir)/,$(CSCOPE_DIRS)))
 all: cscope.out
 endif
 DISTCLEAN_TARGETS += cscope.out
@@ -116,11 +112,11 @@ rpm: dist
 	$(LN_S) -f $(abs_top_srcdir)/spec/packages.inc $(rpmbuilddir)/SOURCES
 	DM_VER=$$(cut -d- -f1 $(top_srcdir)/VERSION_DM);\
 	GIT_VER=$$(cd $(top_srcdir); git describe | cut -d- --output-delimiter=. -f2,3 || echo 0);\
-	sed -e "s,\(device_mapper_version\) [0-9.]*$$,\1 $$DM_VER," \
+	$(SED) -e "s,\(device_mapper_version\) [0-9.]*$$,\1 $$DM_VER," \
 	    -e "s,^\(Version:[^0-9%]*\)[0-9.]*$$,\1 $(LVM_VER)," \
 	    -e "s,^\(Release:[^0-9%]*\)[0-9.]\+,\1 $$GIT_VER," \
 	    $(top_srcdir)/spec/source.inc >$(rpmbuilddir)/SOURCES/source.inc
-	rpmbuild -v --define "_topdir $(rpmbuilddir)" -ba $(top_srcdir)/spec/lvm2.spec
+	V=$(V) rpmbuild -v --define "_topdir $(rpmbuilddir)" -ba $(top_srcdir)/spec/lvm2.spec
 
 generate: conf.generate man.generate
 	$(MAKE) -C conf generate
@@ -154,6 +150,31 @@ install_all_man:
 install_tmpfiles_configuration:
 	$(MAKE) -C scripts install_tmpfiles_configuration
 
+help:
+	@echo -e "\nAvailable targets:"
+	@echo "  all			Default target."
+	@echo "  all_man		Build all man pages with generators."
+	@echo "  clean			Remove all compile files."
+	@echo "  device-mapper		Device mapper part of lvm2."
+	@echo "  dist			Generate distributable file."
+	@echo "  distclean		Remove all build files."
+	@echo "  generate		Generate man pages for sources."
+	@echo "  help			Display callable targets."
+	@echo "  install		Install all files."
+	@echo "  install_all_man	Install all man pages."
+	@echo "  install_cluster	Install cmirrord."
+	@echo "  install_device-mapper	Install device mapper files."
+	@echo "  install_initscripts	Install initialization scripts."
+	@echo "  install_lvm2		Install lvm2 files."
+	@echo "  install_systemd_units	Install systemd units."
+	@echo "  lcov			Generate lcov output."
+	@echo "  lcov-dated		Generate lcov with timedate suffix."
+	@echo "  lcov-reset		Reset lcov counters"
+	@echo "  man			Build man pages."
+	@echo "  rpm			Build rpm."
+	@echo "  run-unit-test		Run unit tests."
+	@echo "  tags			Generate c/etags."
+
 ifneq ("$(LCOV)", "")
 .PHONY: lcov-reset lcov lcov-dated
 
@@ -183,8 +204,8 @@ endif
 ifneq ($(shell which ctags 2>/dev/null),)
 .PHONY: tags
 tags:
-	test -z "$(shell find $(top_srcdir) -type f -name '*.[ch]' -newer tags 2>/dev/null | head -1)" || $(RM) tags
-	test -f tags || find $(top_srcdir) -maxdepth 5 -type f -name '*.[ch]' -exec ctags -a '{}' +
+	test -z "$(shell find $(addprefix $(top_srcdir)/,$(CSCOPE_DIRS)) -type f -name '*.[ch]' -newer tags 2>/dev/null | head -1)" || $(RM) tags
+	test -f tags || find $(addprefix $(top_srcdir)/,$(CSCOPE_DIRS)) -maxdepth 5 -type f -name '*.[ch]' -exec ctags -a '{}' +
 
 CLEAN_TARGETS += tags
 endif

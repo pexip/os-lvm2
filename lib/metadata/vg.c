@@ -46,7 +46,7 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 	vg->vgmem = vgmem;
 	vg->alloc = ALLOC_NORMAL;
 
-	if (!(vg->hostnames = dm_hash_create(16))) {
+	if (!(vg->hostnames = dm_hash_create(14))) {
 		log_error("Failed to allocate VG hostname hashtable.");
 		dm_pool_destroy(vgmem);
 		return NULL;
@@ -60,6 +60,7 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 	dm_list_init(&vg->removed_lvs);
 	dm_list_init(&vg->removed_historical_lvs);
 	dm_list_init(&vg->removed_pvs);
+	dm_list_init(&vg->msg_list);
 
 	log_debug_mem("Allocated VG %s at %p.", vg->name ? : "<no name>", (void *)vg);
 
@@ -78,6 +79,8 @@ static void _free_vg(struct volume_group *vg)
 
 	log_debug_mem("Freeing VG %s at %p.", vg->name ? : "<no name>", (void *)vg);
 
+	if (vg->committed_cft)
+		config_destroy(vg->committed_cft);
 	dm_hash_destroy(vg->hostnames);
 	dm_pool_destroy(vg->vgmem);
 }
@@ -676,6 +679,11 @@ int vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 		return r;
 	}
 
+	if (!pv->dev || dm_list_empty(&pv->dev->aliases)) {
+		log_error("No device found for PV.");
+		return r;
+	}
+
 	log_debug("vgreduce_single VG %s PV %s", vg->name, pv_dev_name(pv));
 
 	if (pv_pe_alloc_count(pv)) {
@@ -690,9 +698,6 @@ int vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	pvl = find_pv_in_vg(vg, name);
-
-	if (!archive(vg))
-		goto_bad;
 
 	log_verbose("Removing \"%s\" from volume group \"%s\"", name, vg->name);
 
@@ -739,8 +744,6 @@ int vgreduce_single(struct cmd_context *cmd, struct volume_group *vg,
 			goto bad;
 		}
 
-		backup(vg);
-
 		log_print_unless_silent("Removed \"%s\" from volume group \"%s\"",
 				name, vg->name);
 	}
@@ -751,4 +754,13 @@ bad:
 		free_pv_fid(pvl->pv);
 	release_vg(orphan_vg);
 	return r;
+}
+
+void vg_backup_if_needed(struct volume_group *vg)
+{
+	if (!vg || !vg->needs_backup)
+		return;
+
+	vg->needs_backup = 0;
+	backup(vg->vg_committed);
 }

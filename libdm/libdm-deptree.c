@@ -292,16 +292,7 @@ struct dm_tree_node {
 	dm_node_callback_fn callback;
 	void *callback_data;
 
-	/*
-	 * TODO:
-	 *	Add advanced code which tracks of send ioctls and their
-	 *	proper revert operation for more advanced recovery
-	 *	Current code serves mostly only to recovery when
-	 *	thin pool metadata check fails and command would
-	 *	have left active thin data and metadata subvolumes.
-	 */
-	struct dm_list activated;	/* Head of activated nodes for preload revert */
-	struct dm_list activated_list;	/* List of activated nodes for preload revert */
+	int activated;                  /* tracks activation during preload */
 };
 
 struct dm_tree {
@@ -336,7 +327,6 @@ struct dm_tree *dm_tree_create(void)
 	dtree->root.dtree = dtree;
 	dm_list_init(&dtree->root.uses);
 	dm_list_init(&dtree->root.used_by);
-	dm_list_init(&dtree->root.activated);
 	dtree->skip_lockfs = 0;
 	dtree->no_flush = 0;
 	dtree->mem = dmem;
@@ -521,7 +511,6 @@ static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
 
 	dm_list_init(&node->uses);
 	dm_list_init(&node->used_by);
-	dm_list_init(&node->activated);
 	dm_list_init(&node->props.segs);
 
 	dev = MKDEV(info->major, info->minor);
@@ -577,7 +566,7 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 	default_uuid_prefix = dm_uuid_prefix();
 	default_uuid_prefix_len = strlen(default_uuid_prefix);
 
-	if (suffix_list && (suffix_position = rindex(uuid, '-'))) {
+	if (suffix_list && (suffix_position = strrchr(uuid, '-'))) {
 		while ((suffix = suffix_list[i++])) {
 			if (strcmp(suffix_position + 1, suffix))
 				continue;
@@ -2036,7 +2025,7 @@ static int _create_node(struct dm_tree_node *dnode, struct dm_tree_node *parent)
 	}
 
 	if (r)
-		dm_list_add_h(&parent->activated, &dnode->activated_list);
+		dnode->activated = 1;
 out:
 	dm_task_destroy(dmt);
 
@@ -2231,7 +2220,7 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 
 	EMIT_PARAMS(pos, " %u ", seg->mirror_area_count);
 
-	if (_emit_areas_line(dmt, seg, params, paramsize, &pos) <= 0)
+	if (!_emit_areas_line(dmt, seg, params, paramsize, &pos))
 		return_0;
 
 	if (handle_errors)
@@ -2433,7 +2422,7 @@ static int _raid_emit_segment_line(struct dm_task *dmt, uint32_t major,
 	/* Print number of metadata/data device pairs */
 	EMIT_PARAMS(pos, " %u", area_count);
 
-	if (_emit_areas_line(dmt, seg, params, paramsize, &pos) <= 0)
+	if (!_emit_areas_line(dmt, seg, params, paramsize, &pos))
 		return_0;
 
 	return 1;
@@ -2489,7 +2478,7 @@ static int _cache_emit_segment_line(struct dm_task *dmt,
 	EMIT_PARAMS(pos, " %s", name);
 
 	/* Do not pass migration_threshold 2048 which is default */
-	EMIT_PARAMS(pos, " %u", (seg->policy_argc + (seg->migration_threshold != 2048) ? 1 : 0) * 2);
+	EMIT_PARAMS(pos, " %u", (seg->policy_argc + ((seg->migration_threshold != 2048) ? 1 : 0)) * 2);
 	if (seg->migration_threshold != 2048)
 		    EMIT_PARAMS(pos, " migration_threshold %u", seg->migration_threshold);
 	if (seg->policy_settings)
@@ -2561,7 +2550,6 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 			      size_t paramsize)
 {
 	int pos = 0;
-	int r;
 	int target_type_is_raid = 0;
 	char originbuf[DM_FORMAT_DEV_BUFSIZE], cowbuf[DM_FORMAT_DEV_BUFSIZE];
 
@@ -2572,8 +2560,7 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 		break;
 	case SEG_MIRRORED:
 		/* Mirrors are pretty complicated - now in separate function */
-		r = _mirror_emit_segment_line(dmt, seg, params, paramsize);
-		if (!r)
+		if (!_mirror_emit_segment_line(dmt, seg, params, paramsize))
 			return_0;
 		break;
 	case SEG_SNAPSHOT:
@@ -2619,9 +2606,8 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_RAID6_LA_6:
 	case SEG_RAID6_RA_6:
 		target_type_is_raid = 1;
-		r = _raid_emit_segment_line(dmt, major, minor, seg, seg_start,
-					    params, paramsize);
-		if (!r)
+		if (!_raid_emit_segment_line(dmt, major, minor, seg, seg_start,
+					     params, paramsize))
 			return_0;
 
 		break;
@@ -2652,10 +2638,9 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 	case SEG_CRYPT:
 	case SEG_LINEAR:
 	case SEG_STRIPED:
-		if ((r = _emit_areas_line(dmt, seg, params, paramsize, &pos)) <= 0) {
-			stack;
-			return r;
-		}
+		if (!_emit_areas_line(dmt, seg, params, paramsize, &pos))
+			return_0;
+
 		if (!params[0]) {
 			log_error("No parameters supplied for %s target "
 				  "%u:%u.", _dm_segtypes[seg->type].target,
@@ -2797,26 +2782,29 @@ out:
 	return r;
 }
 
-/*
- * Currently try to deactivate only nodes created during preload.
- * New node is always attached to the front of activated_list
- */
-static int _dm_tree_revert_activated(struct dm_tree_node *parent)
+/* Try to deactivate only nodes created during preload. */
+static int _dm_tree_revert_activated(struct dm_tree_node *dnode)
 {
+	void *handle = NULL;
 	struct dm_tree_node *child;
 
-	dm_list_iterate_items_gen(child, &parent->activated, activated_list) {
-		log_debug_activation("Reverting %s.", _node_name(child));
-		if (child->callback) {
-			log_debug_activation("Dropping callback for %s.", _node_name(child));
-			child->callback = NULL;
+	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
+		if (child->activated) {
+			if (child->callback) {
+				log_debug_activation("Dropping callback for %s.", _node_name(child));
+				child->callback = NULL;
+			}
+
+			log_debug_activation("Reverting %s.", _node_name(child));
+			if (!_deactivate_node(child->name, child->info.major, child->info.minor,
+					      &child->dtree->cookie, child->udev_flags, 0)) {
+				log_debug_activation("Unable to deactivate %s.", _node_name(child));
+				return 0;
+			}
 		}
-		if (!_deactivate_node(child->name, child->info.major, child->info.minor,
-				      &child->dtree->cookie, child->udev_flags, 0)) {
-			log_error("Unable to deactivate %s.", _node_name(child));
-			return 0;
-		}
-		if (!_dm_tree_revert_activated(child))
+
+		if (dm_tree_node_num_children(child, 0) &&
+		    !_dm_tree_revert_activated(child))
 			return_0;
 	}
 
@@ -3315,15 +3303,16 @@ int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
 	return 1;
 }
 
-int dm_tree_node_add_cache_target(struct dm_tree_node *node,
-				  uint64_t size,
-				  uint64_t feature_flags, /* DM_CACHE_FEATURE_* */
-				  const char *metadata_uuid,
-				  const char *data_uuid,
-				  const char *origin_uuid,
-				  const char *policy_name,
-				  const struct dm_config_node *policy_settings,
-				  uint32_t data_block_size)
+DM_EXPORT_NEW_SYMBOL(int, dm_tree_node_add_cache_target, 1_02_138)
+	(struct dm_tree_node *node,
+	 uint64_t size,
+	 uint64_t feature_flags, /* DM_CACHE_FEATURE_* */
+	 const char *metadata_uuid,
+	 const char *data_uuid,
+	 const char *origin_uuid,
+	 const char *policy_name,
+	 const struct dm_config_node *policy_settings,
+	 uint32_t data_block_size)
 {
 	struct dm_config_node *cn;
 	struct load_segment *seg;
@@ -3503,6 +3492,24 @@ int dm_tree_node_add_thin_pool_target(struct dm_tree_node *node,
 				      uint64_t low_water_mark,
 				      unsigned skip_block_zeroing)
 {
+	return dm_tree_node_add_thin_pool_target_v1(node, size, transaction_id,
+						    metadata_uuid, pool_uuid,
+						    data_block_size,
+						    low_water_mark,
+						    skip_block_zeroing,
+						    1);
+}
+
+int dm_tree_node_add_thin_pool_target_v1(struct dm_tree_node *node,
+					 uint64_t size,
+					 uint64_t transaction_id,
+					 const char *metadata_uuid,
+					 const char *pool_uuid,
+					 uint32_t data_block_size,
+					 uint64_t low_water_mark,
+					 unsigned skip_block_zeroing,
+					 unsigned crop_metadata)
+{
 	struct load_segment *seg, *mseg;
 	uint64_t devsize = 0;
 
@@ -3529,17 +3536,18 @@ int dm_tree_node_add_thin_pool_target(struct dm_tree_node *node,
 	if (!_link_tree_nodes(node, seg->metadata))
 		return_0;
 
-	/* FIXME: more complex target may need more tweaks */
-	dm_list_iterate_items(mseg, &seg->metadata->props.segs) {
-		devsize += mseg->size;
-		if (devsize > DM_THIN_MAX_METADATA_SIZE) {
-			log_debug_activation("Ignoring %" PRIu64 " of device.",
-					     devsize - DM_THIN_MAX_METADATA_SIZE);
-			mseg->size -= (devsize - DM_THIN_MAX_METADATA_SIZE);
-			devsize = DM_THIN_MAX_METADATA_SIZE;
-			/* FIXME: drop remaining segs */
+	if (crop_metadata)
+		/* FIXME: more complex target may need more tweaks */
+		dm_list_iterate_items(mseg, &seg->metadata->props.segs) {
+			devsize += mseg->size;
+			if (devsize > DM_THIN_MAX_METADATA_SIZE) {
+				log_debug_activation("Ignoring %" PRIu64 " of device.",
+						     devsize - DM_THIN_MAX_METADATA_SIZE);
+				mseg->size -= (devsize - DM_THIN_MAX_METADATA_SIZE);
+				devsize = DM_THIN_MAX_METADATA_SIZE;
+				/* FIXME: drop remaining segs */
+			}
 		}
-	}
 
 	if (!(seg->pool = dm_tree_find_node_by_uuid(node->dtree, pool_uuid))) {
 		log_error("Missing pool uuid %s.", pool_uuid);
@@ -3834,7 +3842,7 @@ void dm_tree_node_set_callback(struct dm_tree_node *dnode,
 	dnode->callback_data = data;
 }
 
-#if defined(__GNUC__)
+#if defined(GNU_SYMVER)
 /*
  * Backward compatible implementations.
  *
@@ -3843,8 +3851,8 @@ void dm_tree_node_set_callback(struct dm_tree_node *dnode,
  */
 
 /* Backward compatible dm_tree_node_size_changed() implementations. */
+DM_EXPORT_SYMBOL_BASE(dm_tree_node_size_changed)
 int dm_tree_node_size_changed_base(const struct dm_tree_node *dnode);
-DM_EXPORT_SYMBOL_BASE(dm_tree_node_size_changed);
 int dm_tree_node_size_changed_base(const struct dm_tree_node *dnode)
 {
 	/* Base does not make difference between smaller and bigger */
@@ -3859,6 +3867,7 @@ int dm_tree_node_size_changed_base(const struct dm_tree_node *dnode)
  * the new function dm_tree_node_add_cache_target which detects unknown
  * feature flags and returns error for them.
  */
+DM_EXPORT_SYMBOL_BASE(dm_tree_node_add_cache_target)
 int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
 				       uint64_t size,
 				       uint64_t feature_flags, /* DM_CACHE_FEATURE_* */
@@ -3868,7 +3877,6 @@ int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
 				       const char *policy_name,
 				       const struct dm_config_node *policy_settings,
 				       uint32_t data_block_size);
-DM_EXPORT_SYMBOL_BASE(dm_tree_node_add_cache_target);
 int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
 				       uint64_t size,
 				       uint64_t feature_flags,

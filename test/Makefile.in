@@ -81,9 +81,11 @@ help:
 	@echo "  check_system		Run all tests using udev."
 	@echo "  check_local		Run tests."
 	@echo "  check_lvmpolld         Run tests with lvmpolld daemon."
+	@echo "  check_devicesfile	Run tests using a devices file."
 	@echo "  check_all_lvmpolld     Run all tests with lvmpolld daemon."
 	@echo "  check_lvmlockd_sanlock Run tests with lvmlockd and sanlock."
 	@echo "  check_lvmlockd_dlm     Run tests with lvmlockd and dlm."
+	@echo "  check_lvmlockd_idm	Run tests with lvmlockd and idm."
 	@echo "  check_lvmlockd_test    Run tests with lvmlockd --test."
 	@echo "  run-unit-test          Run only unit tests (root not needed)."
 	@echo "  clean			Clean dir."
@@ -91,6 +93,7 @@ help:
 	@echo -e "\nSupported variables:"
 	@echo "  LVM_TEST_AUX_TRACE	Set for verbose messages for aux scripts []."
 	@echo "  LVM_TEST_BACKING_DEVICE Set device used for testing (see also LVM_TEST_DIR)."
+	@echo "  LVM_TEST_MULTI_HOST	Set multiple hosts used for testing."
 	@echo "  LVM_TEST_CAN_CLOBBER_DMESG Allow to clobber dmesg buffer without /dev/kmsg. (1)"
 	@echo "  LVM_TEST_DEVDIR	Set to '/dev' to run on real /dev."
 	@echo "  LVM_TEST_PREFER_BRD	Prefer using brd (ramdisk) over loop for testing [1]."
@@ -109,6 +112,7 @@ help:
 	@echo "  LVM_TEST_CACHE_REPAIR_CMD  Command for cache_repair  [$(LVM_TEST_CACHE_REPAIR_CMD)]."
 	@echo "  LVM_TEST_CACHE_RESTORE_CMD Command for cache_restore [$(LVM_TEST_CACHE_RESTORE_CMD)]."
 	@echo "  LVM_TEST_UNLIMITED	Set to get unlimited test log (>32MB)"
+	@echo "  LVM_TEST_DEVICE_LIST   File path listing real devs that tests can use."
 	@echo "  LVM_VALGRIND		Enable valgrind testing, execs $$"VALGRIND.
 	@echo "  LVM_VALGRIND_DMEVENTD	Enable valgrind testing of dmeventd (1)."
 	@echo "  LVM_VALGRIND_LVMPOLLD	Enable valgrind testing of lvmpolld (1)."
@@ -147,6 +151,11 @@ check_all_lvmpolld: .tests-stamp
 		--flavours ndev-lvmpolld --only $(T) --skip $(S)
 endif
 
+check_devicesfile: .tests-stamp
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours ndev-devicesfile --only $(T) --skip $(S)
+
 ifeq ("@BUILD_LVMLOCKD@", "yes")
 check_lvmlockd_sanlock: .tests-stamp
 	VERBOSE=$(VERBOSE) ./lib/runner \
@@ -159,6 +168,14 @@ check_lvmlockd_dlm: .tests-stamp
 	VERBOSE=$(VERBOSE) ./lib/runner \
 		--testdir . --outdir $(LVM_TEST_RESULTS) \
 		--flavours udev-lvmlockd-dlm --only shell/aa-lvmlockd-dlm-prepare.sh,$(T),shell/zz-lvmlockd-dlm-remove.sh --skip $(S)
+endif
+
+ifeq ("@BUILD_LVMLOCKD@", "yes")
+check_lvmlockd_idm: .tests-stamp lib/idm_inject_failure
+	$(INSTALL_PROGRAM) lib/idm_inject_failure $(EXECDIR)
+	VERBOSE=$(VERBOSE) ./lib/runner \
+		--testdir . --outdir $(LVM_TEST_RESULTS) \
+		--flavours udev-lvmlockd-idm --only shell/aa-lvmlockd-idm-prepare.sh,$(T),shell/zz-lvmlockd-idm-remove.sh --skip $(S)
 endif
 
 ifeq ("@BUILD_LVMLOCKD@", "yes")
@@ -178,9 +195,11 @@ EXECDIR = $(libexecdir)/lvm2-testsuite
 LIB_FLAVOURS = \
  flavour-ndev-lvmpolld\
  flavour-ndev-vanilla\
+ flavour-ndev-devicesfile\
  flavour-udev-lvmpolld\
  flavour-udev-lvmlockd-sanlock\
  flavour-udev-lvmlockd-dlm\
+ flavour-udev-lvmlockd-idm\
  flavour-udev-lvmlockd-test\
  flavour-udev-vanilla
 
@@ -250,7 +269,11 @@ lib/dmsecuretest: lib/dmsecuretest.o .lib-dir-stamp $(INTERNAL_LIBS)
 
 lib/securetest: lib/dmsecuretest.o .lib-dir-stamp
 	@echo "    [CC] $@"
-	$(Q) $(CC) -g $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS) -o $@ $< -L$(top_builddir)/libdm/ioctl -ldevmapper $(LIBS)
+	$(Q) $(CC) -g $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS) -o $@ $< -L$(interfacebuilddir) -ldevmapper $(LIBS)
+
+lib/idm_inject_failure: lib/idm_inject_failure.o .lib-dir-stamp
+	@echo "    [CC] $@"
+	$(Q) $(CC) -g $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS) -o $@ $< $(INTERNAL_LIBS) $(LIBS) -lseagate_ilm
 
 lib/runner.o: $(wildcard $(srcdir)/lib/*.h)
 
@@ -345,6 +368,7 @@ LIB = $(addprefix lib/, $(LIB_SECURETEST) $(LIB_DMSECURETEST) $(LIB_SHARED) $(LI
 	$(Q) $(LN_S) -f $(abs_top_srcdir)/conf/lvmdbusd.profile lib/
 	$(Q) $(LN_S) -f $(abs_top_srcdir)/conf/thin-performance.profile lib/
 	$(Q) $(LN_S) -f $(abs_top_srcdir)/scripts/fsadm.sh lib/fsadm
+	$(Q) $(LN_S) -f $(abs_top_srcdir)/scripts/lvm_import_vdo.sh lib/lvm_import_vdo
 	@test "$(srcdir)" = . || \
 		for i in $(LIB_LVMLOCKD_CONF) $(LIB_MKE2FS_CONF); do \
 			test -n "$(Q)" || echo "$(LN_S) -f $(abs_top_srcdir)/test/lib/$$i lib/"; \

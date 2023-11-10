@@ -18,6 +18,7 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h> /* help musl C */
 #include <pthread.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -326,7 +327,7 @@ static void _remove_lockfile(const char *file)
 static void _daemonise(daemon_state s)
 {
 	int child_status;
-	int fd;
+	int fd, ffd;
 	pid_t pid;
 	struct rlimit rlim;
 	struct timeval tval;
@@ -394,20 +395,22 @@ static void _daemonise(daemon_state s)
 
 	/* Switch to sysconf(_SC_OPEN_MAX) ?? */
 	if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
-		fd = 256; /* just have to guess */
+		ffd = 256; /* just have to guess */
 	else
-		fd = rlim.rlim_cur;
+		ffd = rlim.rlim_cur;
 
-	for (--fd; fd > STDERR_FILENO; fd--) {
+	for (--ffd; ffd > STDERR_FILENO; ffd--) {
 #ifdef __linux__
 		/* Do not close fds preloaded by systemd! */
-		if (_systemd_activation && fd == SD_FD_SOCKET_SERVER)
+		if (_systemd_activation && ffd == SD_FD_SOCKET_SERVER)
 			continue;
 #endif
-		(void) close(fd);
+		(void) close(ffd);
 	}
 
 	setsid();
+
+	/* coverity[leaked_handle] 'fd' handle is not leaking */
 }
 
 response daemon_reply_simple(const char *id, ...)
@@ -551,9 +554,14 @@ static void _reap(daemon_state s, int waiting)
 
 	while (ts) {
 		if (waiting || !ts->active) {
-			if (ts->client.thread_id &&
-			    (errno = pthread_join(ts->client.thread_id, &rv)))
-				ERROR(&s, "pthread_join failed: %s", strerror(errno));
+			if (ts->client.thread_id) {
+				if ((errno = pthread_kill(ts->client.thread_id, SIGTERM)) &&
+				    (errno != ESRCH))
+					ERROR(&s, "pthread_kill failed for pid %ld",
+					      (long)ts->client.thread_id);
+				if ((errno = pthread_join(ts->client.thread_id, &rv)))
+					ERROR(&s, "pthread_join failed: %s", strerror(errno));
+			}
 			last->next = ts->next;
 			free(ts);
 		} else
@@ -659,19 +667,13 @@ void daemon_start(daemon_state s)
 	if (sigprocmask(SIG_SETMASK, NULL, &old_set))
 		perror("sigprocmask error");
 
-	while (!failed) {
+	while (!failed && !_shutdown_requested) {
 		_reset_timeout(s);
 		FD_ZERO(&in);
 		FD_SET(s.socket_fd, &in);
 
 		if (sigprocmask(SIG_SETMASK, &new_set, NULL))
 			perror("sigprocmask error");
-		if (_shutdown_requested && !s.threads->next) {
-			if (sigprocmask(SIG_SETMASK, &old_set, NULL))
-				perror("sigprocmask error");
-			INFO(&s, "%s shutdown requested", s.name);
-			break;
-		}
 		ret = pselect(s.socket_fd + 1, &in, NULL, NULL, _get_timeout(s), &old_set);
 		if (sigprocmask(SIG_SETMASK, &old_set, NULL))
 			perror("sigprocmask error");
@@ -679,6 +681,7 @@ void daemon_start(daemon_state s)
 		if (ret < 0) {
 			if ((errno != EINTR) && (errno != EAGAIN))
 				perror("select error");
+			_reap(s, 0);
 			continue;
 		}
 
@@ -697,6 +700,9 @@ void daemon_start(daemon_state s)
 			}
 		}
 	}
+
+	if (_shutdown_requested)
+		INFO(&s, "%s shutdown requested", s.name);
 
 	INFO(&s, "%s waiting for client threads to finish", s.name);
 	_reap(s, 1);

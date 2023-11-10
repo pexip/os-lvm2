@@ -3,8 +3,6 @@ etc/lvm
 lib/systemd/system/blk-availability*
 lib/systemd/system/lvm2-lvmpolld*
 lib/systemd/system/lvm2-monitor*
-lib/systemd/system/lvm2-pvscan*
-lib/systemd/system-generators/lvm2*
 lib/udev/rules.d/*-lvm*.rules
 sbin/fsadm
 sbin/lvchange
@@ -67,7 +65,6 @@ usr/share/man/man8/lvconvert.8
 usr/share/man/man8/lvcreate.8
 usr/share/man/man8/lvdisplay.8
 usr/share/man/man8/lvextend.8
-usr/share/man/man8/lvm2-activation-generator.8
 usr/share/man/man8/lvm.8
 usr/share/man/man8/lvm-config.8
 usr/share/man/man8/lvmconfig.8

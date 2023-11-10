@@ -95,6 +95,8 @@ const char *get_lock_type_string(lock_type_t lock_type)
 		return "dlm";
 	case LOCK_TYPE_SANLOCK:
 		return "sanlock";
+	case LOCK_TYPE_IDM:
+		return "idm";
 	}
 	return "invalid";
 }
@@ -111,6 +113,8 @@ lock_type_t get_lock_type_from_string(const char *str)
 		return LOCK_TYPE_DLM;
 	if (!strcmp(str, "sanlock"))
 		return LOCK_TYPE_SANLOCK;
+	if (!strcmp(str, "idm"))
+		return LOCK_TYPE_IDM;
 	return LOCK_TYPE_INVALID;
 }
 
@@ -399,7 +403,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 		   void *handle __attribute__((unused)))
 {
 	struct lvinfo info;
-	int inkernel, snap_active = 0;
+	int inkernel, snap_active = 0, partial = 0, raid_is_avail = 1;
 	char uuid[64] __attribute__((aligned(8)));
 	const char *access_str;
 	struct lv_segment *snap_seg = NULL, *mirror_seg = NULL;
@@ -475,7 +479,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 					  snap_active ? "active" : "INACTIVE");
 		}
 		snap_seg = NULL;
-	} else if ((snap_seg = find_snapshot(lv))) {
+	} else if (lv_is_cow(lv) && (snap_seg = find_snapshot(lv))) {
 		if (inkernel &&
 		    (snap_active = lv_snapshot_percent(snap_seg->cow,
 						       &snap_percent)))
@@ -558,11 +562,18 @@ int lvdisplay_full(struct cmd_context *cmd,
 		log_print("LV VDO Pool name       %s", seg_lv(seg, 0)->name);
 	}
 
+	if (lv_is_partial(lv))
+		partial = 1;
+
+	if (lv_is_raid(lv))
+		raid_is_avail = raid_is_available(lv) ? 1 : 0;
+
 	if (inkernel && info.suspended)
 		log_print("LV Status              suspended");
 	else if (activation())
-		log_print("LV Status              %savailable",
-			  inkernel ? "" : "NOT ");
+		log_print("LV Status              %savailable%s",
+			  (inkernel && raid_is_avail) ? "" : "NOT ",
+			  partial ? " (partial)" : "");
 
 /********* FIXME lv_number
     log_print("LV #                   %u", lv->lv_number + 1);
@@ -963,7 +974,7 @@ char yes_no_prompt(const char *prompt, ...)
 
 		c = tolower(c);
 
-		if ((ret > 0) && (c == answer[0]))
+		if ((ret > 0) && answer && (c == answer[0]))
 			answer++;	/* Matching, next char */
 		else if (c == '\n') {
 			if (feof(stdin))
@@ -989,7 +1000,7 @@ char yes_no_prompt(const char *prompt, ...)
 			/* Ignore any whitespace before */
 			--i;
 			goto nextchar;
-		} else if ((ret > 0) && isspace(c)) {
+		} else if ((ret > 0) && answer && isspace(c)) {
 			/* Ignore any whitespace after */
 			while (*answer)
 				answer++; /* jump to end-of-word */

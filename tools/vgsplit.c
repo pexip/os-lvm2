@@ -311,7 +311,7 @@ static int _move_raids(struct volume_group *vg_from,
 		/* Ignore, if no allocations on PVs of @vg_to */
 		if (!lv_is_on_pvs(lv, &vg_to->pvs))
 			continue;
- 
+
 		/* If allocations are on PVs of @vg_to -> move RAID LV stack across */
 		if (!_move_one_lv(vg_from, vg_to, lvh, &lvht))
 			return_0;
@@ -341,8 +341,9 @@ static int _move_thins(struct volume_group *vg_from,
 
 			if ((_lv_is_in_vg(vg_to, data_lv) ||
 			     _lv_is_in_vg(vg_to, seg->external_lv))) {
-				if (_lv_is_in_vg(vg_from, seg->external_lv) ||
-				    _lv_is_in_vg(vg_from, data_lv)) {
+				if (seg->external_lv &&
+				    (_lv_is_in_vg(vg_from, seg->external_lv) ||
+				     _lv_is_in_vg(vg_from, data_lv))) {
 					log_error("Can't split external origin %s "
 						  "and pool %s between two Volume Groups.",
 						  display_lvname(seg->external_lv),
@@ -459,7 +460,7 @@ static int _move_cache(struct volume_group *vg_from,
 			    !lv_is_on_pvs(meta, &vg_to->pvs))
 				continue;
 		}
-		
+
 		if (fast && orig &&
 		    !lv_is_on_pvs(orig, &vg_to->pvs) && !lv_is_on_pvs(fast, &vg_to->pvs))
 			continue;
@@ -524,6 +525,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	int existing_vg = 0;
 	int r = ECMD_FAILED;
 	const char *lv_name;
+	int poolmetadataspare = arg_int_value(cmd, poolmetadataspare_ARG, DEFAULT_POOL_METADATA_SPARE);
 
 	if ((arg_is_set(cmd, name_ARG) + argc) < 3) {
 		log_error("Existing VG, new VG and either physical volumes "
@@ -698,6 +700,13 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	vg_to->status |= EXPORTED_VG;
 
+
+	if (!handle_pool_metadata_spare(vg_to, 0, &vg_to->pvs, poolmetadataspare))
+		goto_bad;
+
+	if (!handle_pool_metadata_spare(vg_from, 0, &vg_from->pvs, poolmetadataspare))
+		goto_bad;
+
 	if (!archive(vg_to))
 		goto_bad;
 
@@ -716,30 +725,6 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 			goto_bad;
 
 		backup(vg_from);
-	}
-
-	/*
-	 * Finally, remove the EXPORTED flag from the new VG and write it out.
-	 * We need to unlock vg_to because vg_read_for_update wants to lock it.
-	 */
-	if (!test_mode()) {
-		unlock_vg(cmd, NULL, vg_name_to);
-		release_vg(vg_to);
-
-		/*
-		 * This command uses the exported vg flag internally, but
-		 * exported VGs are not allowed to be split from the command
-		 * level, so ALLOW_EXPORTED is not set in commands.h.
-		 */
-		cmd->include_exported_vgs = 1;
-
-		vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0);
-
-		if (!vg_to) {
-			log_error("Volume group \"%s\" became inconsistent: "
-				  "please fix manually", vg_name_to);
-			goto bad;
-		}
 	}
 
 	vg_to->status &= ~EXPORTED_VG;

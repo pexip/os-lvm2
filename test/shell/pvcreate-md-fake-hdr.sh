@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright (C) 2018 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2018-2021 Red Hat, Inc. All rights reserved.
 #
 # This copyrighted material is made available to anyone wishing to use,
 # modify, copy, or redistribute it subject to the terms and conditions
@@ -26,16 +26,17 @@ aux extend_filter_LVMTEST "a|/dev/md|"
 aux prepare_devs 4
 
 pvcreate "$dev2"
-aux prepare_md_dev 0 64 2 "$dev1" "$dev2"
-# Incorrectly shows  $dev2 as PV for 'raid0'
-pvs -vvvv
 
+aux mdadm_create --metadata=1.0 --level=0 --chunk=64 --raid-devices=2 "$dev1" "$dev2"
+
+pvs | tee out
+not grep pv2 out
 
 vgcreate $SHARED $vg "$dev3" "$dev4"
 
 # create 2 disk MD raid1 array
 # by default using metadata format 1.0 with data at the end of device
-aux prepare_md_dev 1 64 2 "$dev1" "$dev2"
+aux mdadm_create --metadata=1.0 --level=1 --chunk=64 --raid-devices=2 "$dev1" "$dev2"
 
 mddev=$(< MD_DEV)
 pvdev=$(< MD_DEV_PV)
@@ -48,28 +49,27 @@ dd if="$dev3"  of="$dev2" bs=64k count=1 conv=fdatasync
 # remove VG on PV3 & PV4
 vgremove -f $vg
 
-sleep 3
 aux udev_wait
 # too bad  'dd' wakes up  md array reassembling
-should not mdadm --detail "$mddev"
-should not mdadm --stop "$mddev"
-sleep 3
+mdadm --detail "$mddev" || true
+mdadm --stop "$mddev" || true
+sleep 1
 
 # print what  blkid thinks about each PV
 for i in "$dev1" "$dev2" "$dev3" "$dev4"
 do
-	blkid -c /dev/null -w /dev/null "$i" || echo "Unknown signature"
+	blkid -c /dev/null "$i" || echo "Unknown signature"
 done
 
 # expect open count for each PV to be 0
 dmsetup info -c
 
-pvs -vvvv  "$dev2" "$dev3" || true
+pvs "$dev2" "$dev3" || true
 
 # still expect open count for each PV to be 0
 dmsetup info -c
 
-pvs -vvvv  "$dev3" "$dev2" || true
+pvs "$dev3" "$dev2" || true
 
 # and again we expect open count for each PV to be 0
 dmsetup info -c
@@ -87,8 +87,8 @@ if mdadm --detail "$mddev" ; then
 fi
 
 # now reassemble array from  PV1 & PV2
-mdadm --assemble --verbose "$mddev" "$dev1" "$dev2"
-aux udev_wait
+aux mdadm_assemble --verbose "$mddev" "$dev1" "$dev2"
+
 sleep 1
 
 # and let 'fake hdr' to be fixed from master/primary leg
@@ -97,5 +97,5 @@ if mdadm --action=repair "$mddev" ; then
 	sleep 1
 	pvscan -vvvv
 	# should be showing correctly PV3 & PV4
-	pvs -vvvv "$dev3" "$dev4"
+	pvs "$dev3" "$dev4"
 fi

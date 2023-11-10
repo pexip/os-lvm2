@@ -1,0 +1,8 @@
+/autoreconf.*
+/debhelper*
+/files
+/*.debhelper
+/*.log
+/*.substvars
+/*/
+!/bin/

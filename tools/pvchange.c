@@ -25,7 +25,9 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 {
 	struct pvchange_params *params = (struct pvchange_params *) handle->custom_handle;
 	const char *pv_name = pv_dev_name(pv);
+	char pvid[ID_LEN + 1]  __attribute__((aligned(8))) = { 0 };
 	char uuid[64] __attribute__((aligned(8)));
+	struct dev_use *du = NULL;
 	unsigned done = 0;
 	int used;
 
@@ -53,7 +55,7 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	/* If in a VG, must change using volume group. */
-	if (!is_orphan(pv)) {
+	if (vg && !is_orphan(pv)) {
 		if (tagargs && !(vg->fid->fmt->features & FMT_TAGS)) {
 			log_error("Volume group containing %s does not "
 				  "support tags", pv_name);
@@ -64,8 +66,6 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 				  "logical volumes", pv_name);
 			goto bad;
 		}
-		if (!archive(vg))
-			goto_bad;
 	} else {
 		if (tagargs) {
 			log_error("Can't change tag on Physical Volume %s not "
@@ -133,7 +133,7 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	if (arg_is_set(cmd, metadataignore_ARG)) {
-		if ((vg_mda_copies(vg) != VGMETADATACOPIES_UNMANAGED) &&
+		if (vg && (vg_mda_copies(vg) != VGMETADATACOPIES_UNMANAGED) &&
 		    (arg_count(cmd, force_ARG) == PROMPT) &&
 		    yes_no_prompt("Override preferred number of copies "
 				  "of VG %s metadata? [y/n]: ",
@@ -147,6 +147,9 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 
 	if (arg_is_set(cmd, uuid_ARG)) {
 		/* --uuid: Change PV ID randomly */
+
+		du = get_du_for_pvid(cmd, pv->dev->pvid);
+
 		memcpy(&pv->old_id, &pv->id, sizeof(pv->id));
 		if (!id_create(&pv->id)) {
 			log_error("Failed to generate new random UUID for %s.",
@@ -171,7 +174,7 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	log_verbose("Updating physical volume \"%s\"", pv_name);
-	if (!is_orphan(pv)) {
+	if (vg && !is_orphan(pv)) {
 		if (!vg_write(vg) || !vg_commit(vg)) {
 			log_error("Failed to store physical volume \"%s\" in "
 				  "volume group \"%s\"", pv_name, vg->name);
@@ -182,6 +185,16 @@ static int _pvchange_single(struct cmd_context *cmd, struct volume_group *vg,
 		log_error("Failed to store physical volume \"%s\"",
 			  pv_name);
 		goto bad;
+	}
+
+	if (du) {
+		memcpy(pvid, &pv->id.uuid, ID_LEN);
+		free(du->pvid);
+		if (!(du->pvid = strdup(pvid)))
+			log_error("Failed to set pvid for devices file.");
+		if (!device_ids_write(cmd))
+			log_warn("Failed to update devices file.");
+		unlock_devices_file(cmd);
 	}
 
 	log_print_unless_silent("Physical volume \"%s\" changed", pv_name);
@@ -210,6 +223,9 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	if (arg_is_set(cmd, uuid_ARG))
+		cmd->edit_devices_file = 1;
+
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
 		ret = ECMD_FAILED;
@@ -232,7 +248,32 @@ int pvchange(struct cmd_context *cmd, int argc, char **argv)
 
 	set_pv_notify(cmd);
 
-	clear_hint_file(cmd);
+	/*
+	 * Changing a PV uuid is the only pvchange that invalidates hints.
+	 * Invalidating hints (clear_hint_file) is called at the start of
+	 * the command and takes the hints lock.
+	 * The global lock must always be taken first, then the hints lock
+	 * (the required lock ordering.)
+	 *
+	 * Because of these constraints, the global lock is taken ex here
+	 * for any PV uuid change, even though the global lock is technically
+	 * required only for changing an orphan PV (we don't know until later
+	 * if the PV is an orphan).  The VG lock is used when changing
+	 * non-orphan PVs.
+	 *
+	 * For changes other than uuid on an orphan PV, the global lock is
+	 * taken sh by process_each, then converted to ex in pvchange_single,
+	 * which works because the hints lock is not held.
+	 *
+	 * (Eventually, perhaps always do lock_global(ex) here to simplify.)
+	 */
+	if (arg_is_set(cmd, uuid_ARG)) {
+		if (!lock_global(cmd, "ex")) {
+			ret = ECMD_FAILED;
+			goto out;
+		}
+		clear_hint_file(cmd);
+	}
 
 	ret = process_each_pv(cmd, argc, argv, NULL, 0, READ_FOR_UPDATE, handle, _pvchange_single);
 

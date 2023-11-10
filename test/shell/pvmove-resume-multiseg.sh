@@ -19,7 +19,7 @@ SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
-aux prepare_pvs 5 30
+aux prepare_pvs 5 40
 
 vgcreate -s 128k $vg "$dev1" "$dev2" "$dev3"
 pvcreate --metadatacopies 0 "$dev4" "$dev5"
@@ -28,35 +28,28 @@ vgextend $vg "$dev4" "$dev5"
 # $1 resume fn
 test_pvmove_resume() {
 	# Create multisegment LV
-	lvcreate -an -Zn -l30 -n $lv1 $vg "$dev1"
-	lvextend -l+30 $vg/$lv1 "$dev2"
+	lvcreate -an -Zn -l50 -n $lv1 $vg "$dev1"
+	lvextend -l+50 $vg/$lv1 "$dev2"
 	# next LV on same VG and differetnt PV (we want to test 2 pvmoves per VG)
-	lvcreate -an -Zn -l30 -n $lv2 $vg "$dev3"
+	lvcreate -an -Zn -l50 -n $lv2 $vg "$dev3"
 
-	aux delay_dev "$dev4" 0 500 "$(get first_extent_sector "$dev4"):"
+	aux delay_dev "$dev4" 0 30 "$(get first_extent_sector "$dev4"):"
 	test -e HAVE_DM_DELAY || { lvremove -f $vg; return 0; }
-	aux delay_dev "$dev5" 0 500 "$(get first_extent_sector "$dev5"):"
+	aux delay_dev "$dev5" 0 30 "$(get first_extent_sector "$dev5"):"
 
 	pvmove -i5 "$dev1" "$dev4" &
 	PVMOVE=$!
-	aux wait_pvmove_lv_ready "$vg-pvmove0" 300
-	kill -9 $PVMOVE
+	aux wait_pvmove_lv_ready "$vg-pvmove0"
+	kill $PVMOVE
 
 	pvmove -i5 -n $vg/$lv2 "$dev3" "$dev5" &
 	PVMOVE=$!
-	aux wait_pvmove_lv_ready "$vg-pvmove1" 300
-	kill -9 $PVMOVE
+	aux wait_pvmove_lv_ready "$vg-pvmove1"
+	kill $PVMOVE
 
-	if test -e LOCAL_LVMPOLLD ; then
-		aux prepare_lvmpolld
-	fi
-
+	test -e LOCAL_LVMPOLLD && aux prepare_lvmpolld
 	wait
-
-	while dmsetup status "$vg-$lv1"; do dmsetup remove "$vg-$lv1" || true; done
-	while dmsetup status "$vg-$lv2"; do dmsetup remove "$vg-$lv2" || true; done
-	while dmsetup status "$vg-pvmove0"; do dmsetup remove "$vg-pvmove0" || true; done
-	while dmsetup status "$vg-pvmove1"; do dmsetup remove "$vg-pvmove1" || true; done
+	aux remove_dm_devs "$vg-$lv1" "$vg-$lv2" "$vg-pvmove0" "$vg-pvmove1"
 
 	check lv_attr_bit type $vg/pvmove0 "p"
 	check lv_attr_bit type $vg/pvmove1 "p"
@@ -83,16 +76,13 @@ test_pvmove_resume() {
 	# bg polling as parameter
 	$1 2
 
-	aux enable_dev "$dev4"
-	aux enable_dev "$dev5"
+	aux enable_dev "$dev4" "$dev5"
 
-	i=0
-	while get lv_field $vg name -a | grep -E "^\[?pvmove"; do
-		# wait for 30 secs at max
-		test $i -ge 300 && die "Pvmove is too slow or does not progress."
+	for i in {100..0} ; do # wait for 10 secs at max
+		get lv_field $vg name -a | grep -E "^\[?pvmove" || break
 		sleep .1
-		i=$((i + 1))
 	done
+	test $i -gt 0 || die "Pvmove is too slow or does not progress."
 
 	aux kill_tagged_processes
 
@@ -153,7 +143,7 @@ pvmove_fg() {
 	aux enable_dev "$dev4"
 	aux enable_dev "$dev5"
 
-	pvmove
+	LVM_TEST_TAG="kill_me_$PREFIX" pvmove
 }
 
 pvmove_bg() {
@@ -198,8 +188,8 @@ pvmove_fg_single() {
 	aux enable_dev "$dev4"
 	aux enable_dev "$dev5"
 
-	pvmove "$dev1"
-	pvmove "$dev3"
+	LVM_TEST_TAG="kill_me_$PREFIX" pvmove "$dev1"
+	LVM_TEST_TAG="kill_me_$PREFIX" pvmove "$dev3"
 }
 
 pvmove_bg_single() {

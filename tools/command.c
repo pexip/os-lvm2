@@ -21,7 +21,6 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -35,6 +34,8 @@
 #include <ctype.h>
 #include <getopt.h>
 
+const char *_lvt_enum_to_name(int lvt_enum);
+const size_t _LONG_LINE = 42; /* length of line that neededs .nh .. .hy */
 /*
  * This file can be compiled by itself as a man page generator.
  */
@@ -129,7 +130,7 @@ static inline int dumptype_arg(struct cmd_context *cmd __attribute__((unused)), 
 #define CACHE_VGMETADATA        0x00000001
 #define PERMITTED_READ_ONLY     0x00000002
 #define ALL_VGS_IS_DEFAULT      0x00000004
-#define ENABLE_ALL_DEVS         0x00000008      
+#define ENABLE_ALL_DEVS         0x00000008
 #define ALLOW_UUID_AS_NAME      0x00000010
 #define LOCKD_VG_SH             0x00000020
 #define NO_METADATA_PROCESSING  0x00000040
@@ -140,7 +141,8 @@ static inline int dumptype_arg(struct cmd_context *cmd __attribute__((unused)), 
 #define CAN_USE_ONE_SCAN	 0x00002000
 #define ALLOW_HINTS              0x00004000
 #define ALLOW_EXPORTED           0x00008000
-
+#define CHECK_DEVS_USED          0x00010000
+#define DEVICE_ID_NOT_FOUND      0x00020000
 
 /* create foo_CMD enums for command def ID's in command-lines.in */
 
@@ -246,19 +248,21 @@ struct cmd_name cmd_names[CMD_COUNT + 1] = {
 
 #ifdef MAN_PAGE_GENERATOR
 
-struct command_name command_names[MAX_COMMAND_NAMES] = {
+struct command_name command_names[] = {
 #define xx(a, b, c...) { # a, b, c },
 #include "commands.h"
 #undef xx
+	{ .name = NULL }
 };
 struct command commands[COMMAND_COUNT];
 
 #else /* MAN_PAGE_GENERATOR */
 
-struct command_name command_names[MAX_COMMAND_NAMES] = {
+struct command_name command_names[] = {
 #define xx(a, b, c...) { # a, b, c, a},
 #include "commands.h"
 #undef xx
+	{ .name = NULL }
 };
 extern struct command commands[COMMAND_COUNT]; /* defined in lvmcmdline.c */
 
@@ -299,6 +303,14 @@ static struct oo_line _oo_lines[MAX_OO_LINES];
 #include "command-lines-input.h"
 
 static void __add_optional_opt_line(struct cmd_context *cmdtool, struct command *cmd, int argc, char *argv[]);
+
+static unsigned _was_hyphen = 0;
+static void printf_hyphen(char c)
+{
+	/* When .hy 1 was printed, we do not want to emit empty space */
+	printf("%c%c\n", _was_hyphen ? '\n' : ' ', c);
+	_was_hyphen = 0;
+}
 
 /*
  * modifies buf, replacing the sep characters with \0
@@ -424,12 +436,19 @@ static int _opt_str_to_num(struct command *cmd, char *str)
 int command_id_to_enum(const char *str)
 {
 	int i;
+	int first = 1, last = CMD_COUNT - 1, middle;
 
-	for (i = 1; i < CMD_COUNT; i++) {
-		if (!strcmp(str, cmd_names[i].name))
-			return cmd_names[i].cmd_enum;
+	while (first <= last) {
+		middle = first + (last - first) / 2;
+		if ((i = strcmp(cmd_names[middle].name, str)) < 0)
+			first = middle + 1;
+		else if (i > 0)
+			last = middle - 1;
+		else
+			return cmd_names[middle].cmd_enum;
 	}
 
+	log_error("Cannot find command %s.", str);
 	return CMD_NONE;
 }
 
@@ -507,21 +526,49 @@ static uint64_t _lv_to_bits(struct command *cmd, char *name)
 	return lvt_bits;
 }
 
-static struct command_name *_find_command_name(const char *name)
+struct command_name *find_command_name(const char *name)
 {
+	static int _command_names_count = -1;
+	int first = 0, last, middle;
 	int i;
 
-	if (!islower(name[0]))
-		return NULL; /* Commands starts with lower-case */
+	if (_command_names_count == -1) {
+		/* Validate cmd_names & command_names arrays are properly sorted */
+		for (i = 1; i < CMD_COUNT - 2; i++)
+			if (strcmp(cmd_names[i].name, cmd_names[i + 1].name) > 0) {
+				log_error("File cmds.h has unsorted name entry %s.",
+					  cmd_names[i].name);
+				return 0;
+			}
+		for (i = 1; command_names[i].name; i++) /* assume > 1 */
+			if (strcmp(command_names[i - 1].name, command_names[i].name) > 0) {
+				log_error("File commands.h has unsorted name entry %s.",
+					  command_names[i].name);
+				return 0;
+			}
+		_command_names_count = i - 1;
+	}
+	last = _command_names_count;
 
-	for (i = 0; i < MAX_COMMAND_NAMES; i++) {
-		if (!command_names[i].name)
-			break;
-		if (!strcmp(command_names[i].name, name))
-			return &command_names[i];
+	while (first <= last) {
+		middle = first + (last - first) / 2;
+		if ((i = strcmp(command_names[middle].name, name)) < 0)
+			first = middle + 1;
+		else if (i > 0)
+			last = middle - 1;
+		else
+			return &command_names[middle];
 	}
 
 	return NULL;
+}
+
+static struct command_name *_find_command_name(const char *name)
+{
+	if (!islower(name[0]))
+		return NULL; /* Commands starts with lower-case */
+
+	return find_command_name(name);
 }
 
 static const char *_is_command_name(char *str)
@@ -599,6 +646,13 @@ static int _is_desc_line(char *str)
 	return 0;
 }
 
+static int _is_autotype_line(char *str)
+{
+	if (!strncmp(str, "AUTOTYPE:", 6))
+		return 1;
+	return 0;
+}
+
 static int _is_flags_line(char *str)
 {
 	if (!strncmp(str, "FLAGS:", 6))
@@ -665,7 +719,6 @@ static void _set_pos_def(struct command *cmd, char *str, struct arg_def *def)
  * Save an option arg in a struct arg_def.
  * Parse str for anything that can follow --option.
  */
-
 static void _set_opt_def(struct cmd_context *cmdtool, struct command *cmd, char *str, struct arg_def *def)
 {
 	char *argv[MAX_LINE_ARGC];
@@ -704,6 +757,9 @@ static void _set_opt_def(struct cmd_context *cmdtool, struct command *cmd, char 
 			def->num = (uint64_t)atoi(name);
 
 		if (val_enum == conststr_VAL) {
+#ifdef MAN_PAGE_GENERATOR
+			free((void*)def->str);
+#endif
 			def->str = dm_pool_strdup(cmdtool->libmem, name);
 
 			if (!def->str) {
@@ -723,7 +779,6 @@ static void _set_opt_def(struct cmd_context *cmdtool, struct command *cmd, char 
 				def->flags |= ARG_DEF_FLAG_NEW_LV;
 			else if (val_enum == vg_VAL)
 				def->flags |= ARG_DEF_FLAG_NEW_VG;
-				
 		}
 	}
 }
@@ -1076,7 +1131,6 @@ static void _add_required_opt_line(struct cmd_context *cmdtool, struct command *
  * and flag CMD_FLAG_ANY_REQUIRED_OPT is set on the cmd indicating
  * this special case.
  */
- 
 static void _include_required_opt_args(struct cmd_context *cmdtool, struct command *cmd, char *str)
 {
 	char *oo_line;
@@ -1164,6 +1218,19 @@ static void _add_flags(struct command *cmd, char *line)
 		cmd->cmd_flags |= CMD_FLAG_SECONDARY_SYNTAX;
 	if (strstr(line, "PREVIOUS_SYNTAX"))
 		cmd->cmd_flags |= CMD_FLAG_PREVIOUS_SYNTAX;
+}
+
+static void _add_autotype(struct cmd_context *cmdtool, struct command *cmd, char *line)
+{
+	int line_argc;
+	char *line_argv[MAX_LINE_ARGC];
+
+	_split_line(line, &line_argc, line_argv, ' ');
+
+	if (cmd->autotype)
+		cmd->autotype2 = dm_pool_strdup(cmdtool->libmem, line_argv[1]);
+	else
+		cmd->autotype = dm_pool_strdup(cmdtool->libmem, line_argv[1]);
 }
 
 #define MAX_RULE_OPTS 64
@@ -1270,10 +1337,7 @@ void factor_common_options(void)
 	int cn, opt_enum, ci, oo, ro, found;
 	struct command *cmd;
 
-	for (cn = 0; cn < MAX_COMMAND_NAMES; cn++) {
-		if (!command_names[cn].name)
-			break;
-
+	for (cn = 0; command_names[cn].name; cn++) {
 		/* already factored */
 		if (command_names[cn].variants)
 			continue;
@@ -1478,20 +1542,32 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
 		 */
 
 		if (_is_desc_line(line_argv[0]) && !skip && cmd) {
-			char *desc = dm_pool_strdup(cmdtool->libmem, line_orig);
-			if (cmd->desc && desc) {
-				int newlen = strlen(cmd->desc) + strlen(desc) + 2;
+			if (cmd->desc) {
+				size_t newlen = strlen(cmd->desc) + strlen(line_orig) + 2;
 				char *newdesc = dm_pool_alloc(cmdtool->libmem, newlen);
-				if (newdesc) {
-					snprintf(newdesc, newlen, "%s %s", cmd->desc, desc);
-					cmd->desc = newdesc;
-				} else {
+
+				if (!newdesc) {
 					/* FIXME */
 					stack;
 					return 0;
 				}
-			} else
-				cmd->desc = desc;
+
+				snprintf(newdesc, newlen, "%s %s", cmd->desc, line_orig);
+#ifdef MAN_PAGE_GENERATOR
+				free((void*)cmd->desc);
+#endif
+				cmd->desc = newdesc;
+			} else if (!(cmd->desc = dm_pool_strdup(cmdtool->libmem, line_orig))) {
+				/* FIXME */
+				stack;
+				return 0;
+			}
+
+			continue;
+		}
+
+		if (_is_autotype_line(line_argv[0]) && !skip && cmd) {
+			_add_autotype(cmdtool, cmd, line_orig);
 			continue;
 		}
 
@@ -1506,6 +1582,9 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
 		}
 
 		if (_is_id_line(line_argv[0]) && cmd) {
+#ifdef MAN_PAGE_GENERATOR
+			free((void*)cmd->command_id);
+#endif
 			cmd->command_id = dm_pool_strdup(cmdtool->libmem, line_argv[1]);
 
 			if (!cmd->command_id) {
@@ -1617,14 +1696,14 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
  *
  * This function overrides default opt_names[] entries at run time according
  * to the command name, adjusting the value types accepted by various options.
- * So, for lvresize, opt_names[sizemb_VAL] is overriden to accept
+ * So, for lvresize, opt_names[sizemb_VAL] is overridden to accept
  * the relative (+ or -) value type ssizemb_VAL, instead of the default
  * sizemb_VAL.  This way, when lvresize processes the --size value, it
  * will use the ssize_mb_arg() function which accepts relative size values.
  * When lvcreate processes the --size value, it uses size_mb_arg() which
  * rejects signed values.
  *
- * The command defs in commands[] do not need to be overriden because
+ * The command defs in commands[] do not need to be overridden because
  * the command-lines.in defs have the context of a command, and are
  * described using the proper value type, e.g. this cmd def already
  * uses the relative size value: "lvresize --size SSizeMB LV",
@@ -1681,7 +1760,7 @@ void configure_command_option_values(const char *name)
 
 /* type_LVT to "type" */
 
-static const char *_lvt_enum_to_name(int lvt_enum)
+const char *_lvt_enum_to_name(int lvt_enum)
 {
 	return lv_types[lvt_enum].name;
 }
@@ -1751,7 +1830,6 @@ static void _print_val_usage(struct command *cmd, int opt_enum, int val_enum)
 static void _print_usage_def(struct command *cmd, int opt_enum, struct arg_def *def)
 {
 	int val_enum;
-	int lvt_enum;
 	int sep = 0;
 
 	for (val_enum = 0; val_enum < VAL_COUNT; val_enum++) {
@@ -1769,12 +1847,16 @@ static void _print_usage_def(struct command *cmd, int opt_enum, struct arg_def *
 				sep = 1;
 			}
 
+			/* Too many types have made this too long.  man page has this info. */
+			/*
 			if (val_enum == lv_VAL && def->lvt_bits) {
+				int lvt_enum;
 				for (lvt_enum = 1; lvt_enum < LVT_COUNT; lvt_enum++) {
 					if (lvt_bit_is_set(def->lvt_bits, lvt_enum))
 						printf("_%s", _lvt_enum_to_name(lvt_enum));
 				}
 			}
+			*/
 
 			if ((val_enum == vg_VAL) && (def->flags & ARG_DEF_FLAG_NEW_VG))
 				printf("_new");
@@ -1868,7 +1950,7 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 			}
 		}
 
-		printf(" )\n");
+		printf_hyphen(')');
 	}
 
 	if (!any_req && cmd->ro_count) {
@@ -1908,6 +1990,14 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 		goto op_count;
 
 	if (cmd->oo_count) {
+		if (cmd->autotype) {
+			printf("\n\t");
+			if (!cmd->autotype2)
+				printf("[ --type %s ] (implied)", cmd->autotype);
+			else
+				printf("[ --type %s|%s ] (implied)", cmd->autotype, cmd->autotype2);
+		}
+
 		if (include_extents) {
 			printf("\n\t[ -l|--extents ");
 			_print_val_usage(cmd, extents_ARG, opt_names[extents_ARG].val_enum);
@@ -2070,6 +2160,7 @@ void print_usage_common_lvm(struct command_name *cname, struct command *cmd)
 void print_usage_common_cmd(struct command_name *cname, struct command *cmd)
 {
 	int oo, opt_enum;
+	int found_common_command = 0;
 
 	/*
 	 * when there's more than one variant, options that
@@ -2077,6 +2168,18 @@ void print_usage_common_cmd(struct command_name *cname, struct command *cmd)
 	 */
 
 	if (cname->variants < 2)
+		return;
+
+	for (opt_enum = 0; opt_enum < ARG_COUNT; opt_enum++) {
+		if (!cname->common_options[opt_enum])
+			continue;
+		if (_is_lvm_all_opt(opt_enum))
+			continue;
+		found_common_command = 1;
+		break;
+	}
+
+	if (!found_common_command)
 		return;
 
 	printf("  Common options for command:");
@@ -2219,6 +2322,8 @@ static void _print_val_man(struct command_name *cname, int opt_enum, int val_enu
 	char *line_argv[MAX_LINE_ARGC];
 	int line_argc;
 	int i;
+
+	_was_hyphen = 0;
 	int is_relative_opt = (opt_enum == size_ARG) ||
 			      (opt_enum == extents_ARG) ||
 			      (opt_enum == poolmetadatasize_ARG) ||
@@ -2324,15 +2429,26 @@ static void _print_val_man(struct command_name *cname, int opt_enum, int val_enu
 	if (strchr(str, '|')) {
 		if (!(line = strdup(str)))
 			return;
+		if ((_was_hyphen = (strlen(line) > _LONG_LINE)))
+			/* TODO: prevent line to end with already printed space */
+			printf("\\c\n.nh\n\\%%");
 		_split_line(line, &line_argc, line_argv, '|');
 		for (i = 0; i < line_argc; i++) {
 			if (i)
-				printf("|");
+				printf("|%s", _was_hyphen ? "\\:" : "");
+
+			if (strncmp(line_argv[i], "[Number]", 8) == 0) {
+				printf("[\\fINumber\\fP]");
+				line_argv[i] += 8;
+			}
+
 			if (strstr(line_argv[i], "Number"))
 				printf("\\fI%s\\fP", line_argv[i]);
 			else
 				printf("\\fB%s\\fP", line_argv[i]);
 		}
+		if (_was_hyphen)
+			printf("\n.hy");
 		free(line);
 		return;
 	}
@@ -2340,11 +2456,13 @@ static void _print_val_man(struct command_name *cname, int opt_enum, int val_enu
 	printf("\\fB%s\\fP", str);
 }
 
-static void _print_def_man(struct command_name *cname, int opt_enum, struct arg_def *def, int usage)
+static void _print_def_man(struct command_name *cname, int opt_enum, struct arg_def *def, int usage, uint64_t *lv_type_bits)
 {
 	int val_enum;
-	int lvt_enum;
 	int sep = 0;
+
+	if (lv_type_bits)
+		*lv_type_bits = 0;
 
 	for (val_enum = 0; val_enum < VAL_COUNT; val_enum++) {
 		if (def->val_bits & val_enum_to_bit(val_enum)) {
@@ -2358,21 +2476,24 @@ static void _print_def_man(struct command_name *cname, int opt_enum, struct arg_
 			else {
 				if (sep) printf("|");
 
-				if (!usage || !val_names[val_enum].usage)
-					printf("\\fI%s\\fP", val_names[val_enum].name);
-				else
+				if (!usage || !val_names[val_enum].usage) {
+					if (_was_hyphen) {
+						printf("\n");
+						_was_hyphen = 0;
+					}
+
+					/* special case to print LV1 instead of LV */
+					if ((val_enum == lv_VAL) && def->lvt_bits && lv_type_bits) {
+						printf("\\fILV1\\fP");
+						*lv_type_bits = def->lvt_bits;
+					} else {
+						printf("\\fI%s\\fP", val_names[val_enum].name);
+					}
+				} else {
 					_print_val_man(cname, opt_enum, val_enum);
+				}
 
 				sep = 1;
-			}
-
-			if (val_enum == lv_VAL && def->lvt_bits) {
-				printf("\\fI");
-				for (lvt_enum = 1; lvt_enum < LVT_COUNT; lvt_enum++) {
-					if (lvt_bit_is_set(def->lvt_bits, lvt_enum))
-						printf("_%s", _lvt_enum_to_name(lvt_enum));
-				}
-				printf("\\fP");
 			}
 
 			if (((val_enum == vg_VAL) && (def->flags & ARG_DEF_FLAG_NEW_VG)) ||
@@ -2390,6 +2511,7 @@ static const char *_man_long_opt_name(const char *cmdname, int opt_enum)
 {
 	static char long_opt_name[LONG_OPT_NAME_LEN];
 	const char *long_opt;
+	int i;
 
 	memset(&long_opt_name, 0, sizeof(long_opt_name));
 
@@ -2426,6 +2548,25 @@ static const char *_man_long_opt_name(const char *cmdname, int opt_enum)
 		break;
 	}
 
+	if (strchr(long_opt, '[')) {
+		for (i = 0; *long_opt && i < sizeof(long_opt_name) - 1; ++long_opt, ++i) {
+			if (i < (sizeof(long_opt_name) - 8))
+				switch(*long_opt) {
+				case '[':
+					strcpy(long_opt_name + i, "\\fP[\\fB");
+					i += 6;
+					continue;
+				case ']':
+					strcpy(long_opt_name + i, "\\fP]\\fB");
+					i += 6;
+					continue;
+				}
+			long_opt_name[i] = *long_opt;
+		}
+		long_opt_name[i] = 0;
+		return long_opt_name;
+	}
+
 	return long_opt;
 }
 
@@ -2436,7 +2577,10 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 	int sep, ro, rp, oo, op, opt_enum;
 	int need_ro_indent_end = 0;
 	int include_extents = 0;
+	int lvt_enum;
+	uint64_t lv_type_bits = 0;
 
+	_was_hyphen = 0;
 	if (!(cname = _find_command_name(cmd->name)))
 		return;
 
@@ -2473,7 +2617,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (cmd->required_opt_args[ro].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1, NULL);
 			}
 
 			sep++;
@@ -2506,10 +2650,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 				continue;
 
 			if (sep) {
-				printf(",\n");
-				printf(".ad b\n");
-				printf(".br\n");
-				printf(".ad l\n");
+				printf("\n.br\n");
 				printf(" ");
 			}
 
@@ -2524,7 +2665,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (cmd->required_opt_args[ro].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1, NULL);
 			}
 
 			sep++;
@@ -2538,10 +2679,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 				continue;
 
 			if (sep) {
-				printf(",\n");
-				printf(".ad b\n");
-				printf(".br\n");
-				printf(".ad l\n");
+				printf("\n.br\n");
 				printf(" ");
 			} else
 				printf(".ad l\n");
@@ -2551,13 +2689,13 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (cmd->required_opt_args[ro].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1, NULL);
 			}
 
 			sep++;
 		}
 
-		printf(" )\n");
+		printf_hyphen(')');
 		printf(".RE\n");
 	}
 
@@ -2567,7 +2705,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 		for (rp = 0; rp < cmd->rp_count; rp++) {
 			if (cmd->required_pos_args[rp].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, 0, &cmd->required_pos_args[rp].def, 1);
+				_print_def_man(cname, 0, &cmd->required_pos_args[rp].def, 1, NULL);
 			}
 		}
 
@@ -2612,7 +2750,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (cmd->required_opt_args[ro].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->required_opt_args[ro].def, 1, NULL);
 			}
 
 			sep++;
@@ -2624,7 +2762,8 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 		for (rp = 0; rp < cmd->rp_count; rp++) {
 			if (cmd->required_pos_args[rp].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, 0, &cmd->required_pos_args[rp].def, 1);
+				/* Only print lv_type_bits for one LV arg (no cases exist with more) */
+				_print_def_man(cname, 0, &cmd->required_pos_args[rp].def, 1, lv_type_bits ? NULL : &lv_type_bits);
 			}
 		}
 
@@ -2646,6 +2785,16 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 	if (cmd->oo_count) {
 		printf(".RS 4\n");
+		printf(".ad l\n");
+
+		if (cmd->autotype) {
+			if (!cmd->autotype2)
+				printf("[ \\fB--type %s\\fP ] (implied)\n", cmd->autotype);
+			else
+				printf("[ \\fB--type %s\\fP|\\fB%s\\fP ] (implied)\n", cmd->autotype, cmd->autotype2);
+			printf(".br\n");
+			sep = 1;
+		}
 
 		if (include_extents) {
 			/*
@@ -2653,11 +2802,10 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 			 * actual val type for extents_ARG has been adjusted
 			 * in opt_names[] according to the command name.
 			 */
-			printf(".ad l\n");
 			printf("[ \\fB-l\\fP|\\fB--extents\\fP ");
 			_print_val_man(cname, extents_ARG, opt_names[extents_ARG].val_enum);
-			printf(" ]\n");
-			printf(".ad b\n");
+
+			printf_hyphen(']');
 			sep = 1;
 		}
 
@@ -2677,7 +2825,6 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (sep)
 				printf(".br\n");
-			printf(".ad l\n");
 
 			printf("[ \\fB-%c\\fP|\\fB%s\\fP",
 				opt_names[opt_enum].short_opt,
@@ -2685,10 +2832,9 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (cmd->optional_opt_args[oo].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1, NULL);
 			}
-			printf(" ]\n");
-			printf(".ad b\n");
+			printf_hyphen(']');
 			sep = 1;
 		}
 
@@ -2708,7 +2854,6 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (sep)
 				printf(".br\n");
-			printf(".ad l\n");
 
 			/* space alignment without short opt */
 			printf("[   ");
@@ -2717,10 +2862,9 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			if (cmd->optional_opt_args[oo].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1, NULL);
 			}
-			printf(" ]\n");
-			printf(".ad b\n");
+			printf_hyphen(']');
 			sep = 1;
 		}
 
@@ -2730,13 +2874,13 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 			/* printf("   "); */
 		}
 		printf("[ COMMON_OPTIONS ]\n");
+		printf(".ad b\n");
 		printf(".RE\n");
-		printf(".br\n");
 	}
 
  op_count:
 	if (!cmd->op_count)
-		return;
+		goto out;
 
 	printf(".RS 4\n");
 	printf("[");
@@ -2745,13 +2889,31 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 		for (op = 0; op < cmd->op_count; op++) {
 			if (cmd->optional_pos_args[op].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, 0, &cmd->optional_pos_args[op].def, 1);
+				_print_def_man(cname, 0, &cmd->optional_pos_args[op].def, 1, NULL);
 			}
 		}
 	}
 
-	printf(" ]\n");
+	printf_hyphen(']');
 	printf(".RE\n");
+
+out:
+	printf(".P\n");
+	if (!lv_type_bits)
+		return;
+
+	printf(".RS 4\n");
+
+	if (lv_type_bits) {
+		printf("LV1 types:");
+		for (lvt_enum = 1; lvt_enum < LVT_COUNT; lvt_enum++) {
+			if (lvt_bit_is_set(lv_type_bits, lvt_enum))
+				printf(" %s", _lvt_enum_to_name(lvt_enum));
+		}
+		printf("\n");
+	}
+	printf(".RE\n");
+	printf(".P\n");
 }
 
 /*
@@ -2785,6 +2947,7 @@ static void _print_man_usage_common_lvm(struct command *cmd)
 	sep = 0;
 
 	printf(".RS 4\n");
+	printf(".ad l\n");
 
 	/* print those with short opts */
 	for (i = 0; i < ARG_COUNT; i++) {
@@ -2798,7 +2961,6 @@ static void _print_man_usage_common_lvm(struct command *cmd)
 
 		if (sep)
 			printf(".br\n");
-		printf(".ad l\n");
 
 		for (oo = 0; oo < cmd->oo_count; oo++) {
 			if (cmd->optional_opt_args[oo].opt != opt_enum)
@@ -2810,10 +2972,9 @@ static void _print_man_usage_common_lvm(struct command *cmd)
 
 			if (cmd->optional_opt_args[oo].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1, NULL);
 			}
-			printf(" ]\n");
-			printf(".ad b\n");
+			printf_hyphen(']');
 			sep = 1;
 			break;
 		}
@@ -2832,7 +2993,6 @@ static void _print_man_usage_common_lvm(struct command *cmd)
 
 		if (sep)
 			printf(".br\n");
-		printf(".ad l\n");
 
 		for (oo = 0; oo < cmd->oo_count; oo++) {
 			if (cmd->optional_opt_args[oo].opt != opt_enum)
@@ -2845,28 +3005,40 @@ static void _print_man_usage_common_lvm(struct command *cmd)
 
 			if (cmd->optional_opt_args[oo].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1, NULL);
 			}
-			printf(" ]\n");
-			printf(".ad b\n");
+			printf_hyphen(']');
 			sep = 1;
 			break;
 		}
 	}
 
+	printf(".ad b\n");
 	printf(".RE\n");
-	return;
 }
 
 static void _print_man_usage_common_cmd(struct command *cmd)
 {
 	struct command_name *cname;
 	int i, sep, oo, opt_enum;
+	int found_common_command = 0;
 
 	if (!(cname = _find_command_name(cmd->name)))
 		return;
 
 	if (cname->variants < 2)
+		return;
+
+	for (opt_enum = 0; opt_enum < ARG_COUNT; opt_enum++) {
+		if (!cname->common_options[opt_enum])
+			continue;
+		if (_is_lvm_all_opt(opt_enum))
+			continue;
+		found_common_command = 1;
+		break;
+	}
+
+	if (!found_common_command)
 		return;
 
 	printf("Common options for command:\n");
@@ -2875,6 +3047,7 @@ static void _print_man_usage_common_cmd(struct command *cmd)
 	sep = 0;
 
 	printf(".RS 4\n");
+	printf(".ad l\n");
 
 	/* print those with short opts */
 	for (i = 0; i < ARG_COUNT; i++) {
@@ -2895,7 +3068,6 @@ static void _print_man_usage_common_cmd(struct command *cmd)
 
 		if (sep)
 			printf(".br\n");
-		printf(".ad l\n");
 
 		for (oo = 0; oo < cmd->oo_count; oo++) {
 			if (cmd->optional_opt_args[oo].opt != opt_enum)
@@ -2907,14 +3079,12 @@ static void _print_man_usage_common_cmd(struct command *cmd)
 
 			if (cmd->optional_opt_args[oo].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1, NULL);
 			}
-			printf(" ]\n");
-			printf(".ad b\n");
+			printf_hyphen(']');
 			sep = 1;
 			break;
 		}
-
 	}
 
 	/* print those without short opts */
@@ -2936,7 +3106,6 @@ static void _print_man_usage_common_cmd(struct command *cmd)
 
 		if (sep)
 			printf(".br\n");
-		printf(".ad l\n");
 
 		for (oo = 0; oo < cmd->oo_count; oo++) {
 			if (cmd->optional_opt_args[oo].opt != opt_enum)
@@ -2949,18 +3118,17 @@ static void _print_man_usage_common_cmd(struct command *cmd)
 
 			if (cmd->optional_opt_args[oo].def.val_bits) {
 				printf(" ");
-				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1);
+				_print_def_man(cname, opt_enum, &cmd->optional_opt_args[oo].def, 1, NULL);
 			}
-			printf(" ]\n");
-			printf(".ad b\n");
+			printf_hyphen(']');
 			sep = 1;
 			break;
 		}
 	}
 
+	printf(".ad b\n");
 	printf(".RE\n");
-	printf("\n");
-	return;
+	printf(".P\n");
 }
 
 /*
@@ -3053,6 +3221,7 @@ static void _print_man_all_options_list(struct command_name *cname)
 	int opt_enum, val_enum;
 	int sep = 0;
 	int i;
+	int adl = 0;
 
 	for (i = 0; i < ARG_COUNT; i++) {
 		opt_enum = opt_names_alpha[i]->opt_enum;
@@ -3062,7 +3231,11 @@ static void _print_man_all_options_list(struct command_name *cname)
 
 		if (sep)
 			printf(".br\n");
-		printf(".ad l\n");
+
+		if (!adl) {
+			printf(".ad l\n");
+			adl = 1;
+		}
 
 		if (opt_names[opt_enum].short_opt) {
 			printf(" \\fB-%c\\fP|\\fB%s\\fP",
@@ -3087,10 +3260,13 @@ static void _print_man_all_options_list(struct command_name *cname)
 			_print_val_man(cname, opt_enum, val_enum);
 		}
 
-		printf("\n.ad b\n");
-
+		printf("\n");
 		sep = 1;
 	}
+
+	if (adl)
+		printf(".ad b\n");
+
 }
 
 /*
@@ -3101,6 +3277,7 @@ static void _print_man_all_options_desc(struct command_name *cname)
 {
 	int opt_enum, val_enum;
 	int i;
+	int adl;
 
 	for (i = 0; i < ARG_COUNT; i++) {
 		opt_enum = opt_names_alpha[i]->opt_enum;
@@ -3108,9 +3285,22 @@ static void _print_man_all_options_desc(struct command_name *cname)
 		if (!cname->all_options[opt_enum])
 			continue;
 
-		printf(".HP\n");
+		val_enum = opt_names[opt_enum].val_enum;
 
-		printf(".ad l\n");
+		if (val_names[val_enum].usage &&
+		    (strlen(val_names[val_enum].usage) > _LONG_LINE)) {
+			printf(".\n.HP\n");
+			printf(".ad l\n");
+			adl = 1;
+		} else {
+			/* printf(".\n.TP\n");
+			 * ATM HTML rendering can't handle HP and TP mixing properly
+			 * so still keeping .HP usage for this case
+			 * untill some better workaround is found
+			 * .TP does not need .br */
+			printf(".\n.HP\n");
+			adl = 0;
+		}
 
 		if (opt_names[opt_enum].short_opt) {
 			printf("\\fB-%c\\fP|\\fB%s\\fP",
@@ -3120,7 +3310,6 @@ static void _print_man_all_options_desc(struct command_name *cname)
 			printf("\\fB%s\\fP", _man_long_opt_name(cname->name, opt_enum));
 		}
 
-		val_enum = opt_names[opt_enum].val_enum;
 
 		if (!val_names[val_enum].fn) {
 			/* takes no arg */
@@ -3137,13 +3326,15 @@ static void _print_man_all_options_desc(struct command_name *cname)
 		if (opt_names[opt_enum].flags & ARG_COUNTABLE)
 			printf(" ...");
 
+		printf("\n");
+		if (adl) {
+			printf(".ad b\n");
+		}
+		printf(".br\n");
+
 		if (opt_names[opt_enum].desc) {
-			printf("\n");
-			printf(".br\n");
 			_print_man_option_desc(cname, opt_enum);
 		}
-
-		printf(".ad b\n");
 	}
 }
 
@@ -3206,11 +3397,9 @@ static void _print_man_all_positions_desc(struct command_name *cname)
 	}
 
 	if (has_vg_val) {
-		printf(".HP\n");
+		printf(".TP\n");
 
-		printf("\\fI%s\\fP", val_names[vg_VAL].name);
-		printf("\n");
-		printf(".br\n");
+		printf(".I %s\n", val_names[vg_VAL].name);
 		printf("Volume Group name.  See \\fBlvm\\fP(8) for valid names.\n");
 
 		if (!strcmp(cname->name, "lvcreate"))
@@ -3220,25 +3409,22 @@ static void _print_man_all_positions_desc(struct command_name *cname)
 	}
 
 	if (has_lv_val) {
-		printf(".HP\n");
+		printf(".TP\n");
 
-		printf("\\fI%s\\fP", val_names[lv_VAL].name);
-		printf("\n");
-		printf(".br\n");
+		printf(".I %s\n", val_names[lv_VAL].name);
 		printf("Logical Volume name.  See \\fBlvm\\fP(8) for valid names.\n"
 		       "An LV positional arg generally includes the VG name and LV name, e.g. VG/LV.\n");
 
 		if (has_lv_type)
-			printf("LV followed by _<type> indicates that an LV of the\n"
-			       "given type is required. (raid represents raid<N> type)\n");
+			printf("LV1 indicates the LV must have a specific type, where the\n"
+			       "accepted LV types are listed. (raid represents raid<N> type).\n");
+
 	}
 
 	if (has_pv_val) {
-		printf(".HP\n");
+		printf(".TP\n");
 
-		printf("\\fI%s\\fP", val_names[pv_VAL].name);
-		printf("\n");
-		printf(".br\n");
+		printf(".I %s\n", val_names[pv_VAL].name);
 		printf("Physical Volume name, a device path under /dev.\n"
 		       "For commands managing physical extents, a PV positional arg\n"
 		       "generally accepts a suffix indicating a range (or multiple ranges)\n"
@@ -3249,21 +3435,17 @@ static void _print_man_all_positions_desc(struct command_name *cname)
 	}
 
 	if (has_tag_val) {
-		printf(".HP\n");
+		printf(".TP\n");
 
-		printf("\\fI%s\\fP", val_names[tag_VAL].name);
-		printf("\n");
-		printf(".br\n");
+		printf(".I %s\n", val_names[tag_VAL].name);
 		printf("Tag name.  See \\fBlvm\\fP(8) for information about tag names and using tags\n"
 		       "in place of a VG, LV or PV.\n");
 	}
 
 	if (has_select_val) {
-		printf(".HP\n");
+		printf(".TP\n");
 
-		printf("\\fI%s\\fP", val_names[select_VAL].name);
-		printf("\n");
-		printf(".br\n");
+		printf(".I %s\n", val_names[select_VAL].name);
 		printf("Select indicates that a required positional parameter can\n"
 		       "be omitted if the \\fB--select\\fP option is used.\n"
 		       "No arg appears in this position.\n");
@@ -3271,10 +3453,8 @@ static void _print_man_all_positions_desc(struct command_name *cname)
 
 	/* Every command uses a string arg somewhere. */
 
-	printf(".HP\n");
-	printf("\\fI%s\\fP", val_names[string_VAL].name);
-	printf("\n");
-	printf(".br\n");
+	printf(".TP\n");
+	printf(".I %s\n", val_names[string_VAL].name);
 	printf("See the option description for information about the string content.\n");
 
 	/*
@@ -3283,21 +3463,20 @@ static void _print_man_all_positions_desc(struct command_name *cname)
 	 * so common that we should probably always print it.
 	 */
 
-	printf(".HP\n");
-	printf("\\fISize\\fP[UNIT]");
-	printf("\n");
-	printf(".br\n");
+	printf(".TP\n");
+	printf(".IR Size [UNIT]\n");
 	printf("Size is an input number that accepts an optional unit.\n"
 	       "Input units are always treated as base two values, regardless of\n"
 	       "capitalization, e.g. 'k' and 'K' both refer to 1024.\n"
 	       "The default input unit is specified by letter, followed by |UNIT.\n"
-	       "UNIT represents other possible input units: \\fBbBsSkKmMgGtTpPeE\\fP.\n"
-	       "b|B is bytes, s|S is sectors of 512 bytes, k|K is KiB,\n"
-	       "m|M is MiB, g|G is GiB, t|T is TiB, p|P is PiB, e|E is EiB.\n"
+	       "UNIT represents other possible input units:\n"
+	       ".BR b | B\nis bytes,\n.BR s | S\nis sectors of 512 bytes,\n.BR k | K\nis KiB,\n"
+	       ".BR m | M\nis MiB,\n.BR g | G\nis GiB,\n.BR t | T\nis TiB,\n"
+	       ".BR p | P\nis PiB,\n.BR e | E\nis EiB.\n"
 	       "(This should not be confused with the output control --units, where\n"
 	       "capital letters mean multiple of 1000.)\n");
 
-	printf(".SH ENVIRONMENT VARIABLES\n");
+	printf(".\n.SH ENVIRONMENT VARIABLES\n.\n");
 	printf("See \\fBlvm\\fP(8) for information about environment variables used by lvm.\n"
 	       "For example, LVM_VG_NAME can generally be substituted for a required VG parameter.\n");
 }
@@ -3360,7 +3539,7 @@ static int _include_description_file(char *name, char *des_file)
 	char *buf;
 	int fd, r = 0;
 	ssize_t sz;
-	struct stat statbuf;
+	struct stat statbuf = { 0 };
 
 	if ((fd = open(des_file, O_RDONLY)) < 0) {
 		log_error("Failed to open description file %s.", des_file);
@@ -3388,7 +3567,7 @@ static int _include_description_file(char *name, char *des_file)
 	}
 
 	buf[sz] = '\0';
-	printf(".SH DESCRIPTION\n%s", buf);
+	printf(".\n.SH DESCRIPTION\n.\n%s", buf);
 	r = 1;
 
 out_free:
@@ -3424,9 +3603,9 @@ static int _print_man(char *name, char *des_file, int secondary)
 			_print_man_usage_common_cmd(prev_cmd);
 			_print_man_usage_common_lvm(prev_cmd);
 
-			printf(".SH OPTIONS\n");
+			printf(".\n.SH OPTIONS\n.\n");
 			_print_man_all_options_desc(cname);
-			printf(".SH VARIABLES\n");
+			printf(".\n.SH VARIABLES\n.\n");
 			_print_man_all_positions_desc(cname);
 
 			prev_cmd = NULL;
@@ -3442,14 +3621,13 @@ static int _print_man(char *name, char *des_file, int secondary)
 			continue;
 
 		if (!prev_cmd || strcmp(prev_cmd->name, cmd->name)) {
-			printf(".SH NAME\n");
+			printf(".\n.SH NAME\n.\n");
 			if (cname && cname->desc)
-				printf("%s - %s\n", lvmname, cname->desc);
+				printf("%s \\(em %s\n", lvmname, cname->desc);
 			else
 				printf("%s\n", lvmname);
 
-			printf(".\n");
-			printf(".SH SYNOPSIS\n");
+			printf(".\n.SH SYNOPSIS\n.\n");
 			prev_cmd = cmd;
 
 			if (!(cname = _find_command_name(cmd->name)))
@@ -3485,7 +3663,7 @@ static int _print_man(char *name, char *des_file, int secondary)
 			if (des_file && !_include_description_file(lvmname, des_file))
 				return 0;
 
-			printf(".SH USAGE\n");
+			printf(".\n.SH USAGE\n.\n");
 		}
 
 		if (cmd->desc) {
@@ -3499,18 +3677,16 @@ static int _print_man(char *name, char *des_file, int secondary)
 			_print_man_usage_common_cmd(cmd);
 			_print_man_usage_common_lvm(cmd);
 
-			printf("\n");
-			printf(".SH OPTIONS\n");
+			printf(".\n.SH OPTIONS\n.\n");
 			_print_man_all_options_desc(cname);
-			printf(".SH VARIABLES\n");
+			printf(".\n.SH VARIABLES\n.\n");
 			_print_man_all_positions_desc(cname);
 		} else {
-			if (cname->variants > 2)
-				printf("-\n");
+			if (cname->variants > 2) {
+				printf("\\(em\n");
+				printf(".P\n");
+			}
 		}
-
-		printf("\n");
-		continue;
 	}
 
 	return 1;
@@ -3540,7 +3716,7 @@ static void _print_man_secondary(char *name)
 			continue;
 
 		if (!header) {
-			printf(".SH ADVANCED USAGE\n");
+			printf(".\n.SH ADVANCED USAGE\n.\n");
 			printf("Alternate command forms, advanced command usage, and listing of all valid syntax for completeness.\n");
 			printf(".P\n");
 			header = 1;
@@ -3553,27 +3729,234 @@ static void _print_man_secondary(char *name)
 
 		_print_man_usage(lvmname, cmd);
 
-		printf("-\n");
-		printf("\n");
+		printf("\\(em\n");
+		printf(".P\n");
 	}
+}
+
+static void _print_opt_list(const char *prefix, int *opt_list, int opt_count)
+{
+	int i;
+	int opt_enum;
+
+	printf("%s ", prefix);
+	for (i = 0; i < opt_count; i++) {
+		opt_enum = opt_list[i];
+		printf(" %s", opt_names[opt_enum].long_opt);
+	}
+	printf("\n");
+}
+
+/* return 1 if the lists do not match, 0 if they match */
+static int _compare_opt_lists(int *list1, int count1, int *list2, int count2, const char *type1_str, const char *type2_str)
+{
+	int i, j;
+
+	if (count1 != count2)
+		return 1;
+
+	for (i = 0; i < count1; i++) {
+		for (j = 0; j < count2; j++) {
+
+			/* lists do not match if one has --type foo and the other --type bar */
+			if ((list1[i] == type_ARG) && (list2[j] == type_ARG) &&
+			    type1_str && type2_str && strcmp(type1_str, type2_str)) {
+				return 1;
+			}
+
+			if (list1[i] == list2[j])
+				goto next;
+		}
+		return 1;
+ next:
+		;
+	}
+
+	return 0;
+}
+
+static int _compare_cmds(struct command *cmd1, struct command *cmd2, int *all_req_opts)
+{
+	const char *cmd1_type_str = NULL;
+	const char *cmd2_type_str = NULL;
+	int opt_list_1[ARG_COUNT] = { 0 };
+	int opt_list_2[ARG_COUNT] = { 0 };
+	int opt_count_1 = 0;
+	int opt_count_2 = 0;
+	int i, j;
+	int r = 1;
+
+	/* different number of required pos items means different cmds */
+	if (cmd1->rp_count != cmd2->rp_count)
+		return 1;
+
+	/* different types of required pos items means different cmds */
+	for (i = 0; i < cmd1->rp_count; i++) {
+		if (cmd1->required_pos_args[i].def.val_bits != cmd2->required_pos_args[i].def.val_bits)
+			return 1;
+	}
+
+	/* create opt list from cmd1 */
+	for (i = 0; i < cmd1->ro_count; i++) {
+		if (!all_req_opts[cmd1->required_opt_args[i].opt])
+			continue;
+
+		opt_list_1[opt_count_1++] = cmd1->required_opt_args[i].opt;
+
+		if (cmd1->required_opt_args[i].opt == type_ARG)
+			cmd1_type_str = cmd1->required_opt_args[i].def.str;
+	}
+
+	/* create opt list from cmd2 */
+	for (i = 0; i < cmd2->ro_count; i++) {
+		if (!all_req_opts[cmd2->required_opt_args[i].opt])
+			continue;
+
+		opt_list_2[opt_count_2++] = cmd2->required_opt_args[i].opt;
+
+		if (cmd2->required_opt_args[i].opt == type_ARG)
+			cmd2_type_str = cmd2->required_opt_args[i].def.str;
+	}
+
+	/* "--type foo" and "--type bar" are different */
+	if (cmd1_type_str && cmd2_type_str && strcmp(cmd1_type_str, cmd2_type_str))
+		return 1;
+
+	/* compare opt_list_1 and opt_list_2 */
+	if (!_compare_opt_lists(opt_list_1, opt_count_1, opt_list_2, opt_count_2, NULL, NULL)) {
+		log_error("Repeated commands %s %s", cmd1->command_id, cmd2->command_id);
+		log_error("cmd1: %s", cmd1->desc);
+		log_error("cmd2: %s", cmd2->desc);
+		_print_opt_list("cmd1 options: ", opt_list_1, opt_count_1);
+		_print_opt_list("cmd2 options: ", opt_list_2, opt_count_2);
+		printf("\n");
+		r = 0;
+	}
+
+	/* check if cmd1 matches cmd2 + one of its oo */
+	for (i = 0; i < cmd2->oo_count; i++) {
+		/* for each cmd2 optional_opt_arg, add it to opt_list_2
+		   and compare opt_list_1 and opt_list_2 again */
+
+		/* cmd1 "--type foo" and cmd2 OO "--type bar" are different */
+		if (cmd2->optional_opt_args[i].opt == type_ARG) {
+			if (cmd2->optional_opt_args[i].def.str && cmd1_type_str &&
+			    strcmp(cmd2->optional_opt_args[i].def.str, cmd1_type_str))
+				return 1;
+		}
+
+		opt_list_2[opt_count_2] = cmd2->optional_opt_args[i].opt;
+
+		if (!_compare_opt_lists(opt_list_1, opt_count_1, opt_list_2, opt_count_2+1, NULL, NULL)) {
+			log_error("Repeated commands %s %s", cmd1->command_id, cmd2->command_id);
+			log_error("cmd1: %s", cmd1->desc);
+			log_error("cmd2: %s", cmd2->desc);
+			log_error("Included cmd2 OO: %s", opt_names[cmd2->optional_opt_args[i].opt].long_opt);
+			_print_opt_list("cmd1 options: ", opt_list_1, opt_count_1);
+			_print_opt_list("cmd2 options: ", opt_list_2, opt_count_2+1);
+			printf("\n");
+			r = 0;
+		}
+	}
+
+	/* check if cmd1 + an oo matches cmd2 + an oo */
+
+	if (!cmd1_type_str) {
+		for (i = 0; i < cmd1->oo_count; i++) {
+			if (cmd1->optional_opt_args[i].opt == type_ARG)
+				cmd1_type_str = cmd1->optional_opt_args[i].def.str;
+		}
+	}
+	if (!cmd2_type_str) {
+		for (j = 0; j < cmd2->oo_count; j++) {
+			if (cmd2->optional_opt_args[j].opt == type_ARG)
+				cmd2_type_str = cmd2->optional_opt_args[j].def.str;
+		}
+	}
+
+	for (i = 0; i < cmd1->oo_count; i++) {
+
+		for (j = 0; j < cmd2->oo_count; j++) {
+			if (cmd1->optional_opt_args[i].opt == cmd2->optional_opt_args[j].opt)
+				continue;
+
+			opt_list_1[opt_count_1] = cmd1->optional_opt_args[i].opt;
+			opt_list_2[opt_count_2] = cmd2->optional_opt_args[j].opt;
+
+			if (!_compare_opt_lists(opt_list_1, opt_count_1+1, opt_list_2, opt_count_2+1, cmd1_type_str, cmd2_type_str)) {
+				log_error("Repeated commands %s %s", cmd1->command_id, cmd2->command_id);
+				log_error("cmd1: %s", cmd1->desc);
+				log_error("cmd2: %s", cmd2->desc);
+				log_error("Included cmd1 OO: %s and cmd2 OO: %s",
+					  opt_names[cmd1->optional_opt_args[i].opt].long_opt,
+					  opt_names[cmd2->optional_opt_args[j].opt].long_opt);
+				_print_opt_list("cmd1 options: ", opt_list_1, opt_count_1+1);
+				_print_opt_list("cmd2 options: ", opt_list_2, opt_count_2+1);
+				printf("\n");
+				r = 0;
+			}
+		}
+	}
+	return r;
+}
+
+static int _check_overlap(void)
+{
+	int all_req_opts[ARG_COUNT] = { 0 };
+	struct command *cmd1, *cmd2;
+	int i, j;
+	int r = 1;
+
+	for (i = 0; i < COMMAND_COUNT; i++) {
+		cmd1 = &commands[i];
+		for (j = 0; j < cmd1->ro_count; j++)
+			all_req_opts[cmd1->required_opt_args[j].opt] = 1;
+	}
+
+	for (i = 0; i < COMMAND_COUNT; i++) {
+
+		cmd1 = &commands[i];
+
+		if (cmd1->any_ro_count)
+			continue;
+
+		for (j = 0; j < COMMAND_COUNT; j++) {
+			if (i == j)
+				continue;
+
+			cmd2 = &commands[j];
+
+			if (cmd2->any_ro_count)
+				continue;
+
+			if (strcmp(cmd1->name, cmd2->name))
+				continue;
+
+			if (!_compare_cmds(cmd1, cmd2, all_req_opts))
+				r = 0;
+		}
+	}
+	return r;
 }
 
 #define	STDOUT_BUF_SIZE	 (MAX_MAN_DESC + 4 * 1024)
 
 int main(int argc, char *argv[])
 {
-	struct cmd_context cmdtool;
+	struct cmd_context cmdtool = { 0 };
 	char *cmdname = NULL;
 	char *desfile = NULL;
 	char *stdout_buf;
 	int primary = 0;
 	int secondary = 0;
+	int check = 0;
 	int r = 0;
 	size_t sz = STDOUT_BUF_SIZE;
 
 	static struct option long_options[] = {
 		{"primary", no_argument, 0, 'p' },
 		{"secondary", no_argument, 0, 's' },
+		{"check", no_argument, 0, 'c' },
 		{0, 0, 0, 0 }
 	};
 
@@ -3588,7 +3971,7 @@ int main(int argc, char *argv[])
 		int c;
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "ps", long_options, &option_index);
+		c = getopt_long(argc, argv, "psc", long_options, &option_index);
 		if (c == -1)
 			break;
 
@@ -3601,11 +3984,14 @@ int main(int argc, char *argv[])
 		case 's':
 			secondary = 1;
 			break;
+		case 'c':
+			check = 1;
+			break;
 		}
 	}
 
-	if (!primary && !secondary) {
-		log_error("Usage: %s --primary|--secondary <command> [/path/to/description-file].", argv[0]);
+	if (!primary && !secondary && !check) {
+		log_error("Usage: %s --primary|--secondary|--check <command> [/path/to/description-file].", argv[0]);
 		goto out_free;
 	}
 
@@ -3614,7 +4000,7 @@ int main(int argc, char *argv[])
 			log_error("Out of memory.");
 			goto out_free;
 		}
-	} else {
+	} else if (!check) {
 		log_error("Missing command name.");
 		goto out_free;
 	}
@@ -3624,15 +4010,18 @@ int main(int argc, char *argv[])
 
 	define_commands(&cmdtool, NULL);
 
-	configure_command_option_values(cmdname);
+	if (!check)
+		configure_command_option_values(cmdname);
 
 	factor_common_options();
 
-	if (primary)
+	if (primary && cmdname)
 		r = _print_man(cmdname, desfile, secondary);
-	else if (secondary) {
+	else if (secondary && cmdname) {
 		r = 1;
 		_print_man_secondary(cmdname);
+	} else if (check) {
+		r = _check_overlap();
 	}
 
 out_free:

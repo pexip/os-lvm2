@@ -18,8 +18,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <syslog.h>
+#include <ctype.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 static int quit = 0;
 static int info = 0;
@@ -30,6 +33,7 @@ static int kill_vg = 0;
 static int drop_vg = 0;
 static int gl_enable = 0;
 static int gl_disable = 0;
+static int use_stderr = 0;
 static int stop_lockspaces = 0;
 static char *arg_vg_name = NULL;
 
@@ -45,6 +49,22 @@ daemon_handle _lvmlockd;
 #define log_error(fmt, args...) \
 do { \
 	printf(fmt "\n", ##args); \
+} while (0)
+
+#define log_sys_emerg(fmt, args...) \
+do { \
+	if (use_stderr) \
+		fprintf(stderr, fmt "\n", ##args); \
+	else \
+		syslog(LOG_EMERG, fmt, ##args); \
+} while (0)
+
+#define log_sys_warn(fmt, args...) \
+do { \
+	if (use_stderr) \
+		fprintf(stderr, fmt "\n", ##args); \
+	else \
+		syslog(LOG_WARNING, fmt, ##args); \
 } while (0)
 
 #define MAX_LINE 512
@@ -437,6 +457,7 @@ retry:
 	if (count < dump_len)
 		goto retry;
 
+	dump_buf[count] = 0;
 	rv = 0;
 	if ((info && dump) || !strcmp(req_name, "dump"))
 		printf("%s\n", dump_buf);
@@ -502,51 +523,274 @@ static int do_stop_lockspaces(void)
 	return rv;
 }
 
-static int do_kill(void)
+static int _reopen_fd_to_null(int fd)
 {
-	daemon_reply reply;
-	int result;
-	int rv;
+	int null_fd;
+	int r = 0;
 
-	syslog(LOG_EMERG, "Lost access to sanlock lease storage in VG %s.", arg_vg_name);
-	/* These two lines explain the manual alternative to the FIXME below. */
-	syslog(LOG_EMERG, "Immediately deactivate LVs in VG %s.", arg_vg_name);
-	syslog(LOG_EMERG, "Once VG is unused, run lvmlockctl --drop %s.", arg_vg_name);
-
-	/*
-	 * It may not be strictly necessary to notify lvmlockd of the kill, but
-	 * lvmlockd can use this information to avoid attempting any new lock
-	 * requests in the VG (which would fail anyway), and can return an
-	 * error indicating that the VG has been killed.
-	 */
-
-	reply = _lvmlockd_send("kill_vg",
-				"cmd = %s", "lvmlockctl",
-				"pid = " FMTd64, (int64_t) getpid(),
-				"vg_name = %s", arg_vg_name,
-				NULL);
-
-	if (!_lvmlockd_result(reply, &result)) {
-		log_error("lvmlockd result %d", result);
-		rv = result;
-	} else {
-		rv = 0;
+	if ((null_fd = open("/dev/null", O_RDWR)) == -1) {
+		log_error("open error /dev/null %d", errno);
+		return 0;
 	}
 
-	daemon_reply_destroy(reply);
+	if (close(fd)) {
+		log_error("close error fd %d %d", fd, errno);
+		goto out;
+	}
 
-	/*
-	 * FIXME: here is where we should implement a strong form of
-	 * blkdeactivate, and if it completes successfully, automatically call
-	 * do_drop() afterward.  (The drop step may not always be necessary
-	 * if the lvm commands run while shutting things down release all the
-	 * leases.)
-	 *
-	 * run_strong_blkdeactivate();
-	 * do_drop();
-	 */
+	if (dup2(null_fd, fd) == -1) {
+		log_error("dup2 error %d", errno);
+		goto out;
+	}
 
-	return rv;
+	r = 1;
+out:
+	if (close(null_fd)) {
+		log_error("close error fd %d %d", null_fd, errno);
+		return 0;
+	}
+
+	return r;
+}
+
+#define MAX_AV_COUNT 32
+#define ONE_ARG_LEN 1024
+
+static void _run_command_pipe(const char *cmd_str, pid_t *pid_out, FILE **fp_out)
+{
+	char arg[ONE_ARG_LEN];
+	char *av[MAX_AV_COUNT + 1]; /* +1 for NULL */
+	char *arg_dup;
+	int av_count = 0;
+	int cmd_len;
+	int arg_len;
+	pid_t pid = 0;
+	FILE *fp = NULL;
+	int pipefd[2];
+	int i;
+
+	for (i = 0; i < MAX_AV_COUNT + 1; i++)
+		av[i] = NULL;
+
+	cmd_len = strlen(cmd_str);
+
+	memset(&arg, 0, sizeof(arg));
+	arg_len = 0;
+
+	for (i = 0; i < cmd_len; i++) {
+		if (!cmd_str[i])
+			break;
+
+		if (av_count == MAX_AV_COUNT)
+			goto out;
+
+		if (cmd_str[i] == '\\') {
+			if (i == (cmd_len - 1))
+				break;
+			i++;
+
+			if (cmd_str[i] == '\\') {
+				arg[arg_len++] = cmd_str[i];
+				continue;
+			}
+			if (isspace(cmd_str[i])) {
+				arg[arg_len++] = cmd_str[i];
+				continue;
+			} else {
+				break;
+			}
+		}
+
+		if (isalnum(cmd_str[i]) || ispunct(cmd_str[i])) {
+			arg[arg_len++] = cmd_str[i];
+		} else if (isspace(cmd_str[i])) {
+			if (arg_len) {
+				if (!(arg_dup = strdup(arg)))
+					goto out;
+				av[av_count++] = arg_dup;
+			}
+
+			memset(arg, 0, sizeof(arg));
+			arg_len = 0;
+		} else {
+			break;
+		}
+	}
+
+	if (arg_len) {
+		if (av_count >= MAX_AV_COUNT)
+			goto out;
+		if (!(arg_dup = strdup(arg)))
+			goto out;
+		av[av_count++] = arg_dup;
+	}
+
+	if (pipe(pipefd)) {
+		log_error("pipe error %d", errno);
+		goto out;
+	}
+
+	pid = fork();
+
+	if (pid < 0) {
+		log_error("fork error %d", errno);
+		pid = 0;
+		goto out;
+	}
+
+	if (pid == 0) {
+		/* Child -> writer, convert pipe[0] to STDOUT */
+		if (!_reopen_fd_to_null(STDIN_FILENO))
+			log_error("reopen STDIN error");
+		else if (close(pipefd[0 /*read*/]))
+			log_error("close error pipe[0] %d", errno);
+		else if (close(STDOUT_FILENO))
+			log_error("close error STDOUT %d", errno);
+		else if (dup2(pipefd[1 /*write*/], STDOUT_FILENO) == -1)
+			log_error("dup2 error STDOUT %d", errno);
+		else if (close(pipefd[1]))
+			log_error("close error pipe[1] %d", errno);
+		else {
+			execvp(av[0], av);
+			log_error("execvp error %d", errno);
+		}
+		_exit(errno);
+	}
+
+	/* Parent -> reader */
+	if (close(pipefd[1 /*write*/]))
+		log_error("close error STDOUT %d", errno);
+
+	if (!(fp = fdopen(pipefd[0 /*read*/],  "r"))) {
+		log_error("fdopen STDIN error %d", errno);
+		if (close(pipefd[0]))
+			log_error("close error STDIN %d", errno);
+	}
+
+ out:
+	for (i = 0; i < MAX_AV_COUNT + 1; i++)
+		free(av[i]);
+
+	*pid_out = pid;
+	*fp_out = fp;
+}
+
+/* Returns -1 on error, 0 on success. */
+
+static int _close_command_pipe(pid_t pid, FILE *fp)
+{
+	int status, estatus;
+	int ret = -1;
+
+	if (waitpid(pid, &status, 0) != pid) {
+		log_error("waitpid error pid %d %d", pid, errno);
+		goto out;
+	}
+
+	if (WIFEXITED(status)) {
+		/* pid exited with an exit code */
+		estatus = WEXITSTATUS(status);
+
+		/* exit status 0: child success */
+		if (!estatus) {
+			ret = 0;
+			goto out;
+		}
+
+		/* exit status not zero: child error */
+		log_error("child exit error %d", estatus);
+		goto out;
+	}
+
+	if (WIFSIGNALED(status)) {
+		/* pid terminated due to a signal */
+		log_error("child exit from signal");
+		goto out;
+	}
+
+	log_error("child exit problem");
+
+out:
+	if (fp && fclose(fp))
+		log_error("fclose error STDIN %d", errno);
+	return ret;
+}
+
+/* Returns -1 on error, 0 on success. */
+
+static int _get_kill_command(char *kill_cmd)
+{
+	char config_cmd[PATH_MAX + 128] = { 0 };
+	char config_val[1024] = { 0 };
+	char line[PATH_MAX] = { 0 };
+	pid_t pid = 0;
+	FILE *fp = NULL;
+
+	snprintf(config_cmd, PATH_MAX, "%s config --typeconfig full global/lvmlockctl_kill_command", LVM_PATH);
+
+	_run_command_pipe(config_cmd, &pid, &fp);
+
+	if (!pid) {
+		log_error("failed to run %s", config_cmd);
+		return -1;
+	}
+
+	if (!fp) {
+		log_error("failed to get output %s", config_cmd);
+		_close_command_pipe(pid, fp);
+		return -1;
+	}
+
+	if (!fgets(line, sizeof(line), fp)) {
+		log_error("no output from %s", config_cmd);
+		goto bad;
+	}
+
+	if (sscanf(line, "lvmlockctl_kill_command=\"%256[^\n\"]\"", config_val) != 1) {
+		log_error("unrecognized config value from %s", config_cmd);
+		goto bad;
+	}
+
+	if (!config_val[0] || (config_val[0] == ' ')) {
+		log_error("invalid config value from %s", config_cmd);
+		goto bad;
+	}
+
+	if (config_val[0] != '/') {
+		log_error("lvmlockctl_kill_command must be full path");
+		goto bad;
+	}
+
+	printf("Found lvmlockctl_kill_command: %s\n", config_val);
+
+	snprintf(kill_cmd, PATH_MAX, "%s %s", config_val, arg_vg_name);
+	kill_cmd[PATH_MAX-1] = '\0';
+
+	_close_command_pipe(pid, fp);
+	return 0;
+bad:
+	_close_command_pipe(pid, fp);
+	return -1;
+}
+
+/* Returns -1 on error, 0 on success. */
+
+static int _run_kill_command(char *kill_cmd)
+{
+	pid_t pid = 0;
+	FILE *fp = NULL;
+	int rv;
+
+	_run_command_pipe(kill_cmd, &pid, &fp);
+	rv = _close_command_pipe(pid, fp);
+
+	if (!pid)
+		return -1;
+
+	if (rv < 0)
+		return -1;
+
+	return 0;
 }
 
 static int do_drop(void)
@@ -555,7 +799,7 @@ static int do_drop(void)
 	int result;
 	int rv;
 
-	syslog(LOG_WARNING, "Dropping locks for VG %s.", arg_vg_name);
+	log_sys_warn("Dropping locks for VG %s.", arg_vg_name);
 
 	/*
 	 * Check for misuse by looking for any active LVs in the VG
@@ -583,6 +827,84 @@ static int do_drop(void)
 	return rv;
 }
 
+static int do_kill(void)
+{
+	char kill_cmd[PATH_MAX] = { 0 };
+	daemon_reply reply;
+	int no_kill_command = 0;
+	int result;
+	int rv;
+
+	log_sys_emerg("lvmlockd lost access to locks in VG %s.", arg_vg_name);
+
+	rv = _get_kill_command(kill_cmd);
+	if (rv < 0) {
+		log_sys_emerg("Immediately deactivate LVs in VG %s.", arg_vg_name);
+		log_sys_emerg("Once VG is unused, run lvmlockctl --drop %s.", arg_vg_name);
+		no_kill_command = 1;
+	}
+
+	/*
+	 * It may not be strictly necessary to notify lvmlockd of the kill, but
+	 * lvmlockd can use this information to avoid attempting any new lock
+	 * requests in the VG (which would fail anyway), and can return an
+	 * error indicating that the VG has been killed.
+	 */
+	_lvmlockd = lvmlockd_open(NULL);
+	if (_lvmlockd.socket_fd < 0 || _lvmlockd.error) {
+		log_error("Cannot connect to lvmlockd for kill_vg.");
+		goto run;
+	}
+	reply = _lvmlockd_send("kill_vg",
+				"cmd = %s", "lvmlockctl",
+				"pid = " FMTd64, (int64_t) getpid(),
+				"vg_name = %s", arg_vg_name,
+				NULL);
+	if (!_lvmlockd_result(reply, &result))
+		log_error("lvmlockd result %d kill_vg", result);
+	daemon_reply_destroy(reply);
+	lvmlockd_close(_lvmlockd);
+
+ run:
+	if (no_kill_command)
+		return 0;
+
+	rv = _run_kill_command(kill_cmd);
+	if (rv < 0) {
+		log_sys_emerg("Failed to run VG %s kill command %s", arg_vg_name, kill_cmd);
+		log_sys_emerg("Immediately deactivate LVs in VG %s.", arg_vg_name);
+		log_sys_emerg("Once VG is unused, run lvmlockctl --drop %s.", arg_vg_name);
+		return -1;
+	}
+
+	log_sys_warn("Successful VG %s kill command %s", arg_vg_name, kill_cmd);
+
+	/*
+	 * If kill command was successfully, call do_drop().  (The drop step
+	 * may not always be necessary if the lvm commands run while shutting
+	 * things down release all the leases.)
+	 */
+	rv = 0;
+	_lvmlockd = lvmlockd_open(NULL);
+	if (_lvmlockd.socket_fd < 0 || _lvmlockd.error) {
+		log_sys_emerg("Failed to connect to lvmlockd to drop locks in VG %s.", arg_vg_name);
+		return -1;
+	}
+	reply = _lvmlockd_send("drop_vg",
+				"cmd = %s", "lvmlockctl",
+				"pid = " FMTd64, (int64_t) getpid(),
+				"vg_name = %s", arg_vg_name,
+				NULL);
+	if (!_lvmlockd_result(reply, &result)) {
+		log_sys_emerg("Failed to drop locks in VG %s", arg_vg_name);
+		rv = result;
+	}
+	daemon_reply_destroy(reply);
+	lvmlockd_close(_lvmlockd);
+
+	return rv;
+}
+
 static void print_usage(void)
 {
 	printf("lvmlockctl options\n");
@@ -600,7 +922,7 @@ static void print_usage(void)
 	printf("--force | -f 0|1>\n");
 	printf("      Force option for other commands.\n");
 	printf("--kill | -k <vgname>\n");
-	printf("      Kill access to the VG when sanlock cannot renew lease.\n");
+	printf("      Kill access to the VG locks are lost (see lvmlockctl_kill_command).\n");
 	printf("--drop | -r <vgname>\n");
 	printf("      Clear locks for the VG when it is unused after kill (-k).\n");
 	printf("--gl-enable | -E <vgname>\n");
@@ -609,6 +931,8 @@ static void print_usage(void)
 	printf("      Tell lvmlockd to disable the global lock in a sanlock VG.\n");
 	printf("--stop-lockspaces | -S\n");
 	printf("      Stop all lockspaces.\n");
+	printf("--stderr | -e\n");
+	printf("      Send kill and drop messages to stderr instead of syslog\n");
 }
 
 static int read_options(int argc, char *argv[])
@@ -628,6 +952,7 @@ static int read_options(int argc, char *argv[])
 		{"gl-enable",       required_argument, 0,  'E' },
 		{"gl-disable",      required_argument, 0,  'D' },
 		{"stop-lockspaces", no_argument,       0,  'S' },
+		{"stderr",          no_argument,       0,  'e' },
 		{0, 0, 0, 0 }
 	};
 
@@ -637,7 +962,7 @@ static int read_options(int argc, char *argv[])
 	}
 
 	while (1) {
-		c = getopt_long(argc, argv, "hqidE:D:w:k:r:S", long_options, &option_index);
+		c = getopt_long(argc, argv, "hqidE:D:w:k:r:Se", long_options, &option_index);
 		if (c == -1)
 			break;
 
@@ -663,22 +988,29 @@ static int read_options(int argc, char *argv[])
 			break;
 		case 'k':
 			kill_vg = 1;
+			free(arg_vg_name);
 			arg_vg_name = strdup(optarg);
 			break;
 		case 'r':
 			drop_vg = 1;
+			free(arg_vg_name);
 			arg_vg_name = strdup(optarg);
 			break;
 		case 'E':
 			gl_enable = 1;
+			free(arg_vg_name);
 			arg_vg_name = strdup(optarg);
 			break;
 		case 'D':
 			gl_disable = 1;
+			free(arg_vg_name);
 			arg_vg_name = strdup(optarg);
 			break;
 		case 'S':
 			stop_lockspaces = 1;
+			break;
+		case 'e':
+			use_stderr = 1;
 			break;
 		default:
 			print_usage();
@@ -698,8 +1030,12 @@ int main(int argc, char **argv)
 	if (rv < 0)
 		return rv;
 
-	_lvmlockd = lvmlockd_open(NULL);
+	/* do_kill handles lvmlockd connections itself */
+	if (kill_vg)
+		return do_kill();
 
+
+	_lvmlockd = lvmlockd_open(NULL);
 	if (_lvmlockd.socket_fd < 0 || _lvmlockd.error) {
 		log_error("Cannot connect to lvmlockd.");
 		return -1;
@@ -717,11 +1053,6 @@ int main(int argc, char **argv)
 
 	if (dump) {
 		rv = do_dump("dump");
-		goto out;
-	}
-
-	if (kill_vg) {
-		rv = do_kill();
 		goto out;
 	}
 

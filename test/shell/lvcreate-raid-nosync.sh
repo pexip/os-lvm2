@@ -33,6 +33,18 @@ _sync() {
 	aux restore_from_devtable "$dev1"
 }
 
+# Workaround for raid targets returning 'a' shortly after initialization
+# TODO: maybe there is some workaround to be made on lvm side
+_check_raid_in_loop() {
+	local vg=$1
+	local lv=$2
+	local health=$3
+	for i in {1..10} ; do
+		check raid_leg_status $vg $lv ${health} && return 0
+		sleep .05
+	done
+	die "Cannot get $A status for $vg/$lv";
+}
 
 # Delay 1st leg so that rebuilding status characters
 #  can be read before resync finished too quick.
@@ -42,36 +54,36 @@ aux delay_dev "$dev1" 0 100 "$(get first_extent_sector "$dev1")"
 for r in raid0 raid0_meta
 do
 	lvcreate --type $r -Zn -i 3 -l 1 -n $lv1 $vg
-	check raid_leg_status $vg $lv1 "AAA"
+	_check_raid_in_loop $vg $lv1 "AAA"
 	lvremove --yes $vg/$lv1
 done
 
 # raid1 supports resynchronization
 lvcreate --type raid1 -m 2 -Zn -l 4 -n $lv1 $vg
-check raid_leg_status $vg $lv1 "aaa"
+should check raid_leg_status $vg $lv1 "aaa"
 _sync "AAA"
 
 # raid1 supports --nosync
 lvcreate --type raid1 --nosync -Zn -m 2 -l 1 -n $lv1 $vg
-check raid_leg_status $vg $lv1 "AAA"
+_check_raid_in_loop $vg $lv1 "AAA"
 lvremove --yes $vg/$lv1
 
 for r in $segtypes
 do
 	# raid4/5 support resynchronization
 	lvcreate --type $r -Zn -i 3 -L10 -n $lv1 $vg
-	check raid_leg_status $vg $lv1 "aaaa"
+	should check raid_leg_status $vg $lv1 "aaaa"
 	_sync "AAAA"
 
 	# raid4/5 support --nosync
 	lvcreate --type $r -Zn --nosync -i 3 -l 1 -n $lv2 $vg
-	check raid_leg_status $vg $lv2 "AAAA"
+	_check_raid_in_loop $vg $lv2 "AAAA"
 	lvremove --yes $vg
 done
 
 # raid6 supports resynchronization
 lvcreate --type raid6 -Zn -i 3 -l 4 -n $lv1 $vg
-check raid_leg_status $vg $lv1 "aaaaa"
+should check raid_leg_status $vg $lv1 "aaaaa"
 _sync "AAAAA"
 
 # raid6 rejects --nosync; it has to initialize P- and Q-Syndromes
@@ -79,11 +91,11 @@ not lvcreate --type raid6 --nosync -Zn -i 3 -l 1 -n $lv1 $vg
 
 # raid10 supports resynchronization
 lvcreate --type raid10 -m 1 -Zn -i 3 -L10 -n $lv1 $vg
-check raid_leg_status $vg $lv1 "aaaaaa"
+should check raid_leg_status $vg $lv1 "aaaaaa"
 _sync "AAAAAA"
 
 # raid10 supports --nosync
 lvcreate --type raid10 --nosync -m 1 -Zn -i 3 -l 1 -n $lv1 $vg
-check raid_leg_status $vg $lv1 "AAAAAA"
+_check_raid_in_loop $vg $lv1 "AAAAAA"
 
 vgremove -ff $vg

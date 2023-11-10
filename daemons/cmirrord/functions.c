@@ -34,7 +34,7 @@
 #define LOG_OFFSET 2
 
 #define RESYNC_HISTORY 50
-#define RESYNC_BUFLEN 128
+#define RESYNC_BUFLEN 270
 //static char resync_history[RESYNC_HISTORY][128];
 //static int idx = 0;
 #define LOG_SPRINT(_lc, f, arg...) do {					\
@@ -378,7 +378,7 @@ static int _clog_ctr(char *uuid, uint64_t luid,
 	uint32_t block_on_error = 0;
 
 	int disk_log;
-	char disk_path[PATH_MAX];
+	char disk_path[PATH_MAX] = { 0 };
 	int unlink_path = 0;
 	long page_size;
 	int pages;
@@ -658,8 +658,7 @@ static int clog_dtr(struct dm_ulog_request *rq)
 	if (lc->disk_fd != -1 && close(lc->disk_fd))
 		LOG_ERROR("Failed to close disk log: %s",
 			  strerror(errno));
-	if (lc->disk_buffer)
-		free(lc->disk_buffer);
+	free(lc->disk_buffer);
 	free(lc->clean_bits);
 	free(lc->sync_bits);
 	free(lc);

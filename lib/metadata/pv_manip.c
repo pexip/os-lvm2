@@ -20,7 +20,6 @@
 #include "lib/locking/locking.h"
 #include "lib/config/defaults.h"
 #include "lib/display/display.h"
-#include "lib/format_text/archiver.h"
 
 static struct pv_segment *_alloc_pv_segment(struct dm_pool *mem,
 					    struct physical_volume *pv,
@@ -623,9 +622,6 @@ int pv_resize_single(struct cmd_context *cmd,
 	const char *vg_name = pv->vg_name;
 	int vg_needs_pv_write = 0;
 
-	if (!archive(vg))
-		goto out;
-
 	if (!(pv->fmt->features & FMT_RESIZE_PV)) {
 		log_error("Physical volume %s format does not support resizing.",
 			  pv_name);
@@ -690,7 +686,6 @@ int pv_resize_single(struct cmd_context *cmd,
 				  "volume group \"%s\"", pv_name, vg_name);
 			goto out;
 		}
-		backup(vg);
 	}
 
 	log_print_unless_silent("Physical volume \"%s\" changed", pv_name);

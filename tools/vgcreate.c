@@ -82,6 +82,8 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
+	cmd->create_edit_devices_file = 1;
+
 	lvmcache_label_scan(cmd);
 
 	if (lvmcache_vginfo_from_vgname(vp_new.vg_name, NULL)) {
@@ -100,6 +102,8 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		return_ECMD_FAILED;
 	}
 
+	unlock_devices_file(cmd);
+
 	if (!(vg = vg_create(cmd, vp_new.vg_name)))
 		goto_bad;
 
@@ -113,6 +117,9 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	    !vg_set_system_id(vg, vp_new.system_id) ||
 	    !vg_set_mda_copies(vg, vp_new.vgmetadatacopies))
 		goto_bad;
+
+	if (arg_is_set(cmd, setautoactivation_ARG) && !arg_int_value(cmd, setautoactivation_ARG, 1))
+		vg->status |= NOAUTOACTIVATE;
 
 	/* attach the pv's */
 	if (!vg_extend_each_pv(vg, &pp))
@@ -141,9 +148,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		}
 	}
 
-	if (!archive(vg))
-		goto_bad;
-
 	/* Store VG on disk(s) */
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
@@ -162,8 +166,6 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	unlock_vg(cmd, vg, vp_new.vg_name);
-
-	backup(vg);
 
 	log_print_unless_silent("Volume group \"%s\" successfully created%s%s",
 				vg->name,
