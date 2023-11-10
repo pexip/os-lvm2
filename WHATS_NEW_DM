@@ -1,3 +1,26 @@
+Version 1.02.185 - 18th May 2022
+================================
+
+Version 1.02.183 - 07th February 2022
+=====================================
+  Unmangle UUIDs for DM_DEVICE_LIST ioctl.
+
+Version 1.02.181 - 20th October 2021
+====================================
+  Add IMA support with 'dmsetup measure' command.
+  Add defines DM_NAME_LIST_FLAG_HAS_UUID, DM_NAME_LIST_FLAG_DOESNT_HAVE_UUID.
+  Enhance tracking of activated devices when preloading dm tree.
+  Fix bug in construction of cache table line (regression from 1.02.159).
+
+Version 1.02.179 - 11th August 2021
+===================================
+
+Version 1.02.177 - 07th May 2021
+================================
+  Configure proceeds without libaio to allow build of device-mapper only.
+  Fix symbol versioning build with -O2 -flto.
+  Add dm_tree_node_add_thin_pool_target_v1 with crop_metadata support.
+
 Version 1.02.175 - 08th January 2021
 ====================================
 
@@ -551,7 +574,7 @@ Version 1.02.86 - 23rd June 2014
   Add DM_REPORT_FIELD_TYPE_STRING_LIST: separate string and string list fields.
   Add dm_str_list to libdevmapper for string list type definition and its reuse.
   Add dmsetup -S/--select to define selection criteria for dmsetup reports.
-  Add dm_report_init_with_selection to intialize report with selection criteria.
+  Add dm_report_init_with_selection to initialize report with selection criteria.
   Add DM_REPORT_FIELD_TYPE_SIZE: separate number and size reporting fields.
   Use RemoveOnStop for dm-event.socket systemd unit.
   Document env var 'DM_DEFAULT_NAME_MANGLING_MODE' in dmsetup man page.

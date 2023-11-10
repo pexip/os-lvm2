@@ -93,23 +93,26 @@ static uint32_t _raidmaxrecoveryrate(const struct logical_volume *lv)
 
 static const char *_raidintegritymode(const struct logical_volume *lv)
 {
-	struct integrity_settings *settings;
+	struct integrity_settings *settings = NULL;
 
 	if (lv_raid_has_integrity((struct logical_volume *)lv))
 		lv_get_raid_integrity_settings((struct logical_volume *)lv, &settings);
 	else if (lv_is_integrity(lv))
 		settings = &first_seg(lv)->integrity_settings;
 
-	if (settings->mode[0] == 'B')
-		return "bitmap";
-	if (settings->mode[0] == 'J')
-		return "journal";
+	if (settings) {
+		switch (settings->mode[0]) {
+		case 'B': return "bitmap";
+		case 'J': return "journal";
+		}
+	}
+
 	return "unknown";
 }
 
 static uint32_t _raidintegrityblocksize(const struct logical_volume *lv)
 {
-	struct integrity_settings *settings;
+	struct integrity_settings *settings = NULL;
 
 	if (lv_raid_has_integrity((struct logical_volume *)lv))
 		lv_get_raid_integrity_settings((struct logical_volume *)lv, &settings);
@@ -118,7 +121,7 @@ static uint32_t _raidintegrityblocksize(const struct logical_volume *lv)
 	else
 		return 0;
 
-	return settings->block_size;
+	return (settings) ? settings->block_size : 0;
 }
 
 static uint64_t _integritymismatches(const struct logical_volume *lv)
@@ -238,6 +241,10 @@ GET_PV_NUM_PROPERTY_FN(pv_ba_start, SECTOR_SIZE * pv->ba_start)
 #define _pv_ba_start_set prop_not_implemented_set
 GET_PV_NUM_PROPERTY_FN(pv_ba_size, SECTOR_SIZE * pv->ba_size)
 #define _pv_ba_size_set prop_not_implemented_set
+GET_PV_STR_PROPERTY_FN(pv_device_id, pv->device_id)
+#define _pv_device_id_set prop_not_implemented_set
+GET_PV_STR_PROPERTY_FN(pv_device_id_type, pv->device_id_type)
+#define _pv_device_id_type_set prop_not_implemented_set
 
 #define _pv_allocatable_set prop_not_implemented_set
 #define _pv_allocatable_get prop_not_implemented_get
@@ -262,6 +269,8 @@ GET_PV_NUM_PROPERTY_FN(pv_ba_size, SECTOR_SIZE * pv->ba_size)
 #define _vg_extendable_get prop_not_implemented_get
 #define _vg_exported_set prop_not_implemented_set
 #define _vg_exported_get prop_not_implemented_get
+#define _vg_autoactivation_set prop_not_implemented_set
+#define _vg_autoactivation_get prop_not_implemented_get
 #define _vg_partial_set prop_not_implemented_set
 #define _vg_partial_get prop_not_implemented_get
 #define _vg_allocation_policy_set prop_not_implemented_set
@@ -316,6 +325,8 @@ GET_PV_NUM_PROPERTY_FN(pv_ba_size, SECTOR_SIZE * pv->ba_size)
 #define _lv_skip_activation_get prop_not_implemented_get
 #define _lv_check_needed_set prop_not_implemented_set
 #define _lv_check_needed_get prop_not_implemented_get
+#define _lv_autoactivation_set prop_not_implemented_set
+#define _lv_autoactivation_get prop_not_implemented_get
 #define _lv_historical_set prop_not_implemented_set
 #define _lv_historical_get prop_not_implemented_get
 
@@ -342,6 +353,8 @@ GET_PV_NUM_PROPERTY_FN(pv_ba_size, SECTOR_SIZE * pv->ba_size)
 #define _writecache_writeback_blocks_get prop_not_implemented_get
 #define _writecache_error_set prop_not_implemented_set
 #define _writecache_error_get prop_not_implemented_get
+#define _writecache_block_size_set prop_not_implemented_set
+#define _writecache_block_size_get prop_not_implemented_get
 
 #define _vdo_operating_mode_set prop_not_implemented_set
 #define _vdo_operating_mode_get prop_not_implemented_get

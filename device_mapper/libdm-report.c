@@ -492,7 +492,7 @@ static int _report_field_string_list(struct dm_report *rh,
 		delimiter = ",";
 	delimiter_len = strlen(delimiter);
 
-	i = pos = len = 0;
+	i = pos = 0;
 	dm_list_iterate_items(sl, data) {
 		arr[i].str = sl->str;
 		if (!sort) {
@@ -2332,7 +2332,7 @@ static const char *_reserved_name(struct dm_report *rh,
 				  uint32_t field_num, const char *s, size_t len)
 {
 	dm_report_reserved_handler handler;
-	const char *canonical_name;
+	const char *canonical_name = NULL;
 	const char **name;
 	char *tmp_s;
 	char c;
@@ -2474,7 +2474,7 @@ dm_percent_t dm_make_percent(uint64_t numerator, uint64_t denominator)
 
 int dm_report_value_cache_set(struct dm_report *rh, const char *name, const void *data)
 {
-	if (!rh->value_cache && (!(rh->value_cache = dm_hash_create(64)))) {
+	if (!rh->value_cache && (!(rh->value_cache = dm_hash_create(63)))) {
 		log_error("Failed to create cache for values used during reporting.");
 		return 0;
 	}
@@ -3774,7 +3774,7 @@ static struct selection_node *_parse_selection(struct dm_report *rh,
 	struct field_selection *fs;
 	struct selection_node *sn;
 	const char *ws, *we; /* field name */
-	const char *vs, *ve; /* value */
+	const char *vs = NULL, *ve = NULL; /* value */
 	const char *last;
 	uint32_t flags, field_num;
 	int implicit;
@@ -3910,7 +3910,7 @@ static struct selection_node *_parse_ex(struct dm_report *rh,
 	static const char _pe_expected_msg[] = "Syntax error: right parenthesis expected at \'%s\'";
 	struct selection_node *sn = NULL;
 	uint32_t t;
-	const char *tmp;
+	const char *tmp = NULL;
 
 	t = _tok_op_log(s, next, SEL_MODIFIER_NOT | SEL_PRECEDENCE_PS);
 	if (t == SEL_MODIFIER_NOT) {
@@ -3956,7 +3956,7 @@ static struct selection_node *_parse_and_ex(struct dm_report *rh,
 					    struct selection_node *and_sn)
 {
 	struct selection_node *n;
-	const char *tmp;
+	const char *tmp = NULL;
 
 	n = _parse_ex(rh, s, next);
 	if (!n)
@@ -3988,7 +3988,7 @@ static struct selection_node *_parse_or_ex(struct dm_report *rh,
 					   struct selection_node *or_sn)
 {
 	struct selection_node *n;
-	const char *tmp;
+	const char *tmp = NULL;
 
 	n = _parse_and_ex(rh, s, next, NULL);
 	if (!n)

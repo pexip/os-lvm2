@@ -21,6 +21,8 @@
 #include "lib/metadata/metadata.h"
 #include "lib/device/bcache.h"
 #include "lib/label/label.h"
+#include "lib/commands/toolcontext.h"
+#include "device_mapper/misc/dm-ioctl.h"
 
 #ifdef BLKID_WIPING_SUPPORT
 #include <blkid.h>
@@ -33,38 +35,19 @@
 
 #include <libgen.h>
 #include <ctype.h>
+#include <dirent.h>
 
 /*
- * dev is pmem if /sys/dev/block/<major>:<minor>/queue/dax is 1
+ * An nvme device has major number 259 (BLKEXT), minor number <minor>,
+ * and reading /sys/dev/block/259:<minor>/device/dev shows a character
+ * device cmajor:cminor where cmajor matches the major number of the
+ * nvme character device entry in /proc/devices.  Checking all of that
+ * is excessive and unnecessary compared to just comparing /dev/name*.
  */
 
-int dev_is_pmem(struct device *dev)
+int dev_is_nvme(struct dev_types *dt, struct device *dev)
 {
-	FILE *fp;
-	char path[PATH_MAX];
-	int is_pmem = 0;
-
-	if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d/queue/dax",
-			dm_sysfs_dir(),
-			(int) MAJOR(dev->dev),
-			(int) MINOR(dev->dev)) < 0) {
-		log_warn("Sysfs path for %s dax is too long.", dev_name(dev));
-		return 0;
-	}
-
-	if (!(fp = fopen(path, "r")))
-		return 0;
-
-	if (fscanf(fp, "%d", &is_pmem) != 1)
-		log_warn("Failed to parse DAX %s.", path);
-
-	if (is_pmem)
-		log_debug("%s is pmem", dev_name(dev));
-
-	if (fclose(fp))
-		log_sys_debug("fclose", path);
-
-	return is_pmem ? 1 : 0;
+	return (dev->flags & DEV_IS_NVME) ? 1 : 0;
 }
 
 int dev_is_lv(struct device *dev)
@@ -94,6 +77,124 @@ int dev_is_lv(struct device *dev)
 		log_sys_debug("fclose", path);
 
 	return ret;
+}
+
+int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *used_by_lv_count,
+			     char **used_by_dm_name, char **used_by_vg_uuid, char **used_by_lv_uuid)
+{
+	char holders_path[PATH_MAX];
+	char dm_dev_path[PATH_MAX];
+	char dm_uuid[DM_UUID_LEN];
+	struct stat info;
+	DIR *d;
+	struct dirent *dirent;
+	char *holder_name;
+	int dm_dev_major, dm_dev_minor;
+	size_t lvm_prefix_len = sizeof(UUID_PREFIX) - 1;
+	size_t lvm_uuid_len = sizeof(UUID_PREFIX) - 1 + 2 * ID_LEN;
+	size_t uuid_len;
+	int used_count = 0;
+	char *used_name = NULL;
+	char *used_vgid = NULL;
+	char *used_lvid = NULL;
+
+	/*
+	 * An LV using this device will be listed as a "holder" in the device's
+	 * sysfs "holders" dir.
+	 */
+
+	if (dm_snprintf(holders_path, sizeof(holders_path), "%sdev/block/%d:%d/holders/", dm_sysfs_dir(), (int) MAJOR(dev->dev), (int) MINOR(dev->dev)) < 0) {
+		log_error("%s: dm_snprintf failed for path to holders directory.", dev_name(dev));
+		return 0;
+	}
+
+	if (!(d = opendir(holders_path)))
+		return 0;
+
+	while ((dirent = readdir(d))) {
+		if (!strcmp(".", dirent->d_name) || !strcmp("..", dirent->d_name))
+			continue;
+
+		holder_name = dirent->d_name;
+
+		/*
+		 * dirent->d_name is the dev name of the holder, e.g. "dm-1"
+		 * from this name, create path "/dev/dm-1" to run stat on.
+		 */
+		
+		if (dm_snprintf(dm_dev_path, sizeof(dm_dev_path), "%s/%s", cmd->dev_dir, holder_name) < 0)
+			continue;
+
+		/*
+		 * stat "/dev/dm-1" which is the holder of the dev we're checking
+		 * dm_dev_major:dm_dev_minor come from stat("/dev/dm-1")
+		 */
+		if (stat(dm_dev_path, &info))
+			continue;
+
+		dm_dev_major = (int)MAJOR(info.st_rdev);
+		dm_dev_minor = (int)MINOR(info.st_rdev);
+        
+		if (dm_dev_major != cmd->dev_types->device_mapper_major)
+			continue;
+
+		/*
+		 * if "dm-1" is a dm device, then check if it's an LVM LV
+		 * by reading /sys/block/<holder_name>/dm/uuid and seeing
+		 * if the uuid begins with LVM-
+		 * UUID_PREFIX is "LVM-"
+		 */
+
+		dm_uuid[0] = '\0';
+
+		if (!get_dm_uuid_from_sysfs(dm_uuid, sizeof(dm_uuid), dm_dev_major, dm_dev_minor))
+			continue;
+
+		if (!strncmp(dm_uuid, UUID_PREFIX, 4))
+			used_count++;
+
+		if (used_by_dm_name && !used_name)
+			used_name = dm_pool_strdup(cmd->mem, holder_name);
+
+		if (!used_by_vg_uuid && !used_by_lv_uuid)
+			continue;
+
+		/*
+		 * UUID for LV is either "LVM-<vg_uuid><lv_uuid>" or
+		 * "LVM-<vg_uuid><lv_uuid>-<suffix>", where vg_uuid and lv_uuid
+		 * has length of ID_LEN and suffix len is not restricted (only
+		 * restricted by whole DM UUID max len).
+		 */
+
+		uuid_len = strlen(dm_uuid);
+
+		if (((uuid_len == lvm_uuid_len) ||
+		    ((uuid_len > lvm_uuid_len) && (dm_uuid[lvm_uuid_len] == '-'))) &&
+		    !strncmp(dm_uuid, UUID_PREFIX, lvm_prefix_len)) {
+
+			if (used_by_vg_uuid && !used_vgid)
+				used_vgid = dm_pool_strndup(cmd->mem, dm_uuid + lvm_prefix_len, ID_LEN);
+
+			if (used_by_lv_uuid && !used_lvid)
+				used_lvid = dm_pool_strndup(cmd->mem, dm_uuid + lvm_prefix_len + ID_LEN, ID_LEN);
+		}
+	}
+
+	if (closedir(d))
+		log_sys_debug("closedir", holders_path);
+
+	if (used_by_lv_count)
+		*used_by_lv_count = used_count;
+	if (used_by_dm_name)
+		*used_by_dm_name = used_name;
+	if (used_by_vg_uuid)
+		*used_by_vg_uuid = used_vgid;
+	if (used_by_lv_uuid)
+		*used_by_lv_uuid = used_lvid;
+
+	if (used_count)
+		return 1;
+	return 0;
 }
 
 struct dev_types *create_dev_types(const char *proc_dir,
@@ -230,7 +331,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 				log_error("Expecting string in devices/types "
 					  "in config file");
 				if (fclose(pd))
-					log_sys_error("fclose", proc_devices);
+					log_sys_debug("fclose", proc_devices);
 				goto bad;
 			}
 			dev_len = strlen(cv->v.str);
@@ -241,7 +342,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 					  "in devices/types in config file",
 					  name);
 				if (fclose(pd))
-					log_sys_error("fclose", proc_devices);
+					log_sys_debug("fclose", proc_devices);
 				goto bad;
 			}
 			if (!cv->v.i) {
@@ -249,7 +350,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 					  "%s in devices/types in config file",
 					  name);
 				if (fclose(pd))
-					log_sys_error("fclose", proc_devices);
+					log_sys_debug("fclose", proc_devices);
 				goto bad;
 			}
 			if (dev_len <= strlen(line + i) &&
@@ -302,6 +403,9 @@ int dev_subsystem_part_major(struct dev_types *dt, struct device *dev)
 
 const char *dev_subsystem_name(struct dev_types *dt, struct device *dev)
 {
+	if (dev->flags & DEV_IS_NVME)
+		return "NVME";
+
 	if (MAJOR(dev->dev) == dt->device_mapper_major)
 		return "DM";
 
@@ -348,7 +452,6 @@ int major_is_scsi_device(struct dev_types *dt, int major)
 	return (dt->dev_type_array[major].flags & PARTITION_SCSI_DEVICE) ? 1 : 0;
 }
 
-
 static int _loop_is_with_partscan(struct device *dev)
 {
 	FILE *fp;
@@ -380,6 +483,45 @@ static int _loop_is_with_partscan(struct device *dev)
 	return partscan;
 }
 
+int dev_get_partition_number(struct device *dev, int *num)
+{
+	char path[PATH_MAX];
+	char buf[8] = { 0 };
+	dev_t devt = dev->dev;
+	struct stat sb;
+
+	if (dev->part != -1) {
+		*num = dev->part;
+		return 1;
+	}
+
+	if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d/partition",
+			dm_sysfs_dir(), (int)MAJOR(devt), (int)MINOR(devt)) < 0) {
+		log_error("Failed to create sysfs path for %s", dev_name(dev));
+		return 0;
+	}
+
+	if (stat(path, &sb)) {
+		dev->part = 0;
+		*num = 0;
+		return 1;
+	}
+
+	if (!get_sysfs_value(path, buf, sizeof(buf), 0)) {
+		log_error("Failed to read sysfs path for %s", dev_name(dev));
+		return 0;
+	}
+
+	if (!buf[0]) {
+		log_error("Failed to read sysfs partition value for %s", dev_name(dev));
+		return 0;
+	}
+
+	dev->part = atoi(buf);
+	*num = dev->part;
+	return 1;
+}
+
 /* See linux/genhd.h and fs/partitions/msdos */
 #define PART_MAGIC 0xAA55
 #define PART_MAGIC_OFFSET UINT64_C(0x1FE)
@@ -398,6 +540,28 @@ struct partition {
 	uint32_t nr_sects;
 } __attribute__((packed));
 
+static int _has_sys_partition(struct device *dev)
+{
+	char path[PATH_MAX];
+	struct stat info;
+	int major = (int) MAJOR(dev->dev);
+	int minor = (int) MINOR(dev->dev);
+
+	/* check if dev is a partition */
+	if (dm_snprintf(path, sizeof(path), "%s/dev/block/%d:%d/partition",
+			dm_sysfs_dir(), major, minor) < 0) {
+		log_warn("WARNING: %s: partition path is too long.", dev_name(dev));
+		return 0;
+	}
+
+	if (stat(path, &info) == -1) {
+		if (errno != ENOENT)
+			log_sys_debug("stat", path);
+		return 0;
+	}
+	return 1;
+}
+
 static int _is_partitionable(struct dev_types *dt, struct device *dev)
 {
 	int parts = major_max_partitions(dt, MAJOR(dev->dev));
@@ -413,6 +577,13 @@ static int _is_partitionable(struct dev_types *dt, struct device *dev)
 	if ((MAJOR(dev->dev) == dt->loop_major) &&
 	    _loop_is_with_partscan(dev))
 		return 1;
+
+	if (dev_is_nvme(dt, dev)) {
+		/* If this dev is already a partition then it's not partitionable. */
+		if (_has_sys_partition(dev))
+			return 0;
+		return 1;
+	}
 
 	if ((parts <= 1) || (MINOR(dev->dev) % parts))
 		return 0;
@@ -453,12 +624,16 @@ static int _has_partition_table(struct device *dev)
 }
 
 #ifdef UDEV_SYNC_SUPPORT
-static int _udev_dev_is_partitioned(struct dev_types *dt, struct device *dev)
+static int _dev_is_partitioned_udev(struct dev_types *dt, struct device *dev)
 {
 	struct dev_ext *ext;
 	struct udev_device *device;
 	const char *value;
 
+	/*
+	 * external_device_info_source="udev" enables these udev checks.
+	 * external_device_info_source="none" disables them.
+	 */
 	if (!(ext = dev_ext_get(dev)))
 		return_0;
 
@@ -489,21 +664,15 @@ static int _udev_dev_is_partitioned(struct dev_types *dt, struct device *dev)
 	return !strcmp(value, DEV_EXT_UDEV_DEVTYPE_DISK);
 }
 #else
-static int _udev_dev_is_partitioned(struct dev_types *dt, struct device *dev)
+static int _dev_is_partitioned_udev(struct dev_types *dt, struct device *dev)
 {
 	return 0;
 }
 #endif
 
-static int _native_dev_is_partitioned(struct dev_types *dt, struct device *dev)
+static int _dev_is_partitioned_native(struct dev_types *dt, struct device *dev)
 {
 	int r;
-
-	if (!scan_bcache)
-		return -EAGAIN;
-
-	if (!_is_partitionable(dt, dev))
-		return 0;
 
 	/* Unpartitioned DASD devices are not supported. */
 	if ((MAJOR(dev->dev) == dt->dasd_major) && dasd_is_cdl_formatted(dev))
@@ -514,16 +683,20 @@ static int _native_dev_is_partitioned(struct dev_types *dt, struct device *dev)
 	return r;
 }
 
-int dev_is_partitioned(struct dev_types *dt, struct device *dev)
+int dev_is_partitioned(struct cmd_context *cmd, struct device *dev)
 {
-	if (dev->ext.src == DEV_EXT_NONE)
-		return _native_dev_is_partitioned(dt, dev);
+	struct dev_types *dt = cmd->dev_types;
 
-	if (dev->ext.src == DEV_EXT_UDEV)
-		return _udev_dev_is_partitioned(dt, dev);
+	if (!_is_partitionable(dt, dev))
+		return 0;
 
-	log_error(INTERNAL_ERROR "Missing hook for partition table recognition "
-		  "using external device info source %s", dev_ext_name(dev));
+	if (_dev_is_partitioned_native(dt, dev) == 1)
+		return 1;
+
+	if (external_device_info_source() == DEV_EXT_UDEV) {
+		if (_dev_is_partitioned_udev(dt, dev) == 1)
+			return 1;
+	}
 
 	return 0;
 }
@@ -551,15 +724,21 @@ int dev_is_partitioned(struct dev_types *dt, struct device *dev)
  */
 int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 {
-	const char *sysfs_dir = dm_sysfs_dir();
 	int major = (int) MAJOR(dev->dev);
 	int minor = (int) MINOR(dev->dev);
 	char path[PATH_MAX];
 	char temp_path[PATH_MAX];
 	char buffer[64];
-	struct stat info;
 	FILE *fp = NULL;
 	int parts, residue, size, ret = 0;
+
+	/*
+	 * /dev/nvme devs don't use the major:minor numbering like
+	 * block dev types that have their own major number, so
+	 * the calculation based on minor number doesn't work.
+	 */
+	if (dev_is_nvme(dt, dev))
+		goto sys_partition;
 
 	/*
 	 * Try to get the primary dev out of the
@@ -576,23 +755,14 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 		goto out;
 	}
 
+ sys_partition:
 	/*
 	 * If we can't get the primary dev out of the list of known device
 	 * types, try to look at sysfs directly then. This is more complex
 	 * way and it also requires certain sysfs layout to be present
 	 * which might not be there in old kernels!
 	 */
-
-	/* check if dev is a partition */
-	if (dm_snprintf(path, sizeof(path), "%s/dev/block/%d:%d/partition",
-			sysfs_dir, major, minor) < 0) {
-		log_error("dm_snprintf partition failed");
-		goto out;
-	}
-
-	if (stat(path, &info) == -1) {
-		if (errno != ENOENT)
-			log_sys_error("stat", path);
+	if (!_has_sys_partition(dev)) {
 		*result = dev->dev;
 		ret = 1;
 		goto out; /* dev is not a partition! */
@@ -605,25 +775,31 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 	 * - basename ../../block/md0/md0  = md0
 	 * Parent's 'dev' sysfs attribute  = /sys/block/md0/dev
 	 */
-	if ((size = readlink(dirname(path), temp_path, sizeof(temp_path) - 1)) < 0) {
-		log_sys_error("readlink", path);
+	if (dm_snprintf(path, sizeof(path), "%s/dev/block/%d:%d",
+			dm_sysfs_dir(), major, minor) < 0) {
+		log_warn("WARNING: %s: major:minor sysfs path is too long.", dev_name(dev));
+		return 0;
+	}
+	if ((size = readlink(path, temp_path, sizeof(temp_path) - 1)) < 0) {
+		log_warn("WARNING: Readlink of %s failed.", path);
 		goto out;
 	}
 
 	temp_path[size] = '\0';
 
 	if (dm_snprintf(path, sizeof(path), "%s/block/%s/dev",
-			sysfs_dir, basename(dirname(temp_path))) < 0) {
-		log_error("dm_snprintf dev failed");
+			dm_sysfs_dir(), basename(dirname(temp_path))) < 0) {
+		log_warn("WARNING: sysfs path for %s is too long.",
+			 basename(dirname(temp_path)));
 		goto out;
 	}
 
 	/* finally, parse 'dev' attribute and create corresponding dev_t */
 	if (!(fp = fopen(path, "r"))) {
 		if (errno == ENOENT)
-			log_error("sysfs file %s does not exist.", path);
+			log_debug("sysfs file %s does not exist.", path);
 		else
-			log_sys_error("fopen", path);
+			log_sys_debug("fopen", path);
 		goto out;
 	}
 
@@ -633,7 +809,7 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 	}
 
 	if (sscanf(buffer, "%d:%d", &major, &minor) != 2) {
-		log_error("sysfs file %s not in expected MAJ:MIN format: %s",
+		log_warn("WARNING: sysfs file %s not in expected MAJ:MIN format: %s",
 			  path, buffer);
 		goto out;
 	}
@@ -641,29 +817,29 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 	ret = 2;
 out:
 	if (fp && fclose(fp))
-		log_sys_error("fclose", path);
+		log_sys_debug("fclose", path);
 
 	return ret;
 }
 
 #ifdef BLKID_WIPING_SUPPORT
-int get_fs_block_size(struct device *dev, uint32_t *fs_block_size)
+int get_fs_block_size(const char *pathname, uint32_t *fs_block_size)
 {
 	char *block_size_str = NULL;
 
-	if ((block_size_str = blkid_get_tag_value(NULL, "BLOCK_SIZE", dev_name(dev)))) {
+	if ((block_size_str = blkid_get_tag_value(NULL, "BLOCK_SIZE", pathname))) {
 		*fs_block_size = (uint32_t)atoi(block_size_str);
 		free(block_size_str);
-		log_debug("Found blkid BLOCK_SIZE %u for fs on %s", *fs_block_size, dev_name(dev));
+		log_debug("Found blkid BLOCK_SIZE %u for fs on %s", *fs_block_size, pathname);
 		return 1;
 	} else {
-		log_debug("No blkid BLOCK_SIZE for fs on %s", dev_name(dev));
+		log_debug("No blkid BLOCK_SIZE for fs on %s", pathname);
 		*fs_block_size = 0;
 		return 0;
 	}
 }
 #else
-int get_fs_block_size(struct device *dev, uint32_t *fs_block_size)
+int get_fs_block_size(const char *pathname, uint32_t *fs_block_size)
 {
 	log_debug("Disabled blkid BLOCK_SIZE for fs.");
 	*fs_block_size = 0;
@@ -692,7 +868,7 @@ static int _blkid_wipe(blkid_probe probe, struct device *dev, const char *name,
 	const char *offset = NULL, *type = NULL, *magic = NULL,
 		   *usage = NULL, *label = NULL, *uuid = NULL;
 	loff_t offset_value;
-	size_t len;
+	size_t len = 0;
 
 	if (!blkid_probe_lookup_value(probe, "TYPE", &type, NULL)) {
 		if (_type_in_flag_list(type, types_to_exclude))
@@ -703,7 +879,7 @@ static int _blkid_wipe(blkid_probe probe, struct device *dev, const char *name,
 				return 0;
 			}
 
-			log_error("WARNING: " MSG_FAILED_SIG_OFFSET MSG_WIPING_SKIPPED, type, name);
+			log_warn("WARNING: " MSG_FAILED_SIG_OFFSET MSG_WIPING_SKIPPED, type, name);
 			return 2;
 		}
 		if (blkid_probe_lookup_value(probe, "SBMAGIC", &magic, &len)) {
@@ -785,6 +961,9 @@ static int _wipe_known_signatures_with_blkid(struct device *dev, const char *nam
 
 	/* TODO: Should we check for valid dev - _dev_is_valid(dev)? */
 
+	if (dm_list_empty(&dev->aliases))
+		goto_out;
+
 	if (!(probe = blkid_new_probe_from_filename(dev_name(dev)))) {
 		log_error("Failed to create a new blkid probe for device %s.", dev_name(dev));
 		goto out;
@@ -832,14 +1011,14 @@ out:
 
 #endif /* BLKID_WIPING_SUPPORT */
 
-static int _wipe_signature(struct device *dev, const char *type, const char *name,
+static int _wipe_signature(struct cmd_context *cmd, struct device *dev, const char *type, const char *name,
 			   int wipe_len, int yes, force_t force, int *wiped,
-			   int (*signature_detection_fn)(struct device *dev, uint64_t *offset_found, int full))
+			   int (*signature_detection_fn)(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full))
 {
 	int wipe;
-	uint64_t offset_found;
+	uint64_t offset_found = 0;
 
-	wipe = signature_detection_fn(dev, &offset_found, 1);
+	wipe = signature_detection_fn(cmd, dev, &offset_found, 1);
 	if (wipe == -1) {
 		log_error("Fatal error while trying to detect %s on %s.",
 			  type, name);
@@ -867,7 +1046,7 @@ static int _wipe_signature(struct device *dev, const char *type, const char *nam
 	return 1;
 }
 
-static int _wipe_known_signatures_with_lvm(struct device *dev, const char *name,
+static int _wipe_known_signatures_with_lvm(struct cmd_context *cmd, struct device *dev, const char *name,
 					   uint32_t types_to_exclude __attribute__((unused)),
 					   uint32_t types_no_prompt __attribute__((unused)),
 					   int yes, force_t force, int *wiped)
@@ -878,9 +1057,9 @@ static int _wipe_known_signatures_with_lvm(struct device *dev, const char *name,
 		wiped = &wiped_tmp;
 	*wiped = 0;
 
-	if (!_wipe_signature(dev, "software RAID md superblock", name, 4, yes, force, wiped, dev_is_md_component) ||
-	    !_wipe_signature(dev, "swap signature", name, 10, yes, force, wiped, dev_is_swap) ||
-	    !_wipe_signature(dev, "LUKS signature", name, 8, yes, force, wiped, dev_is_luks))
+	if (!_wipe_signature(cmd, dev, "software RAID md superblock", name, 4, yes, force, wiped, dev_is_md_component) ||
+	    !_wipe_signature(cmd, dev, "swap signature", name, 10, yes, force, wiped, dev_is_swap) ||
+	    !_wipe_signature(cmd, dev, "LUKS signature", name, 8, yes, force, wiped, dev_is_luks))
 		return 0;
 
 	return 1;
@@ -901,11 +1080,11 @@ int wipe_known_signatures(struct cmd_context *cmd, struct device *dev,
 							 yes, force, wiped);
 #endif
 	if (blkid_wiping_enabled) {
-		log_warn("allocation/use_blkid_wiping=1 configuration setting is set "
+		log_warn("WARNING: allocation/use_blkid_wiping=1 configuration setting is set "
 			 "while LVM is not compiled with blkid wiping support.");
-		log_warn("Falling back to native LVM signature detection.");
+		log_warn("WARNING: Falling back to native LVM signature detection.");
 	}
-	return _wipe_known_signatures_with_lvm(dev, name,
+	return _wipe_known_signatures_with_lvm(cmd, dev, name,
 					       types_to_exclude,
 					       types_no_prompt,
 					       yes, force, wiped);
@@ -919,25 +1098,23 @@ static int _snprintf_attr(char *buf, size_t buf_size, const char *sysfs_dir,
 	if (dm_snprintf(buf, buf_size, "%s/dev/block/%d:%d/%s", sysfs_dir,
 			(int)MAJOR(dev), (int)MINOR(dev),
 			attribute) < 0) {
-		log_warn("dm_snprintf %s failed.", attribute);
+		log_warn("WARNING: sysfs path for %s attribute is too long.", attribute);
 		return 0;
 	}
 
 	return 1;
 }
 
-static unsigned long _dev_topology_attribute(struct dev_types *dt,
-					     const char *attribute,
-					     struct device *dev,
-					     unsigned long default_value)
+static int _dev_sysfs_block_attribute(struct dev_types *dt,
+				      const char *attribute,
+				      struct device *dev,
+				      unsigned long *value)
 {
 	const char *sysfs_dir = dm_sysfs_dir();
 	char path[PATH_MAX], buffer[64];
 	FILE *fp;
-	struct stat info;
-	dev_t uninitialized_var(primary);
-	unsigned long result = default_value;
-	unsigned long value = 0UL;
+	dev_t primary = 0;
+	int ret = 0;
 
 	if (!attribute || !*attribute)
 		goto_out;
@@ -946,16 +1123,16 @@ static unsigned long _dev_topology_attribute(struct dev_types *dt,
 		goto_out;
 
 	if (!_snprintf_attr(path, sizeof(path), sysfs_dir, attribute, dev->dev))
-                goto_out;
+		goto_out;
 
 	/*
 	 * check if the desired sysfs attribute exists
 	 * - if not: either the kernel doesn't have topology support
 	 *   or the device could be a partition
 	 */
-	if (stat(path, &info) == -1) {
+	if (!(fp = fopen(path, "r"))) {
 		if (errno != ENOENT) {
-			log_sys_debug("stat", path);
+			log_sys_debug("fopen", path);
 			goto out;
 		}
 		if (!dev_get_primary_dev(dt, dev, &primary))
@@ -965,16 +1142,11 @@ static unsigned long _dev_topology_attribute(struct dev_types *dt,
 		if (!_snprintf_attr(path, sizeof(path), sysfs_dir, attribute, primary))
 			goto_out;
 
-		if (stat(path, &info) == -1) {
+		if (!(fp = fopen(path, "r"))) {
 			if (errno != ENOENT)
-				log_sys_debug("stat", path);
+				log_sys_debug("fopen", path);
 			goto out;
 		}
-	}
-
-	if (!(fp = fopen(path, "r"))) {
-		log_sys_debug("fopen", path);
-		goto out;
 	}
 
 	if (!fgets(buffer, sizeof(buffer), fp)) {
@@ -982,27 +1154,42 @@ static unsigned long _dev_topology_attribute(struct dev_types *dt,
 		goto out_close;
 	}
 
-	if (sscanf(buffer, "%lu", &value) != 1) {
-		log_warn("sysfs file %s not in expected format: %s", path, buffer);
+	if (sscanf(buffer, "%lu", value) != 1) {
+		log_warn("WARNING: sysfs file %s not in expected format: %s", path, buffer);
 		goto out_close;
 	}
 
-	log_very_verbose("Device %s: %s is %lu%s.",
-			 dev_name(dev), attribute, value, default_value ? "" : " bytes");
-
-	result = value >> SECTOR_SHIFT;
-
-	if (!result && value) {
-		log_warn("WARNING: Device %s: %s is %lu and is unexpectedly less than sector.",
-			 dev_name(dev), attribute, value);
-		result = 1;
-	}
+	ret = 1;
 
 out_close:
 	if (fclose(fp))
 		log_sys_debug("fclose", path);
 
 out:
+	return ret;
+}
+
+static unsigned long _dev_topology_attribute(struct dev_types *dt,
+					     const char *attribute,
+					     struct device *dev,
+					     unsigned long default_value)
+{
+	unsigned long result = default_value;
+	unsigned long value = 0UL;
+
+	if (_dev_sysfs_block_attribute(dt, attribute, dev, &value)) {
+		log_very_verbose("Device %s: %s is %lu%s.",
+				 dev_name(dev), attribute, value, default_value ? "" : " bytes");
+
+		result = value >> SECTOR_SHIFT;
+
+		if (!result && value) {
+			log_warn("WARNING: Device %s: %s is %lu and is unexpectedly less than sector.",
+				 dev_name(dev), attribute, value);
+			result = 1;
+		}
+	}
+
 	return result;
 }
 
@@ -1033,8 +1220,17 @@ unsigned long dev_discard_granularity(struct dev_types *dt, struct device *dev)
 
 int dev_is_rotational(struct dev_types *dt, struct device *dev)
 {
-	return (int) _dev_topology_attribute(dt, "queue/rotational", dev, 1UL);
+	unsigned long value;
+	return _dev_sysfs_block_attribute(dt, "queue/rotational", dev, &value) ? (int) value : 1;
 }
+
+/* dev is pmem if /sys/dev/block/<major>:<minor>/queue/dax is 1 */
+int dev_is_pmem(struct dev_types *dt, struct device *dev)
+{
+	unsigned long value;
+	return _dev_sysfs_block_attribute(dt, "queue/dax", dev, &value) ? (int) value : 0;
+}
+
 #else
 
 int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
@@ -1071,152 +1267,10 @@ int dev_is_rotational(struct dev_types *dt, struct device *dev)
 {
 	return 1;
 }
-#endif
 
-#ifdef UDEV_SYNC_SUPPORT
-
-/*
- * Udev daemon usually has 30s timeout to process each event by default.
- * But still, that value can be changed in udev configuration and we
- * don't have libudev API to read the actual timeout value used.
- */
-
-/* FIXME: Is this long enough to wait for udev db to get initialized?
- *
- *        Take also into consideration that this check is done for each
- *        device that is scanned so we don't want to wait for a long time
- *        if there's something wrong with udev, e.g. timeouts! With current
- *        libudev API, we can't recognize whether the event processing has
- *        not finished yet and it's still being processed or whether it has
- *        failed already due to timeout in udev - in both cases the
- *        udev_device_get_is_initialized returns 0.
- */
-#define UDEV_DEV_IS_COMPONENT_ITERATION_COUNT 100
-#define UDEV_DEV_IS_COMPONENT_USLEEP 100000
-
-static struct udev_device *_udev_get_dev(struct device *dev)
-{
-	struct udev *udev_context = udev_get_library_context();
-	struct udev_device *udev_device = NULL;
-	int initialized = 0;
-	unsigned i = 0;
-
-	if (!udev_context) {
-		log_warn("WARNING: No udev context available to check if device %s is multipath component.", dev_name(dev));
-		return NULL;
-	}
-
-	while (1) {
-		if (i >= UDEV_DEV_IS_COMPONENT_ITERATION_COUNT)
-			break;
-
-		if (udev_device)
-			udev_device_unref(udev_device);
-
-		if (!(udev_device = udev_device_new_from_devnum(udev_context, 'b', dev->dev))) {
-			log_warn("WARNING: Failed to get udev device handler for device %s.", dev_name(dev));
-			return NULL;
-		}
-
-#ifdef HAVE_LIBUDEV_UDEV_DEVICE_GET_IS_INITIALIZED
-		if ((initialized = udev_device_get_is_initialized(udev_device)))
-			break;
-#else
-		if ((initialized = (udev_device_get_property_value(udev_device, DEV_EXT_UDEV_DEVLINKS) != NULL)))
-			break;
-#endif
-
-		log_debug("Device %s not initialized in udev database (%u/%u, %u microseconds).", dev_name(dev),
-			   i + 1, UDEV_DEV_IS_COMPONENT_ITERATION_COUNT,
-			   i * UDEV_DEV_IS_COMPONENT_USLEEP);
-
-		if (!udev_sleeping())
-			break;
-
-		usleep(UDEV_DEV_IS_COMPONENT_USLEEP);
-		i++;
-	}
-
-	if (!initialized) {
-		log_warn("WARNING: Device %s not initialized in udev database even after waiting %u microseconds.",
-			  dev_name(dev), i * UDEV_DEV_IS_COMPONENT_USLEEP);
-		goto out;
-	}
-
-out:
-	return udev_device;
-}
-
-int udev_dev_is_mpath_component(struct device *dev)
-{
-	struct udev_device *udev_device;
-	const char *value;
-	int ret = 0;
-
-	if (!obtain_device_list_from_udev())
-		return 0;
-
-	if (!(udev_device = _udev_get_dev(dev)))
-		return 0;
-
-	value = udev_device_get_property_value(udev_device, DEV_EXT_UDEV_BLKID_TYPE);
-	if (value && !strcmp(value, DEV_EXT_UDEV_BLKID_TYPE_MPATH)) {
-		log_debug("Device %s is multipath component based on blkid variable in udev db (%s=\"%s\").",
-			   dev_name(dev), DEV_EXT_UDEV_BLKID_TYPE, value);
-		ret = 1;
-		goto out;
-	}
-
-	value = udev_device_get_property_value(udev_device, DEV_EXT_UDEV_MPATH_DEVICE_PATH);
-	if (value && !strcmp(value, "1")) {
-		log_debug("Device %s is multipath component based on multipath variable in udev db (%s=\"%s\").",
-			   dev_name(dev), DEV_EXT_UDEV_MPATH_DEVICE_PATH, value);
-		ret = 1;
-		goto out;
-	}
-out:
-	udev_device_unref(udev_device);
-	return ret;
-}
-
-int udev_dev_is_md_component(struct device *dev)
-{
-	struct udev_device *udev_device;
-	const char *value;
-	int ret = 0;
-
-	if (!obtain_device_list_from_udev()) {
-		dev->flags |= DEV_UDEV_INFO_MISSING;
-		return 0;
-	}
-
-	if (!(udev_device = _udev_get_dev(dev)))
-		return 0;
-
-	value = udev_device_get_property_value(udev_device, DEV_EXT_UDEV_BLKID_TYPE);
-	if (value && !strcmp(value, DEV_EXT_UDEV_BLKID_TYPE_SW_RAID)) {
-		log_debug("Device %s is md raid component based on blkid variable in udev db (%s=\"%s\").",
-			   dev_name(dev), DEV_EXT_UDEV_BLKID_TYPE, value);
-		dev->flags |= DEV_IS_MD_COMPONENT;
-		ret = 1;
-		goto out;
-	}
-out:
-	udev_device_unref(udev_device);
-	return ret;
-}
-
-#else
-
-int udev_dev_is_mpath_component(struct device *dev)
+int dev_is_pmem(struct dev_types *dt, struct device *dev)
 {
 	return 0;
 }
-
-int udev_dev_is_md_component(struct device *dev)
-{
-	dev->flags |= DEV_UDEV_INFO_MISSING;
-	return 0;
-}
-
 #endif
+

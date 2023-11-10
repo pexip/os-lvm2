@@ -37,12 +37,25 @@ arg(activationmode_ARG, '\0', "activationmode", activationmode_VAL, 0, 0,
     "(This does not include the \"mirror\" type, see \"raid1\" instead.)\n"
     "\\fBpartial\\fP allows any LV with missing PVs to be activated, and\n"
     "should only be used for recovery or repair.\n"
-    "For default, see lvm.conf/activation_mode.\n"
+    "For default, see \\fBlvm.conf\\fP(5) activation_mode.\n"
     "See \\fBlvmraid\\fP(7) for more information.\n")
 
 arg(addtag_ARG, '\0', "addtag", tag_VAL, ARG_GROUPABLE, 0,
     "Adds a tag to a PV, VG or LV. This option can be repeated to add\n"
     "multiple tags at once. See \\fBlvm\\fP(8) for information about tags.\n")
+
+arg(adddev_ARG, '\0', "adddev", pv_VAL, 0, 0,
+    "Add a device to the devices file.\n")
+
+arg(deldev_ARG, '\0', "deldev", string_VAL, 0, 0,
+    "Remove a device from the devices file.\n"
+    "When used alone, --deldev specifies a device name.\n"
+    "When used with --deviceidtype, --deldev specifies a device id.\n")
+
+arg(addpvid_ARG, '\0', "addpvid", string_VAL, 0, 0,
+    "Find a device with the PVID and add the device to the devices file.\n")
+arg(delpvid_ARG, '\0', "delpvid", string_VAL, 0, 0,
+    "Remove a device with the PVID from the devices file.\n")
 
 arg(aligned_ARG, '\0', "aligned", 0, 0, 0,
     "Use with --separator to align the output columns\n")
@@ -50,7 +63,7 @@ arg(aligned_ARG, '\0', "aligned", 0, 0, 0,
 arg(alloc_ARG, '\0', "alloc", alloc_VAL, 0, 0,
     "Determines the allocation policy when a command needs to allocate\n"
     "Physical Extents (PEs) from the VG. Each VG and LV has an allocation policy\n"
-    "which can be changed with vgchange/lvchange, or overriden on the\n"
+    "which can be changed with vgchange/lvchange, or overridden on the\n"
     "command line.\n"
     "\\fBnormal\\fP applies common sense rules such as not placing parallel stripes\n"
     "on the same PV.\n"
@@ -77,6 +90,23 @@ arg(atversion_ARG, '\0', "atversion", string_VAL, 0, 0,
     "to display a configuration that a certain LVM version understands and\n"
     "which does not contain any newer settings for which LVM would\n"
     "issue a warning message when checking the configuration.\n")
+
+arg(autoactivation_ARG, '\0', "autoactivation", string_VAL, 0, 0,
+    "Specify if autoactivation is being used from an event.\n"
+    "This allows the command to apply settings that are specific\n"
+    "to event activation, such as device scanning optimizations\n"
+    "using pvs_online files created by event-based pvscans.\n")
+
+arg(setautoactivation_ARG, '\0', "setautoactivation", bool_VAL, 0, 0,
+    "Set the autoactivation property on a VG or LV.\n"
+    "Display the property with vgs or lvs \"-o autoactivation\".\n"
+    "When the autoactivation property is disabled, the VG or LV\n"
+    "will not be activated by a command doing autoactivation\n"
+    "(vgchange, lvchange, or pvscan using -aay.)\n"
+    "If autoactivation is disabled on a VG, no LVs will be autoactivated\n"
+    "in that VG, and the LV autoactivation property has no effect.\n"
+    "If autoactivation is enabled on a VG, autoactivation can be disabled\n"
+    "for individual LVs.\n")
 
 arg(binary_ARG, '\0', "binary", 0, 0, 0,
     "Use binary values \"0\" or \"1\" instead of descriptive literal values\n"
@@ -132,6 +162,10 @@ arg(cachedevice_ARG, '\0', "cachedevice", pv_VAL, ARG_GROUPABLE, 0,
 arg(cachesize_ARG, '\0', "cachesize", sizemb_VAL, 0, 0,
     "The size of cache to use.\n")
 
+arg(check_ARG, '\0', "check", 0, 0, 0,
+    "Checks the content of the devices file.\n"
+    "Reports incorrect device names or PVIDs for entries.\n")
+
 arg(commandprofile_ARG, '\0', "commandprofile", string_VAL, 0, 0,
     "The command profile to use for command configuration.\n"
     "See \\fBlvm.conf\\fP(5) for more information about profiles.\n")
@@ -141,8 +175,8 @@ arg(compression_ARG, '\0', "compression", bool_VAL, 0, 0,
     "See \\fBlvmvdo\\fP(7) for more information about VDO usage.\n")
 
 arg(config_ARG, '\0', "config", string_VAL, 0, 0,
-    "Config settings for the command. These override lvm.conf settings.\n"
-    "The String arg uses the same format as lvm.conf,\n"
+    "Config settings for the command. These override \\fBlvm.conf\\fP(5) settings.\n"
+    "The String arg uses the same format as \\fBlvm.conf\\fP(5),\n"
     "or may use section/field syntax.\n"
     "See \\fBlvm.conf\\fP(5) for more information about config.\n")
 
@@ -204,6 +238,24 @@ arg(deltag_ARG, '\0', "deltag", tag_VAL, ARG_GROUPABLE, 0,
 arg(detachprofile_ARG, '\0', "detachprofile", 0, 0, 0,
     "Detaches a metadata profile from a VG or LV.\n"
     "See \\fBlvm.conf\\fP(5) for more information about profiles.\n")
+
+arg(deviceidtype_ARG, '\0', "deviceidtype", string_VAL, 0, 0,
+    "The type of device ID to use for the device.\n"
+    "If the specified type is available for the device,\n"
+    "then it will override the default type that lvm would use.\n")
+
+arg(devices_ARG, '\0', "devices", pv_VAL, ARG_GROUPABLE, 0,
+    "Restricts the devices that are visible and accessible to the command.\n"
+    "Devices not listed will appear to be missing. This option can be\n"
+    "repeated, or accepts a comma separated list of devices. This overrides\n"
+    "the devices file.\n")
+
+arg(devicesfile_ARG, '\0', "devicesfile", string_VAL, 0, 0,
+    "A file listing devices that LVM should use.\n"
+    "The file must exist in \\fI#DEFAULT_SYS_DIR#/devices/\\fP and is managed\n"
+    "with the \\fBlvmdevices\\fP(8) command.\n"
+    "This overrides the \\fBlvm.conf\\fP(5) \\fBdevices/devicesfile\\fP and\n"
+    "\\fBdevices/use_devicesfile\\fP settings.\n")
 
 arg(discards_ARG, '\0', "discards", discards_VAL, 0, 0,
     "Specifies how the device-mapper thin pool layer in the kernel should\n"
@@ -280,11 +332,35 @@ arg(ignoreunsupported_ARG, '\0', "ignoreunsupported", 0, 0, 0,
     "and \\fBdiff\\fP types include unsupported settings in their output by default,\n"
     "all the other types ignore unsupported settings.\n")
 
+arg(importdevices_ARG, '\0', "importdevices", 0, 0, 0,
+    "Add devices to the devices file.\n")
+
+arg(journal_ARG, '\0', "journal", string_VAL, 0, 0,
+    "Record information in the systemd journal.\n"
+    "This information is in addition to information\n"
+    "enabled by the lvm.conf log/journal setting.\n"
+    "command: record information about the command.\n"
+    "output: record the default command output.\n"
+    "debug: record full command debugging.\n")
+
 arg(labelsector_ARG, '\0', "labelsector", number_VAL, 0, 0,
     "By default the PV is labelled with an LVM2 identifier in its second\n"
     "sector (sector 1). This lets you use a different sector near the\n"
     "start of the disk (between 0 and 3 inclusive - see LABEL_SCAN_SECTORS\n"
     "in the source). Use with care.\n")
+
+arg(listlvs_ARG, '\0', "listlvs", 0, 0, 0,
+    "Print a list of LVs that use the device.\n")
+
+arg(listvg_ARG, '\0', "listvg", 0, 0, 0,
+    "Print the VG that uses the device.\n")
+
+arg(checkcomplete_ARG, '\0', "checkcomplete", 0, 0, 0,
+    "Check if all the devices used by a VG or LV are present,\n"
+    "and print \"complete\" or \"incomplete\" for each listed\n"
+    "VG or LV.  This option is used as a part of event-based\n"
+    "autoactivation, so pvscan will do nothing if this option\n"
+    "is set and event_activation=0 in the config settings.\n")
 
 arg(lockopt_ARG, '\0', "lockopt", string_VAL, 0, 0,
     "Used to pass options for special cases to lvmlockd.\n"
@@ -417,13 +493,19 @@ arg(noheadings_ARG, '\0', "noheadings", 0, 0, 0,
     "Suppress the headings line that is normally the first line of output.\n"
     "Useful if grepping the output.\n")
 
+arg(nohints_ARG, '\0', "nohints", 0, 0, 0,
+    "Do not use the hints file to locate devices for PVs. A command may read\n"
+    "more devices to find PVs when hints are not used. The command will still\n"
+    "perform standard hint file invalidation where appropriate.\n")
+
 arg(nohistory_ARG, '\0', "nohistory", 0, 0, 0,
     "Do not record history of LVs being removed.\n"
     "This has no effect unless the configuration setting\n"
     "metadata/record_lvs_history is enabled.\n")
 
 arg(nolocking_ARG, '\0', "nolocking", 0, 0, 0,
-    "Disable locking.\n")
+    "Disable locking. Use with caution, concurrent commands may produce\n"
+    "incorrect results.\n")
 
 arg(norestorefile_ARG, '\0', "norestorefile", 0, 0, 0,
     "In conjunction with --uuid, this allows a uuid to be specified\n"
@@ -591,7 +673,7 @@ arg(replace_ARG, '\0', "replace", pv_VAL, ARG_GROUPABLE, 0,
 
 arg(reportformat_ARG, '\0', "reportformat", reportformat_VAL, 0, 0,
     "Overrides current output format for reports which is defined globally by\n"
-    "the report/output_format setting in lvm.conf.\n"
+    "the report/output_format setting in \\fBlvm.conf\\fP(5).\n"
     "\\fBbasic\\fP is the original format with columns and rows.\n"
     "If there is more than one report per command, each report is prefixed\n"
     "with the report name for identification. \\fBjson\\fP produces report\n"
@@ -713,7 +795,7 @@ arg(syncaction_ARG, '\0', "syncaction", syncaction_VAL, 0, 0,
     "(mismatches between mirrors or incorrect parity values).\n"
     "\\fBcheck\\fP will count but not correct discrepancies.\n"
     "\\fBrepair\\fP will correct discrepancies.\n"
-    "See lvs for reporting discrepancies found or repaired.\n")
+    "See \\fBlvs\\fP(8) for reporting discrepancies found or repaired.\n")
     
 arg(sysinit_ARG, '\0', "sysinit", 0, 0, 0,
     "Indicates that vgchange/lvchange is being invoked from early system initialisation\n"
@@ -768,6 +850,9 @@ arg(type_ARG, '\0', "type", segtype_VAL, 0, 0,
     "(e.g. --stripes, --mirrors, --snapshot, --virtualsize, --thin, --cache, --vdo).\n"
     "Use inferred types with care because it can lead to unexpected results.\n")
 
+arg(udevoutput_ARG, '\0', "udevoutput", 0, 0, 0,
+    "Command output is modified to be imported from a udev rule.\n")
+
 arg(unbuffered_ARG, '\0', "unbuffered", 0, 0, 0,
     "Produce output immediately without sorting or aligning the columns properly.\n")
 
@@ -775,17 +860,21 @@ arg(uncache_ARG, '\0', "uncache", 0, 0, 0,
     "Separates a cache pool from a cache LV, and deletes the unused cache pool LV.\n"
     "Before the separation, the cache is flushed. Also see --splitcache.\n")
 
+arg(update_ARG, '\0', "update", 0, 0, 0,
+    "Update the content of the devices file.\n")
+
 arg(cachepolicy_ARG, '\0', "cachepolicy", string_VAL, 0, 0,
     "Specifies the cache policy for a cache LV.\n"
     "See \\fBlvmcache\\fP(7) for more information.\n")
 
 arg(cachesettings_ARG, '\0', "cachesettings", string_VAL, ARG_GROUPABLE, 0,
-    "Specifies tunable values for a cache LV in \"Key = Value\" form.\n"
-    "Repeat this option to specify multiple values.\n"
-    "(The default values should usually be adequate.)\n"
-    "The special string value \\fBdefault\\fP switches\n"
-    "settings back to their default kernel values and removes\n"
-    "them from the list of settings stored in LVM metadata.\n"
+    "Specifies tunable kernel options for dm-cache or dm-writecache LVs.\n"
+    "Use the form 'option=value' or 'option1=value option2=value', or\n"
+    "repeat --cachesettings for each option being set.\n"
+    "These settings override the default kernel behaviors which are\n"
+    "usually adequate. To remove cachesettings and revert to the default\n"
+    "kernel behaviors, use --cachesettings 'default' for dm-cache or\n"
+    "an empty string --cachesettings '' for dm-writecache.\n"
     "See \\fBlvmcache\\fP(7) for more information.\n")
 
 arg(unconfigured_ARG, '\0', "unconfigured", 0, 0, 0,
@@ -804,7 +893,7 @@ arg(unquoted_ARG, '\0', "unquoted", 0, 0, 0,
     "pairs are not quoted.\n")
 
 arg(usepolicies_ARG, '\0', "usepolicies", 0, 0, 0,
-    "Perform an operation according to the policy configured in lvm.conf\n"
+    "Perform an operation according to the policy configured in \\fBlvm.conf\\fP(5)\n"
     "or a profile.\n")
 
 arg(validate_ARG, '\0', "validate", 0, 0, 0,
@@ -812,7 +901,7 @@ arg(validate_ARG, '\0', "validate", 0, 0, 0,
     "return code. The validation is done only for the configuration\n"
     "at the front of the \"config cascade\". To validate the whole\n"
     "merged configuration tree, also use --mergedconfig.\n"
-    "The validation is done even if lvm.conf config/checks is disabled.\n")
+    "The validation is done even if \\fBlvm.conf\\fP(5) \\fBconfig/checks\\fP is disabled.\n")
 
 arg(vdo_ARG, '\0', "vdo", 0, 0, 0,
     "Specifies the command is handling VDO LV.\n"
@@ -822,6 +911,15 @@ arg(vdo_ARG, '\0', "vdo", 0, 0, 0,
 arg(vdopool_ARG, '\0', "vdopool", lv_VAL, 0, 0,
     "The name of a VDO pool LV.\n"
     "See \\fBlvmvdo\\fP(7) for more information about VDO usage.\n")
+
+arg(vdosettings_ARG, '\0', "vdosettings", string_VAL, ARG_GROUPABLE, 0,
+    "Specifies tunable VDO options for VDO LVs.\n"
+    "Use the form 'option=value' or 'option1=value option2=value', or\n"
+    "repeat --vdosettings for each option being set.\n"
+    "These settings override the default VDO behaviors.\n"
+    "To remove vdosettings and revert to the default\n"
+    "VDO behaviors, use --vdosettings 'default'.\n"
+    "See \\fBlvmvdo\\fP(7) for more information.\n")
 
 arg(version_ARG, '\0', "version", 0, 0, 0,
     "Display version information.\n")
@@ -840,6 +938,10 @@ arg(vgmetadatacopies_ARG, '\0', "vgmetadatacopies", vgmetadatacopies_VAL, 0, 0,
     "metadataignore flags.\n"
     "\\fBall\\fP causes LVM to first clear the metadataignore flags on\n"
     "all PVs, and then to become unmanaged.\n")
+
+arg(vgonline_ARG, '\0', "vgonline", 0, 0, 0,
+    "The first command to see a complete VG will report it uniquely.\n"
+    "Other commands to see the complete VG will report it differently.\n")
 
 arg(withsummary_ARG, '\0', "withsummary", 0, 0, 0,
     "Display a one line comment for each configuration node.\n")
@@ -930,12 +1032,17 @@ arg(activate_ARG, 'a', "activate", activation_VAL, 0, 0,
     "link and present this as the name of the device.\n"
     "The location and name of the underlying device node may depend on\n"
     "the distribution, configuration (e.g. udev), or release version.\n"
-    "\\fBay\\fP specifies autoactivation, in which case an LV is activated\n"
-    "only if it matches an item in lvm.conf activation/auto_activation_volume_list.\n"
-    "If the list is not set, all LVs are considered to match, and if\n"
-    "if the list is set but empty, no LVs match.\n"
-    "Autoactivation should be used during system boot to make it possible\n"
-    "to select which LVs should be automatically activated by the system.\n"
+    "\\fBay\\fP specifies autoactivation, which is used by system-generated\n"
+    "activation commands.  By default, LVs are autoactivated.\n"
+    "An autoactivation property can be set on a VG or LV to disable autoactivation,\n"
+    "see --setautoactivation y|n in vgchange, lvchange, vgcreate, and lvcreate.\n"
+    "Display the property with vgs or lvs \"-o autoactivation\".\n"
+    "The \\fBlvm.conf\\fP(5) auto_activation_volume_list includes names of VGs or LVs\n"
+    "that should be autoactivated, and anything not listed is not autoactivated.\n"
+    "When auto_activation_volume_list is undefined (the default), it has no effect.\n"
+    "If auto_activation_volume_list is defined and empty, no LVs are autoactivated.\n"
+    "Items included by auto_activation_volume_list will not be autoactivated if\n"
+    "the autoactivation property has been disabled.\n"
     "See \\fBlvmlockd\\fP(8) for more information about activation options \\fBey\\fP and \\fBsy\\fP for shared VGs.\n"
     "#lvcreate\n"
     "Controls the active state of the new LV.\n"
@@ -947,7 +1054,7 @@ arg(activate_ARG, 'a', "activate", activation_VAL, 0, 0,
     "be created in the active state (this does not apply to thin snapshots).\n"
     "The --zero option normally requires the LV to be active.\n"
     "If autoactivation \\fBay\\fP is used, the LV is only activated\n"
-    "if it matches an item in lvm.conf activation/auto_activation_volume_list.\n"
+    "if it matches an item in \\fBlvm.conf\\fP(5) \\fBactivation/auto_activation_volume_list\\fP.\n"
     "\\fBay\\fP implies --zero n and --wipesignatures n.\n"
     "See \\fBlvmlockd\\fP(8) for more information about activation options for shared VGs.\n")
 
@@ -1068,7 +1175,7 @@ arg(cache_ARG, 'H', "cache", 0, 0, 0,
 arg(history_ARG, 'H', "history", 0, 0, 0,
     "Include historical LVs in the output.\n"
     "(This has no effect unless LVs were removed while\n"
-    "lvm.conf metadata/record_lvs_history was enabled.\n")
+    "\\fBlvm.conf\\fP(5) \\fBmetadata/record_lvs_history\\fP was enabled.\n")
 
 /* Not used */
 arg(help2_ARG, '?', "", 0, 0, 0, NULL)
@@ -1095,7 +1202,7 @@ arg(stripes_ARG, 'i', "stripes", number_VAL, 0, 0,
     "when unspecified, the default depends on the RAID type\n"
     "(raid0: 2, raid10: 2, raid4/5: 3, raid6: 5.)\n"
     "To stripe a new raid LV across all PVs by default,\n"
-    "see lvm.conf allocation/raid_stripe_all_devices.\n")
+    "see \\fBlvm.conf\\fP(5) \\fBallocation/raid_stripe_all_devices\\fP.\n")
 
 arg(stripesize_ARG, 'I', "stripesize", sizekb_VAL, 0, 0,
     "The amount of data that is written to one device before\n"
@@ -1108,7 +1215,7 @@ arg(maxlogicalvolumes_ARG, 'l', "maxlogicalvolumes", uint32_VAL, 0, 0,
     "Sets the maximum number of LVs allowed in a VG.\n")
 
 /*
- * The extents_VAL is overriden in configure_command_option_values()
+ * The extents_VAL is overridden in configure_command_option_values()
  * according to the command being run.  Different commands accept
  * different signs with the value.
  */
@@ -1167,7 +1274,7 @@ arg(lvmpartition_ARG, 'l', "lvmpartition", 0, 0, 0,
     "Only report PVs.\n")
 
 /*
- * The sizemb_VAL is overriden in configure_command_option_values()
+ * The sizemb_VAL is overridden in configure_command_option_values()
  * according to the command being run.  Different commands accept
  * different signs with the value.
  */
@@ -1231,7 +1338,7 @@ arg(mirrors_ARG, 'm', "mirrors", number_VAL, 0, 0,
     "These are the names of the corresponding LV types, or \"segment types\".\n"
     "Use the --type option to specify which to use (raid1 is default,\n"
     "and mirror is legacy)\n"
-    "Use lvm.conf global/mirror_segtype_default and\n"
+    "Use \\fBlvm.conf\\fP(5) \\fBglobal/mirror_segtype_default\\fP and\n"
     "global/raid10_segtype_default to configure the default types.\n"
     "See the --nosync option for avoiding initial image synchronization.\n"
     "See \\fBlvmraid\\fP(7) for more information.\n"
@@ -1245,7 +1352,7 @@ arg(mirrors_ARG, 'm', "mirrors", number_VAL, 0, 0,
     "These are the names of the corresponding LV types, or \"segment types\".\n"
     "Use the --type option to specify which to use (raid1 is default,\n"
     "and mirror is legacy)\n"
-    "Use lvm.conf global/mirror_segtype_default and\n"
+    "Use \\fBlvm.conf\\fP(5) \\fBglobal/mirror_segtype_default\\fP and\n"
     "global/raid10_segtype_default to configure the default types.\n"
     "The plus prefix \\fB+\\fP can be used, in which case\n"
     "the number is added to the current number of images,\n"
@@ -1290,7 +1397,7 @@ arg(oldpath_ARG, 'n', "oldpath", 0, 0, 0, NULL)
 
 arg(options_ARG, 'o', "options", string_VAL, ARG_GROUPABLE, 0,
     "Comma-separated, ordered list of fields to display in columns.\n"
-    "String arg syntax is: [+|-|#]Field1[,Field2 ...]\n"
+    "String arg syntax is: [\\fB+\\fP|\\fB-\\fP|\\fB#\\fP]\\fIField1\\fP[\\fB,\\fP\\fIField2\\fP ...]\n"
     "The prefix \\fB+\\fP will append the specified fields to the default fields,\n"
     "\\fB-\\fP will remove the specified fields from the default fields, and\n"
     "\\fB#\\fP will compact specified fields (removing them when empty for all rows.)\n"
@@ -1304,7 +1411,7 @@ arg(options_ARG, 'o', "options", string_VAL, ARG_GROUPABLE, 0,
     "\\fBpvseg_all\\fP all PV segment fields,\n"
     "\\fBseg_all\\fP all LV segment fields, and\n"
     "\\fBpvseg_all\\fP all PV segment columns.\n"
-    "See the lvm.conf report section for more config options.\n"
+    "See the \\fBlvm.conf\\fP(5) report section for more config options.\n"
     "See \\fBlvmreport\\fP(7) for more information about reporting.\n")
 
 arg(sort_ARG, 'O', "sort", string_VAL, ARG_GROUPABLE, 0,
@@ -1323,7 +1430,7 @@ arg(permission_ARG, 'p', "permission", permission_VAL, 0, 0,
 arg(partial_ARG, 'P', "partial", 0, 0, 0,
     "Commands will do their best to activate LVs with missing PV extents.\n"
     "Missing extents may be replaced with error or zero segments\n"
-    "according to the lvm.conf missing_stripe_filler setting.\n"
+    "according to the  missing_stripe_filler setting.\n"
     "Metadata may not be changed with this option.\n")
 
 /* Not used */
@@ -1340,14 +1447,14 @@ arg(readahead_ARG, 'r', "readahead", readahead_VAL, 0, 0,
     "\\fBnone\\fP is equivalent to zero.\n")
 
 arg(resizefs_ARG, 'r', "resizefs", 0, 0, 0,
-    "Resize underlying filesystem together with the LV using fsadm(8).\n")
+    "Resize underlying filesystem together with the LV using \\fBfsadm\\fP(8).\n")
 
 /* Not used */
 arg(reset_ARG, 'R', "reset", 0, 0, 0, NULL)
 
 arg(regionsize_ARG, 'R', "regionsize", regionsizemb_VAL, 0, 0,
     "Size of each raid or mirror synchronization region.\n"
-    "lvm.conf activation/raid_region_size can be used to\n"
+    "\\fBlvm.conf\\fP(5) \\fBactivation/raid_region_size\\fP can be used to\n"
     "configure a default.\n")
 
 arg(physicalextentsize_ARG, 's', "physicalextentsize", sizemb_VAL, 0, 0,
@@ -1478,7 +1585,7 @@ arg(virtualsize_ARG, 'V', "virtualsize", sizemb_VAL, 0, 0,
     "See \\fBlvmthin\\fP(7) for more information about LVM thin provisioning.\n"
     "Using virtual size (-V) and actual size (-L) together creates\n"
     "a sparse LV.\n"
-    "lvm.conf global/sparse_segtype_default determines the\n"
+    "\\fBlvm.conf\\fP(5) \\fBglobal/sparse_segtype_default\\fP determines the\n"
     "default segment type used to create a sparse LV.\n"
     "Anything written to a sparse LV will be returned when reading from it.\n"
     "Reading from other areas of the LV will return blocks of zeros.\n"
@@ -1493,8 +1600,8 @@ arg(wipesignatures_ARG, 'W', "wipesignatures", bool_VAL, 0, 0,
     "(unless --yes is used to override confirmations.)\n"
     "When not specified, signatures are wiped whenever zeroing is done\n"
     "(see --zero). This behaviour can be configured with\n"
-    "lvm.conf allocation/wipe_signatures_when_zeroing_new_lvs.\n"
-    "If blkid wiping is used (lvm.conf allocation/use_blkid_wiping)\n"
+    "\\fBlvm.conf\\fP(5) \\fBallocation/wipe_signatures_when_zeroing_new_lvs\\fP.\n"
+    "If blkid wiping is used (\\fBlvm.conf\\fP(5) \\fBallocation/use_blkid_wiping\\fP)\n"
     "and LVM is compiled with blkid wiping support, then the blkid(8)\n"
     "library is used to detect the signatures (use blkid -k to list the\n"
     "signatures that are recognized).\n"

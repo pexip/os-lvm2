@@ -152,6 +152,11 @@ static int _create_pv_entry(struct dm_pool *mem, struct pv_list *pvl,
 	struct pv_list *new_pvl = NULL, *pvl2;
 	struct dm_list *pe_ranges;
 
+	if (!pvl->pv->dev || dm_list_empty(&pvl->pv->dev->aliases)) {
+		log_error("Failed to create PV entry for missing device.");
+		return 0;
+	}
+
 	pvname = pv_dev_name(pvl->pv);
 	if (allocatable_only && !(pvl->pv->status & ALLOCATABLE_PV)) {
 		log_warn("WARNING: Physical volume %s not allocatable.", pvname);
@@ -258,10 +263,12 @@ struct dm_list *create_pv_list(struct dm_pool *mem, struct volume_group *vg, int
 			return_NULL;
 	}
 
-	if (dm_list_empty(r))
+	if (dm_list_empty(r)) {
 		log_error("No specified PVs have space available.");
+		return NULL;
+	}
 
-	return dm_list_empty(r) ? NULL : r;
+	return r;
 }
 
 struct dm_list *clone_pv_list(struct dm_pool *mem, struct dm_list *pvsl)
@@ -277,7 +284,7 @@ struct dm_list *clone_pv_list(struct dm_pool *mem, struct dm_list *pvsl)
 	dm_list_init(r);
 
 	dm_list_iterate_items(pvl, pvsl) {
-		if (!(new_pvl = dm_pool_zalloc(mem, sizeof(*new_pvl)))) {
+		if (!(new_pvl = dm_pool_alloc(mem, sizeof(*new_pvl)))) {
 			log_error("Unable to allocate physical volume list.");
 			return NULL;
 		}

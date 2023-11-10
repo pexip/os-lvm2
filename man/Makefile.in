@@ -23,20 +23,18 @@ else
 endif
 
 FSADMMAN = fsadm.8
+LVMIMPORTVDOMAN = lvm_import_vdo.8
 BLKDEACTIVATEMAN = blkdeactivate.8
 DMEVENTDMAN = dmeventd.8
 DMFILEMAPDMAN = dmfilemapd.8
 LVMPOLLDMAN = lvmpolld.8
 LVMLOCKDMAN = lvmlockd.8 lvmlockctl.8
 CMIRRORDMAN = cmirrord.8
-LVMCACHEMAN = lvmcache.7
-LVMTHINMAN = lvmthin.7
 LVMDBUSDMAN = lvmdbusd.8
-LVMRAIDMAN = lvmraid.7
-LVMVDOMAN = lvmvdo.7
 
 MAN5=lvm.conf.5
-MAN7=lvmsystemid.7 lvmreport.7 
+MAN7=lvmsystemid.7 lvmreport.7 lvmraid.7 lvmautoactivation.7
+
 MAN8=lvm.8 lvmdump.8 lvm-fullreport.8 lvm-lvpoll.8 \
      lvcreate.8 lvchange.8 lvmconfig.8 lvconvert.8 lvdisplay.8 \
      lvextend.8 lvreduce.8 lvremove.8 lvrename.8 lvresize.8 lvs.8 \
@@ -45,27 +43,23 @@ MAN8=lvm.8 lvmdump.8 lvm-fullreport.8 lvm-lvpoll.8 \
      vgck.8 vgcreate.8 vgconvert.8 vgdisplay.8 vgexport.8 vgextend.8 \
      vgimport.8 vgimportclone.8 vgmerge.8 vgmknodes.8 vgreduce.8 vgremove.8 \
      vgrename.8 vgs.8 vgscan.8 vgsplit.8 \
-     lvmsar.8 lvmsadc.8 lvmdiskscan.8
+     lvmsar.8 lvmsadc.8 lvmdiskscan.8 lvmdevices.8 vgimportdevices.8
 MAN8SO=lvm-config.8 lvm-dumpconfig.8
 MAN8DM=dmsetup.8 dmstats.8
 MAN8CLUSTER=
-MAN8SYSTEMD_GENERATORS=lvm2-activation-generator.8
 
-ifeq ($(MAKECMDGOALS),all_man)
-  MAN_ALL="yes"
-endif
-
-ifeq ($(MAKECMDGOALS),install_all_man)
-  MAN_ALL="yes"
-endif
-
-ifeq ($(MAN_ALL),"yes")
-  MAN8+=$(FSADMMAN) $(LVMPOLLDMAN) $(LVMLOCKDMAN) $(LVMDBUSDMAN)
+ifeq (,$(findstring $(MAKECMDGOALS), distclean all_man install_all_man))
+  MAN7 += lvmcache.7 lvmthin.7 lvmvdo.7
+  MAN8+=$(FSADMMAN) $(LVMPOLLDMAN) $(LVMLOCKDMAN) $(LVMDBUSDMAN) $(LVMIMPORTVDOMAN)
   MAN8DM+=$(BLKDEACTIVATEMAN) $(DMEVENTDMAN) $(DMFILEMAPDMAN)
   MAN8CLUSTER+=$(CMIRRORDMAN)
 else
   ifeq ("@FSADM@", "yes")
     MAN8+=$(FSADMMAN)
+  endif
+
+  ifeq ("@LVMIMPORTVDO@", "yes")
+    MAN8+=$(LVMIMPORTVDOMAN)
   endif
 
   ifeq ("@BUILD_LVMDBUSD@", "yes")
@@ -95,9 +89,25 @@ else
   ifeq ("@BUILD_CMIRRORD@", "yes")
     MAN8CLUSTER+=$(CMIRRORDMAN)
   endif
+
+  ifeq ("@CACHE@", "internal")
+    MAN7 += lvmcache.7
+  else
+    ifeq ("@WRITECACHE@", "internal")
+      MAN7 += lvmcache.7
+    endif
+  endif
+
+  ifeq ("@THIN@", "internal")
+    MAN7 += lvmthin.7
+  endif
+
+  ifeq ("@VDO@", "internal")
+    MAN7 += lvmvdo.7
+  endif
+
 endif
 
-MAN7+=$(LVMCACHEMAN) $(LVMTHINMAN) $(LVMRAIDMAN) $(LVMVDOMAN)
 MAN5DIR=$(mandir)/man5
 MAN7DIR=$(mandir)/man7
 MAN8DIR=$(mandir)/man8
@@ -108,11 +118,7 @@ TESTMAN=test.gen
 include $(top_builddir)/make.tmpl
 
 CLEAN_TARGETS+=$(MAN5) $(MAN7) $(MAN8) $(MAN8SO) $(MAN8:%.8=%.8_gen) $(MAN8CLUSTER) \
-	$(MAN8SYSTEMD_GENERATORS) $(MAN8DM) $(TESTMAN)
-DISTCLEAN_TARGETS+=$(FSADMMAN) $(BLKDEACTIVATEMAN) $(DMEVENTDMAN) \
-	$(LVMPOLLDMAN) $(LVMLOCKDMAN) $(CMIRRORDMAN) \
-	$(LVMCACHEMAN) $(LVMTHINMAN) $(LVMDBUSDMAN) $(LVMRAIDMAN) \
-	$(DMFILEMAPDMAN)
+	$(MAN8DM) $(TESTMAN)
 
 all: man device-mapper
 
@@ -120,15 +126,20 @@ all: man device-mapper
 
 device-mapper: $(MAN8DM)
 
-man: $(MAN5) $(MAN7) $(MAN8) $(MAN8SO) $(MAN8CLUSTER) $(MAN8SYSTEMD_GENERATORS)
+man: $(MAN5) $(MAN7) $(MAN8) $(MAN8SO) $(MAN8CLUSTER)
 
 all_man: man
 
-$(MAN5) $(MAN7) $(MAN8) $(MAN8SO) $(MAN8DM) $(MAN8CLUSTER) $(MAN8SYSTEMD_GENERATORS): Makefile
+$(MAN5) $(MAN7) $(MAN8) $(MAN8SO) $(MAN8DM) $(MAN8CLUSTER): Makefile
+
+$(MANGENERATOR):
+	@echo "    [MAKE] $<"
+	$(Q) $(MAKE) -C $(top_builddir) tools
 
 # Test whether or not the man page generator works
 $(TESTMAN): $(MANGENERATOR) Makefile
-	- $(MANGENERATOR) --primary lvmconfig > $@
+	@echo "    [TSTMAN] $@"
+	$(Q) - $(MANGENERATOR) --primary lvmconfig > $@
 
 SEE_ALSO=$(srcdir)/see_also.end
 
@@ -137,66 +148,92 @@ SEE_ALSO=$(srcdir)/see_also.end
 %.8_gen: $(srcdir)/%.8_des $(srcdir)/%.8_end $(MANGENERATOR) $(TESTMAN)
 	$(Q)set -e ; ( \
 	    if [ ! -s $(TESTMAN) ] ; then \
-		cat $(srcdir)/$(@:%.8_gen=%.8_pregen) ; \
+		cat $(srcdir)/$(@:%.8_gen=%.8_pregen) \
+		    $(srcdir)/$(basename $@).8_end $(SEE_ALSO) ; \
 	    else \
 		MANCMD=$(basename $@) && \
 		$(MANGENERATOR) --primary $$MANCMD $< && \
 		$(MANGENERATOR) --secondary $$MANCMD && \
-		cat $(srcdir)/$(basename $@).8_end && \
-		cat $(SEE_ALSO) ; \
+		cat $(srcdir)/$(basename $@).8_end $(SEE_ALSO) ; \
 	    fi \
 	) > $@
 
+#
+# When EDITLINE_LIBS is defined, we are compiling with libedit
+#
+ifneq ("$(EDITLINE_LIBS)", "")
+DEFAULT_LIBLINE=editline
+else
+DEFAULT_LIBLINE=readline
+endif
+
 define SUBSTVARS
-$(Q)$(SED) -e "s+#VERSION#+$(LVM_VERSION)+" \
+$(SED) -e "s+#VERSION#+$(LVM_VERSION)+" \
 	-e "s+#DEFAULT_SYS_DIR#+$(DEFAULT_SYS_DIR)+" \
 	-e "s+#DEFAULT_ARCHIVE_DIR#+$(DEFAULT_ARCHIVE_DIR)+" \
 	-e "s+#DEFAULT_BACKUP_DIR#+$(DEFAULT_BACKUP_DIR)+" \
 	-e "s+#DEFAULT_PROFILE_DIR#+$(DEFAULT_PROFILE_DIR)+" \
 	-e "s+#DEFAULT_CACHE_DIR#+$(DEFAULT_CACHE_DIR)+" \
 	-e "s+#DEFAULT_LOCK_DIR#+$(DEFAULT_LOCK_DIR)+" \
-	-e "s+#LVM_PATH#+$(exec_prefix)/lvm+" \
+	-e "s+#LVM_PATH#+@bindir@/lvm+" \
 	-e "s+#DEFAULT_RUN_DIR#+$(DEFAULT_RUN_DIR)+" \
 	-e "s+#DEFAULT_PID_DIR#+$(DEFAULT_PID_DIR)+" \
 	-e "s+#SYSTEMD_GENERATOR_DIR#+$(SYSTEMD_GENERATOR_DIR)+" \
+	-e "s+#DEFAULT_LIBLINE#+$(DEFAULT_LIBLINE)+" \
 	-e "s+#DEFAULT_MANGLING#+$(DEFAULT_MANGLING)+" $< > $@
 endef
 
-# Escape any '-':
+# Escape any '-' to '\-'  (except ^.TH line)
+# and fix unwanted changes:
+#    '\\-'  back to '\-'
+#    words like 'device\-mapper' back to 'device-mapper',
+#    \[\->] \[<\-] back to \[->], \[<-]
+#    however for some words i.e. '*-pool' we want '*\-pool'
+#    also 'vg-lv,[systemd-]machine-id,lvm-full,lvm-lvpoll' should go with \-
 #
-# - multiple (>= 2)
-# - in ' -'
-# - in ranges
-# - in middle of options (e.g. '--use-policies') and their arguments
-# - in symbolic use (e.g. '->')
-# - in "$vg-$lv"
-# - in single one in '\\f.-'
 define ESCAPEHYPHENS
-$(Q)$(SED) -i -e "s+\([ [:alpha:]]\)-\{7\}+\1\\\-\\\-\\\-\\\-\\\-\\\-\\\-+g" \
-	  -e "s+\([ [:alpha:]]\)-\{6\}+\1\\\-\\\-\\\-\\\-\\\-\\\-+g" \
-	  -e "s+\([ [:alpha:]]\)-\{5\}+\1\\\-\\\-\\\-\\\-\\\-+g" \
-	  -e "s+\([ [:alpha:]]\)-\{4\}+\1\\\-\\\-\\\-\\\-+g" \
-	  -e "s+\([ [:alpha:]]\)-\{3\}+\1\\\-\\\-\\\-+g" \
-	  -e "s+\([ [:alpha:]]\)-\{2\}+\1\\\-\\\-+g" \
-	  -e "s+\([^\]\)-\([[:alnum:]\?]\)+\1\\\-\2+g" \
-	  -e "s+ --+\\\-\\\-+g" \
-	  -e "s+|-|+|\\\-|+g" \
-	  -e "s+|-\\\-+\\\-\\\-+g" \
-	  -e "s+ -\"+ \\\-\"+g" \
-	  -e "s+'--'+'\\\-\\\-'+g" \
-	  -e "s+^--+\\\-\\\-+g" \
-	  -e "s+\([[:alnum:]]\) - \([[:alnum:]]\)+\1 \\\- \2+g" \
-	  -e "s+\(<\)-+\1\\\-+g" \
-	  -e "s+[^\\]-\(>\)+\\\-\1+g" \
-	  -e "s+\([[:alnum:]]\{2,\}\)\\\-\([[:alnum:]]\{2,\}\)+\1-\2+g" \
-	  -e "s+\(\\\-\\\-[[:alnum:]]\{2,\}\)-+\1\\\-+g" \
-	  -e "s+\(lvm2\-activation\)+lvm2\\\-activation+" \
-	  -e "s+\([^\\]\)-pool+\1\\\-pool+g" \
-	  -e "s+\([[:digit:]]\)-\([[:digit:]]\)+\1\\\-\2+g" \
-	  -e "s+\\\-git+\-git+g" \
-	  -e "s+\(vg.*\)\-lv+\1\\\-lv+g" \
-	  -e "s+\([[:digit:]]\{4\}\)\\\-\([[:digit:]]\{2\}\)\\\-\([[:digit:]]\{2\}\)+\1-\2-\3+g" $@
+$(SED) -i -e "/^.TH/ !s+-+\\\-+g" \
+	  -e "s+\\\[\]-+\\\-+g" \
+	  -e "s+\(^\|[^[:alnum:]\-]\)\([[:alpha:]]\{1,\}\)\\\-\((\|[([:alpha:]]\{2,\}\)+\1\2-\3+g" \
+	  -e "s+\([[:alpha:]]\)-\(pool\)+\1\\\-\2+g" \
+	  -e "s+[\][[]\(<\{0,1\}\)\\\-+\\\[\1-+g" \
+	  -e "s+\(vg.\{1,\}[^\]\)-lv+\1\\\-lv+g" \
+	  -e "s+systemd-machine+systemd\\\-machine+g" \
+	  -e "s+machine-id+machine\\\-id+g" \
+	  -e "s+lvm-full+lvm\\\-full+g" \
+	  -e "s+lvm-lvpoll+lvm\\\-lvpoll+g" \
+	  $@
 endef
+
+.PHONY: checksed
+checksed:
+	$(Q) echo "cmd -a -b retry -c ret --use-policy -d" > $@
+	$(Q) echo "cmd \fI-u\fB -d retry \fI--use-pol --use-poli 4.0 --use \"-L|--size\"" >> $@
+	$(Q) echo "cmd --use-pol" >> $@
+	$(Q) echo "cmd --[raid]use device-mapper thin-pool \fB-\fP sdb1:1000-1999 \fB-t\fP|\fB--test\fP -? -o-field3" >> $@
+	$(Q) echo "cmd -dd---- \[->] \[<-] -*- -o#field5 -o-field3 -d" >> $@
+	$(Q) echo "-d" >> $@
+	$(Q) echo ".TH 2.03.12(2)-git" >> $@
+	$(Q) echo "--verbose" >> $@
+	$(Q) echo ".BR -- [ raid ] most  -- [ raid ] most" >> $@
+	$(Q) echo ".BR | --verbose|--verb  --verbose  --verbose --verbose --verbose" >> $@
+	$(Q) echo "skip - unint --aa-dd- --aa-dd-- ---aa-dd 4.0 \-a\-b" >> $@
+	$(Q) echo "cmd \-a \-b retry \-c ret \-\-use\-policy \-d" > $@-e
+	$(Q) echo "cmd \fI\-u\fB \-d retry \fI\-\-use\-pol \-\-use\-poli 4.0 \-\-use \"\-L|\-\-size\"" >> $@-e
+	$(Q) echo "cmd \-\-use\-pol" >> $@-e
+	$(Q) echo "cmd \-\-[raid]use device-mapper thin\-pool \fB\-\fP sdb1:1000\-1999 \fB\-t\fP|\fB\-\-test\fP \-? \-o\-field3" >> $@-e
+	$(Q) echo "cmd \-dd\-\-\-\- \[->] \[<-] \-*\- \-o#field5 \-o\-field3 \-d" >> $@-e
+	$(Q) echo "\-d" >> $@-e
+	$(Q) echo ".TH 2.03.12(2)-git" >> $@-e
+	$(Q) echo "\-\-verbose" >> $@-e
+	$(Q) echo ".BR \-\- [ raid ] most  \-\- [ raid ] most" >> $@-e
+	$(Q) echo ".BR | \-\-verbose|\-\-verb  \-\-verbose  \-\-verbose \-\-verbose \-\-verbose" >> $@-e
+	$(Q) echo "skip \- unint \-\-aa\-dd\- \-\-aa\-dd\-\- \-\-\-aa\-dd 4.0 \-a\-b" >> $@-e
+	$(Q) $(ESCAPEHYPHENS)
+	$(Q) echo "--- H Y P H E N A T E D ---"
+	$(Q) cat $@
+	$(Q) diff -u $@-e $@
+	$(Q) $(RM) $@ $@-e
 
 %.5: $(srcdir)/%.5_main
 	@echo "    [MAN] $@"
@@ -223,48 +260,46 @@ $(MAN8SO): lvmconfig.8
 	$(Q) echo ".so $<" > $@
 
 install_man5: $(MAN5)
-	@echo "    [INSTALL] $<"
+	@echo "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN5DIR)
-	$(Q) $(INSTALL_DATA) $(MAN5) $(MAN5DIR)/
+	$(Q) $(INSTALL_DATA) $^ $(MAN5DIR)/
 
 install_man7: $(MAN7)
-	@echo "    [INSTALL] $<"
+	@echo "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN7DIR)
-	$(Q) $(INSTALL_DATA) $(MAN7) $(MAN7DIR)/
+	$(Q) $(INSTALL_DATA) $^ $(MAN7DIR)/
 
 install_man8: $(MAN8) $(MAN8SO)
-	@echo "    [INSTALL] $<"
+	@echo "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN8DIR)
-	$(Q) $(INSTALL_DATA) $(MAN8) $(MAN8SO) $(MAN8DIR)/
+	$(Q) $(INSTALL_DATA) $^ $(MAN8DIR)/
 
 install_lvm2: install_man5 install_man7 install_man8
 
 install_cluster: $(MAN8CLUSTER)
 ifdef MAN8CLUSTER
-	@echo "    [INSTALL] $<"
+	@echo "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN8DIR)
-	$(Q) $(INSTALL_DATA) $(MAN8CLUSTER) $(MAN8DIR)/
+	$(Q) $(INSTALL_DATA) $^ $(MAN8DIR)/
 endif
 
 install_device-mapper: $(MAN8DM)
-	@echo "    [INSTALL] $<"
+	@echo "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN8DIR)
-	$(Q) $(INSTALL_DATA) $(MAN8DM) $(MAN8DIR)/
-
-install_systemd_generators: $(MAN8SYSTEMD_GENERATORS)
-	@echo "    [INSTALL] $<"
-	$(Q) $(INSTALL) -d $(MAN8DIR)
-	$(Q) $(INSTALL_DATA) $(MAN8SYSTEMD_GENERATORS) $(MAN8DIR)/
+	$(Q) $(INSTALL_DATA) $^ $(MAN8DIR)/
 
 install: install_lvm2 install_device-mapper install_cluster
 
 install_all_man: install install_systemd_generators
 
 # Copy generated man pages back to source tree as fallback for machines where generator doesn't work
-pregenerated_man: all
-	set -e ; for i in $(srcdir)/*.8_des; do \
+pregenerated_man: $(MANGENERATOR) $(TESTMAN)
+	@echo "    [GENERATE] $^"
+	$(Q) set -e ; test -s $(TESTMAN) && for i in $(srcdir)/*.8_des; do \
 		CMD=`basename $$i .8_des`; \
-		cat $${CMD}.8_gen > $(srcdir)/$$CMD.8_pregen ; \
+		( $(MANGENERATOR) --primary $$CMD $$i && \
+		$(MANGENERATOR) --secondary $$CMD )  \
+		> $(srcdir)/$$CMD.8_pregen ; \
 	done
 
 generate: pregenerated_man

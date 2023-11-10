@@ -55,7 +55,6 @@
 
 /* May any free extents on this PV be used or must they be left free? */
 
-#define SPINDOWN_LV          	UINT64_C(0x00000010)	/* LV */
 #define BADBLOCK_ON       	UINT64_C(0x00000020)	/* LV */
 //#define VIRTUAL			UINT64_C(0x00010000)	/* LV - internal use only */
 #define PRECOMMITTED		UINT64_C(0x00200000)	/* VG - internal use only */
@@ -393,11 +392,8 @@ uint32_t vg_bad_status_bits(const struct volume_group *vg, uint64_t status);
 int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 		 struct physical_volume *pv, int new_pv);
 
-struct logical_volume *find_lv_in_vg_by_lvid(struct volume_group *vg,
+struct logical_volume *find_lv_in_vg_by_lvid(const struct volume_group *vg,
 					     const union lvid *lvid);
-
-struct lv_list *find_lv_in_lv_list(const struct dm_list *ll,
-				   const struct logical_volume *lv);
 
 /* FIXME Merge these functions with ones above */
 struct physical_volume *find_pv(struct volume_group *vg, struct device *dev);
@@ -512,18 +508,35 @@ int pool_below_threshold(const struct lv_segment *pool_seg);
 int pool_check_overprovisioning(const struct logical_volume *lv);
 int create_pool(struct logical_volume *pool_lv, const struct segment_type *segtype,
 		struct alloc_handle *ah, uint32_t stripes, uint32_t stripe_size);
+uint64_t get_thin_pool_max_metadata_size(struct cmd_context *cmd, struct profile *profile,
+					 thin_crop_metadata_t *crop);
+thin_crop_metadata_t get_thin_pool_crop_metadata(struct cmd_context *cmd,
+						  thin_crop_metadata_t crop,
+						  uint64_t metadata_size);
 uint64_t estimate_thin_pool_metadata_size(uint32_t data_extents, uint32_t extent_size, uint32_t chunk_size);
+
+int update_pool_metadata_min_max(struct cmd_context *cmd,
+				 uint32_t extent_size,
+				 uint64_t min_metadata_size,		/* required min */
+				 uint64_t max_metadata_size,		/* writable max */
+				 uint64_t *metadata_size,		/* current calculated */
+				 struct logical_volume *metadata_lv,	/* name of converted LV or NULL */
+				 uint32_t *metadata_extents);		/* resulting extent count */
 
 /*
  * Begin skeleton for external LVM library
  */
 struct id pv_id(const struct physical_volume *pv);
 const struct format_type *pv_format_type(const struct physical_volume *pv);
-struct id pv_vgid(const struct physical_volume *pv);
+struct id pv_vg_id(const struct physical_volume *pv);
 
 uint64_t find_min_mda_size(struct dm_list *mdas);
 char *tags_format_and_copy(struct dm_pool *mem, const struct dm_list *tagsl);
 
-void set_pv_devices(struct format_instance *fid, struct volume_group *vg, int *found_md_component);
+void set_pv_devices(struct format_instance *fid, struct volume_group *vg);
+
+int get_visible_lvs_using_pv(struct cmd_context *cmd, struct volume_group *vg, struct device *dev,
+                            struct dm_list *lvs_list);
+
 
 #endif

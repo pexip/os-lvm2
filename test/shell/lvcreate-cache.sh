@@ -27,7 +27,6 @@ aux prepare_vg 5 80000
 
 aux lvmconf 'global/cache_disabled_features = [ "policy_smq" ]'
 
-
 #######################
 # Cache_Pool creation #
 #######################
@@ -173,17 +172,16 @@ dmsetup table ${vg}-$lv1 | grep cache  # ensure it is loaded in kernel
 
 lvremove -f $vg
 
-
 # Check minimum cache pool metadata size
-lvcreate -l 1 --type cache-pool --poolmetadatasize 1 $vg 2>out
-grep "WARNING: Minimum" out
+lvcreate -l 1 --type cache-pool --poolmetadatasize 1 $vg 2>&1 | tee out
+grep -i "minimal" out
+
 
 # FIXME: This test is failing in allocator with smaller VG sizes
-lvcreate -l 1 --type cache-pool --poolmetadatasize 17G $vg 2>out
-grep "WARNING: Maximum" out
+lvcreate -l 1 --type cache-pool --poolmetadatasize 17G $vg 2>&1 | tee out
+grep -i "maximum" out
 
 lvremove -f $vg
-
 ########################################
 # Cache conversion and r/w permissions #
 ########################################
@@ -275,6 +273,19 @@ dmsetup status | grep $vg
 dmsetup status | grep $vg-corigin | grep 'migration_threshold 1233'
 
 lvremove -f $vg
+
+
+####################################################
+# S/MQ policy does not accept random string settings
+####################################################
+
+lvcreate -L1 -n $lv1 $vg
+lvcreate -L1 -H $vg/$lv1 --cachesettings  unknown=0  |& tee out
+
+grep "not support \"unknown=0\"" out
+
+# But still the caching should proceed and LV should be available
+check lv_exists $vg/$lv1
 
 
 ##############################

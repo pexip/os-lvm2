@@ -180,14 +180,14 @@ static int _is_open_in_pid(pid_t pid, const char *path)
 		link_buf[len] = '\0';
 		if (!strcmp(deleted_path, link_buf)) {
 			if (closedir(pid_d))
-				log_sys_error("closedir", path_buf);
+				log_sys_debug("closedir", path_buf);
 			return 1;
 		}
 	}
 
 bad:
 	if (closedir(pid_d))
-		log_sys_error("closedir", path_buf);
+		log_sys_debug("closedir", path_buf);
 
 	return 0;
 }
@@ -230,13 +230,13 @@ static int _is_open(const char *path)
 			continue;
 		if (_is_open_in_pid(pid, path)) {
 			if (closedir(proc_d))
-				log_sys_error("closedir", DEFAULT_PROC_DIR);
+				log_sys_debug("closedir", DEFAULT_PROC_DIR);
 			return 1;
 		}
 	}
 
 	if (closedir(proc_d))
-		log_sys_error("closedir", DEFAULT_PROC_DIR);
+		log_sys_debug("closedir", DEFAULT_PROC_DIR);
 
 	return 0;
 }
@@ -629,7 +629,7 @@ check_unlinked:
 static int _daemonise(struct filemap_monitor *fm)
 {
 	pid_t pid = 0;
-	int fd;
+	int fd, ffd;
 
 	if (!setsid()) {
 		_early_log("setsid failed.");
@@ -653,26 +653,29 @@ static int _daemonise(struct filemap_monitor *fm)
 	}
 
 	if (!_verbose) {
-		if (close(STDIN_FILENO))
-			_early_log("Error closing stdin");
-		if (close(STDOUT_FILENO))
-			_early_log("Error closing stdout");
-		if (close(STDERR_FILENO))
-			_early_log("Error closing stderr");
-		if ((open("/dev/null", O_RDONLY) < 0) ||
-	            (open("/dev/null", O_WRONLY) < 0) ||
-		    (open("/dev/null", O_WRONLY) < 0)) {
-			_early_log("Error opening stdio streams.");
+		if ((fd = open("/dev/null", O_RDWR)) == -1) {
+			_early_log("Error opening /dev/null.");
 			return 0;
 		}
+
+		if ((dup2(fd, STDIN_FILENO) == -1) ||
+		    (dup2(fd, STDOUT_FILENO) == -1) ||
+		    (dup2(fd, STDERR_FILENO) == -1)) {
+			if (fd > STDERR_FILENO)
+				(void) close(fd);
+			_early_log("Error redirecting stdin/out/err to null.");
+			/* coverity[leaked_handle] no leak */
+			return 0;
+		}
+		if (fd > STDERR_FILENO)
+			(void) close(fd);
 	}
 	/* TODO: Use libdaemon/server/daemon-server.c _daemonise() */
-	for (fd = (int) sysconf(_SC_OPEN_MAX) - 1; fd > STDERR_FILENO; fd--) {
-		if (fd == fm->fd)
-			continue;
-		(void) close(fd);
-	}
+	for (ffd = (int) sysconf(_SC_OPEN_MAX) - 1; ffd > STDERR_FILENO; --ffd)
+		if (ffd != fm->fd)
+			(void) close(ffd);
 
+	/* coverity[leaked_handle] no leak */
 	return 1;
 }
 

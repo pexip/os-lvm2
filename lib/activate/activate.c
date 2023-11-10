@@ -29,6 +29,7 @@
 #include "lib/metadata/segtype.h"
 #include "lib/misc/sharedlib.h"
 #include "lib/metadata/metadata.h"
+#include "lib/misc/lvm-signal.h"
 
 #include <limits.h>
 #include <fcntl.h>
@@ -177,6 +178,22 @@ int lv_passes_auto_activation_filter(struct cmd_context *cmd, struct logical_vol
 	return _lv_passes_volumes_filter(cmd, lv, cn, activation_auto_activation_volume_list_CFG);
 }
 
+static int _passes_readonly_filter(struct cmd_context *cmd,
+				   const struct logical_volume *lv)
+{
+	const struct dm_config_node *cn;
+
+	if (!(cn = find_config_tree_array(cmd, activation_read_only_volume_list_CFG, NULL)))
+		return 0;
+
+	return _lv_passes_volumes_filter(cmd, lv, cn, activation_read_only_volume_list_CFG);
+}
+
+int lv_passes_readonly_filter(const struct logical_volume *lv)
+{
+	return _passes_readonly_filter(lv->vg->cmd, lv);
+}
+
 #ifndef DEVMAPPER_SUPPORT
 void set_activation(int act, int silent)
 {
@@ -271,6 +288,10 @@ int lv_raid_sync_action(const struct logical_volume *lv, char **sync_action)
 	return 0;
 }
 int lv_raid_message(const struct logical_volume *lv, const char *msg)
+{
+	return 0;
+}
+int lv_raid_status(const struct logical_volume *lv, struct lv_status_raid **status)
 {
 	return 0;
 }
@@ -392,7 +413,7 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 {
         return 0;
 }
-int device_is_usable(struct device *dev, struct dev_usable_check_params check)
+int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
 {
         return 0;
 }
@@ -455,17 +476,6 @@ static int _passes_activation_filter(struct cmd_context *cmd,
 	return _lv_passes_volumes_filter(cmd, lv, cn, activation_volume_list_CFG);
 }
 
-static int _passes_readonly_filter(struct cmd_context *cmd,
-				   const struct logical_volume *lv)
-{
-	const struct dm_config_node *cn;
-
-	if (!(cn = find_config_tree_array(cmd, activation_read_only_volume_list_CFG, NULL)))
-		return 0;
-
-	return _lv_passes_volumes_filter(cmd, lv, cn, activation_read_only_volume_list_CFG);
-}
-
 int library_version(char *version, size_t size)
 {
 	if (!activation())
@@ -476,12 +486,20 @@ int library_version(char *version, size_t size)
 
 int driver_version(char *version, size_t size)
 {
+	static char _vsn[80] = { 0 };
+
 	if (!activation())
 		return 0;
 
 	log_very_verbose("Getting driver version");
 
-	return dm_driver_version(version, size);
+	if (!_vsn[0] &&
+	    !dm_driver_version(_vsn, sizeof(_vsn)))
+		return_0;
+
+	(void) dm_strncpy(version, _vsn, size);
+
+	return 1;
 }
 
 int target_version(const char *target_name, uint32_t *maj,
@@ -553,7 +571,7 @@ int module_present(struct cmd_context *cmd, const char *target_name)
 			    dm_sysfs_dir(), target_name);
 
 	if (i > 0) {
-		while (path[--i] != '/')  /* stop on dm_ */
+		while ((i > 0) && path[--i] != '/')  /* stop on dm_ */
 			if (path[i] == '-')
 				path[i] = '_'; /* replace '-' with '_' */
 
@@ -564,13 +582,9 @@ int module_present(struct cmd_context *cmd, const char *target_name)
 	}
 
 #ifdef MODPROBE_CMD
-	if (strcmp(target_name, MODULE_NAME_VDO) == 0) {
-		argv[1] = target_name;		/* ATM kvdo is without dm- prefix */
-		if ((ret = exec_cmd(cmd, argv, NULL, 0)))
-			return ret;
-	}
-
-	if (dm_snprintf(module, sizeof(module), "dm-%s", target_name) < 0) {
+	if (strcmp(target_name, TARGET_NAME_VDO) == 0)
+		argv[1] = MODULE_NAME_VDO; /* ATM kvdo is without dm- prefix */
+	else if (dm_snprintf(module, sizeof(module), "dm-%s", target_name) < 0) {
 		log_error("module_present module name too long: %s",
 			  target_name);
 		return 0;
@@ -608,6 +622,15 @@ int target_present(struct cmd_context *cmd, const char *target_name,
 
 	return target_present_version(cmd, target_name, use_modprobe,
 				      &maj, &min, &patchlevel);
+}
+
+int get_device_list(const struct volume_group *vg, struct dm_list **devs,
+		    unsigned *devs_features)
+{
+	if (!activation())
+		return 0;
+
+	return dev_manager_get_device_list(NULL, devs, devs_features);
 }
 
 /*
@@ -823,12 +846,15 @@ int lv_info_with_seg_status(struct cmd_context *cmd,
 #define OPEN_COUNT_CHECK_USLEEP_DELAY 200000
 
 /* Only report error if error_if_used is set */
+/* Returns 0 if in use,  1 if it is unused, 2 when it is not present in table */
 int lv_check_not_in_use(const struct logical_volume *lv, int error_if_used)
 {
 	struct lvinfo info;
 	unsigned int open_count_check_retries;
 
-	if (!lv_info(lv->vg->cmd, lv, 0, &info, 1, 0) || !info.exists || !info.open_count)
+	if (!lv_info(lv->vg->cmd, lv, 0, &info, 1, 0) || !info.exists)
+		return 2;
+	else if (!info.open_count)
 		return 1;
 
 	/* If sysfs is not used, use open_count information only. */
@@ -855,25 +881,24 @@ int lv_check_not_in_use(const struct logical_volume *lv, int error_if_used)
 	}
 
 	open_count_check_retries = retry_deactivation() ? OPEN_COUNT_CHECK_RETRIES : 1;
-	while (info.open_count > 0 && open_count_check_retries--) {
-		if (!open_count_check_retries) {
-			if (error_if_used)
-				log_error("Logical volume %s in use.", display_lvname(lv));
-			else
-				log_debug_activation("Logical volume %s in use.", display_lvname(lv));
-			return 0;
-		}
+	while (open_count_check_retries--) {
+		if (interruptible_usleep(OPEN_COUNT_CHECK_USLEEP_DELAY))
+			break;  /* interrupted */
 
-		usleep(OPEN_COUNT_CHECK_USLEEP_DELAY);
 		log_debug_activation("Retrying open_count check for %s.",
 				     display_lvname(lv));
-		if (!lv_info(lv->vg->cmd, lv, 0, &info, 1, 0)) {
+		if (!lv_info(lv->vg->cmd, lv, 0, &info, 1, 0) || !info.exists) {
 			stack; /* device dissappeared? */
-			break;
-		}
+			return 1;
+		} else if (!info.open_count)
+			return 1;
 	}
 
-	return 1;
+	if (error_if_used)
+		log_error("Logical volume %s in use.", display_lvname(lv));
+	else
+		log_debug_activation("Logical volume %s in use.", display_lvname(lv));
+	return 0;
 }
 
 /*
@@ -964,35 +989,28 @@ int lv_raid_percent(const struct logical_volume *lv, dm_percent_t *percent)
 
 int lv_raid_data_offset(const struct logical_volume *lv, uint64_t *data_offset)
 {
-	int r;
-	struct dev_manager *dm;
-	struct dm_status_raid *status;
+	struct lv_status_raid *raid_status;
 
 	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
 		return 0;
 
 	log_debug_activation("Checking raid data offset and dev sectors for LV %s/%s",
 			     lv->vg->name, lv->name);
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
-		return_0;
 
-	if (!(r = dev_manager_raid_status(dm, lv, &status))) {
-		dev_manager_destroy(dm);
-		return_0;
-	}
+	if (!lv_raid_status(lv, &raid_status))
+                return_0;
 
-	*data_offset = status->data_offset;
+	*data_offset = raid_status->raid->data_offset;
 
-	dev_manager_destroy(dm);
+	dm_pool_destroy(raid_status->mem);
 
-	return r;
+	return 1;
 }
 
 int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health)
 {
-	int r;
-	struct dev_manager *dm;
-	struct dm_status_raid *status;
+	int r = 1;
+	struct lv_status_raid *raid_status;
 
 	*dev_health = NULL;
 
@@ -1002,25 +1020,23 @@ int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health)
 	log_debug_activation("Checking raid device health for LV %s.",
 			     display_lvname(lv));
 
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
-		return_0;
+	if (!lv_raid_status(lv, &raid_status))
+                return_0;
 
-	if (!(r = dev_manager_raid_status(dm, lv, &status)) ||
-	    !(*dev_health = dm_pool_strdup(lv->vg->cmd->mem,
-					   status->dev_health))) {
-		dev_manager_destroy(dm);
-		return_0;
+	if (!(*dev_health = dm_pool_strdup(lv->vg->cmd->mem,
+					  raid_status->raid->dev_health))) {
+		stack;
+                r = 0;
 	}
 
-	dev_manager_destroy(dm);
+	dm_pool_destroy(raid_status->mem);
 
 	return r;
 }
 
 int lv_raid_dev_count(const struct logical_volume *lv, uint32_t *dev_cnt)
 {
-	struct dev_manager *dm;
-	struct dm_status_raid *status;
+	struct lv_status_raid *raid_status;
 
 	*dev_cnt = 0;
 
@@ -1029,24 +1045,20 @@ int lv_raid_dev_count(const struct logical_volume *lv, uint32_t *dev_cnt)
 
 	log_debug_activation("Checking raid device count for LV %s/%s",
 			     lv->vg->name, lv->name);
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+
+	if (!lv_raid_status(lv, &raid_status))
 		return_0;
 
-	if (!dev_manager_raid_status(dm, lv, &status)) {
-		dev_manager_destroy(dm);
-		return_0;
-	}
-	*dev_cnt = status->dev_count;
+	*dev_cnt = raid_status->raid->dev_count;
 
-	dev_manager_destroy(dm);
+	dm_pool_destroy(raid_status->mem);
 
 	return 1;
 }
 
 int lv_raid_mismatch_count(const struct logical_volume *lv, uint64_t *cnt)
 {
-	struct dev_manager *dm;
-	struct dm_status_raid *status;
+	struct lv_status_raid *raid_status;
 
 	*cnt = 0;
 
@@ -1056,25 +1068,20 @@ int lv_raid_mismatch_count(const struct logical_volume *lv, uint64_t *cnt)
 	log_debug_activation("Checking raid mismatch count for LV %s.",
 			     display_lvname(lv));
 
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+	if (!lv_raid_status(lv, &raid_status))
 		return_0;
 
-	if (!dev_manager_raid_status(dm, lv, &status)) {
-		dev_manager_destroy(dm);
-		return_0;
-	}
-	*cnt = status->mismatch_count;
+	*cnt = raid_status->raid->mismatch_count;
 
-	dev_manager_destroy(dm);
+	dm_pool_destroy(raid_status->mem);
 
 	return 1;
 }
 
 int lv_raid_sync_action(const struct logical_volume *lv, char **sync_action)
 {
-	struct dev_manager *dm;
-	struct dm_status_raid *status;
-	char *action;
+	struct lv_status_raid *raid_status;
+	int r = 1;
 
 	*sync_action = NULL;
 
@@ -1084,30 +1091,27 @@ int lv_raid_sync_action(const struct logical_volume *lv, char **sync_action)
 	log_debug_activation("Checking raid sync_action for LV %s.",
 			     display_lvname(lv));
 
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+	if (!lv_raid_status(lv, &raid_status))
 		return_0;
 
 	/* status->sync_action can be NULL if dm-raid version < 1.5.0 */
-	if (!dev_manager_raid_status(dm, lv, &status) ||
-	    !status->sync_action ||
-	    !(action = dm_pool_strdup(lv->vg->cmd->mem,
-				      status->sync_action))) {
-		dev_manager_destroy(dm);
-		return_0;
+	if (!raid_status->raid->sync_action ||
+	    !(*sync_action = dm_pool_strdup(lv->vg->cmd->mem,
+					    raid_status->raid->sync_action))) {
+		stack;
+		r = 0;
 	}
 
-	*sync_action = action;
+	dm_pool_destroy(raid_status->mem);
 
-	dev_manager_destroy(dm);
-
-	return 1;
+	return r;
 }
 
 int lv_raid_message(const struct logical_volume *lv, const char *msg)
 {
+	struct lv_status_raid *raid_status;
+	struct dev_manager *dm = NULL;
 	int r = 0;
-	struct dev_manager *dm;
-	struct dm_status_raid *status;
 
 	if (!seg_is_raid(first_seg(lv))) {
 		/*
@@ -1132,16 +1136,10 @@ int lv_raid_message(const struct logical_volume *lv, const char *msg)
 		return 0;
 	}
 
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+	if (!lv_raid_status(lv, &raid_status))
 		return_0;
 
-	if (!(r = dev_manager_raid_status(dm, lv, &status))) {
-		log_error("Failed to retrieve status of %s.",
-			  display_lvname(lv));
-		goto out;
-	}
-
-	if (!status->sync_action) {
+	if (!raid_status->raid->sync_action) {
 		log_error("Kernel driver does not support this action: %s", msg);
 		goto out;
 	}
@@ -1163,17 +1161,41 @@ int lv_raid_message(const struct logical_volume *lv, const char *msg)
 		log_error("\"%s\" is not a supported sync operation.", msg);
 		goto out;
 	}
-	if (strcmp(status->sync_action, "idle")) {
+	if (strcmp(raid_status->raid->sync_action, "idle")) {
 		log_error("%s state is currently \"%s\".  Unable to switch to \"%s\".",
-			  display_lvname(lv), status->sync_action, msg);
+			  display_lvname(lv), raid_status->raid->sync_action, msg);
 		goto out;
 	}
 
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+		return_0;
+
 	r = dev_manager_raid_message(dm, lv, msg);
 out:
-	dev_manager_destroy(dm);
+	if (dm)
+		dev_manager_destroy(dm);
+	dm_pool_destroy(raid_status->mem);
 
 	return r;
+}
+
+int lv_raid_status(const struct logical_volume *lv, struct lv_status_raid **status)
+{
+	struct dev_manager *dm;
+	int exists;
+
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+		return_0;
+
+	if (!dev_manager_raid_status(dm, lv, status, &exists)) {
+		dev_manager_destroy(dm);
+		if (exists)
+			stack;
+		return 0;
+	}
+	/* User has to call dm_pool_destroy(status->mem)! */
+
+	return 1;
 }
 
 int lv_writecache_message(const struct logical_volume *lv, const char *msg)
@@ -1208,6 +1230,7 @@ int lv_cache_status(const struct logical_volume *cache_lv,
 {
 	struct dev_manager *dm;
 	struct lv_segment *cache_seg;
+	int exists;
 
 	if (lv_is_cache_pool(cache_lv)) {
 		if (dm_list_empty(&cache_lv->segs_using_this_lv) ||
@@ -1225,21 +1248,14 @@ int lv_cache_status(const struct logical_volume *cache_lv,
 		return 0;
 	}
 
-	if (!lv_info(cache_lv->vg->cmd, cache_lv, 1, NULL, 0, 0)) {
-		log_error("Cannot check status for locally inactive cache volume %s.",
-			  display_lvname(cache_lv));
-		return 0;
-	}
-
-	log_debug_activation("Checking status for cache volume %s.",
-			     display_lvname(cache_lv));
-
 	if (!(dm = dev_manager_create(cache_lv->vg->cmd, cache_lv->vg->name, 1)))
 		return_0;
 
-	if (!dev_manager_cache_status(dm, cache_lv, status)) {
+	if (!dev_manager_cache_status(dm, cache_lv, status, &exists)) {
 		dev_manager_destroy(dm);
-		return_0;
+		if (exists)
+			stack;
+		return 0;
 	}
 	/* User has to call dm_pool_destroy(status->mem)! */
 
@@ -1250,19 +1266,16 @@ int lv_thin_pool_status(const struct logical_volume *lv, int flush,
 			struct lv_status_thin_pool **thin_pool_status)
 {
 	struct dev_manager *dm;
-
-	if (!lv_info(lv->vg->cmd, lv, 1, NULL, 0, 0))
-		return 0;
-
-	log_debug_activation("Checking thin pool status for LV %s.",
-			     display_lvname(lv));
+	int exists;
 
 	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
 		return_0;
 
-	if (!dev_manager_thin_pool_status(dm, lv, flush, thin_pool_status)) {
+	if (!dev_manager_thin_pool_status(dm, lv, flush, thin_pool_status, &exists)) {
 		dev_manager_destroy(dm);
-		return_0;
+		if (exists)
+			stack;
+		return 0;
 	}
 
 	/* User has to call dm_pool_destroy(thin_pool_status->mem)! */
@@ -1274,19 +1287,16 @@ int lv_thin_status(const struct logical_volume *lv, int flush,
 		   struct lv_status_thin **thin_status)
 {
 	struct dev_manager *dm;
-
-	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
-		return 0;
-
-	log_debug_activation("Checking thin status for LV %s.",
-			     display_lvname(lv));
+	int exists;
 
 	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
 		return_0;
 
-	if (!dev_manager_thin_status(dm, lv, flush, thin_status)) {
+	if (!dev_manager_thin_status(dm, lv, flush, thin_status, &exists)) {
 		dev_manager_destroy(dm);
-		return_0;
+		if (exists)
+			stack;
+		return 0;
 	}
 
 	/* User has to call dm_pool_destroy(thin_status->mem)! */
@@ -1296,20 +1306,16 @@ int lv_thin_status(const struct logical_volume *lv, int flush,
 
 int lv_thin_device_id(const struct logical_volume *lv, uint32_t *device_id)
 {
-	int r;
 	struct dev_manager *dm;
-
-	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
-		return 0;
-
-	log_debug_activation("Checking device id for LV %s.",
-			     display_lvname(lv));
+	int exists;
+	int r;
 
 	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
 		return_0;
 
-	if (!(r = dev_manager_thin_device_id(dm, lv, device_id)))
-		stack;
+	if (!(r = dev_manager_thin_device_id(dm, lv, device_id, &exists)))
+		if (exists)
+			stack;
 
 	dev_manager_destroy(dm);
 
@@ -1326,28 +1332,22 @@ int lv_thin_device_id(const struct logical_volume *lv, uint32_t *device_id)
 int lv_vdo_pool_status(const struct logical_volume *lv, int flush,
 		       struct lv_status_vdo **vdo_status)
 {
-	int r = 0;
 	struct dev_manager *dm;
-
-	if (!lv_info(lv->vg->cmd, lv, 1, NULL, 0, 0))
-		return 0;
-
-	log_debug_activation("Checking VDO pool status for LV %s.",
-			     display_lvname(lv));
+	int exists;
 
 	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, !lv_is_pvmove(lv))))
 		return_0;
 
-	if (!dev_manager_vdo_pool_status(dm, lv, vdo_status, flush))
-		goto_out;
+	if (!dev_manager_vdo_pool_status(dm, lv, flush, vdo_status, &exists)) {
+		dev_manager_destroy(dm);
+		if (exists)
+			stack;
+		return 0;
+	}
 
 	/* User has to call dm_pool_destroy(vdo_status->mem) */
-	r = 1;
-out:
-	if (!r)
-		dev_manager_destroy(dm);
 
-	return r;
+	return 1;
 }
 
 int lv_vdo_pool_percent(const struct logical_volume *lv, dm_percent_t *percent)
@@ -1508,7 +1508,7 @@ int lvs_in_vg_opened(const struct volume_group *vg)
  */
 int raid4_is_supported(struct cmd_context *cmd, const struct segment_type *segtype)
 {
-	unsigned attrs;
+	unsigned attrs = 0;
 
 	if (segtype_is_raid4(segtype) &&
 	    (!segtype->ops->target_present ||
@@ -2043,12 +2043,6 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 	if (!activation())
 		return 1;
 
-	/* Ignore origin_only unless LV is origin in both old and new metadata */
-	/* or LV is thin or thin pool volume */
-	if (!lv_is_thin_volume(lv) && !lv_is_thin_pool(lv) &&
-	    !(lv_is_origin(lv) && lv_is_origin(lv_pre)))
-		laopts->origin_only = 0;
-
 	if (test_mode()) {
 		_skip("Suspending %s%s.", display_lvname(lv),
 		      laopts->origin_only ? " origin without snapshots" : "");
@@ -2069,6 +2063,12 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 	}
 
 	lv_calculate_readahead(lv, NULL);
+
+	/* Ignore origin_only unless LV is origin in both old and new metadata */
+	/* or LV is thin or thin pool volume */
+	if (!lv_is_thin_volume(lv) && !lv_is_thin_pool(lv) &&
+	    !(lv_is_origin(lv) && lv_is_origin(lv_pre)))
+		laopts->origin_only = 0;
 
 	/*
 	 * Preload devices for the LV.
@@ -2391,6 +2391,7 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 	static const struct lv_activate_opts laopts = { .skip_in_use = 1 };
 	struct dm_list *snh;
 	int r = 0;
+	unsigned tmp_state;
 
 	if (!activation())
 		return 1;
@@ -2403,44 +2404,47 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 
 	log_debug_activation("Deactivating %s.", display_lvname(lv));
 
-	if (!lv_info(cmd, lv, 0, &info, 0, 0))
-		goto_out;
-
-	if (!info.exists) {
-		r = 1;
-		/* Check attached snapshot segments are also inactive */
-		dm_list_iterate(snh, &lv->snapshot_segs) {
-			if (!lv_info(cmd, dm_list_struct_base(snh, struct lv_segment, origin_list)->cow,
-				     0, &info, 0, 0))
-				goto_out;
-			if (info.exists) {
-				r = 0; /* Snapshot left in table? */
-				break;
-			}
-		}
-
-		if (lv_is_vdo_pool(lv)) {
-			/* If someone has remove 'linear' mapping over VDO device
-			 * we may still be able to deactivate the rest of the tree
-			 * i.e. in test-suite we simulate this via 'dmsetup remove' */
-			if (!lv_info(cmd, lv, 1, &info, 1, 0))
-				goto_out;
-
-			if (info.exists && !info.open_count)
-				r = 0; /* Unused VDO device left in table? */
-		}
-
-		if (r)
-			goto out;
-	}
-
 	if (lv_is_visible(lv) || lv_is_virtual_origin(lv) ||
 	    lv_is_merging_thin_snapshot(lv)) {
-		if (!lv_check_not_in_use(lv, 1))
-			goto_out;
+		switch (lv_check_not_in_use(lv, 1)) {
+		case 0: goto_out;
+		case 2: goto no_exists;
+		}
 
 		if (lv_is_origin(lv) && _lv_has_open_snapshots(lv))
 			goto_out;
+	} else {
+		if (!lv_info(cmd, lv, 0, &info, 0, 0))
+			goto_out;
+
+		if (!info.exists) {
+	no_exists:
+			r = 1;
+			/* Check attached snapshot segments are also inactive */
+			dm_list_iterate(snh, &lv->snapshot_segs) {
+				if (!lv_info(cmd, dm_list_struct_base(snh, struct lv_segment, origin_list)->cow,
+					     0, &info, 0, 0))
+					goto_out;
+				if (info.exists) {
+					r = 0; /* Snapshot left in table? */
+					break;
+				}
+			}
+
+			if (lv_is_vdo_pool(lv)) {
+				/* If someone has remove 'linear' mapping over VDO device
+				 * we may still be able to deactivate the rest of the tree
+				 * i.e. in test-suite we simulate this via 'dmsetup remove' */
+				if (!lv_info(cmd, lv, 1, &info, 1, 0))
+					goto_out;
+
+				if (info.exists && !info.open_count)
+					r = 0; /* Unused VDO device left in table? */
+			}
+
+			if (r)
+				goto out;
+		}
 	}
 
 	if (!monitor_dev_for_events(cmd, lv, &laopts, 0))
@@ -2460,12 +2464,17 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 	}
 	critical_section_dec(cmd, "deactivated");
 
+	tmp_state = cmd->disable_dm_devs;
+	cmd->disable_dm_devs = 1;
+
 	if (!lv_info(cmd, lv, 0, &info, 0, 0) || info.exists) {
 		/* Turn into log_error, but we do not log error */
 		log_debug_activation("Deactivated volume is still %s present.",
 				     display_lvname(lv));
 		r = 0;
 	}
+
+	cmd->disable_dm_devs = tmp_state;
 out:
 
 	return r;
@@ -2754,7 +2763,10 @@ static int _component_cb(struct logical_volume *lv, void *data)
 	    (lv_is_thin_pool(lv) && pool_is_active(lv)))
 		return -1;
 
-	if (lv_is_active(lv)) {
+	/* External origin is activated through thinLV and uses -real suffix.
+	 * Note: for old clustered logic we would need to check for all thins */
+	if ((lv_is_external_origin(lv) && lv_info(lv->vg->cmd, lv, 1, NULL, 0, 0)) ||
+	    lv_is_active(lv)) {
 		if (!lv_is_component(lv) || lv_is_visible(lv))
 			return -1;	/* skip whole subtree */
 
@@ -2837,7 +2849,7 @@ static int _deactivate_sub_lv_cb(struct logical_volume *lv, void *data)
  */
 int deactivate_lv_with_sub_lv(const struct logical_volume *lv)
 {
-	struct logical_volume *flv;
+	struct logical_volume *flv = NULL;
 
 	if (!deactivate_lv(lv->vg->cmd, lv)) {
 		log_error("Cannot deactivate logical volume %s.",
@@ -2847,7 +2859,7 @@ int deactivate_lv_with_sub_lv(const struct logical_volume *lv)
 
 	if (!for_each_sub_lv((struct logical_volume *)lv, _deactivate_sub_lv_cb, &flv)) {
 		log_error("Cannot deactivate subvolume %s of logical volume %s.",
-			  display_lvname(flv), display_lvname(lv));
+			  (flv) ? display_lvname(flv) : "", display_lvname(lv));
 		return 0;
 	}
 

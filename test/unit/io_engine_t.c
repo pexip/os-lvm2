@@ -25,8 +25,10 @@
 
 //----------------------------------------------------------------
 
+#define SECTOR_SHIFT 9
 #define SECTOR_SIZE 512
 #define BLOCK_SIZE_SECTORS 8
+#define PAGE_SIZE_SECTORS ((PAGE_SIZE) >> SECTOR_SHIFT)
 #define NR_BLOCKS 64
 
 struct fixture {
@@ -83,10 +85,11 @@ static void *_fix_init(void)
         T_ASSERT(f);
         f->e = create_async_io_engine();
         T_ASSERT(f->e);
-	if (posix_memalign((void **) &f->data, 4096, SECTOR_SIZE * BLOCK_SIZE_SECTORS))
+	if (posix_memalign((void **) &f->data, PAGE_SIZE, SECTOR_SIZE * BLOCK_SIZE_SECTORS))
         	test_fail("posix_memalign failed");
 
         snprintf(f->fname, sizeof(f->fname), "unit-test-XXXXXX");
+	/* coverity[secure_temp] don't care */
 	f->fd = mkstemp(f->fname);
 	T_ASSERT(f->fd >= 0);
 
@@ -102,13 +105,15 @@ static void _fix_exit(void *fixture)
 {
         struct fixture *f = fixture;
 
-	close(f->fd);
-	bcache_clear_fd(f->di);
-	unlink(f->fname);
-        free(f->data);
-        if (f->e)
-                f->e->destroy(f->e);
-        free(f);
+	if (f) {
+		(void) close(f->fd);
+		bcache_clear_fd(f->di);
+		(void) unlink(f->fname);
+		free(f->data);
+		if (f->e)
+			f->e->destroy(f->e);
+		free(f);
+	}
 }
 
 static void _test_create(void *fixture)
@@ -138,10 +143,12 @@ static void _test_read(void *fixture)
 {
 	struct fixture *f = fixture;
 	struct io io;
-	struct bcache *cache = bcache_create(8, BLOCK_SIZE_SECTORS, f->e);
+	struct bcache *cache = bcache_create(PAGE_SIZE_SECTORS, BLOCK_SIZE_SECTORS, f->e);
 	T_ASSERT(cache);
 
 	f->di = bcache_set_fd(f->fd);
+
+	T_ASSERT(f->di >= 0);
 
 	_io_init(&io);
 	T_ASSERT(f->e->issue(f->e, DIR_READ, f->di, 0, BLOCK_SIZE_SECTORS, f->data, &io));
@@ -149,17 +156,19 @@ static void _test_read(void *fixture)
 	T_ASSERT(io.completed);
 	T_ASSERT(!io.error);
 
-	_check_buffer(f->data, 123, sizeof(f->data));
+	_check_buffer(f->data, 123, SECTOR_SIZE * BLOCK_SIZE_SECTORS);
 }
 
 static void _test_write(void *fixture)
 {
 	struct fixture *f = fixture;
 	struct io io;
-	struct bcache *cache = bcache_create(8, BLOCK_SIZE_SECTORS, f->e);
+	struct bcache *cache = bcache_create(PAGE_SIZE_SECTORS, BLOCK_SIZE_SECTORS, f->e);
 	T_ASSERT(cache);
 
 	f->di = bcache_set_fd(f->fd);
+
+	T_ASSERT(f->di >= 0);
 
 	_io_init(&io);
 	T_ASSERT(f->e->issue(f->e, DIR_WRITE, f->di, 0, BLOCK_SIZE_SECTORS, f->data, &io));
@@ -175,7 +184,7 @@ static void _test_write_bytes(void *fixture)
 	unsigned offset = 345;
 	char buf_out[32];
 	char buf_in[32];
-	struct bcache *cache = bcache_create(8, BLOCK_SIZE_SECTORS, f->e);
+	struct bcache *cache = bcache_create(PAGE_SIZE_SECTORS, BLOCK_SIZE_SECTORS, f->e);
 	T_ASSERT(cache);
 
 	f->di = bcache_set_fd(f->fd);

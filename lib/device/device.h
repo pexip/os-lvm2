@@ -32,12 +32,15 @@
 #define DEV_NOT_O_NOATIME	0x00000400	/* Don't use O_NOATIME */
 #define DEV_IN_BCACHE		0x00000800      /* dev fd is open and used in bcache */
 #define DEV_BCACHE_EXCL		0x00001000      /* bcache_fd should be open EXCL */
-#define DEV_FILTER_AFTER_SCAN	0x00002000	/* apply filter after bcache has data */
-#define DEV_FILTER_OUT_SCAN	0x00004000	/* filtered out during label scan */
+/* unused                       0x00002000      */
+/* unused			0x00004000	*/
 #define DEV_BCACHE_WRITE	0x00008000      /* bcache_fd is open with RDWR */
 #define DEV_SCAN_FOUND_LABEL	0x00010000      /* label scan read dev and found label */
 #define DEV_IS_MD_COMPONENT	0x00020000	/* device is an md component */
-#define DEV_UDEV_INFO_MISSING   0x00040000	/* we have no udev info for this device */
+#define DEV_IS_NVME		0x00040000	/* set if dev is nvme */
+#define DEV_MATCHED_USE_ID	0x00080000	/* matched an entry from cmd->use_devices */
+#define DEV_SCAN_FOUND_NOLABEL	0x00100000	/* label_scan read, passed filters, but no lvm label */
+#define DEV_SCAN_NOT_READ	0x00200000	/* label_scan not able to read dev */
 
 /*
  * Support for external device info.
@@ -56,12 +59,54 @@ struct dev_ext {
 	void *handle;
 };
 
+#define DEV_ID_TYPE_SYS_WWID   0x0001
+#define DEV_ID_TYPE_SYS_SERIAL 0x0002
+#define DEV_ID_TYPE_MPATH_UUID 0x0003
+#define DEV_ID_TYPE_MD_UUID    0x0004
+#define DEV_ID_TYPE_LOOP_FILE  0x0005
+#define DEV_ID_TYPE_CRYPT_UUID 0x0006
+#define DEV_ID_TYPE_LVMLV_UUID 0x0007
+#define DEV_ID_TYPE_DEVNAME    0x0008
+
+/*
+ * A device ID of a certain type for a device.
+ * A struct device may have multiple dev_id structs on dev->ids.
+ * One of them will be the one that's used, pointed to by dev->id.
+ */
+
+struct dev_id {
+	struct dm_list list;
+	struct device *dev;
+	uint16_t idtype;	/* DEV_ID_TYPE_ */
+	char *idname;		/* id string determined by idtype */
+};
+
+/*
+ * A device listed in devices file that lvm should use.
+ * Each entry in the devices file is represented by a struct dev_use.
+ * The structs are kept on cmd->use_devices.
+ * idtype/idname/pvid/part are set when reading the devices file.
+ * du->dev is set when a struct dev_use is matched to a struct device.
+ */
+
+struct dev_use {
+	struct dm_list list;
+	struct device *dev;
+	int part;
+	uint16_t idtype;
+	char *idname;
+	char *devname;
+	char *pvid;
+};
+
 /*
  * All devices in LVM will be represented by one of these.
  * pointer comparisons are valid.
  */
 struct device {
 	struct dm_list aliases;	/* struct dm_str_list */
+	struct dm_list ids; /* struct dev_id, different entries for different idtypes */
+	struct dev_id *id; /* points to the the ids entry being used for this dev */
 	dev_t dev;
 
 	/* private */
@@ -72,6 +117,7 @@ struct device {
 	int read_ahead;
 	int bcache_fd;
 	int bcache_di;
+	int part;		/* partition number */
 	uint32_t flags;
 	uint32_t filtered_flags;
 	unsigned size_seqno;
@@ -158,7 +204,7 @@ struct device *dev_create_file(const char *filename, struct device *dev,
 			       struct dm_str_list *alias, int use_malloc);
 void dev_destroy_file(struct device *dev);
 
-/* Return a valid device name from the alias list; NULL otherwise */
-const char *dev_name_confirmed(struct device *dev, int quiet);
+int dev_mpath_init(const char *config_wwids_file);
+void dev_mpath_exit(void);
 
 #endif

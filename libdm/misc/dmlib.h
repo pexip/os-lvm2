@@ -22,6 +22,7 @@
 /*
  * Symbol export control macros
  *
+ *   DM_EXPORT_NEW_SYMBOL(rettype, func, ver)
  *   DM_EXPORT_SYMBOL(func,ver)
  *   DM_EXPORT_SYMBOL_BASE(func,ver)
  *
@@ -37,22 +38,22 @@
  * specified version string.
  *
  * Since versioning is only available when compiling with GCC the entire
- * compatibility version should be enclosed in '#if defined(__GNUC__)',
+ * compatibility version should be enclosed in '#if defined(GNU_SYMVER)',
  * for example:
  *
- *   int dm_foo(int bar)
+ *   DM_EXPORT_NEW_SYMBOL(int, dm_foo, 1_02_107)(int bar)
  *   {
  *     return bar;
  *   }
  *
- *   #if defined(__GNUC__)
+ *   #if defined(GNU_SYMVER)
  *   // Backward compatible dm_foo() version 1.02.104
+ *   DM_EXPORT_SYMBOL(dm_foo,1_02_104)
  *   int dm_foo_v1_02_104(void);
  *   int dm_foo_v1_02_104(void)
  *   {
  *     return 0;
  *   }
- *   DM_EXPORT_SYMBOL(dm_foo,1_02_104)
  *   #endif
  *
  * A prototype for the compatibility version is required as these
@@ -62,17 +63,36 @@
  * versions of library symbols prior to the introduction of symbol
  * versioning: it must never be used for new symbols.
  */
-#if defined(__GNUC__)
+#if defined(GNU_SYMVER)
+# ifdef __has_attribute
+#  if __has_attribute(symver)
+#   define DM_EXPORT_NEW_SYMBOL(rettype, func, ver) \
+	__attribute__((__symver__( #func "@@DM_" #ver ))) \
+	__typeof__(func) func ##_v ##ver; \
+	rettype func ##_v ##ver
+#   define DM_EXPORT_SYMBOL(func, ver) \
+	__attribute__((__symver__( #func "@DM_" #ver )))
+#   define DM_EXPORT_SYMBOL_BASE(func) \
+	__attribute__((__symver__( #func "@Base" )))
+#  endif
+# endif
+#ifndef DM_EXPORT_NEW_SYMBOL
+#define DM_EXPORT_NEW_SYMBOL(rettype, func, ver) \
+	__typeof__(func) func ##_v ##ver; \
+	__asm__(".symver " #func "_v" #ver ", " #func "@@DM_" #ver ); \
+	rettype func ##_v ##ver
 #define DM_EXPORT_SYMBOL(func, ver) \
-	__asm__(".symver " #func "_v" #ver ", " #func "@DM_" #ver )
+	__asm__(".symver " #func "_v" #ver ", " #func "@DM_" #ver );
 #define DM_EXPORT_SYMBOL_BASE(func) \
-	__asm__(".symver " #func "_base, " #func "@Base" )
+	__asm__(".symver " #func "_base, " #func "@Base" );
+#endif
 #else
+#define DM_EXPORT_NEW_SYMBOL(rettype, func, ver) rettype func
 #define DM_EXPORT_SYMBOL(func, ver)
 #define DM_EXPORT_SYMBOL_BASE(func)
 #endif
 
-#include "lib/misc/util.h"
+#include "libdm/dm-tools/util.h"
 
 #include "libdm/libdevmapper.h"
 #include "libdm/misc/dm-logging.h"

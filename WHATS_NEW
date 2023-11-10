@@ -1,8 +1,129 @@
+Version 2.03.16 - 18th May 2022
+===============================
+  Fix segfault when handling selection with historical LVs.
+  Add support --vdosettings with lvcreate, lvconvert, lvchange.
+  Filtering multipath devices respects blacklist setting from multipath
+  configuration.
+  lvmdevices support for removing by device id using --deviceidtype and
+  --deldev.
+  Display writecache block size with lvs -o writecache_block_size.
+  Improve cachesettings description in man lvmcache.
+  Fix lossing of delete message on thin-pool extension.
+
+Version 2.03.15 - 07th February 2022
+====================================
+  Remove service based autoactivation. global/event_activation = 0 is NOOP.
+  Improve support for metadata profiles for --type writecache.
+  Use cache or active DM device when available with new kernels.
+  Introduce function to utilize UUIDs from DM_DEVICE_LIST.
+  Increase some hash table size to better support large device sets.
+
+Version 2.03.14 - 20th October 2021
+===================================
+  Device scanning is skipping directories on different filesystems.
+  Print info message with too many or too large archived files.
+  Reduce metadata readings during scanning phase.
+  Optimize computation of crc32 check sum with multiple PVs.
+  Enhance recover path on cache creation failure.
+  Filter out unsupported MQ/SMQ cache policy setting.
+  Fix memleak in mpath filter.
+  Support newer location for VDO statistics.
+  Add support for VDO async-unsafe write policy.
+  Improve lvm_import_vdo script.
+  Support VDO LV with lvcreate -ky.
+  Fix lvconvert for VDO LV bigger then 2T.
+  Create VDO LVs automatically without zeroing.
+  Rename vdoimport to lvm_import_vdo.
+
+Version 2.03.13 - 11th August 2021
+==================================
+  Changes in udev support:
+  - obtain_device_list_from_udev defaults to 0.
+  - see devices/external_device_info_source,
+    devices/obtain_device_list_from_udev, and devices/multipath_wwids_file help
+    in lvm.conf
+  Fix devices file handling of loop with deleted backing file.
+  Fix devices file handling of scsi_debug WWIDs.
+  Fix many static analysis issues.
+  Support --poolmetadataspare with vgsplit and vgmerge.
+  Fix detection of active components of external origin volume.
+  Add vdoimport tool to support conversion of VDO volumes.
+  Support configurable allocation/vdo_pool_header_size.
+  Fix handling of lvconvert --type vdo-pool --virtualsize.
+  Simplified handling of archive() and backup() internal calls.
+  Add 'idm' locking type for IDM lock manager.
+  Fix load of kvdo target when it is not present in memory (2.03.12).
+
+Version 2.03.12 - 07th May 2021
+===============================
+  Allow attaching cache to thin data volume.
+  Fix memleak when generating list of outdated pvs.
+  Better hyphenation usage in man pages.
+  Replace use of deprecated security_context_t with char*.
+  Configure supports AIO_LIBS and AIO_CFLAGS.
+  Improve build process for static builds.
+  New --setautoactivation option to modify LV or VG auto activation.
+  New metadata based autoactivation property for LVs and VGs.
+  Improve signal handling with lvmpolld.
+  Signal handler can interrupt command also for SIGTERM.
+  Lvreduce --yes support.
+  Add configure option --with/out-symvers for non-glibc builds.
+  Report error when the filesystem is missing on fsadm resized volume.
+  Handle better blockdev with --getsize64 support for fsadm.
+  Do not include editline/history.h when using editline library.
+  Support error and zero segtype for thin-pool data for testing.
+  Support mixed extension for striped, error and zero segtypes.
+  Support resize also for stacked virtual volumes.
+  Skip dm-zero devices just like with dm-error target.
+  Reduce ioctl() calls when checking target status.
+  Merge polling does not fail, when LV is found to be already merged.
+  Poll volumes with at least 100ms delays.
+  Do not flush dm cache when cached LV is going to be removed.
+  New lvmlockctl_kill_command configuration option.
+  Support interruption while waiting on device close before deactivation.
+  Flush thin-pool messages before removing more thin volumes.
+  Improve hash function with less collisions and make it faster.
+  Reduce ioctl count when deactivating volumes.
+  Reduce number of metadata parsing.
+  Enhance performance of lvremove and vgremove commands.
+  Support interruption when taking archive and backup.
+  Accelerate large lvremoves.
+  Speedup search for cached device nodes.
+  Speedup command initialization.
+  Add devices file feature, off by default for now.
+  Support extension of writecached volumes.
+  Fix problem with unbound variable usage within fsadm.
+  Fix IMSM MD RAID detection on 4k devices.
+  Check for presence of VDO target before starting any conversion.
+  Support metatadata profiles with volume VDO pool conversions.
+  Support -Zn for conversion of already formated VDO pools.
+  Avoid removing LVs on error path of lvconvert during creation volumes.
+  Fix crashing lvdisplay when thin volume was waiting for merge.
+  Support option --errorwhenfull when converting volume to thin-pool.
+  Improve thin-performance profile support conversion to thin-pool.
+  Add workaround to avoid read of internal 'converted' devices.
+  Prohibit merging snapshot into the read-only thick snapshot origin.
+  Restore support for flipping rw/r permissions for thin snapshot origin.
+  Support resize of cached volumes.
+  Disable autoactivation with global/event_activation=0.
+  Check if lvcreate passes read_only_volume_list with tags and skips zeroing.
+  Allocation prints better error when metadata cannot fit on a single PV.
+  Pvmove can better resolve full thin-pool tree move.
+  Limit pool metadata spare to 16GiB.
+  Improves conversion and allocation of pool metadata.
+  Support thin pool metadata 15.88GiB, adds 64MiB, thin_pool_crop_metadata=0.
+  Enhance lvdisplay to report raid available/partial.
+  Support online rename of VDO pools.
+  Improve removal of pmspare when last pool is removed.
+  Fix problem with wiping of converted LVs.
+  Fix memleak in scanning  (2.03.11).
+  Fix corner case allocation for thin-pools.
+
 Version 2.03.11 - 08th January 2021
 ===================================
   Fix pvck handling MDA at offset different from 4096.
   Partial or degraded activation of writecache is not allowed.
-  Enhance error handling for fsadm and hanled correct fsck result.
+  Enhance error handling for fsadm and handle correct fsck result.
   Dmeventd lvm plugin ignores higher reserved_stack lvm.conf values.
   Support using BLKZEROOUT for clearing devices.
   Support interruption when wipping LVs.
@@ -196,7 +317,6 @@ Version 2.03.00 - 10th October 2018
   Remove clvmd
   Remove lvmlib (api)
   Remove lvmetad
-  lvconvert: provide possible layouts between linear and striped/raid
   Use versionsort to fix archive file expiry beyond 100000 files.
 
 Version 2.02.178-rc1 - 24th May 2018
@@ -1716,7 +1836,7 @@ Version 2.02.105 - 20th January 2014
   Allow lvmetad to reuse stale socket.
   Only unlink lvmetad socket on error if created by the same process.
   Append missing newline to lvmetad missing socket path error message.
-  Check for non-zero aligment in _text_pv_add_metadata_area() to not div by 0.
+  Check for non-zero alignment in _text_pv_add_metadata_area() to not div by 0.
   Add allocation/use_blkid_wiping to lvm.conf to enable blkid wiping.
   Enable blkid_wiping by default if the blkid library is present.
   Add configure --disable-blkid_wiping to disable libblkid signature detection.

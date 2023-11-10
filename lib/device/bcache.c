@@ -42,7 +42,7 @@ static int *_fd_table;
 
 static void log_sys_warn(const char *call)
 {
-	log_warn("%s failed: %s", call, strerror(errno));
+	log_warn("WARNING: %s failed: %s.", call, strerror(errno));
 }
 
 // Assumes the list is not empty.
@@ -74,7 +74,7 @@ static struct cb_set *_cb_set_create(unsigned nr)
 	unsigned i;
 	struct cb_set *cbs = malloc(sizeof(*cbs) + nr * sizeof(*cbs->vec));
 
-	if (!cbs->vec)
+	if (!cbs)
 		return NULL;
 
 	dm_list_init(&cbs->free);
@@ -92,7 +92,7 @@ static void _cb_set_destroy(struct cb_set *cbs)
 	// never be in flight IO.
 	if (!dm_list_empty(&cbs->allocated)) {
 		// bail out
-		log_error("async io still in flight");
+		log_warn("WARNING: async io still in flight.");
 		return;
 	}
 
@@ -358,10 +358,16 @@ static unsigned _async_max_io(struct io_engine *e)
 
 struct io_engine *create_async_io_engine(void)
 {
+	static int _pagesize = 0;
 	int r;
-	struct async_engine *e = malloc(sizeof(*e));
+	struct async_engine *e;
 
-	if (!e)
+	if ((_pagesize <= 0) && (_pagesize = sysconf(_SC_PAGESIZE)) < 0) {
+		log_warn("_SC_PAGESIZE returns negative value.");
+		return NULL;
+	}
+
+	if (!(e = malloc(sizeof(*e))))
 		return NULL;
 
 	e->e.destroy = _async_destroy;
@@ -384,8 +390,9 @@ struct io_engine *create_async_io_engine(void)
 		return NULL;
 	}
 
-	e->page_mask = sysconf(_SC_PAGESIZE) - 1;
+	e->page_mask = (unsigned) _pagesize - 1;
 
+	/* coverity[leaked_storage] 'e' is not leaking */
 	return &e->e;
 }
 
@@ -600,7 +607,8 @@ struct io_engine *create_sync_io_engine(void)
         e->e.wait = _sync_wait;
         e->e.max_io = _sync_max_io;
 
-        dm_list_init(&e->complete);
+	dm_list_init(&e->complete);
+	/* coverity[leaked_storage] 'e' is not leaking */
         return &e->e;
 }
 
@@ -728,7 +736,7 @@ static void _block_remove(struct block *b)
         k.parts.di = b->di;
         k.parts.b = b->index;
 
-	radix_tree_remove(b->cache->rtree, k.bytes, k.bytes + sizeof(k.bytes));
+	(void) radix_tree_remove(b->cache->rtree, k.bytes, k.bytes + sizeof(k.bytes));
 }
 
 //----------------------------------------------------------------
@@ -1087,12 +1095,12 @@ static void _preemptive_writeback(struct bcache *cache)
 struct bcache *bcache_create(sector_t block_sectors, unsigned nr_cache_blocks,
 			     struct io_engine *engine)
 {
+	static long _pagesize = 0;
 	struct bcache *cache;
 	unsigned max_io = engine->max_io(engine);
-	long pgsize = sysconf(_SC_PAGESIZE);
 	int i;
 
-	if (pgsize < 0) {
+	if ((_pagesize <= 0) && ((_pagesize = sysconf(_SC_PAGESIZE)) < 0)) {
 		log_warn("WARNING: _SC_PAGESIZE returns negative value.");
 		return NULL;
 	}
@@ -1107,7 +1115,7 @@ struct bcache *bcache_create(sector_t block_sectors, unsigned nr_cache_blocks,
 		return NULL;
 	}
 
-	if (block_sectors & ((pgsize >> SECTOR_SHIFT) - 1)) {
+	if (block_sectors & ((_pagesize >> SECTOR_SHIFT) - 1)) {
 		log_warn("bcache block size must be a multiple of page size");
 		return NULL;
 	}
@@ -1144,7 +1152,7 @@ struct bcache *bcache_create(sector_t block_sectors, unsigned nr_cache_blocks,
 	cache->write_misses = 0;
 	cache->prefetches = 0;
 
-	if (!_init_free_list(cache, nr_cache_blocks, pgsize)) {
+	if (!_init_free_list(cache, nr_cache_blocks, _pagesize)) {
 		cache->engine->destroy(cache->engine);
 		radix_tree_destroy(cache->rtree);
 		free(cache);
@@ -1351,26 +1359,26 @@ static bool _writeback_v(struct radix_tree_iterator *it,
 	struct block *b = v.ptr;
 
 	if (_test_flags(b, BF_DIRTY))
-        	_issue_write(b);
+		_issue_write(b);
 
-        return true;
+	return true;
 }
 
 static bool _invalidate_v(struct radix_tree_iterator *it,
                           uint8_t *kb, uint8_t *ke, union radix_value v)
 {
 	struct block *b = v.ptr;
-        struct invalidate_iterator *iit = container_of(it, struct invalidate_iterator, it);
+	struct invalidate_iterator *iit = container_of(it, struct invalidate_iterator, it);
 
 	if (b->error || _test_flags(b, BF_DIRTY)) {
-        	log_warn("bcache_invalidate: block (%d, %llu) still dirty",
-                         b->di, (unsigned long long) b->index);
-        	iit->success = false;
-        	return true;
+		log_warn("WARNING: bcache_invalidate: block (%d, %llu) still dirty.",
+			 b->di, (unsigned long long) b->index);
+		iit->success = false;
+		return true;
 	}
 
 	if (b->ref_count) {
-		log_warn("bcache_invalidate: block (%d, %llu) still held",
+		log_warn("WARNING: bcache_invalidate: block (%d, %llu) still held.",
 			 b->di, (unsigned long long) b->index);
 		iit->success = false;
 		return true;
@@ -1386,7 +1394,7 @@ static bool _invalidate_v(struct radix_tree_iterator *it,
 
 bool bcache_invalidate_di(struct bcache *cache, int di)
 {
-        union key k;
+	union key k;
 	struct invalidate_iterator it;
 
 	k.parts.di = di;
@@ -1401,7 +1409,7 @@ bool bcache_invalidate_di(struct bcache *cache, int di)
 	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it.it);
 
 	if (it.success)
-		radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
+		(void) radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
 
 	return it.success;
 }
@@ -1429,14 +1437,14 @@ static bool _abort_v(struct radix_tree_iterator *it,
 
 void bcache_abort_di(struct bcache *cache, int di)
 {
-        union key k;
+	union key k;
 	struct radix_tree_iterator it;
 
 	k.parts.di = di;
 
 	it.visit = _abort_v;
 	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it);
-	radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
+	(void) radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
 }
 
 //----------------------------------------------------------------
@@ -1512,10 +1520,9 @@ int bcache_change_fd(int di, int fd)
 	if (di >= _fd_table_size)
 		return 0;
 	if (di < 0) {
-		log_error(INTERNAL_ERROR "Cannot change not openned DI with FD:%d", fd);
+		log_error(INTERNAL_ERROR "Cannot change not opened DI with FD:%d", fd);
 		return 0;
 	}
 	_fd_table[di] = fd;
 	return 1;
 }
-

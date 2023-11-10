@@ -61,9 +61,10 @@ PYTHON2 = @PYTHON2@
 PYTHON3 = @PYTHON3@
 PYCOMPILE = $(top_srcdir)/autoconf/py-compile
 
-LIBS += @LIBS@ $(SELINUX_LIBS) $(UDEV_LIBS) $(BLKID_LIBS) $(RT_LIBS) $(M_LIBS)
+LIBS += @LIBS@ $(SELINUX_LIBS) $(UDEV_LIBS) $(RT_LIBS) $(M_LIBS)
+LVMLIBS = $(DMEVENT_LIBS) $(READLINE_LIBS) $(EDITLINE_LIBS) $(SYSTEMD_LIBS) $(BLKID_LIBS) $(AIO_LIBS) $(LIBS)
 # Extra libraries always linked with static binaries
-STATIC_LIBS = $(SELINUX_LIBS) $(UDEV_LIBS) $(BLKID_LIBS)
+STATIC_LIBS = $(PTHREAD_LIBS)
 DEFS += @DEFS@
 # FIXME set this only where it's needed, not globally?
 CFLAGS ?= @COPTIMISE_FLAG@ @CFLAGS@
@@ -72,20 +73,29 @@ CLDFLAGS += @CLDFLAGS@
 ELDFLAGS += @ELDFLAGS@
 LDDEPS += @LDDEPS@
 LIB_SUFFIX = @LIB_SUFFIX@
+USE_TRACKING = @USE_TRACKING@
+
 DL_LIBS = @DL_LIBS@
 RT_LIBS = @RT_LIBS@
 M_LIBS = @M_LIBS@
-PTHREAD_LIBS = @PTHREAD_LIBS@
-READLINE_LIBS = @READLINE_LIBS@
-EDITLINE_LIBS = @EDITLINE_LIBS@
-SELINUX_LIBS = @SELINUX_LIBS@
-UDEV_CFLAGS = @UDEV_CFLAGS@
-UDEV_LIBS = @UDEV_LIBS@
+AIO_CFLAGS = @AIO_CFLAGS@
+AIO_LIBS = @AIO_LIBS@
 BLKID_CFLAGS = @BLKID_CFLAGS@
 BLKID_LIBS = @BLKID_LIBS@
+CPG_CFLAGS = @CPG_CFLAGS@
+CPG_LIBS = @CPG_LIBS@
+EDITLINE_CFLAGS = @EDITLINE_CFLAGS@
+EDITLINE_LIBS = @EDITLINE_LIBS@
+PTHREAD_LIBS = @PTHREAD_LIBS@
+READLINE_CFLAGS = @READLINE_CFLAGS@
+READLINE_LIBS = @READLINE_LIBS@
+SELINUX_LIBS = @SELINUX_LIBS@
+SYSTEMD_CFLAGS = @SYSTEMD_CFLAGS@
 SYSTEMD_LIBS = @SYSTEMD_LIBS@
+UDEV_CFLAGS = @UDEV_CFLAGS@
+UDEV_LIBS = @UDEV_LIBS@
 VALGRIND_CFLAGS = @VALGRIND_CFLAGS@
-USE_TRACKING = @USE_TRACKING@
+VALGRIND_LIBS = @VALGRIND_LIBS@
 
 # Setup directory variables
 prefix = @prefix@
@@ -118,7 +128,7 @@ systemd_generator_dir = $(DESTDIR)$(SYSTEMD_GENERATOR_DIR)
 systemd_dir = $(DESTDIR)@systemdutildir@
 tmpfiles_dir = $(DESTDIR)@tmpfilesdir@
 ocf_scriptdir = $(DESTDIR)@OCFDIR@
-pythonprefix = $(DESTDIR)$(prefix)
+PYTHON_PREFIX = $(DESTDIR)$(prefix)
 
 # N.B. No $(DESTDIR) prefix here.
 python2dir = @PYTHON2DIR@
@@ -146,6 +156,7 @@ vpath %.po $(srcdir)
 vpath %.exported_symbols $(srcdir)
 
 interface = @interface@
+interfacebuilddir = $(top_builddir)/libdm/$(interface)
 rpmbuilddir = $(abs_top_builddir)/build
 
 # The number of jobs to run, if blank, defaults to the make standard
@@ -265,7 +276,7 @@ endif
 endif
 
 ifeq ("@BUILD_DMEVENTD@", "yes")
-  DMEVENT_LIBS = -ldevmapper-event
+  DMEVENT_LIBS = -ldevmapper-event -L$(interfacebuilddir) -ldevmapper
   LDFLAGS += -L$(top_builddir)/daemons/dmeventd
   CLDFLAGS += -L$(top_builddir)/daemons/dmeventd
 endif
@@ -300,7 +311,7 @@ INCLUDES += -I$(srcdir) -I$(top_srcdir) -I$(top_builddir)/include -include confi
 #VDO_INCLUDES=-I@VDO_INCLUDE@
 
 DEPS = $(top_builddir)/make.tmpl $(top_srcdir)/VERSION \
-       $(top_builddir)/Makefile $(top_builddir)/include/configure.h
+       $(top_builddir)/Makefile
 
 OBJECTS = $(SOURCES:%.c=%.o) $(CXXSOURCES:%.cpp=%.o)
 POTFILES = $(SOURCES:%.c=%.pot)
@@ -337,9 +348,10 @@ LVMINTERNAL_LIBS = $(top_builddir)/lib/liblvm-internal.a $(INTERNAL_LIBS)
 
 all: $(SUBDIRS) $(TARGETS)
 
-install: all $(SUBDIRS.install)
-install_cluster: all $(SUBDIRS.install_cluster)
+install: $(SUBDIRS.install)
+install_cluster: $(SUBDIRS.install_cluster)
 install_device-mapper: $(SUBDIRS.install_device-mapper)
+install_device_mapper: install_device-mapper
 install_lvm2: $(SUBDIRS.install_lvm2)
 install_ocf: $(SUBDIRS.install_ocf)
 cflow: $(SUBDIRS.cflow)
@@ -387,8 +399,7 @@ $(SUBDIRS.generate):
 ifneq ("$(CFLOW_LIST_TARGET)", "")
 CLEAN_CFLOW += $(CFLOW_LIST_TARGET)
 $(CFLOW_LIST_TARGET): $(CFLOW_LIST)
-	echo "CFLOW_SOURCES += $(addprefix \
-		\$$(top_srcdir)$(subst $(top_srcdir),,$(srcdir))/, $(CFLOW_LIST))" > $@
+	echo "CFLOW_SOURCES += $(addprefix $(abs_srcdir)/, $(CFLOW_LIST))" > $@
 cflow: $(CFLOW_LIST_TARGET)
 endif
 
@@ -402,21 +413,23 @@ CLEAN_CFLOW += \
 
 ifneq ("$(CFLOW_CMD)", "")
 CFLOW_FLAGS +=\
- --cpp="$(CC) -E" \
+ --cpp="$(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(BLKID_CFLAGS) $(DEFS)" \
  --symbol _ISbit:wrapper \
+ --symbol __asm__:wrapper \
  --symbol __attribute__:wrapper \
- --symbol __const__:wrapper \
+ --symbol __inline:=inline \
+ --symbol __inline__:=inline \
  --symbol __const:type \
- --symbol __restrict:type \
+ --symbol __const__:wrapper \
  --symbol __extension__:wrapper \
+ --symbol __leaf__:wrapper \
  --symbol __nonnull:wrapper \
  --symbol __nothrow__:wrapper \
  --symbol __pure__:wrapper \
  --symbol __REDIRECT:wrapper \
  --symbol __REDIRECT_NTH:wrapper \
- --symbol __wur:wrapper \
- -I$(top_srcdir)/daemons/dmeventd/plugins/lvm2/ \
- $(INCLUDES) $(DEFS)
+ --symbol __restrict:=restrict \
+ --symbol __wur:wrapper
 
 $(CFLOW_TARGET).cflow: $(CFLOW_SOURCES)
 	$(CFLOW_CMD) -o$@ $(CFLOW_FLAGS) $(CFLOW_SOURCES)
@@ -435,23 +448,28 @@ endif
 
 .LIBPATTERNS = lib%.so lib%.a
 
+DEPFLAGS=-MT $@ -MMD -MP -MF $*.d
+
 # still needed in 2018 for 32bit builds
 DEFS+=-D_FILE_OFFSET_BITS=64
 
-%.o: %.c
-	@echo "    [CC] $<"
-	$(Q) $(CC) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CFLAGS_$@) $< -o $@
+%.o: %.c $(DEPS)
+	@echo "    [CC] $(<F)"
+	@mkdir -p $(@D)
+	$(Q) $(CC) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CFLAGS_$@) $< -o $@
 
-%.o: %.cpp
-	@echo "    [CXX] $<"
-	$(Q) $(CXX) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) $< -o $@
+%.o: %.cpp $(DEPS)
+	@echo "    [CXX] $(<F)"
+	@mkdir -p $(@D)
+	$(Q) $(CXX) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) $< -o $@
 
-%.pot: %.c Makefile
-	@echo "    [CC] $@"
-	$(Q) $(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) -include $(top_builddir)/include/pogen.h $(DEFS) $(WFLAGS) $(CFLAGS) $< >$@
+%.pot: %.c $(DEPS)
+	@echo "    [CC] $(<F)"
+	@mkdir -p $(@D)
+	$(Q) $(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) -include $(top_builddir)/po/pogen.h $(DEFS) $(WFLAGS) $(CFLAGS) $< >$@
 
 %.so: %.o
-	@echo "    [CC] $<"
+	@echo "    [CC] $(<F)"
 	$(Q) $(CC) -c $(CFLAGS) $(CLDFLAGS) $< $(LIBS) -o $@
 
 ifneq (,$(LIB_SHARED))
@@ -500,20 +518,11 @@ $(LIB_STATIC): $(OBJECTS)
 	$(Q) $(RM) $@
 	$(Q) $(AR) rsv $@ $(OBJECTS) > /dev/null
 
-%.d: %.c
-	@echo "    [DEP] $<"
-	$(Q) $(MKDIR_P) $(dir $@); \
-	set -e; \
-	FILE=`echo $@ | sed 's/\\//\\\\\\//g;s/\\.d//g'`; \
-	DEPS=`echo $(DEPS) | sed -e 's/\\//\\\\\\//g'`; \
-	$(CC) -MM $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) -o $@ $<; \
-	sed -i "s/\(.*\)\.o[ :]*/$$FILE.o $$FILE.d $$FILE.pot: $$DEPS /g" $@; \
-	DEPLIST=`sed 's/ \\\\//;s/.*://;' < $@`; \
-	echo $$DEPLIST | fmt -1 | sed 's/ //g;s/\(.*\)/\1:/' >> $@; \
-	[ -s $@ ] || $(RM) $@
+%.d:
+.PRECIOUS: %.d
 
 %.mo: %.po
-	@echo "    [MSGFMT] $<"
+	@echo "    [MSGFMT] $(<F)"
 	$(Q) $(MSGFMT) -o $@ $<
 
 CLEAN_TARGETS += \
@@ -553,32 +562,27 @@ EXPORTED_SYMBOLS := $(wildcard $(srcdir)/.exported_symbols.Base $(srcdir)/.expor
 ifeq (,$(firstword $(EXPORTED_SYMBOLS)))
 	$(Q) set -e; (echo "Base {"; echo "	global:";\
 		 $(SED) "/^#/d;s/^/		/;s/$$/;/" $<;\
+		 echo "	local:"; echo "		*;";\
 		 echo "};";\
-		 echo "Local {"; echo "	local:"; echo "		*;"; echo "};";\
 		 ) > $@
 else
 	$(Q) set -e;\
 	R=$$($(SORT) $^ | $(GREP) -v "^#" | uniq -u);\
 	test -z "$$R" || { echo "Mismatch between symbols in shared library and lists in .exported_symbols.* files: $$R"; false; } ;\
-	( for i in $$(echo $(EXPORTED_SYMBOLS) | tr ' ' '\n' | $(SORT) -rnt_ -k5 ); do\
+	LAST=;\
+	for i in $$(echo $(EXPORTED_SYMBOLS) | tr ' ' '\n' | $(SORT) -nt_ -k5 ); do\
 		echo "$${i##*.} {"; echo "	global:";\
 		$(SED) "/^#/d;s/^/		/;s/$$/;/" $$i;\
-		echo "};";\
-	  done;\
-	  echo "Local {"; echo "	local:"; echo "		*;"; echo "};";\
-	) > $@
+		if test -z "$$LAST"; then echo "	local:"; echo "		*;";fi;\
+		echo "}$$LAST;";\
+		LAST=" $${i##*.}";\
+	done > $@
 endif
 
 ifeq ("$(USE_TRACKING)","yes")
 ifeq (,$(findstring $(MAKECMDGOALS),cscope.out cflow clean distclean lcov lcov-reset \
  help check check_local check_cluster check_lvmpolld run-unit-test tags))
 # Note: no tabs before -include
-    ifdef SOURCES
-       -include $(SOURCES:.c=.d) $(CXXSOURCES:.cpp=.d)
-    endif
-    ifdef SOURCES2
-       -include $(SOURCES2:.c=.d)
-    endif
-    DEPENDS = yes
+    -include $(SOURCES:.c=.d) $(SOURCES2:.c=.d) $(CXXSOURCES:.cpp=.d)
 endif
 endif

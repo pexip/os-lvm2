@@ -640,6 +640,7 @@ LVMLOCKD_PIDFILE
 LVMPOLLD_PIDFILE
 DMEVENTD_PIDFILE
 WRITE_INSTALL
+WRITECACHE
 VDO_LIB
 VDO_INCLUDE
 VDO
@@ -667,7 +668,6 @@ SALCK_CFLAGS
 SACKPT_LIBS
 SACKPT_CFLAGS
 REPLICATORS
-READLINE_LIBS
 RT_LIBS
 QUORUM_LIBS
 QUORUM_CFLAGS
@@ -690,6 +690,8 @@ OCFDIR
 OCF
 MIRRORS
 MANGLING
+LVMIMPORTVDO_PATH
+LVMIMPORTVDO
 LVM_RELEASE_DATE
 LVM_RELEASE
 LVM_PATH
@@ -702,6 +704,7 @@ LIB_SUFFIX
 LDDEPS
 JOBS
 INTL
+INTEGRITY
 HAVE_VALGRIND
 HAVE_REALTIME
 HAVE_LIBDL
@@ -751,6 +754,8 @@ BUILD_LVMDBUSD
 BUILD_DMEVENTD
 BUILD_CMIRRORD
 BLKID_PC
+READLINE_LIBS
+READLINE_CFLAGS
 MODPROBE_CMD
 MSGFMT
 EDITLINE_LIBS
@@ -768,12 +773,12 @@ PYTHON
 LVM2CMD_LIB
 UDEV_LIBS
 UDEV_CFLAGS
-SYSTEMD_LIBS
-SYSTEMD_CFLAGS
 BLKID_LIBS
 BLKID_CFLAGS
-NOTIFY_DBUS_LIBS
-NOTIFY_DBUS_CFLAGS
+SYSTEMD_LIBS
+SYSTEMD_CFLAGS
+LOCKD_IDM_LIBS
+LOCKD_IDM_CFLAGS
 LOCKD_DLM_CONTROL_LIBS
 LOCKD_DLM_CONTROL_CFLAGS
 LOCKD_DLM_LIBS
@@ -795,6 +800,8 @@ PKGCONFIGINIT_CFLAGS
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
 PKG_CONFIG
+AIO_LIBS
+AIO_CFLAGS
 VDO_FORMAT_CMD
 CACHE_RESTORE_CMD
 CACHE_REPAIR_CMD
@@ -868,6 +875,7 @@ infodir
 docdir
 oldincludedir
 includedir
+runstatedir
 localstatedir
 sharedstatedir
 sysconfdir
@@ -899,6 +907,7 @@ with_device_uid
 with_device_gid
 with_device_mode
 with_device_nodes_on
+with_default_use_devices_file
 with_default_name_mangling
 with_snapshots
 with_mirrors
@@ -933,6 +942,7 @@ enable_cmirrord
 with_cmirrord_pidfile
 enable_debug
 with_optimisation
+with_symvers
 enable_profiling
 enable_valgrind_pool
 enable_devmapper
@@ -940,18 +950,20 @@ enable_lvmpolld
 enable_lvmlockd_sanlock
 enable_lvmlockd_dlm
 enable_lvmlockd_dlmcontrol
+enable_lvmlockd_idm
 enable_use_lvmlockd
 with_lvmlockd_pidfile
 enable_use_lvmpolld
 with_lvmpolld_pidfile
 enable_dmfilemapd
 enable_notify_dbus
+enable_systemd_journal
+enable_app_machineid
 enable_blkid_wiping
 enable_udev_systemd_background_jobs
 enable_udev_sync
 enable_udev_rules
 enable_udev_rule_exec_detection
-enable_compat
 enable_units_compat
 enable_ioctl
 enable_o_direct
@@ -960,6 +972,7 @@ enable_dbus_service
 enable_pkgconfig
 enable_write_install
 enable_fsadm
+enable_lvmimportvdo
 enable_blkdeactivate
 enable_dmeventd
 enable_selinux
@@ -996,6 +1009,8 @@ CXX
 CXXFLAGS
 CCC
 CPP
+AIO_CFLAGS
+AIO_LIBS
 PKG_CONFIG
 PKG_CONFIG_PATH
 PKG_CONFIG_LIBDIR
@@ -1011,17 +1026,19 @@ LOCKD_DLM_CFLAGS
 LOCKD_DLM_LIBS
 LOCKD_DLM_CONTROL_CFLAGS
 LOCKD_DLM_CONTROL_LIBS
-NOTIFY_DBUS_CFLAGS
-NOTIFY_DBUS_LIBS
-BLKID_CFLAGS
-BLKID_LIBS
+LOCKD_IDM_CFLAGS
+LOCKD_IDM_LIBS
 SYSTEMD_CFLAGS
 SYSTEMD_LIBS
+BLKID_CFLAGS
+BLKID_LIBS
 UDEV_CFLAGS
 UDEV_LIBS
 PYTHON
 EDITLINE_CFLAGS
-EDITLINE_LIBS'
+EDITLINE_LIBS
+READLINE_CFLAGS
+READLINE_LIBS'
 
 
 # Initialize some variables set by options.
@@ -1060,6 +1077,7 @@ datadir='${datarootdir}'
 sysconfdir='${prefix}/etc'
 sharedstatedir='${prefix}/com'
 localstatedir='${prefix}/var'
+runstatedir='${localstatedir}/run'
 includedir='${prefix}/include'
 oldincludedir='/usr/include'
 docdir='${datarootdir}/doc/${PACKAGE}'
@@ -1312,6 +1330,15 @@ do
   | -silent | --silent | --silen | --sile | --sil)
     silent=yes ;;
 
+  -runstatedir | --runstatedir | --runstatedi | --runstated \
+  | --runstate | --runstat | --runsta | --runst | --runs \
+  | --run | --ru | --r)
+    ac_prev=runstatedir ;;
+  -runstatedir=* | --runstatedir=* | --runstatedi=* | --runstated=* \
+  | --runstate=* | --runstat=* | --runsta=* | --runst=* | --runs=* \
+  | --run=* | --ru=* | --r=*)
+    runstatedir=$ac_optarg ;;
+
   -sbindir | --sbindir | --sbindi | --sbind | --sbin | --sbi | --sb)
     ac_prev=sbindir ;;
   -sbindir=* | --sbindir=* | --sbindi=* | --sbind=* | --sbin=* \
@@ -1449,7 +1476,7 @@ fi
 for ac_var in	exec_prefix prefix bindir sbindir libexecdir datarootdir \
 		datadir sysconfdir sharedstatedir localstatedir includedir \
 		oldincludedir docdir infodir htmldir dvidir pdfdir psdir \
-		libdir localedir mandir
+		libdir localedir mandir runstatedir
 do
   eval ac_val=\$$ac_var
   # Remove trailing slashes.
@@ -1602,6 +1629,7 @@ Fine tuning of the installation directories:
   --sysconfdir=DIR        read-only single-machine data [PREFIX/etc]
   --sharedstatedir=DIR    modifiable architecture-independent data [PREFIX/com]
   --localstatedir=DIR     modifiable single-machine data [PREFIX/var]
+  --runstatedir=DIR       modifiable per-process data [LOCALSTATEDIR/run]
   --libdir=DIR            object code libraries [EPREFIX/lib]
   --includedir=DIR        C header files [PREFIX/include]
   --oldincludedir=DIR     C header files for non-gcc [/usr/include]
@@ -1659,10 +1687,14 @@ Optional Features:
   --enable-lvmlockd-dlm   enable the LVM lock daemon using dlm
   --enable-lvmlockd-dlmcontrol
                           enable lvmlockd remote refresh using libdlmcontrol
+  --enable-lvmlockd-idm   enable the LVM lock daemon using idm
   --disable-use-lvmlockd  disable usage of LVM lock daemon
   --disable-use-lvmpolld  disable usage of LVM Poll Daemon
   --enable-dmfilemapd     enable the dmstats filemap daemon
   --enable-notify-dbus    enable LVM notification using dbus
+  --disable-systemd-journal
+                          disable LVM systemd journaling
+  --disable-app-machineid disable LVM system ID using app-specific machine-id
   --disable-blkid_wiping  disable libblkid detection of signatures when wiping
                           and use native code instead
   --disable-udev-systemd-background-jobs
@@ -1672,7 +1704,6 @@ Optional Features:
   --enable-udev_rules     install rule files needed for udev synchronisation
   --enable-udev-rule-exec-detection
                           enable executable path detection in udev rules
-  --enable-compat         enable support for old device-mapper versions
   --enable-units-compat   enable output compatibility with old versions that
                           that do not use KiB-style unit suffixes
   --disable-ioctl         disable ioctl calls to device-mapper in the kernel
@@ -1682,6 +1713,7 @@ Optional Features:
   --enable-pkgconfig      install pkgconfig support
   --enable-write_install  install user writable files
   --disable-fsadm         disable fsadm
+  --disable-lvmimportvdo  disable lvm_import_vdo
   --disable-blkdeactivate disable blkdeactivate
   --enable-dmeventd       enable the device-mapper event daemon
   --disable-selinux       disable selinux support
@@ -1698,24 +1730,25 @@ Optional Packages:
   --with-device-mode=MODE set the mode used for new device nodes [MODE=0600]
   --with-device-nodes-on=ON
                           create nodes on resume or create [ON=resume]
+  --with-default-use-devices-file
+                          default for lvm.conf devices/use_devicesfile = [0]
   --with-default-name-mangling=MANGLING
                           default name mangling: auto/none/hex [auto]
-  --with-snapshots=TYPE   snapshot support: internal/shared/none [internal]
-  --with-mirrors=TYPE     mirror support: internal/shared/none [internal]
+  --with-snapshots=TYPE   snapshot support: internal/none [internal]
+  --with-mirrors=TYPE     mirror support: internal/none [internal]
   --with-default-mirror-segtype=TYPE
                           default mirror segtype: raid1/mirror [raid1]
   --with-default-raid10-segtype=TYPE
                           default mirror segtype: raid10/mirror [raid10]
   --with-default-sparse-segtype=TYPE
                           default sparse segtype: thin/snapshot [thin]
-  --with-thin=TYPE        thin provisioning support: internal/shared/none
-                          [internal]
+  --with-thin=TYPE        thin provisioning support: internal/none [internal]
   --with-thin-check=PATH  thin_check tool: [autodetect]
   --with-thin-dump=PATH   thin_dump tool: [autodetect]
   --with-thin-repair=PATH thin_repair tool: [autodetect]
   --with-thin-restore=PATH
                           thin_restore tool: [autodetect]
-  --with-cache=TYPE       cache support: internal/shared/none [internal]
+  --with-cache=TYPE       cache support: internal/none [internal]
   --with-cache-check=PATH cache_check tool: [autodetect]
   --with-cache-dump=PATH  cache_dump tool: [autodetect]
   --with-cache-repair=PATH
@@ -1737,6 +1770,8 @@ Optional Packages:
   --with-cmirrord-pidfile=PATH
                           cmirrord pidfile [PID_DIR/cmirrord.pid]
   --with-optimisation=OPT C optimisation flag [OPT=-O2]
+  --with-symvers=STYLE    use symbol versioning of the shared library
+                          [default=gnu]
   --with-lvmlockd-pidfile=PATH
                           lvmlockd pidfile [PID_DIR/lvmlockd.pid]
   --with-lvmpolld-pidfile=PATH
@@ -1783,6 +1818,8 @@ Some influential environment variables:
   CXX         C++ compiler command
   CXXFLAGS    C++ compiler flags
   CPP         C preprocessor
+  AIO_CFLAGS  C compiler flags for AIO
+  AIO_LIBS    linker flags for AIO
   PKG_CONFIG  path to pkg-config utility
   PKG_CONFIG_PATH
               directories to add to pkg-config's search path
@@ -1810,17 +1847,17 @@ Some influential environment variables:
               C compiler flags for LOCKD_DLM_CONTROL, overriding pkg-config
   LOCKD_DLM_CONTROL_LIBS
               linker flags for LOCKD_DLM_CONTROL, overriding pkg-config
-  NOTIFY_DBUS_CFLAGS
-              C compiler flags for NOTIFY_DBUS, overriding pkg-config
-  NOTIFY_DBUS_LIBS
-              linker flags for NOTIFY_DBUS, overriding pkg-config
-  BLKID_CFLAGS
-              C compiler flags for BLKID, overriding pkg-config
-  BLKID_LIBS  linker flags for BLKID, overriding pkg-config
+  LOCKD_IDM_CFLAGS
+              C compiler flags for LOCKD_IDM, overriding pkg-config
+  LOCKD_IDM_LIBS
+              linker flags for LOCKD_IDM, overriding pkg-config
   SYSTEMD_CFLAGS
               C compiler flags for SYSTEMD, overriding pkg-config
   SYSTEMD_LIBS
               linker flags for SYSTEMD, overriding pkg-config
+  BLKID_CFLAGS
+              C compiler flags for BLKID, overriding pkg-config
+  BLKID_LIBS  linker flags for BLKID, overriding pkg-config
   UDEV_CFLAGS C compiler flags for UDEV, overriding pkg-config
   UDEV_LIBS   linker flags for UDEV, overriding pkg-config
   PYTHON      the Python interpreter
@@ -1828,6 +1865,10 @@ Some influential environment variables:
               C compiler flags for EDITLINE, overriding pkg-config
   EDITLINE_LIBS
               linker flags for EDITLINE, overriding pkg-config
+  READLINE_CFLAGS
+              C compiler flags for readline
+  READLINE_LIBS
+              linker flags for readline
 
 Use these variables to override the choices made by `configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -3091,28 +3132,23 @@ if test -z "$CFLAGS"; then :
 fi
 case "$host_os" in
 	linux*)
-		CLDFLAGS="${CLDFLAGS-"$LDFLAGS"} -Wl,--version-script,.export.sym"
 		# equivalent to -rdynamic
 		ELDFLAGS="-Wl,--export-dynamic"
 		# FIXME Generate list and use --dynamic-list=.dlopen.sym
 		CLDWHOLEARCHIVE="-Wl,-whole-archive"
 		CLDNOWHOLEARCHIVE="-Wl,-no-whole-archive"
-		LDDEPS="$LDDEPS .export.sym"
 		LIB_SUFFIX=so
 		DEVMAPPER=yes
 		BUILD_LVMPOLLD=no
-		LOCKDSANLOCK=no
-		LOCKDDLM=no
-		LOCKDDLM_CONTROL=no
 		ODIRECT=yes
 		DM_IOCTLS=yes
 		SELINUX=yes
 		FSADM=yes
+		LVMIMPORTVDO=yes
 		BLKDEACTIVATE=yes
 		;;
 	darwin*)
 		CFLAGS="$CFLAGS -no-cpp-precomp -fno-common"
-		CLDFLAGS="${CLDFLAGS-"$LDFLAGS"}"
 		ELDFLAGS=
 		CLDWHOLEARCHIVE="-all_load"
 		CLDNOWHOLEARCHIVE=
@@ -3122,6 +3158,7 @@ case "$host_os" in
 		DM_IOCTLS=no
 		SELINUX=no
 		FSADM=no
+		LVMIMPORTVDO=no
 		BLKDEACTIVATE=no
 		;;
 	*)
@@ -6077,7 +6114,7 @@ fi
 
 
 for ac_header in assert.h ctype.h dirent.h errno.h fcntl.h float.h \
-  getopt.h inttypes.h langinfo.h libaio.h libgen.h limits.h locale.h paths.h \
+  getopt.h inttypes.h langinfo.h libgen.h limits.h locale.h paths.h \
   signal.h stdarg.h stddef.h stdio.h stdlib.h string.h sys/file.h \
   sys/ioctl.h syslog.h sys/mman.h sys/param.h sys/resource.h sys/stat.h \
   sys/time.h sys/types.h sys/utsname.h sys/wait.h time.h \
@@ -6110,6 +6147,19 @@ fi
 
 done
 
+for ac_header in libaio.h
+do :
+  ac_fn_c_check_header_mongrel "$LINENO" "libaio.h" "ac_cv_header_libaio_h" "$ac_includes_default"
+if test "x$ac_cv_header_libaio_h" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBAIO_H 1
+_ACEOF
+ LVM_NEEDS_LIBAIO_WARN=
+else
+  LVM_NEEDS_LIBAIO_WARN=y
+fi
+
+done
 
 case "$host_os" in
 	linux*)
@@ -6652,6 +6702,50 @@ fi
 
 
 
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __builtin_ffs" >&5
+$as_echo_n "checking for __builtin_ffs... " >&6; }
+if ${ax_cv_have___builtin_ffs+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+            __builtin_ffs(0)
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ax_cv_have___builtin_ffs=yes
+else
+  ax_cv_have___builtin_ffs=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_have___builtin_ffs" >&5
+$as_echo "$ax_cv_have___builtin_ffs" >&6; }
+
+    if test yes = $ax_cv_have___builtin_ffs; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE___BUILTIN_FFS 1
+_ACEOF
+
+fi
+
+
+
+
+
+
 $as_echo "#define _GNU_SOURCE 1" >>confdefs.h
 
 
@@ -6677,12 +6771,13 @@ else
 fi
 done
 
-for ac_func in prlimit
+for ac_func in ffs prlimit versionsort
 do :
-  ac_fn_c_check_func "$LINENO" "prlimit" "ac_cv_func_prlimit"
-if test "x$ac_cv_func_prlimit" = xyes; then :
+  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
+ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
+if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
   cat >>confdefs.h <<_ACEOF
-#define HAVE_PRLIMIT 1
+#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
 _ACEOF
 
 fi
@@ -8251,7 +8346,6 @@ test "x$prefix" = xNONE && prefix=$ac_default_prefix
 # Let make expand exec_prefix.
 test "x$exec_prefix" = xNONE && exec_prefix='${prefix}'
 
-
 ################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking file owner" >&5
 $as_echo_n "checking file owner... " >&6; }
@@ -8361,6 +8455,29 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking default for use_devicesfile" >&5
+$as_echo_n "checking default for use_devicesfile... " >&6; }
+
+# Check whether --with-default-use-devices-file was given.
+if test "${with_default_use_devices_file+set}" = set; then :
+  withval=$with_default_use_devices_file; DEFAULT_USE_DEVICES_FILE=$withval
+else
+  DEFAULT_USE_DEVICES_FILE=0
+fi
+
+case "$DEFAULT_USE_DEVICES_FILE" in
+ 0|1);;
+ *) as_fn_error $? "--with-default-use-devices-file parameter invalid" "$LINENO" 5;;
+esac
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $DEFAULT_USE_DEVICES_FILE" >&5
+$as_echo "$DEFAULT_USE_DEVICES_FILE" >&6; }
+
+cat >>confdefs.h <<_ACEOF
+#define DEFAULT_USE_DEVICES_FILE $DEFAULT_USE_DEVICES_FILE
+_ACEOF
+
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking default name mangling" >&5
 $as_echo_n "checking default name mangling... " >&6; }
 
@@ -8373,7 +8490,7 @@ fi
 
 case "$MANGLING" in
  auto) mangling=DM_STRING_MANGLING_AUTO;;
- none|disabled) mangling=DM_STRING_MANGLING_NONE;;
+ no|none|disabled) mangling=DM_STRING_MANGLING_NONE;;
  hex) mangling=DM_STRING_MANGLING_HEX;;
  *) as_fn_error $? "--with-default-name-mangling parameter invalid" "$LINENO" 5;;
 esac
@@ -8400,7 +8517,7 @@ fi
 $as_echo "$SNAPSHOTS" >&6; }
 
 case "$SNAPSHOTS" in
-  none|shared) ;;
+  no|none|shared) ;;
   internal)
 $as_echo "#define SNAPSHOT_INTERNAL 1" >>confdefs.h
  ;;
@@ -8422,7 +8539,7 @@ fi
 $as_echo "$MIRRORS" >&6; }
 
 case "$MIRRORS" in
-  none|shared) ;;
+  no|none|shared) ;;
   internal)
 $as_echo "#define MIRRORED_INTERNAL 1" >>confdefs.h
  ;;
@@ -8467,7 +8584,10 @@ _ACEOF
 
 # Check whether --with-default-sparse-segtype was given.
 if test "${with_default_sparse_segtype+set}" = set; then :
-  withval=$with_default_sparse_segtype; DEFAULT_SPARSE_SEGTYPE=$withval
+  withval=$with_default_sparse_segtype;  case "$withval" in
+				thin|snapshot) DEFAULT_SPARSE_SEGTYPE=$withval ;;
+				*) as_fn_error $? "--with-default-sparse-segtype parameter invalid" "$LINENO" 5 ;;
+			     esac
 else
   DEFAULT_SPARSE_SEGTYPE="thin"
 fi
@@ -8521,7 +8641,7 @@ fi
 $as_echo "$THIN" >&6; }
 
 case "$THIN" in
-  none)  test "$DEFAULT_SPARSE_SEGTYPE" = "thin" && DEFAULT_SPARSE_SEGTYPE="snapshot" ;;
+  no|none)  test "$DEFAULT_SPARSE_SEGTYPE" = "thin" && DEFAULT_SPARSE_SEGTYPE="snapshot" ;;
   shared) ;;
   internal)
 $as_echo "#define THIN_INTERNAL 1" >>confdefs.h
@@ -8654,7 +8774,7 @@ $as_echo "$as_me: WARNING: thin_check not found in path $PATH" >&2;}
 			THIN_CONFIGURE_WARN=y
 		fi
 	fi
-	if test "$THIN_CHECK_NEEDS_CHECK" = yes; then
+	if test "$THIN_CHECK_NEEDS_CHECK" = yes && test "$THIN_CONFIGURE_WARN" != y ; then
 		THIN_CHECK_VSN=`"$THIN_CHECK_CMD" -V 2>/dev/null`
 		THIN_CHECK_VSN_MAJOR=`echo "$THIN_CHECK_VSN" | $AWK -F '.' '{print $1}'`
 		THIN_CHECK_VSN_MINOR=`echo "$THIN_CHECK_VSN" | $AWK -F '.' '{print $2}'`
@@ -9002,7 +9122,6 @@ $as_echo "$THIN_CHECK_NEEDS_CHECK" >&6; }
 $as_echo "#define THIN_CHECK_NEEDS_CHECK 1" >>confdefs.h
 
 	fi
-
 	;;
 esac
 
@@ -9077,7 +9196,7 @@ fi
 $as_echo "$CACHE" >&6; }
 
 case "$CACHE" in
- none|shared) ;;
+ no|none|shared) ;;
  internal)
 $as_echo "#define CACHE_INTERNAL 1" >>confdefs.h
  ;;
@@ -9203,7 +9322,7 @@ $as_echo "$as_me: WARNING: cache_check not found in path $PATH" >&2;}
 			CACHE_CONFIGURE_WARN=y
 		fi
 	fi
-	if test "$CACHE_CHECK_NEEDS_CHECK" = yes; then
+	if test "$CACHE_CHECK_NEEDS_CHECK" = yes && test "$CACHE_CONFIGURE_WARN" != y ; then
 		$CACHE_CHECK_CMD -V 2>/dev/null >conftest.tmp
 		read -r CACHE_CHECK_VSN < conftest.tmp
 		IFS=.- read -r CACHE_CHECK_VSN_MAJOR CACHE_CHECK_VSN_MINOR CACHE_CHECK_VSN_PATCH LEFTOVER < conftest.tmp
@@ -9614,7 +9733,7 @@ else
 fi
 
 case "$VDO" in
- none) ;;
+ no|none) ;;
  internal)
 
 $as_echo "#define VDO_INTERNAL 1" >>confdefs.h
@@ -9739,13 +9858,13 @@ _ACEOF
 # Do we want to link lvm2 with a big library for vdoformating ?
 #
 #AC_ARG_WITH(vdo-include,
-#	    AC_HELP_STRING([--with-vdo-include=PATH],
+#	    AS_HELP_STRING([--with-vdo-include=PATH],
 #			   [vdo support: Path to utils headers: [/usr/include/vdo/utils]]),
 #			   VDO_INCLUDE=$withval, VDO_INCLUDE="/usr/include/vdo/utils")
 #AC_MSG_RESULT($VDO_INCLUDE)
 #
 #AC_ARG_WITH(vdo-lib,
-#            AC_HELP_STRING([--with-vdo-lib=PATH],
+#            AS_HELP_STRING([--with-vdo-lib=PATH],
 #                           [vdo support: Path to utils lib: [/usr/lib]]),
 #                           VDO_LIB=$withval, VDO_LIB="/usr/lib")
 #AC_MSG_RESULT($VDO_LIB)
@@ -9766,7 +9885,7 @@ fi
 $as_echo "$WRITECACHE" >&6; }
 
 case "$WRITECACHE" in
- none) ;;
+ no|none) ;;
  internal)
 
 $as_echo "#define WRITECACHE_INTERNAL 1" >>confdefs.h
@@ -9791,7 +9910,7 @@ fi
 $as_echo "$INTEGRITY" >&6; }
 
 case "$INTEGRITY" in
- none) ;;
+ no|none) ;;
  internal)
 
 $as_echo "#define INTEGRITY_INTERNAL 1" >>confdefs.h
@@ -9799,6 +9918,14 @@ $as_echo "#define INTEGRITY_INTERNAL 1" >>confdefs.h
 	;;
  *) as_fn_error $? "--with-integrity parameter invalid" "$LINENO" 5 ;;
 esac
+
+################################################################################
+# Allow users to override default location for libaio
+# there seems to be no pkg-config support available
+AIO_CFLAGS=
+AIO_LIBS=${AIO_LIBS:--laio}
+
+
 
 ################################################################################
 # Check whether --enable-readline was given.
@@ -10382,6 +10509,35 @@ fi
 $as_echo "$COPTIMISE_FLAG" >&6; }
 
 ################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to use symbol versioning" >&5
+$as_echo_n "checking whether to use symbol versioning... " >&6; }
+
+# Check whether --with-symvers was given.
+if test "${with_symvers+set}" = set; then :
+  withval=$with_symvers;  case "$withval" in
+				gnu|no) symvers=$withval ;;
+				*) as_fn_error $? "--with-symvers parameter invalid" "$LINENO" 5 ;;
+			     esac
+else
+  symvers=gnu
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $symvers" >&5
+$as_echo "$symvers" >&6; }
+
+if test "$GCC" = "yes" && test "$symvers" = "gnu" ; then
+
+$as_echo "#define GNU_SYMVER 1" >>confdefs.h
+
+		   case "$host_os" in
+			linux*)
+			CLDFLAGS="${CLDFLAGS-"$LDFLAGS"} -Wl,--version-script,.export.sym"
+			LDDEPS="$LDDEPS .export.sym"
+			;;
+		   esac
+fi
+
+################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to gather gcov profiling data" >&5
 $as_echo_n "checking whether to gather gcov profiling data... " >&6; }
 # Check whether --enable-profiling was given.
@@ -10717,7 +10873,6 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
-
 ################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to enable valgrind awareness of pools" >&5
 $as_echo_n "checking whether to enable valgrind awareness of pools... " >&6; }
@@ -10840,6 +10995,8 @@ $as_echo_n "checking whether to build lvmpolld... " >&6; }
 # Check whether --enable-lvmpolld was given.
 if test "${enable_lvmpolld+set}" = set; then :
   enableval=$enable_lvmpolld; LVMPOLLD=$enableval
+else
+  LVMPOLLD=no
 fi
 
 test -n "$LVMPOLLD" && BUILD_LVMPOLLD=$LVMPOLLD
@@ -10854,6 +11011,8 @@ $as_echo_n "checking whether to build lvmlockdsanlock... " >&6; }
 # Check whether --enable-lvmlockd-sanlock was given.
 if test "${enable_lvmlockd_sanlock+set}" = set; then :
   enableval=$enable_lvmlockd_sanlock; LOCKDSANLOCK=$enableval
+else
+  LOCKDSANLOCK=no
 fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDSANLOCK" >&5
@@ -10945,6 +11104,8 @@ $as_echo_n "checking whether to build lvmlockddlm... " >&6; }
 # Check whether --enable-lvmlockd-dlm was given.
 if test "${enable_lvmlockd_dlm+set}" = set; then :
   enableval=$enable_lvmlockd_dlm; LOCKDDLM=$enableval
+else
+  LOCKDDLM=no
 fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDDLM" >&5
@@ -11036,6 +11197,8 @@ $as_echo_n "checking whether to build lvmlockddlmcontrol... " >&6; }
 # Check whether --enable-lvmlockd-dlmcontrol was given.
 if test "${enable_lvmlockd_dlmcontrol+set}" = set; then :
   enableval=$enable_lvmlockd_dlmcontrol; LOCKDDLM_CONTROL=$enableval
+else
+  LOCKDDLM_CONTROL=no
 fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDDLM_CONTROL" >&5
@@ -11117,6 +11280,109 @@ $as_echo "yes" >&6; }
 fi
 
 $as_echo "#define LOCKDDLM_CONTROL_SUPPORT 1" >>confdefs.h
+
+	BUILD_LVMLOCKD=yes
+fi
+
+################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build lvmlockdidm" >&5
+$as_echo_n "checking whether to build lvmlockdidm... " >&6; }
+# Check whether --enable-lvmlockd-idm was given.
+if test "${enable_lvmlockd_idm+set}" = set; then :
+  enableval=$enable_lvmlockd_idm; LOCKDIDM=$enableval
+else
+  LOCKDIDM=no
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $LOCKDIDM" >&5
+$as_echo "$LOCKDIDM" >&6; }
+
+BUILD_LOCKDIDM=$LOCKDIDM
+
+if test "$BUILD_LOCKDIDM" = yes; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for LOCKD_IDM" >&5
+$as_echo_n "checking for LOCKD_IDM... " >&6; }
+
+if test -n "$LOCKD_IDM_CFLAGS"; then
+    pkg_cv_LOCKD_IDM_CFLAGS="$LOCKD_IDM_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libseagate_ilm >= 0.1.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libseagate_ilm >= 0.1.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LOCKD_IDM_CFLAGS=`$PKG_CONFIG --cflags "libseagate_ilm >= 0.1.0" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$LOCKD_IDM_LIBS"; then
+    pkg_cv_LOCKD_IDM_LIBS="$LOCKD_IDM_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libseagate_ilm >= 0.1.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libseagate_ilm >= 0.1.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LOCKD_IDM_LIBS=`$PKG_CONFIG --libs "libseagate_ilm >= 0.1.0" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        LOCKD_IDM_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libseagate_ilm >= 0.1.0" 2>&1`
+        else
+	        LOCKD_IDM_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libseagate_ilm >= 0.1.0" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$LOCKD_IDM_PKG_ERRORS" >&5
+
+	$bailout
+elif test $pkg_failed = untried; then
+     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	$bailout
+else
+	LOCKD_IDM_CFLAGS=$pkg_cv_LOCKD_IDM_CFLAGS
+	LOCKD_IDM_LIBS=$pkg_cv_LOCKD_IDM_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+	HAVE_LOCKD_IDM=yes
+fi
+	if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"blkid >= 2.24\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "blkid >= 2.24") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  HAVE_LOCKD_IDM=yes
+else
+  $bailout
+fi
+
+$as_echo "#define LOCKDIDM_SUPPORT 1" >>confdefs.h
 
 	BUILD_LVMLOCKD=yes
 fi
@@ -11244,12 +11510,34 @@ fi
 
 fi
 
+SYSTEMD_MIN_VERSION=0
+pkg_config_init
+if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 205\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "systemd >= 205") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  SYSTEMD_MIN_VERSION=205
+fi
+
 ################################################################################
+if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 221\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "systemd >= 221") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  SYSTEMD_MIN_VERSION=221
+fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build notifydbus" >&5
 $as_echo_n "checking whether to build notifydbus... " >&6; }
 # Check whether --enable-notify-dbus was given.
 if test "${enable_notify_dbus+set}" = set; then :
-  enableval=$enable_notify_dbus; NOTIFYDBUS_SUPPORT=$enableval
+  enableval=$enable_notify_dbus; if test "$enableval" = yes && test "$SYSTEMD_MIN_VERSION" -lt 221; then :
+  as_fn_error $? "Enabling notify-dbus requires systemd >= 221" "$LINENO" 5
+fi
+	      NOTIFYDBUS_SUPPORT=$enableval
 else
   NOTIFYDBUS_SUPPORT=no
 fi
@@ -11257,30 +11545,105 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $NOTIFYDBUS_SUPPORT" >&5
 $as_echo "$NOTIFYDBUS_SUPPORT" >&6; }
 
-if test "$NOTIFYDBUS_SUPPORT" = yes; then
+if test "$NOTIFYDBUS_SUPPORT" = yes; then :
 
 $as_echo "#define NOTIFYDBUS_SUPPORT 1" >>confdefs.h
 
-	SYSTEMD_LIBS="-lsystemd"
 fi
 
 ################################################################################
-if test "$NOTIFYDBUS_SUPPORT" = yes; then
+if test "$SYSTEMD_MIN_VERSION" -ge 221; then :
+  SYSTEMD_JOURNAL_SUPPORT=maybe
+else
+  SYSTEMD_JOURNAL_SUPPORT=no
+fi
+ac_fn_c_check_header_mongrel "$LINENO" "systemd/sd-journal.h" "ac_cv_header_systemd_sd_journal_h" "$ac_includes_default"
+if test "x$ac_cv_header_systemd_sd_journal_h" = xyes; then :
+  if test "$SYSTEMD_JOURNAL_SUPPORT" != no; then :
+  SYSTEMD_JOURNAL_SUPPORT=yes
+fi
+else
+  SYSTEMD_JOURNAL_SUPPORT=no
+fi
 
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for NOTIFY_DBUS" >&5
-$as_echo_n "checking for NOTIFY_DBUS... " >&6; }
 
-if test -n "$NOTIFY_DBUS_CFLAGS"; then
-    pkg_cv_NOTIFY_DBUS_CFLAGS="$NOTIFY_DBUS_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 221\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "systemd >= 221") 2>&5
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to log to systemd journal" >&5
+$as_echo_n "checking whether to log to systemd journal... " >&6; }
+# Check whether --enable-systemd-journal was given.
+if test "${enable_systemd_journal+set}" = set; then :
+  enableval=$enable_systemd_journal; if test "$enableval" = yes && test "$SYSTEMD_JOURNAL_SUPPORT" = no; then :
+  as_fn_error $? "Enabling systemd journal requires systemd/sd-journal.h and systemd >= 221." "$LINENO" 5
+fi
+	      SYSTEMD_JOURNAL_SUPPORT=$enableval
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $SYSTEMD_JOURNAL_SUPPORT" >&5
+$as_echo "$SYSTEMD_JOURNAL_SUPPORT" >&6; }
+
+if test "$SYSTEMD_JOURNAL_SUPPORT" = yes; then :
+
+$as_echo "#define SYSTEMD_JOURNAL_SUPPORT 1" >>confdefs.h
+
+fi
+
+################################################################################
+if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 234\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "systemd >= 234") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_NOTIFY_DBUS_CFLAGS=`$PKG_CONFIG --cflags "systemd >= 221" 2>/dev/null`
+  SYSTEMD_MIN_VERSION=234  APP_MACHINEID_SUPPORT=maybe
+else
+  APP_MACHINEID_SUPPORT=no
+fi
+ac_fn_c_check_header_mongrel "$LINENO" "systemd/sd-id128.h" "ac_cv_header_systemd_sd_id128_h" "$ac_includes_default"
+if test "x$ac_cv_header_systemd_sd_id128_h" = xyes; then :
+  if test "$APP_MACHINEID_SUPPORT" != no; then :
+  APP_MACHINEID_SUPPORT=yes
+fi
+else
+  APP_MACHINEID_SUPPORT=no
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to support systemd appmachineid" >&5
+$as_echo_n "checking whether to support systemd appmachineid... " >&6; }
+# Check whether --enable-app-machineid was given.
+if test "${enable_app_machineid+set}" = set; then :
+  enableval=$enable_app_machineid; if test "$enableval" = yes && test "$APP_MACHINEID_SUPPORT" = no; then :
+  as_fn_error $? "Enabling app machineid requires systemd/sd-id128.h and systemd >= 234." "$LINENO" 5
+fi
+	      APP_MACHINEID_SUPPORT=$enableval
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $APP_MACHINEID_SUPPORT" >&5
+$as_echo "$APP_MACHINEID_SUPPORT" >&6; }
+
+if test "$APP_MACHINEID_SUPPORT" = yes; then :
+
+$as_echo "#define APP_MACHINEID_SUPPORT 1" >>confdefs.h
+
+fi
+
+if test "$NOTIFYDBUS_SUPPORT" = yes || test "$SYSTEMD_JOURNAL_SUPPORT" = yes || test "$APP_MACHINEID_SUPPORT" = yes  ; then :
+
+      pkg_config_init
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SYSTEMD" >&5
+$as_echo_n "checking for SYSTEMD... " >&6; }
+
+if test -n "$SYSTEMD_CFLAGS"; then
+    pkg_cv_SYSTEMD_CFLAGS="$SYSTEMD_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "systemd") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_SYSTEMD_CFLAGS=`$PKG_CONFIG --cflags "systemd" 2>/dev/null`
 		      test "x$?" != "x0" && pkg_failed=yes
 else
   pkg_failed=yes
@@ -11288,16 +11651,16 @@ fi
  else
     pkg_failed=untried
 fi
-if test -n "$NOTIFY_DBUS_LIBS"; then
-    pkg_cv_NOTIFY_DBUS_LIBS="$NOTIFY_DBUS_LIBS"
+if test -n "$SYSTEMD_LIBS"; then
+    pkg_cv_SYSTEMD_LIBS="$SYSTEMD_LIBS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 221\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "systemd >= 221") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "systemd") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_NOTIFY_DBUS_LIBS=`$PKG_CONFIG --libs "systemd >= 221" 2>/dev/null`
+  pkg_cv_SYSTEMD_LIBS=`$PKG_CONFIG --libs "systemd" 2>/dev/null`
 		      test "x$?" != "x0" && pkg_failed=yes
 else
   pkg_failed=yes
@@ -11318,12 +11681,12 @@ else
         _pkg_short_errors_supported=no
 fi
         if test $_pkg_short_errors_supported = yes; then
-	        NOTIFY_DBUS_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "systemd >= 221" 2>&1`
+	        SYSTEMD_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "systemd" 2>&1`
         else
-	        NOTIFY_DBUS_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "systemd >= 221" 2>&1`
+	        SYSTEMD_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "systemd" 2>&1`
         fi
 	# Put the nasty error message in config.log where it belongs
-	echo "$NOTIFY_DBUS_PKG_ERRORS" >&5
+	echo "$SYSTEMD_PKG_ERRORS" >&5
 
 	$bailout
 elif test $pkg_failed = untried; then
@@ -11331,11 +11694,11 @@ elif test $pkg_failed = untried; then
 $as_echo "no" >&6; }
 	$bailout
 else
-	NOTIFY_DBUS_CFLAGS=$pkg_cv_NOTIFY_DBUS_CFLAGS
-	NOTIFY_DBUS_LIBS=$pkg_cv_NOTIFY_DBUS_LIBS
+	SYSTEMD_CFLAGS=$pkg_cv_SYSTEMD_CFLAGS
+	SYSTEMD_LIBS=$pkg_cv_SYSTEMD_LIBS
         { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
-	HAVE_NOTIFY_DBUS=yes
+	SYSTEMD_LIBS="-lsystemd"
 fi
 fi
 
@@ -11458,85 +11821,14 @@ fi
 
 
 if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" != no; then
-	pkg_config_init
-
-pkg_failed=no
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for SYSTEMD" >&5
-$as_echo_n "checking for SYSTEMD... " >&6; }
-
-if test -n "$SYSTEMD_CFLAGS"; then
-    pkg_cv_SYSTEMD_CFLAGS="$SYSTEMD_CFLAGS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 205\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "systemd >= 205") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_SYSTEMD_CFLAGS=`$PKG_CONFIG --cflags "systemd >= 205" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
+	if test "$SYSTEMD_MIN_VERSION" -ge 205; then :
+  UDEV_SYSTEMD_BACKGROUND_JOBS=yes
 else
-  pkg_failed=yes
-fi
- else
-    pkg_failed=untried
-fi
-if test -n "$SYSTEMD_LIBS"; then
-    pkg_cv_SYSTEMD_LIBS="$SYSTEMD_LIBS"
- elif test -n "$PKG_CONFIG"; then
-    if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 205\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "systemd >= 205") 2>&5
-  ac_status=$?
-  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
-  test $ac_status = 0; }; then
-  pkg_cv_SYSTEMD_LIBS=`$PKG_CONFIG --libs "systemd >= 205" 2>/dev/null`
-		      test "x$?" != "x0" && pkg_failed=yes
+  if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" = maybe; then :
+  UDEV_SYSTEMD_BACKGROUND_JOBS=no
 else
-  pkg_failed=yes
+  as_fn_error $? "bailing out... systemd >= 205 is required" "$LINENO" 5
 fi
- else
-    pkg_failed=untried
-fi
-
-
-
-if test $pkg_failed = yes; then
-   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
-        _pkg_short_errors_supported=yes
-else
-        _pkg_short_errors_supported=no
-fi
-        if test $_pkg_short_errors_supported = yes; then
-	        SYSTEMD_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "systemd >= 205" 2>&1`
-        else
-	        SYSTEMD_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "systemd >= 205" 2>&1`
-        fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$SYSTEMD_PKG_ERRORS" >&5
-
-	if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" = maybe; then
-				UDEV_SYSTEMD_BACKGROUND_JOBS=no
-			   else
-				as_fn_error $? "bailing out... systemd >= 205 is required" "$LINENO" 5
-			   fi
-elif test $pkg_failed = untried; then
-     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" = maybe; then
-				UDEV_SYSTEMD_BACKGROUND_JOBS=no
-			   else
-				as_fn_error $? "bailing out... systemd >= 205 is required" "$LINENO" 5
-			   fi
-else
-	SYSTEMD_CFLAGS=$pkg_cv_SYSTEMD_CFLAGS
-	SYSTEMD_LIBS=$pkg_cv_SYSTEMD_LIBS
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	UDEV_SYSTEMD_BACKGROUND_JOBS=yes
 fi
 fi
 
@@ -11735,24 +12027,6 @@ $as_echo_n "checking whether udev supports built-in blkid... " >&6; }
 	fi
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $UDEV_HAS_BUILTIN_BLKID" >&5
 $as_echo "$UDEV_HAS_BUILTIN_BLKID" >&6; }
-fi
-
-################################################################################
-# Check whether --enable-compat was given.
-if test "${enable_compat+set}" = set; then :
-  enableval=$enable_compat; DM_COMPAT=$enableval
-else
-  DM_COMPAT=no
-fi
-
-
-if test "$DM_COMPAT" = yes; then :
-
-$as_echo "#define DM_COMPAT 1" >>confdefs.h
-
-      as_fn_error $? "--enable-compat is not currently supported.
-Since device-mapper version 1.02.66, only one version (4) of the device-mapper
-ioctl protocol is supported." "$LINENO" 5
 fi
 
 ################################################################################
@@ -12300,6 +12574,18 @@ fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $FSADM" >&5
 $as_echo "$FSADM" >&6; }
+
+
+################################################################################
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to install lvm_import_vdo" >&5
+$as_echo_n "checking whether to install lvm_import_vdo... " >&6; }
+# Check whether --enable-lvmimportvdo was given.
+if test "${enable_lvmimportvdo+set}" = set; then :
+  enableval=$enable_lvmimportvdo; LVMIMPORTVDO=$enableval
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $LVMIMPORTVDO" >&5
+$as_echo "$LVMIMPORTVDO" >&6; }
 
 ################################################################################
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to install blkdeactivate" >&5
@@ -12946,12 +13232,12 @@ fi
 	# Put the nasty error message in config.log where it belongs
 	echo "$EDITLINE_PKG_ERRORS" >&5
 
-	as_fn_error $? "libedit could not be found which is required for the --enable-readline option." "$LINENO" 5
+	as_fn_error $? "libedit could not be found which is required for the --enable-editline option." "$LINENO" 5
 
 elif test $pkg_failed = untried; then
      	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
-	as_fn_error $? "libedit could not be found which is required for the --enable-readline option." "$LINENO" 5
+	as_fn_error $? "libedit could not be found which is required for the --enable-editline option." "$LINENO" 5
 
 else
 	EDITLINE_CFLAGS=$pkg_cv_EDITLINE_CFLAGS
@@ -13404,13 +13690,12 @@ $as_echo_n "checking whether to enable readline... " >&6; }
 $as_echo "$READLINE" >&6; }
 
 if test "$EDITLINE" = yes; then
-	for ac_header in editline/readline.h editline/history.h
+	for ac_header in editline/readline.h
 do :
-  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
-ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
-if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
+  ac_fn_c_check_header_mongrel "$LINENO" "editline/readline.h" "ac_cv_header_editline_readline_h" "$ac_includes_default"
+if test "x$ac_cv_header_editline_readline_h" = xyes; then :
   cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
+#define HAVE_EDITLINE_READLINE_H 1
 _ACEOF
 
 else
@@ -13788,6 +14073,13 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
+LVMIMPORTVDO_PATH="$SBINDIR/lvm_import_vdo"
+
+cat >>confdefs.h <<_ACEOF
+#define LVMIMPORTVDO_PATH "$LVMIMPORTVDO_PATH"
+_ACEOF
+
+
 ################################################################################
 if test "$BUILD_DMEVENTD" = yes; then
 
@@ -13958,8 +14250,20 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
-################################################################################
 
+
+
+
+
+
+
+
+
+
+
+
+
+################################################################################
 
 
 
@@ -15483,6 +15787,10 @@ if test -n "$VDO_CONFIGURE_WARN"; then :
 $as_echo "$as_me: WARNING: Unrecognized 'vdoformat' tool is REQUIRED for VDO logical volume creation!" >&2;}
 fi
 
+if test -n "$LVM_NEEDS_LIBAIO_WARN"; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Only libdm part can be build without libaio:  make [install_]device-mapper" >&5
+$as_echo "$as_me: WARNING: Only libdm part can be build without libaio:  make [install_]device-mapper" >&2;}
+fi
 
 if test "$ODIRECT" != yes; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: O_DIRECT disabled: low-memory pvmove may lock up" >&5

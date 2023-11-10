@@ -128,7 +128,7 @@ static int _read_id(struct id *id, const struct dm_config_node *cn, const char *
 	return 1;
 }
 
-static int _read_flag_config(const struct dm_config_node *n, uint64_t *status, int type)
+static int _read_flag_config(const struct dm_config_node *n, uint64_t *status, enum pv_vg_lv_e type)
 {
 	const struct dm_config_value *cv;
 	*status = 0;
@@ -188,7 +188,7 @@ static int _read_pv(struct cmd_context *cmd,
 	struct physical_volume *pv;
 	struct pv_list *pvl;
 	const struct dm_config_value *cv;
-	const char *device_hint;
+	const char *str;
 	uint64_t size, ba_start;
 
 	if (!(pvl = dm_pool_zalloc(mem, sizeof(*pvl))) ||
@@ -219,7 +219,8 @@ static int _read_pv(struct cmd_context *cmd,
 	if (!(pv->vg_name = dm_pool_strdup(mem, vg->name)))
 		return_0;
 
-	memcpy(&pv->vgid, &vg->id, sizeof(vg->id));
+	/* both are struct id */
+	memcpy(&pv->vg_id, &vg->id, sizeof(struct id));
 
 	if (!_read_flag_config(pvn, &pv->status, PV_FLAGS)) {
 		log_error("Couldn't read status flags for physical volume.");
@@ -233,9 +234,19 @@ static int _read_pv(struct cmd_context *cmd,
 		return 0;
 	}
 
-	if (dm_config_get_str(pvn, "device", &device_hint)) {
-		if (!(pv->device_hint = dm_pool_strdup(mem, device_hint)))
+	if (dm_config_get_str(pvn, "device", &str)) {
+		if (!(pv->device_hint = dm_pool_strdup(mem, str)))
 			log_error("Failed to allocate memory for device hint in read_pv.");
+	}
+
+	if (dm_config_get_str(pvn, "device_id", &str)) {
+		if (!(pv->device_id = dm_pool_strdup(mem, str)))
+			log_error("Failed to allocate memory for device_id in read_pv.");
+	}
+
+	if (dm_config_get_str(pvn, "device_id_type", &str)) {
+		if (!(pv->device_id_type = dm_pool_strdup(mem, str)))
+			log_error("Failed to allocate memory for device_id_type in read_pv.");
 	}
 
 	if (!_read_uint64(pvn, "pe_start", &pv->pe_start)) {
@@ -306,7 +317,7 @@ static int _read_pvsummary(struct cmd_context *cmd,
 {
 	struct physical_volume *pv;
 	struct pv_list *pvl;
-	const char *device_hint;
+	const char *str;
 
 	if (!(pvl = dm_pool_zalloc(mem, sizeof(*pvl))) ||
 	    !(pvl->pv = dm_pool_zalloc(mem, sizeof(*pvl->pv))))
@@ -326,9 +337,19 @@ static int _read_pvsummary(struct cmd_context *cmd,
 	    !_read_uint64(pvn, "dev_size", &pv->size))
 		log_warn("Couldn't read dev size for physical volume.");
 
-	if (dm_config_get_str(pvn, "device", &device_hint)) {
-		if (!(pv->device_hint = dm_pool_strdup(mem, device_hint)))
-			log_error("Failed to allocate memory for device hint in read_pv.");
+	if (dm_config_get_str(pvn, "device", &str)) {
+		if (!(pv->device_hint = dm_pool_strdup(mem, str)))
+			log_error("Failed to allocate memory for device hint in read_pv_sum.");
+	}
+
+	if (dm_config_get_str(pvn, "device_id", &str)) {
+		if (!(pv->device_id = dm_pool_strdup(mem, str)))
+			log_error("Failed to allocate memory for device_id in read_pv_sum.");
+	}
+
+	if (dm_config_get_str(pvn, "device_id_type", &str)) {
+		if (!(pv->device_id_type = dm_pool_strdup(mem, str)))
+			log_error("Failed to allocate memory for device_id_type in read_pv_sum.");
 	}
 
 	dm_list_add(&vgsummary->pvsummaries, &pvl->list);
@@ -1054,7 +1075,7 @@ static struct volume_group *_read_vg(struct cmd_context *cmd,
 	 * The pv hash memorises the pv section names -> pv
 	 * structures.
 	 */
-	if (!(pv_hash = dm_hash_create(64))) {
+	if (!(pv_hash = dm_hash_create(59))) {
 		log_error("Couldn't create pv hash table.");
 		goto bad;
 	}
@@ -1063,7 +1084,7 @@ static struct volume_group *_read_vg(struct cmd_context *cmd,
 	 * The lv hash memorises the lv section names -> lv
 	 * structures.
 	 */
-	if (!(lv_hash = dm_hash_create(1024))) {
+	if (!(lv_hash = dm_hash_create(1023))) {
 		log_error("Couldn't create lv hash table.");
 		goto bad;
 	}
@@ -1282,6 +1303,7 @@ static int _read_vgsummary(const struct format_type *fmt, const struct dm_config
 	const struct dm_config_node *vgn;
 	struct dm_pool *mem = fmt->cmd->mem;
 	const char *str;
+	struct id id;
 
 	if (!dm_config_get_str(cft->root, "creation_host", &str))
 		str = "";
@@ -1302,10 +1324,12 @@ static int _read_vgsummary(const struct format_type *fmt, const struct dm_config
 
 	vgn = vgn->child;
 
-	if (!_read_id(&vgsummary->vgid, vgn, "id")) {
+	if (!_read_id(&id, vgn, "id")) {
 		log_error("Couldn't read uuid for volume group %s.", vgsummary->vgname);
 		return 0;
 	}
+
+	memcpy(vgsummary->vgid, &id, ID_LEN);
 
 	if (!_read_flag_config(vgn, &vgsummary->vgstatus, VG_FLAGS)) {
 		log_error("Couldn't find status flags for volume group %s.",

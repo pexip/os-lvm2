@@ -338,6 +338,7 @@ struct dm_task *dm_task_create(int type)
 	dmt->new_uuid = 0;
 	dmt->secure_data = 0;
 	dmt->record_timestamp = 0;
+	dmt->ima_measurement = 0;
 
 	return dmt;
 }
@@ -382,7 +383,7 @@ static int _find_dm_name_of_device(dev_t st_rdev, char *buf, size_t buf_len)
 	}
 
 	if (closedir(d))
-		log_sys_error("closedir", _dm_dir);
+		log_sys_debug("closedir", _dm_dir);
 
 	return r;
 }
@@ -931,7 +932,7 @@ int dm_task_add_target(struct dm_task *dmt, uint64_t start, uint64_t size,
 
 #ifdef HAVE_SELINUX
 static int _selabel_lookup(const char *path, mode_t mode,
-			   security_context_t *scontext)
+			   char **scontext)
 {
 #ifdef HAVE_SELINUX_LABEL_H
 	if (!_selabel_handle &&
@@ -974,7 +975,7 @@ static int _is_selinux_enabled(void)
 int dm_prepare_selinux_context(const char *path, mode_t mode)
 {
 #ifdef HAVE_SELINUX
-	security_context_t scontext = NULL;
+	char *scontext = NULL;
 
 	if (_is_selinux_enabled() <= 0)
 		return 1;
@@ -1002,7 +1003,7 @@ int dm_prepare_selinux_context(const char *path, mode_t mode)
 int dm_set_selinux_context(const char *path, mode_t mode)
 {
 #ifdef HAVE_SELINUX
-	security_context_t scontext = NULL;
+	char *scontext = NULL;
 
 	if (_is_selinux_enabled() <= 0)
 		return 1;
@@ -1224,7 +1225,7 @@ int get_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor
 	int len;
 	int r = 1;
 	int fd;
-	long read_ahead_long;
+	long read_ahead_long = 0;
 
 	/*
 	 * If we know the device number, use sysfs if we can.
@@ -1445,7 +1446,7 @@ struct node_op_parms {
 	char *old_name;
 	int warn_if_udev_failed;
 	unsigned rely_on_udev;
-	char names[];
+	char names[0];
 };
 
 static void _store_str(char **pos, char **ptr, const char *str)
@@ -1920,7 +1921,7 @@ static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, si
 			continue;
 
 		if ((sz = dm_snprintf(path, sizeof(path), "%sblock/%s/dev",
-				      _sysfs_dir, name)) == -1) {
+				      _sysfs_dir, name)) < 5) {
 			log_warn("Couldn't create path for %s.", name);
 			continue;
 		}

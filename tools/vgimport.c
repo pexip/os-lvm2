@@ -33,9 +33,6 @@ static int _vgimport_single(struct cmd_context *cmd,
 		goto bad;
 	}
 
-	if (!archive(vg))
-		goto_bad;
-
 	vg->status &= ~EXPORTED_VG;
 
 	if (!vg_is_shared(vg))
@@ -48,8 +45,6 @@ static int _vgimport_single(struct cmd_context *cmd,
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		goto_bad;
-
-	backup(vg);
 
 	log_print_unless_silent("Volume group \"%s\" successfully imported", vg->name);
 

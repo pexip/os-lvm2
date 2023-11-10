@@ -22,6 +22,9 @@ SOURCES = clogd.c cluster.c compat.c functions.c link_mon.c local.c logging.c
 
 TARGETS = cmirrord
 
+CFLOW_SOURCES = $(addprefix $(srcdir)/, $(SOURCES))
+CFLOW_TARGET := $(TARGETS)
+
 include $(top_builddir)/make.tmpl
 
 LMLIBS += $(CPG_LIBS)
@@ -33,6 +36,8 @@ cmirrord: $(OBJECTS)
 	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) \
 		$(LMLIBS) -L$(top_builddir)/libdm -ldevmapper $(LIBS)
 
-install: $(TARGETS)
+install_cluster: $(TARGETS)
 	@echo "    [INSTALL] $<"
-	$(Q) $(INSTALL_PROGRAM) -D cmirrord $(usrsbindir)/cmirrord
+	$(Q) $(INSTALL_PROGRAM) -D $< $(usrsbindir)/$(<F)
+
+install: install_cluster

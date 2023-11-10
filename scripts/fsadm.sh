@@ -31,34 +31,34 @@
 
 set -euE -o pipefail
 
-TOOL=fsadm
+TOOL="fsadm"
 
 _SAVEPATH=$PATH
 PATH="/sbin:/usr/sbin:/bin:/usr/sbin:$PATH"
 
 # utilities
-TUNE_EXT=tune2fs
-RESIZE_EXT=resize2fs
-TUNE_REISER=reiserfstune
-RESIZE_REISER=resize_reiserfs
-TUNE_XFS=xfs_info
-RESIZE_XFS=xfs_growfs
+TUNE_EXT="tune2fs"
+RESIZE_EXT="resize2fs"
+TUNE_REISER="reiserfstune"
+RESIZE_REISER="resize_reiserfs"
+TUNE_XFS="xfs_info"
+RESIZE_XFS="xfs_growfs"
 
-MOUNT=mount
-UMOUNT=umount
-MKDIR=mkdir
-RMDIR=rmdir
-BLOCKDEV=blockdev
-BLKID=blkid
-DATE=date
-GREP=grep
-READLINK=readlink
+MOUNT="mount"
+UMOUNT="umount"
+MKDIR="mkdir"
+RMDIR="rmdir"
+BLOCKDEV="blockdev"
+BLKID="blkid"
+DATE="date"
+GREP="grep"
+READLINK="readlink"
 READLINK_E="-e"
-FSCK=fsck
-XFS_CHECK=xfs_check
+FSCK="fsck"
+XFS_CHECK="xfs_check"
 # XFS_REPAIR -n is used when XFS_CHECK is not found
-XFS_REPAIR=xfs_repair
-CRYPTSETUP=cryptsetup
+XFS_REPAIR="xfs_repair"
+CRYPTSETUP="cryptsetup"
 
 # user may override lvm location by setting LVM_BINARY
 LVM=${LVM_BINARY:-lvm}
@@ -69,8 +69,8 @@ VERB=
 FORCE=
 EXTOFF=${_FSADM_EXTOFF:-0}
 DO_LVRESIZE=0
-FSTYPE=unknown
-VOLUME=unknown
+FSTYPE="unknown"
+VOLUME="unknown"
 TEMPDIR="${TMPDIR:-/tmp}/${TOOL}_${RANDOM}$$/m"
 DM_DEV_DIR="${DM_DEV_DIR:-/dev}"
 BLOCKSIZE=
@@ -163,7 +163,7 @@ cleanup() {
 		_FSADM_EXTOFF=$EXTOFF
 		export _FSADM_YES _FSADM_EXTOFF
 		unset FSADM_RUNNING
-		test -n "$LVM_BINARY" && PATH=$_SAVEPATH
+		test -n "${LVM_BINARY-}" && PATH=$_SAVEPATH
 		dry exec "$LVM" lvresize $VERB $FORCE -r -L"${NEWSIZE_ORIG}b" "$VOLUME_ORIG"
 	fi
 
@@ -230,7 +230,7 @@ detect_fs() {
 	esac
 	# use null device as cache file to be sure about the result
 	# not using option '-o value' to be compatible with older version of blkid
-	FSTYPE=$("$BLKID" -c "$NULL" -s TYPE "$VOLUME")
+	FSTYPE=$("$BLKID" -c "$NULL" -s TYPE "$VOLUME" || true)
 	test -n "$FSTYPE" || error "Cannot get FSTYPE of \"$VOLUME\"."
 	FSTYPE=${FSTYPE##*TYPE=\"} # cut quotation marks
 	FSTYPE=${FSTYPE%%\"*}
@@ -321,10 +321,10 @@ detect_mounted_with_proc_self_mountinfo() {
 # device (which could have been renamed).
 # We need to visit every mount point and check it's major minor
 detect_mounted_with_proc_mounts() {
-	MOUNTED=$("$GREP" "^$VOLUME[ \\t]" "$PROCMOUNTS")
+	MOUNTED=$("$GREP" "^${VOLUME}[ \\t]" "$PROCMOUNTS")
 
 	# for empty string try again with real volume name
-	test -z "$MOUNTED" && MOUNTED=$("$GREP" "^$RVOLUME[ \\t]" "$PROCMOUNTS")
+	test -z "$MOUNTED" && MOUNTED=$("$GREP" "^${RVOLUME}[ \\t]" "$PROCMOUNTS")
 
 	MOUNTDEV=$(echo -n -e "${MOUNTED%% *}")
 	# cut device name prefix and trim everything past mountpoint
@@ -335,8 +335,8 @@ detect_mounted_with_proc_mounts() {
 	# for systems with different device names - check also mount output
 	if test -z "$MOUNTED" ; then
 		# will not work with spaces in paths
-		MOUNTED=$(LC_ALL=C "$MOUNT" | "$GREP" "^$VOLUME[ \\t]")
-		test -z "$MOUNTED" && MOUNTED=$(LC_ALL=C "$MOUNT" | "$GREP" "^$RVOLUME[ \\t]")
+		MOUNTED=$(LC_ALL=C "$MOUNT" | "$GREP" "^${VOLUME}[ \\t]")
+		test -z "$MOUNTED" && MOUNTED=$(LC_ALL=C "$MOUNT" | "$GREP" "^${RVOLUME}[ \\t]")
 		MOUNTDEV=${MOUNTED%% on *}
 		MOUNTED=${MOUNTED##* on }
 		MOUNTED=${MOUNTED% type *} # allow type in the mount name
@@ -378,12 +378,12 @@ detect_mounted() {
 detect_device_size() {
 	# check if blockdev supports getsize64
 	DEVSIZE=$("$BLOCKDEV" --getsize64 "$VOLUME" 2>"$NULL" || true)
-	if test -n "$DEVSIZE" ; then
+	if test -z "$DEVSIZE" ; then
 		DEVSIZE=$("$BLOCKDEV" --getsize "$VOLUME" || true)
 		test -n "$DEVSIZE" || error "Cannot read size of device \"$VOLUME\"."
 		SSSIZE=$("$BLOCKDEV" --getss "$VOLUME" || true)
 		test -n "$SSSIZE" || error "Cannot read sector size of device \"$VOLUME\"."
-		DEVSIZE=$(( $DEVSIZE * $SSSIZE ))
+		DEVSIZE=$(( DEVSIZE * SSSIZE ))
 	fi
 }
 

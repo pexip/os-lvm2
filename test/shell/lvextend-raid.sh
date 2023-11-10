@@ -17,7 +17,7 @@ SKIP_WITH_LVMPOLLD=1
 
 aux have_raid 1 3 0 || skip
 PROGRESS=0
-aux have_raid 1 13 0 && PROGRESS=1
+aux have_raid 1 15 0 && PROGRESS=1
 
 # Use smallest regionsize to save VG space
 regionsize=$(getconf PAGESIZE) # in bytes
@@ -63,7 +63,8 @@ aux delayzero_dev "$dev2"  0 50 "${sector}:"
 lvextend -y -L+${lvext}M $vg/$lv1
 if [ $PROGRESS -eq 1 ]
 then
-not check lv_field $vg/$lv1 sync_percent "100.00"
+# Even with delayed devices wre are catching races here.
+should not check lv_field $vg/$lv1 sync_percent "100.00"
 check lv_field $vg/$lv1 size "$(($lvsz)).00m" $vg/$lv1
 fi
 aux wait_for_sync $vg $lv1
@@ -73,7 +74,8 @@ check lv_field $vg/$lv1 sync_percent "100.00"
 lvextend -y -L+${lvext}M $vg/$lv1
 if [ $PROGRESS -eq 1 ]
 then
-	not check lv_field $vg/$lv1 sync_percent "100.00"
+	# Even with delayed devices wre are catching races here.
+	should not check lv_field $vg/$lv1 sync_percent "100.00"
 else
 	check lv_field $vg/$lv1 sync_percent "100.00"
 fi

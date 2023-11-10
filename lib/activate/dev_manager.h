@@ -59,7 +59,7 @@ int dev_manager_mirror_percent(struct dev_manager *dm,
 			       dm_percent_t *percent, uint32_t *event_nr);
 int dev_manager_raid_status(struct dev_manager *dm,
 			    const struct logical_volume *lv,
-			    struct dm_status_raid **status);
+			    struct lv_status_raid **status, int *exists);
 int dev_manager_raid_message(struct dev_manager *dm,
 			     const struct logical_volume *lv,
 			     const char *msg);
@@ -68,20 +68,19 @@ int dev_manager_writecache_message(struct dev_manager *dm,
                                    const char *msg);
 int dev_manager_cache_status(struct dev_manager *dm,
 			     const struct logical_volume *lv,
-			     struct lv_status_cache **status);
+			     struct lv_status_cache **status, int *exists);
 int dev_manager_thin_status(struct dev_manager *dm,
 			    const struct logical_volume *lv, int flush,
-			    struct lv_status_thin **status);
+			    struct lv_status_thin **status, int *exists);
 int dev_manager_thin_device_id(struct dev_manager *dm,
 			       const struct logical_volume *lv,
-			       uint32_t *device_id);
+			       uint32_t *device_id, int *exist);
 int dev_manager_thin_pool_status(struct dev_manager *dm,
 				 const struct logical_volume *lv, int flush,
-				 struct lv_status_thin_pool **status);
+				 struct lv_status_thin_pool **status, int *exists);
 int dev_manager_vdo_pool_status(struct dev_manager *dm,
-				const struct logical_volume *lv,
-				struct lv_status_vdo **vdo_status,
-				int flush);
+				const struct logical_volume *lv, int flush,
+				struct lv_status_vdo **status, int *exists);
 int dev_manager_suspend(struct dev_manager *dm, const struct logical_volume *lv,
 			struct lv_activate_opts *laopts, int lockfs, int flush_required);
 int dev_manager_activate(struct dev_manager *dm, const struct logical_volume *lv,
@@ -104,5 +103,7 @@ int dev_manager_device_uses_vg(struct device *dev,
 int dev_manager_remove_dm_major_minor(uint32_t major, uint32_t minor);
 
 int dev_manager_check_prefix_dm_major_minor(uint32_t major, uint32_t minor, const char *prefix);
+int dev_manager_get_device_list(const char *prefix, struct dm_list **devs,
+				unsigned *devs_features);
 
 #endif

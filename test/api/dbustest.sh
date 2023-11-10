@@ -11,13 +11,14 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
+SKIP_WITH_LVMPOLLD=1
 SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_CLVMD=1
 
 . lib/inittest
 
 # Unsupported with valgrid testing
-test ${LVM_VALGRIND:-0} -eq 0 || skip "Unsupported with valgrind"
+test "${LVM_VALGRIND:-0}" -eq 0 || skip "Unsupported with valgrind"
 
 # NOTE: Some tests, namely anything with vdo, and
 # api/dbus_test_lv_interface_cache_lv.sh, require larger PVs
@@ -28,19 +29,12 @@ aux extend_filter_LVMTEST
 
 # We need the lvmdbusd.profile for the daemon to utilize JSON
 # output
-mkdir -p "$TESTDIR/etc/profile"
-cp -v "$TESTOLDPWD/lib/lvmdbusd.profile" "$TESTDIR/etc/profile/"
-
-# Need to set this up so that the lvmdbusd service knows which
-# binary to be running, which should be the one we just built
-LVM_BINARY=$(which lvm 2>/dev/null)
-export LVM_BINARY
-
-# skip if we don't have our own lvmetad...
-if test -z "${installed_testsuite+varset}"; then
-	(echo "$LVM_BINARY" | grep -q "$abs_builddir") || skip
-fi
+aux prepare_profiles "lvmdbusd"
 
 aux prepare_lvmdbusd
+
+# Example for testing individual test:
+#"$TESTOLDPWD/dbus/lvmdbustest.py" -v TestDbusService.test_lv_interface_cache_lv
+#"$TESTOLDPWD/dbus/lvmdbustest.py" -v TestDbusService.test_pv_symlinks
 
 "$TESTOLDPWD/dbus/lvmdbustest.py" -v

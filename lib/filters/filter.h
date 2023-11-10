@@ -20,7 +20,7 @@
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
 
-struct dev_filter *composite_filter_create(int n, int use_dev_ext_info, struct dev_filter **filters);
+struct dev_filter *composite_filter_create(int n, struct dev_filter **filters);
 
 struct dev_filter *lvm_type_filter_create(struct dev_types *dt);
 struct dev_filter *md_filter_create(struct cmd_context *cmd, struct dev_types *dt);
@@ -30,10 +30,7 @@ struct dev_filter *partitioned_filter_create(struct dev_types *dt);
 struct dev_filter *persistent_filter_create(struct dev_types *dt, struct dev_filter *f);
 struct dev_filter *sysfs_filter_create(void);
 struct dev_filter *signature_filter_create(struct dev_types *dt);
-
-struct dev_filter *internal_filter_create(void);
-int internal_filter_allow(struct dm_pool *mem, struct device *dev);
-void internal_filter_clear(void);
+struct dev_filter *deviceid_filter_create(struct cmd_context *cmd);
 
 /*
  * patterns must be an array of strings of the form:
@@ -43,7 +40,7 @@ void internal_filter_clear(void);
  * r|.*|             - reject everything else
  */
 
-struct dev_filter *regex_filter_create(const struct dm_config_value *patterns);
+struct dev_filter *regex_filter_create(const struct dm_config_value *patterns, int config_filter, int config_global_filter);
 
 typedef enum {
 	FILTER_MODE_NO_LVMETAD,
@@ -63,5 +60,8 @@ struct dev_filter *usable_filter_create(struct cmd_context *cmd, struct dev_type
 #define DEV_FILTERED_DEVTYPE		0x00000100
 #define DEV_FILTERED_MINSIZE		0x00000200
 #define DEV_FILTERED_UNUSABLE		0x00000400
+#define DEV_FILTERED_DEVICES_FILE	0x00000800
+#define DEV_FILTERED_DEVICES_LIST	0x00001000
+#define DEV_FILTERED_IS_LV		0x00002000
 
 #endif 	/* _LVM_FILTER_H */
