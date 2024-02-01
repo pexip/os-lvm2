@@ -1,3 +1,9 @@
+lvm2 (2.03.16-2+pexip24u3) pexip-bookworm; urgency=medium
+
+  * New versioning scheme
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 01 Feb 2024 16:11:39 +0000
+
 lvm2 (2.03.16-2pexip2) pexip-bookworm; urgency=medium
 
   * Bookworm build for product distribution
