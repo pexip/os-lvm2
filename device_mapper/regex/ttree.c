@@ -13,7 +13,6 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "device_mapper/misc/dmlib.h"
 #include "ttree.h"
 
 struct node {
@@ -84,9 +83,7 @@ int ttree_insert(struct ttree *tt, unsigned int *key, void *data)
 	} while (*c && count);
 
 	if (!*c) {
-		count++;
-
-		while (count--) {
+		do {
 			if (!(*c = _tree_node(tt->mem, k)))
 				return_0;
 
@@ -94,7 +91,7 @@ int ttree_insert(struct ttree *tt, unsigned int *key, void *data)
 				k = *key++;
 				c = &((*c)->m);
 			}
-		}
+		} while (count--);
 	}
 	(*c)->data = data;
 

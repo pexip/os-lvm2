@@ -15,6 +15,8 @@
 #ifndef __DMEVENTD_DOT_H__
 #define __DMEVENTD_DOT_H__
 
+#include <stdint.h>
+
 /* FIXME This stuff must be configurable. */
 
 #define	DM_EVENT_FIFO_CLIENT	DEFAULT_DM_RUN_DIR "/dmeventd-client"
@@ -68,7 +70,7 @@ struct dm_event_fifos {
 int daemon_talk(struct dm_event_fifos *fifos,
 		struct dm_event_daemon_message *msg, int cmd,
 		const char *dso_name, const char *dev_name,
-		enum dm_event_mask evmask, uint32_t timeout);
+		unsigned evmask, uint32_t timeout);
 int init_fifos(struct dm_event_fifos *fifos);
 void fini_fifos(struct dm_event_fifos *fifos);
 int dm_event_get_version(struct dm_event_fifos *fifos, int *version);

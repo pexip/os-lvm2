@@ -14,16 +14,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "util.h"
 #include "libdm/misc/dm-logging.h"
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/inotify.h>
-#include <dirent.h>
-#include <ctype.h>
+#include "util.h"
 
 #ifdef __linux__
 #  include "libdm/misc/kdev_t.h"
@@ -33,7 +25,13 @@
 #  define MKDEV(x,y) makedev((x),(y))
 #endif
 
-#define DEFAULT_PROC_DIR "/proc"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/inotify.h>
+#include <dirent.h>
+#include <ctype.h>
 
 /* limit to two updates/sec */
 #define FILEMAPD_WAIT_USECS 500000
@@ -61,8 +59,8 @@ struct filemap_monitor {
 static int _foreground;
 static int _verbose;
 
-const char *const _usage = "dmfilemapd <fd> <group_id> <abs_path> <mode> "
-			   "[<foreground>[<log_level>]]";
+const char _usage[] = "dmfilemapd <fd> <group_id> <abs_path> <mode> "
+	"[<foreground>[<log_level>]]";
 
 /*
  * Daemon logging. By default, all messages are thrown away: messages
@@ -111,7 +109,7 @@ static void _dmfilemapd_log_with_errno(int level,
 }
 
 /*
- * Only used for reporting errors before daemonise().
+ * Only used for reporting errors before daemonize().
  */
 __attribute__((format(printf, 1, 2)))
 static void _early_log(const char *fmt, ...)
@@ -143,6 +141,7 @@ static int _is_open_in_pid(pid_t pid, const char *path)
 	char link_buf[PATH_MAX];
 	DIR *pid_d = NULL;
 	ssize_t len;
+	int df;
 
 	if (pid == getpid())
 		return 0;
@@ -171,8 +170,9 @@ static int _is_open_in_pid(pid_t pid, const char *path)
 	while ((pid_dp = readdir(pid_d)) != NULL) {
 		if (pid_dp->d_name[0] == '.')
 			continue;
-		if ((len = readlinkat(dirfd(pid_d), pid_dp->d_name, link_buf,
-				      sizeof(link_buf))) < 0) {
+		if (((df = dirfd(pid_d)) < 0) ||
+		    (len = readlinkat(df, pid_dp->d_name, link_buf,
+				      (sizeof(link_buf) - 1))) < 0) {
 			log_error("readlink failed for " DEFAULT_PROC_DIR
 				  "/%d/fd/.", pid);
 			goto bad;
@@ -626,7 +626,7 @@ check_unlinked:
 	return 1;
 }
 
-static int _daemonise(struct filemap_monitor *fm)
+static int _daemonize(struct filemap_monitor *fm)
 {
 	pid_t pid = 0;
 	int fd, ffd;
@@ -670,7 +670,7 @@ static int _daemonise(struct filemap_monitor *fm)
 		if (fd > STDERR_FILENO)
 			(void) close(fd);
 	}
-	/* TODO: Use libdaemon/server/daemon-server.c _daemonise() */
+	/* TODO: Use libdaemon/server/daemon-server.c _daemonize() */
 	for (ffd = (int) sysconf(_SC_OPEN_MAX) - 1; ffd > STDERR_FILENO; --ffd)
 		if (ffd != fm->fd)
 			(void) close(ffd);
@@ -774,7 +774,7 @@ static int _dmfilemapd(struct filemap_monitor *fm)
 wait:
 		_filemap_monitor_wait(FILEMAPD_WAIT_USECS);
 
-		/* mode=inode termination condions */
+		/* mode=inode termination conditions */
 		if (fm->mode == DM_FILEMAPD_FOLLOW_INODE) {
 			if (!_filemap_monitor_check_file_unlinked(fm))
 				goto bad;
@@ -804,7 +804,7 @@ bad:
 	return 1;
 }
 
-static const char * const _mode_names[] = {
+static const char _mode_names[][8] = {
 	"inode",
 	"path"
 };
@@ -814,9 +814,7 @@ static const char * const _mode_names[] = {
  */
 int main(int argc, char **argv)
 {
-	struct filemap_monitor fm;
-
-	memset(&fm, 0, sizeof(fm));
+	struct filemap_monitor fm = { .fd = 0 };
 
 	if (!_parse_args(argc, argv, &fm)) {
 		free(fm.path);
@@ -826,10 +824,10 @@ int main(int argc, char **argv)
 	_setup_logging();
 
 	log_info("Starting dmfilemapd with fd=%d, group_id=" FMTu64 " "
-		 "mode=%s, path=%s", fm.fd, fm.group_id,
+		 "mode=%s, path=\"%s\"", fm.fd, fm.group_id,
 		 _mode_names[fm.mode], fm.path);
 
-	if (!_foreground && !_daemonise(&fm)) {
+	if (!_foreground && !_daemonize(&fm)) {
 		free(fm.path);
 		return 1;
 	}

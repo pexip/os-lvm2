@@ -13,7 +13,7 @@
 
 #include "tools/tool.h"
 
-#include "daemon-server.h"
+#include "libdaemon/server/daemon-server.h"
 #include "lib/mm/xlate.h"
 
 #include "lvmlockd-internal.h"
@@ -96,7 +96,6 @@ static int check_args_version(char *vg_args)
 
 static int read_cluster_name(char *clustername)
 {
-	static const char close_error_msg[] = "read_cluster_name: close_error %d";
 	char *n;
 	int fd;
 	int rv;
@@ -115,18 +114,19 @@ static int read_cluster_name(char *clustername)
 	rv = read(fd, clustername, MAX_ARGS);
 	if (rv < 0) {
 		log_error("read_cluster_name: cluster name read error %d, check dlm_controld", fd);
-		if (close(fd))
-			log_error(close_error_msg, fd);
-		return rv;
+		goto out;
 	}
 	clustername[rv] = 0;
 
 	n = strstr(clustername, "\n");
 	if (n)
 		*n = '\0';
+	rv = 0;
+out:
 	if (close(fd))
-		log_error(close_error_msg, fd);
-	return 0;
+		log_error("read_cluster_name: close_error %d", fd);
+
+	return rv;
 }
 
 #define MAX_VERSION 16
@@ -169,8 +169,10 @@ int lm_prepare_lockspace_dlm(struct lockspace *ls)
 	struct lm_dlm *lmd;
 	int rv;
 
-	if (daemon_test)
+	if (daemon_test) {
+		log_debug("lm_prepare_lockspace_dlm test");
 		goto skip_args;
+	}
 
 	memset(sys_clustername, 0, sizeof(sys_clustername));
 	memset(arg_clustername, 0, sizeof(arg_clustername));
@@ -220,20 +222,112 @@ int lm_prepare_lockspace_dlm(struct lockspace *ls)
 	return 0;
 }
 
-int lm_add_lockspace_dlm(struct lockspace *ls, int adopt)
+#define DLM_COMMS_PATH "/sys/kernel/config/dlm/cluster/comms"
+#define LOCK_LINE_MAX 1024
+static int get_local_nodeid(void)
+{
+	struct dirent *de;
+	DIR *ls_dir;
+	char ls_comms_path[PATH_MAX] = { 0 };
+	char path[PATH_MAX] = { 0 };
+	FILE *file;
+	char line[LOCK_LINE_MAX];
+	char *str1, *str2;
+	int rv = -1, val;
+
+	snprintf(ls_comms_path, sizeof(ls_comms_path), "%s", DLM_COMMS_PATH);
+
+	if (!(ls_dir = opendir(ls_comms_path)))
+		return -ECONNREFUSED;
+
+	while ((de = readdir(ls_dir))) {
+		if (de->d_name[0] == '.')
+			continue;
+
+		snprintf(path, sizeof(path), "%s/%s/local",
+			 DLM_COMMS_PATH, de->d_name);
+
+		if (!(file = fopen(ls_comms_path, "r")))
+			continue;
+		str1 = fgets(line, sizeof(line), file);
+		if (fclose(file))
+			log_sys_debug("fclose", path);
+		if (str1) {
+			rv = sscanf(line, "%d", &val);
+			if ((rv == 1) && (val == 1 )) {
+				snprintf(path, sizeof(path), "%s/%s/nodeid",
+					 DLM_COMMS_PATH, de->d_name);
+
+				if (!(file = fopen(path, "r")))
+					continue;
+				str2 = fgets(line, sizeof(line), file);
+				if (fclose(file))
+					log_sys_debug("fclose", path);
+				if (str2) {
+					rv = sscanf(line, "%d", &val);
+					if (rv == 1) {
+						if (closedir(ls_dir))
+							log_sys_debug("closedir", ls_comms_path);
+						return val;
+					}
+				}
+			}
+		}
+	}
+
+	if (closedir(ls_dir))
+		log_sys_debug("closedir", ls_comms_path);
+
+	return rv;
+}
+
+int lm_purge_locks_dlm(struct lockspace *ls)
+{
+	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
+	int nodeid;
+	int rv = -1;
+
+	if (!lmd || !lmd->dh) {
+		log_error("purge_locks_dlm %s no dlm_handle_t error", ls->name);
+		goto fail;
+	}
+
+	nodeid = get_local_nodeid();
+	if (nodeid < 0) {
+		log_error("failed to get local nodeid");
+		goto fail;
+	}
+	if (dlm_ls_purge(lmd->dh, nodeid, 0)) {
+		log_error("purge_locks_dlm %s error", ls->name);
+		goto fail;
+	}
+
+	rv = 0;
+fail:
+	return rv;
+}
+
+int lm_add_lockspace_dlm(struct lockspace *ls, int adopt_only, int adopt_ok)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 
 	if (daemon_test)
 		return 0;
 
-	if (adopt)
+	if (adopt_only || adopt_ok) {
 		lmd->dh = dlm_open_lockspace(ls->name);
-	else
+		if (!lmd->dh && adopt_ok)
+			lmd->dh = dlm_new_lockspace(ls->name, 0600, DLM_LSFL_NEWEXCL);
+		if (!lmd->dh)
+			log_error("add_lockspace_dlm adopt_only %d adopt_ok %d %s error",
+				  adopt_only, adopt_ok, ls->name);
+	} else {
 		lmd->dh = dlm_new_lockspace(ls->name, 0600, DLM_LSFL_NEWEXCL);
+		if (!lmd->dh)
+			log_error("add_lockspace_dlm %s error", ls->name);
+	}
 
 	if (!lmd->dh) {
-		log_error("add_lockspace_dlm %s adopt %d error", ls->name, adopt);
 		free(lmd);
 		ls->lm_data = NULL;
 		return -1;
@@ -269,7 +363,7 @@ int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg)
 	return 0;
 }
 
-static int lm_add_resource_dlm(struct lockspace *ls, struct resource *r, int with_lock_nl)
+int lm_add_resource_dlm(struct lockspace *ls, struct resource *r, int with_lock_nl)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
@@ -301,7 +395,7 @@ static int lm_add_resource_dlm(struct lockspace *ls, struct resource *r, int wit
 			      r->name, strlen(r->name),
 			      0, NULL, NULL, NULL);
 	if (rv < 0) {
-		log_error("S %s R %s add_resource_dlm lock error %d", ls->name, r->name, rv);
+		log_error("%s:%s add_resource_dlm lock error %d", ls->name, r->name, rv);
 		return rv;
 	}
  out:
@@ -325,7 +419,7 @@ int lm_rem_resource_dlm(struct lockspace *ls, struct resource *r)
 
 	rv = dlm_ls_unlock_wait(lmd->dh, lksb->sb_lkid, 0, lksb);
 	if (rv < 0) {
-		log_error("S %s R %s rem_resource_dlm unlock error %d", ls->name, r->name, rv);
+		log_error("%s:%s rem_resource_dlm unlock error %d", ls->name, r->name, rv);
 	}
  out:
 	free(rdd->vb);
@@ -380,7 +474,7 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 		goto fail;
 	}
 
-	log_debug("S %s R %s adopt_dlm", ls->name, r->name);
+	log_debug("%s:%s adopt_dlm", ls->name, r->name);
 
 	if (daemon_test)
 		return 0;
@@ -389,29 +483,29 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	 * dlm returns 0 for success, -EAGAIN if an orphan is
 	 * found with another mode, and -ENOENT if no orphan.
 	 *
-	 * cast/bast/param are (void *)1 because the kernel
+	 * cast/bast/param are (void (*)(void*))1 because the kernel
 	 * returns errors if some are null.
 	 */
 
 	rv = dlm_ls_lockx(lmd->dh, mode, lksb, flags,
 			  r->name, strlen(r->name), 0,
-			  (void *)1, (void *)1, (void *)1,
+			  (void (*)(void*))1, (void (*)(void*))1, (void (*)(void*))1,
 			  NULL, NULL);
 
 	if (rv == -1 && (errno == EAGAIN)) {
-		log_debug("S %s R %s adopt_dlm adopt mode %d try other mode",
+		log_debug("%s:%s adopt_dlm adopt mode %d try other mode",
 			  ls->name, r->name, ld_mode);
-		rv = -EUCLEAN;
+		rv = -EADOPT_RETRY;
 		goto fail;
 	}
 	if (rv == -1 && (errno == ENOENT)) {
-		log_debug("S %s R %s adopt_dlm adopt mode %d no lock",
+		log_debug("%s:%s adopt_dlm adopt mode %d no lock",
 			  ls->name, r->name, ld_mode);
-		rv = -ENOENT;
+		rv = -EADOPT_NONE;
 		goto fail;
 	}
 	if (rv < 0) {
-		log_debug("S %s R %s adopt_dlm mode %d flags %x error %d errno %d",
+		log_debug("%s:%s adopt_dlm mode %d flags %x error %d errno %d",
 			  ls->name, r->name, mode, flags, rv, errno);
 		goto fail;
 	}
@@ -441,7 +535,7 @@ static int lm_adopt_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
  */
 
 int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
-		struct val_blk *vb_out, int adopt)
+		struct val_blk *vb_out, int adopt_only, int adopt_ok)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
@@ -451,7 +545,13 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	int mode;
 	int rv;
 
-	if (adopt) {
+	if (adopt_ok) {
+		log_debug("%s:%s lock_dlm adopt_ok not supported", ls->name, r->name);
+		return -1;
+	}
+
+	if (adopt_only) {
+		log_debug("%s:%s lock_dlm adopt_only", ls->name, r->name);
 		/* When adopting, we don't follow the normal method
 		   of acquiring a NL lock then converting it to the
 		   desired mode. */
@@ -480,7 +580,7 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 		return -EINVAL;
 	}
 
-	log_debug("S %s R %s lock_dlm", ls->name, r->name);
+	log_debug("%s:%s lock_dlm", ls->name, r->name);
 
 	if (daemon_test) {
 		if (rdd->vb) {
@@ -500,7 +600,7 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 				      r->name, strlen(r->name),
 				      0, NULL, NULL, NULL);
 		if (rv == -1) {
-			log_debug("S %s R %s lock_dlm acquire mode PR for %d rv %d",
+			log_debug("%s:%s lock_dlm acquire mode PR for %d rv %d",
 				  ls->name, r->name, mode, rv);
 			goto lockrv;
 		}
@@ -513,17 +613,17 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 			      0, NULL, NULL, NULL);
 lockrv:
 	if (rv == -1 && errno == EAGAIN) {
-		log_debug("S %s R %s lock_dlm acquire mode %d rv EAGAIN", ls->name, r->name, mode);
+		log_debug("%s:%s lock_dlm acquire mode %d rv EAGAIN", ls->name, r->name, mode);
 		return -EAGAIN;
 	}
 	if (rv < 0) {
-		log_error("S %s R %s lock_dlm acquire error %d errno %d", ls->name, r->name, rv, errno);
+		log_error("%s:%s lock_dlm acquire error %d errno %d", ls->name, r->name, rv, errno);
 		return -ELMERR;
 	}
 
 	if (rdd->vb) {
 		if (lksb->sb_flags & DLM_SBF_VALNOTVALID) {
-			log_debug("S %s R %s lock_dlm VALNOTVALID", ls->name, r->name);
+			log_debug("%s:%s lock_dlm VALNOTVALID", ls->name, r->name);
 			memset(rdd->vb, 0, sizeof(struct val_blk));
 			memset(vb_out, 0, sizeof(struct val_blk));
 			goto out;
@@ -552,11 +652,11 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
 	struct dlm_lksb *lksb = &rdd->lksb;
-	uint32_t mode;
+	int mode;
 	uint32_t flags = 0;
 	int rv;
 
-	log_debug("S %s R %s convert_dlm", ls->name, r->name);
+	log_debug("%s:%s convert_dlm", ls->name, r->name);
 
 	flags |= LKF_CONVERT;
 	flags |= LKF_NOQUEUE;
@@ -570,14 +670,16 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 		rdd->vb->r_version = cpu_to_le32(r_version);
 		memcpy(lksb->sb_lvbptr, rdd->vb, sizeof(struct val_blk));
 
-		log_debug("S %s R %s convert_dlm set r_version %u",
+		log_debug("%s:%s convert_dlm set r_version %u",
 			  ls->name, r->name, r_version);
 
 		flags |= LKF_VALBLK;
 	}
 
-	mode = to_dlm_mode(ld_mode);
-
+	if ((mode = to_dlm_mode(ld_mode)) < 0) {
+		log_error("lm_convert_dlm invalid mode %d", ld_mode);
+		return -EINVAL;
+	}
 	if (daemon_test)
 		return 0;
 
@@ -586,11 +688,11 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 			      0, NULL, NULL, NULL);
 	if (rv == -1 && errno == EAGAIN) {
 		/* FIXME: When does this happen?  Should something different be done? */
-		log_error("S %s R %s convert_dlm mode %d rv EAGAIN", ls->name, r->name, mode);
+		log_error("%s:%s convert_dlm mode %d rv EAGAIN", ls->name, r->name, mode);
 		return -EAGAIN;
 	}
 	if (rv < 0) {
-		log_error("S %s R %s convert_dlm error %d", ls->name, r->name, rv);
+		log_error("%s:%s convert_dlm error %d", ls->name, r->name, rv);
 		rv = -ELMERR;
 	}
 	return rv;
@@ -640,7 +742,7 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 			memcpy(rdd->vb, &vb_next, sizeof(struct val_blk));
 			memcpy(lksb->sb_lvbptr, &vb_next, sizeof(struct val_blk));
 
-			log_debug("S %s R %s unlock_dlm vb old %x %x %u new %x %x %u",
+			log_debug("%s:%s unlock_dlm vb old %x %x %u new %x %x %u",
 				  ls->name, r->name,
 				  le16_to_cpu(vb_prev.version),
 				  le16_to_cpu(vb_prev.flags),
@@ -649,12 +751,12 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 				  le16_to_cpu(vb_next.flags),
 				  le32_to_cpu(vb_next.r_version));
 		} else {
-			log_debug("S %s R %s unlock_dlm vb unchanged", ls->name, r->name);
+			log_debug("%s:%s unlock_dlm vb unchanged", ls->name, r->name);
 		}
 
 		flags |= LKF_VALBLK;
 	} else {
-		log_debug("S %s R %s unlock_dlm", ls->name, r->name);
+		log_debug("%s:%s unlock_dlm", ls->name, r->name);
 	}
 
 	if (daemon_test)
@@ -664,7 +766,7 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 			      r->name, strlen(r->name),
 			      0, NULL, NULL, NULL);
 	if (rv < 0) {
-		log_error("S %s R %s unlock_dlm error %d", ls->name, r->name, rv);
+		log_error("%s:%s unlock_dlm error %d", ls->name, r->name, rv);
 		rv = -ELMERR;
 	}
 
@@ -699,7 +801,6 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 
 int lm_hosts_dlm(struct lockspace *ls, int notify)
 {
-	static const char closedir_err_msg[] = "lm_hosts_dlm: closedir failed";
 	char ls_nodes_path[PATH_MAX];
 	struct dirent *de;
 	DIR *ls_dir;
@@ -722,7 +823,7 @@ int lm_hosts_dlm(struct lockspace *ls, int notify)
 	}
 
 	if (closedir(ls_dir))
-		log_error(closedir_err_msg);
+		log_error("lm_hosts_dlm: closedir failed");
 
 	if (!count) {
 		log_error("lm_hosts_dlm found no nodes in %s", ls_nodes_path);
@@ -739,10 +840,10 @@ int lm_hosts_dlm(struct lockspace *ls, int notify)
 
 int lm_get_lockspaces_dlm(struct list_head *ls_rejoin)
 {
-	static const char closedir_err_msg[] = "lm_get_lockspace_dlm: closedir failed";
 	struct lockspace *ls;
 	struct dirent *de;
 	DIR *ls_dir;
+	int ret = 0;
 
 	if (!(ls_dir = opendir(DLM_LOCKSPACES_PATH)))
 		return -ECONNREFUSED;
@@ -755,20 +856,20 @@ int lm_get_lockspaces_dlm(struct list_head *ls_rejoin)
 			continue;
 
 		if (!(ls = alloc_lockspace())) {
-			if (closedir(ls_dir))
-				log_error(closedir_err_msg);
-			return -ENOMEM;
+			ret = -ENOMEM;
+			goto out;
 		}
 
 		ls->lm_type = LD_LM_DLM;
-		strncpy(ls->name, de->d_name, MAX_NAME);
-		strncpy(ls->vg_name, ls->name + strlen(LVM_LS_PREFIX), MAX_NAME);
+		dm_strncpy(ls->name, de->d_name, sizeof(ls->name));
+		dm_strncpy(ls->vg_name, ls->name + strlen(LVM_LS_PREFIX), sizeof(ls->vg_name));
 		list_add_tail(&ls->list, ls_rejoin);
 	}
-
+out:
 	if (closedir(ls_dir))
-		log_error(closedir_err_msg);
-	return 0;
+		log_error("lm_get_lockspace_dlm: closedir failed");
+
+	return ret;
 }
 
 int lm_is_running_dlm(void)
@@ -798,7 +899,7 @@ int lm_refresh_lv_start_dlm(struct action *act)
 	int rv;
 
 	/* split /dev/vgname/lvname into vgname and lvname strings */
-	strncpy(path, act->path, PATH_MAX-1);
+	dm_strncpy(path, act->path, sizeof(path));
 
 	/* skip past dev */
 	if (!(p = strchr(path + 1, '/')))

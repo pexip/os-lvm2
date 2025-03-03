@@ -24,7 +24,7 @@ lvcreate --vdo -L5G -n $lv1 $vg/vdopool
 # deduplication_ARG  (default is 'yes')
 # compression_ARG  (default is 'yes')
 
-# Wait till index gets openned
+# Wait till index gets opened
 for i in {1..10} ; do
 	sleep .1
 	check grep_dmsetup status $vg-vdopool-vpool " online online " || continue
@@ -40,13 +40,14 @@ check grep_dmsetup status $vg-vdopool-vpool " online online "
 
 # dedulication_ARG
 lvchange --deduplication n $vg/vdopool
-check grep_dmsetup status $vg-vdopool-vpool " offline online "
+check grep_dmsetup status $vg-vdopool-vpool -E " offline|closed|closing online "
+
 lvchange --deduplication y $vg/vdopool
-check grep_dmsetup status $vg-vdopool-vpool " online online "
+check grep_dmsetup status $vg-vdopool-vpool -E " online|opening online "
 
 
 lvchange --compression n --deduplication n $vg/vdopool
-check grep_dmsetup status $vg-vdopool-vpool " offline offline "
+check grep_dmsetup status $vg-vdopool-vpool -E " offline|closed|closing offline "
 
 # --vdosettings needs inactive LV
 not lvchange --vdosettings 'ack_threads=8' $vg/vdopool

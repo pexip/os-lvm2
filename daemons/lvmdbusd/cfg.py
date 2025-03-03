@@ -11,10 +11,17 @@ import os
 import multiprocessing
 import queue
 import itertools
+from lvmdbusd.utils import LvmDebugData
 
 from lvmdbusd import path
 
 LVM_CMD = os.getenv('LVM_BINARY', path.LVM_BINARY)
+
+LOCK_FILE = os.getenv("LVM_DBUSD_LOCKFILE", "/var/lock/lvm/lvmdbusd")
+
+# Save off the debug data needed for lvm team to debug issues
+# only used for 'fullreport' at this time.
+lvmdebug = LvmDebugData(os.getenv('LVM_DBUSD_COLLECT_LVM_DEBUG', False))
 
 # This is the global object manager
 om = None
@@ -25,13 +32,13 @@ bus = None
 # Command line args
 args = None
 
-# Set to true if we are depending on external events for updates
+# Set to true if we depend on external events for updates
 got_external_event = False
 
 # Shared state variable across all processes
 run = multiprocessing.Value('i', 1)
 
-# If this is set to true, the current setup support lvm shell and we are
+# If this is set to true, the current setup support lvm shell, and we are
 # running in that mode of operation
 SHELL_IN_USE = None
 
@@ -42,6 +49,11 @@ worker_q = queue.Queue()
 
 # Main event loop
 loop = None
+
+G_LOOP_TMO = 0.5
+
+# Used to instruct the daemon if we should ignore SIGTERM
+ignore_sigterm = False
 
 BUS_NAME = os.getenv('LVM_DBUS_NAME', 'com.redhat.lvmdbus1')
 BASE_INTERFACE = 'com.redhat.lvmdbus1'
@@ -90,10 +102,13 @@ vdo_support = False
 db = None
 
 # lvm flight recorder
-blackbox = None
+flightrecorder = None
 
 # RequestEntry ctor
 create_request_entry = None
+
+# Circular debug log
+debug = None
 
 
 def exit_daemon():
@@ -104,3 +119,6 @@ def exit_daemon():
     if run and loop:
         run.value = 0
         loop.quit()
+
+
+systemd = False

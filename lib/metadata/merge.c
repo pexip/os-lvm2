@@ -20,6 +20,7 @@
 #include "lib/metadata/pv_alloc.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/metadata/segtype.h"
+#include "lib/display/display.h"
 
 /*
  * Attempt to merge two adjacent segments.
@@ -545,41 +546,8 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			seg_error("is missing a VDO pool data LV");
 		} else if (!lv_is_vdo_pool_data(seg_lv(seg, 0)))
 			seg_error("is not VDO pool data LV");
-		if ((seg->vdo_params.minimum_io_size != (512 >> SECTOR_SHIFT)) &&
-		    (seg->vdo_params.minimum_io_size != (4096 >> SECTOR_SHIFT)))
-			seg_error("sets unsupported VDO minimum io size");
-		if ((seg->vdo_params.block_map_cache_size_mb < DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB) ||
-		    (seg->vdo_params.block_map_cache_size_mb > DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB))
-			seg_error("sets unsupported VDO block map cache size");
-		if ((seg->vdo_params.block_map_era_length < DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM) ||
-		    (seg->vdo_params.block_map_era_length > DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM))
-			seg_error("sets unsupported VDO block map era length");
-		if ((seg->vdo_params.index_memory_size_mb < DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB) ||
-		    (seg->vdo_params.index_memory_size_mb > DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB))
-			seg_error("sets unsupported VDO index memory size");
-		if ((seg->vdo_params.slab_size_mb < DM_VDO_SLAB_SIZE_MINIMUM_MB) ||
-		    (seg->vdo_params.slab_size_mb > DM_VDO_SLAB_SIZE_MAXIMUM_MB))
-			seg_error("sets unsupported VDO slab size");
-		if ((seg->vdo_params.max_discard < DM_VDO_MAX_DISCARD_MINIMUM) ||
-		    (seg->vdo_params.max_discard > DM_VDO_MAX_DISCARD_MAXIMUM))
-			seg_error("sets unsupported VDO max discard");
-		if (seg->vdo_params.ack_threads > DM_VDO_ACK_THREADS_MAXIMUM)
-			seg_error("sets unsupported VDO ack threads");
-		if ((seg->vdo_params.bio_threads < DM_VDO_BIO_THREADS_MINIMUM) ||
-		    (seg->vdo_params.bio_threads > DM_VDO_BIO_THREADS_MAXIMUM))
-			seg_error("sets unsupported VDO bio threads");
-		if ((seg->vdo_params.bio_rotation < DM_VDO_BIO_ROTATION_MINIMUM) ||
-		    (seg->vdo_params.bio_rotation > DM_VDO_BIO_ROTATION_MAXIMUM))
-			seg_error("sets unsupported VDO bio rotation");
-		if ((seg->vdo_params.cpu_threads < DM_VDO_CPU_THREADS_MINIMUM) ||
-		    (seg->vdo_params.cpu_threads > DM_VDO_CPU_THREADS_MAXIMUM))
-			seg_error("sets unsupported VDO cpu threads");
-		if (seg->vdo_params.hash_zone_threads > DM_VDO_HASH_ZONE_THREADS_MAXIMUM)
-			seg_error("sets unsupported VDO hash zone threads");
-		if (seg->vdo_params.logical_threads > DM_VDO_LOGICAL_THREADS_MAXIMUM)
-			seg_error("sets unsupported VDO logical threads");
-		if (seg->vdo_params.physical_threads > DM_VDO_PHYSICAL_THREADS_MAXIMUM)
-			seg_error("sets unsupported VDO physical threads");
+		if (!dm_vdo_validate_target_params(&seg->vdo_params, 0))
+			seg_error("sets invalid VDO parameter(s)");
 	} else { /* !VDO pool */
 		if (seg->vdo_pool_header_size)
 			seg_error("sets vdo_pool_header_size");
@@ -588,7 +556,6 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 		if (seg->vdo_params.minimum_io_size |
 		    seg->vdo_params.block_map_cache_size_mb |
 		    seg->vdo_params.block_map_era_length |
-		    seg->vdo_params.check_point_frequency |
 		    seg->vdo_params.index_memory_size_mb |
 		    seg->vdo_params.slab_size_mb |
 		    seg->vdo_params.max_discard |
@@ -639,14 +606,106 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 	}
 }
 
+int check_lv_segments_complete_vg(struct logical_volume *lv)
+{
+	struct lv_segment *seg, *seg2;
+	unsigned seg_count = 0, external_lv_found = 0;
+	uint32_t s;
+	struct seg_list *sl;
+	int error_count = 0;
+
+	dm_list_iterate_items(seg, &lv->segments) {
+		seg_count++;
+
+		_check_lv_segment(lv, seg, seg_count, &error_count);
+
+		for (s = 0; s < seg->area_count; s++) {
+			if ((seg_type(seg, s) == AREA_LV) &&
+			    seg_lv(seg, s) &&
+			    lv_is_mirror_image(seg_lv(seg, s)) &&
+			    (!(seg2 = find_seg_by_le(seg_lv(seg, s),
+						     seg_le(seg, s))) ||
+			     find_mirror_seg(seg2) != seg)) {
+				log_error("LV %s: segment %u mirror "
+					  "image %u missing mirror ptr",
+					  lv->name, seg_count, s);
+				inc_error_count;
+			}
+
+			if (seg_is_mirrored(seg) && !seg_is_raid(seg) &&
+			    seg_type(seg, s) == AREA_LV && seg_lv(seg, s) &&
+			    seg_lv(seg, s)->le_count != seg->area_len) {
+				log_error("LV %s: mirrored LV segment %u has "
+					  "wrong size %u (should be %u).",
+					  lv->name, s, seg_lv(seg, s)->le_count,
+					  seg->area_len);
+				inc_error_count;
+			}
+		}
+	}
+
+	/* Check LV flags match first segment type */
+	if ((seg_count != 1) &&
+	    (lv_is_cache(lv) ||
+	     lv_is_cache_pool(lv) ||
+	     lv_is_raid(lv) ||
+	     lv_is_snapshot(lv) ||
+	     lv_is_thin_pool(lv) ||
+	     lv_is_thin_volume(lv))) {
+		log_error("LV %s must have exactly one segment.",
+			  lv->name);
+		inc_error_count;
+	}
+
+	if (lv_is_pool_data(lv) &&
+	    (!(seg2 = first_seg(lv)) || !(seg2 = find_pool_seg(seg2)) ||
+	     seg2->area_count != 1 || seg_type(seg2, 0) != AREA_LV ||
+	     seg_lv(seg2, 0) != lv)) {
+		log_error("LV %s: segment 1 pool data LV does not point back to same LV",
+			  lv->name);
+		inc_error_count;
+	}
+
+	if (lv_is_thin_pool_metadata(lv) && !strstr(lv->name, "_tmeta")) {
+		log_error("LV %s: thin pool metadata LV does not use _tmeta.",
+			  lv->name);
+		inc_error_count;
+	} else if (lv_is_cache_pool_metadata(lv) && !strstr(lv->name, "_cmeta")) {
+		log_error("LV %s: cache pool metadata LV does not use _cmeta.",
+			  lv->name);
+		inc_error_count;
+	}
+
+	if (lv_is_external_origin(lv)) {
+		/* Validation of external origin counter */
+		dm_list_iterate_items(sl, &lv->segs_using_this_lv)
+			if (sl->seg->external_lv == lv)
+				external_lv_found++;
+
+		if (lv->external_count != external_lv_found) {
+			log_error("LV %s: external origin count does not match.",
+				  lv->name);
+			inc_error_count;
+		}
+		if (lv->status & LVM_WRITE) {
+			log_error("LV %s: external origin can't be writable.",
+				  lv->name);
+			inc_error_count;
+		}
+	}
+
+out:
+	return !error_count;
+}
+
 /*
  * Verify that an LV's segments are consecutive, complete and don't overlap.
  */
-int check_lv_segments(struct logical_volume *lv, int complete_vg)
+int check_lv_segments_incomplete_vg(struct logical_volume *lv)
 {
 	struct lv_segment *seg, *seg2;
 	uint32_t le = 0;
-	unsigned seg_count = 0, seg_found, external_lv_found = 0;
+	unsigned seg_count = 0, seg_found;
 	uint32_t data_rimage_count, s;
 	struct seg_list *sl;
 	struct glv_list *glvl;
@@ -687,9 +746,6 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 			}
 		}
 
-		if (complete_vg)
-			_check_lv_segment(lv, seg, seg_count, &error_count);
-
 		for (s = 0; s < seg->area_count; s++) {
 			if (seg_type(seg, s) == AREA_UNASSIGNED) {
 				log_error("LV %s: segment %u has unassigned "
@@ -713,18 +769,10 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 						  "inconsistent LV area %u",
 						  lv->name, seg_count, s);
 					inc_error_count;
+					/* Can't check more of such segment */
+					continue;
 				}
 
-				if (complete_vg && seg_lv(seg, s) &&
-				    lv_is_mirror_image(seg_lv(seg, s)) &&
-				    (!(seg2 = find_seg_by_le(seg_lv(seg, s),
-							    seg_le(seg, s))) ||
-				     find_mirror_seg(seg2) != seg)) {
-					log_error("LV %s: segment %u mirror "
-						  "image %u missing mirror ptr",
-						  lv->name, seg_count, s);
-					inc_error_count;
-				}
 
 /* FIXME I don't think this ever holds?
 				if (seg_le(seg, s) != le) {
@@ -756,16 +804,6 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 				}
 			}
 
-			if (complete_vg &&
-			    seg_is_mirrored(seg) && !seg_is_raid(seg) &&
-			    seg_type(seg, s) == AREA_LV &&
-			    seg_lv(seg, s)->le_count != seg->area_len) {
-				log_error("LV %s: mirrored LV segment %u has "
-					  "wrong size %u (should be %u).",
-					  lv->name, s, seg_lv(seg, s)->le_count,
-					  seg->area_len);
-				inc_error_count;
-			}
 		}
 
 		le += seg->len;
@@ -778,8 +816,12 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 	}
 
 	if (!le) {
-		log_error("LV %s: has no segment.", lv->name);
-		inc_error_count;
+		if (sscanf(lv->name, "pvmove%u", &le) == 1)
+			log_debug("LV pvmove %s has no segment.", lv->name);
+		else {
+			log_error("LV %s: has no segment.", lv->name);
+			inc_error_count;
+		}
 	}
 
 	dm_list_iterate_items(sl, &lv->segs_using_this_lv) {
@@ -832,10 +874,6 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 				  lv->name);
 			inc_error_count;
 		}
-
-		/* Validation of external origin counter */
-		if (seg->external_lv == lv)
-			external_lv_found++;
 	}
 
 	dm_list_iterate_items(glvl, &lv->indirect_glvs) {
@@ -852,53 +890,6 @@ int check_lv_segments(struct logical_volume *lv, int complete_vg)
 				log_error("LV %s is indirectly used by LV %s"
 					  "but that LV does not point back to LV %s",
 					  lv->name, glvl->glv->live->name, lv->name);
-				inc_error_count;
-			}
-		}
-	}
-
-	/* Check LV flags match first segment type */
-	if (complete_vg) {
-		if ((seg_count != 1) &&
-		    (lv_is_cache(lv) ||
-		     lv_is_cache_pool(lv) ||
-		     lv_is_raid(lv) ||
-		     lv_is_snapshot(lv) ||
-		     lv_is_thin_pool(lv) ||
-		     lv_is_thin_volume(lv))) {
-			log_error("LV %s must have exactly one segment.",
-				  lv->name);
-			inc_error_count;
-		}
-
-		if (lv_is_pool_data(lv) &&
-		    (!(seg2 = first_seg(lv)) || !(seg2 = find_pool_seg(seg2)) ||
-		     seg2->area_count != 1 || seg_type(seg2, 0) != AREA_LV ||
-		     seg_lv(seg2, 0) != lv)) {
-			log_error("LV %s: segment 1 pool data LV does not point back to same LV",
-				  lv->name);
-			inc_error_count;
-		}
-
-		if (lv_is_thin_pool_metadata(lv) && !strstr(lv->name, "_tmeta")) {
-			log_error("LV %s: thin pool metadata LV does not use _tmeta.",
-				  lv->name);
-			inc_error_count;
-		} else if (lv_is_cache_pool_metadata(lv) && !strstr(lv->name, "_cmeta")) {
-			log_error("LV %s: cache pool metadata LV does not use _cmeta.",
-				  lv->name);
-			inc_error_count;
-		}
-
-		if (lv_is_external_origin(lv)) {
-			if (lv->external_count != external_lv_found) {
-				log_error("LV %s: external origin count does not match.",
-					  lv->name);
-				inc_error_count;
-			}
-			if (lv->status & LVM_WRITE) {
-				log_error("LV %s: external origin cant't be writable.",
-					  lv->name);
 				inc_error_count;
 			}
 		}

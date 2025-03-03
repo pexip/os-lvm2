@@ -95,7 +95,7 @@ static int _lvchange_pool_update(struct cmd_context *cmd,
 				 uint32_t *mr)
 {
 	int update = 0;
-	unsigned val;
+	thin_zero_t val;
 	thin_discards_t discards;
 
 	if (arg_is_set(cmd, discards_ARG)) {
@@ -103,7 +103,7 @@ static int _lvchange_pool_update(struct cmd_context *cmd,
 		if (discards != first_seg(lv)->discards) {
 			if (((discards == THIN_DISCARDS_IGNORE) ||
 			     (first_seg(lv)->discards == THIN_DISCARDS_IGNORE)) &&
-			    pool_is_active(lv))
+			    thin_pool_is_active(lv))
 				log_error("Cannot change support for discards while pool volume %s is active.",
 					  display_lvname(lv));
 			else {
@@ -156,8 +156,11 @@ static int _lvchange_monitoring(struct cmd_context *cmd,
 			log_verbose("Monitoring LV %s", display_lvname(lv));
 		else
 			log_verbose("Unmonitoring LV %s", display_lvname(lv));
-		if (!monitor_dev_for_events(cmd, lv, 0, dmeventd_monitor_mode()))
-			return_0;
+		if (!monitor_dev_for_events(cmd, lv, 0, dmeventd_monitor_mode())) {
+			log_error("Failed to change monitoring for %s volume.",
+				  display_lvname(lv));
+			return 0;
+		}
 	}
 
 	return 1;
@@ -203,7 +206,7 @@ static int _lvchange_activate(struct cmd_context *cmd, struct logical_volume *lv
 		return 0;
 	}
 
-	if (lv_activation_skip(lv, activate, arg_is_set(cmd, ignoreactivationskip_ARG)))
+	if (lv_activation_skip(lv, activate, arg_count(cmd, ignoreactivationskip_ARG)))
 		return 1;
 
 	if (lv_is_cow(lv) && !lv_is_virtual_origin(origin_from_cow(lv)))
@@ -223,7 +226,7 @@ static int _lvchange_activate(struct cmd_context *cmd, struct logical_volume *lv
 	/*
 	 * FIXME: lvchange should defer background polling in a similar
 	 * 	  way as vgchange does. First activate all relevant LVs
-	 * 	  initate background polling later (for all actually
+	 * 	  initiate background polling later (for all actually
 	 * 	  activated LVs). So we can avoid duplicate background
 	 * 	  polling for pvmove (2 or more locked LVs on single pvmove
 	 * 	  LV)
@@ -357,7 +360,7 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 		init_dmeventd_monitor(monitored);
 	init_mirror_in_sync(0);
 	if (!sync_local_dev_names(cmd))
-		log_warn("Failed to sync local dev names.");
+		log_warn("WARNING: Failed to sync local dev names.");
 
 	log_very_verbose("Starting resync of %s%s%s%s %s.",
 			 (active) ? "active " : "",
@@ -665,13 +668,28 @@ static int _lvchange_writecache(struct cmd_context *cmd,
 		seg->writecache_settings.max_age = settings.max_age;
 		set_count++;
 	}
+	if (settings.metadata_only_set) {
+		seg->writecache_settings.metadata_only_set = settings.metadata_only_set;
+		seg->writecache_settings.metadata_only = settings.metadata_only;
+		set_count++;
+	}
+	if (settings.pause_writeback_set) {
+		seg->writecache_settings.pause_writeback_set = settings.pause_writeback_set;
+		seg->writecache_settings.pause_writeback = settings.pause_writeback;
+		set_count++;
+	}
+	if (settings.new_key && settings.new_val) {
+		seg->writecache_settings.new_key = settings.new_key;
+		seg->writecache_settings.new_val = settings.new_val;
+		set_count++;
+	}
 
 	if (!set_count) {
 		/*
 		 * Empty settings can be used to clear all current settings,
 		 * lvchange --cachesettings "" vg/lv
 		 */
-		if (!arg_count(cmd, yes_ARG) &&
+		if (!arg_is_set(cmd, yes_ARG) &&
 		    yes_no_prompt("Clear all writecache settings? ") == 'n') {
 			log_print("No settings changed.");
 			return 1;
@@ -720,7 +738,7 @@ static int _lvchange_cache(struct cmd_context *cmd,
 	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv) && (mode == CACHE_MODE_WRITEBACK)) {
 		log_warn("WARNING: repairing a damaged cachevol is not yet possible.");
 		log_warn("WARNING: cache mode writethrough is suggested for safe operation.");
-		if (!arg_count(cmd, yes_ARG) &&
+		if (!arg_is_set(cmd, yes_ARG) &&
 			yes_no_prompt("Continue using writeback without repair?") == 'n')
 			goto_out;
 	}
@@ -788,6 +806,109 @@ static int _lvchange_vdo(struct cmd_context *cmd,
 		/* Request caller to commit and reload metadata */
 		*mr |= MR_RELOAD;
 	}
+
+	return 1;
+}
+
+static int _lvchange_integrity(struct cmd_context *cmd,
+			       struct logical_volume *lv,
+			       uint32_t *mr)
+{
+	struct integrity_settings settings = { .block_size = 0 };
+	struct logical_volume *lv_image;
+	struct lv_segment *seg, *seg_image;
+	uint32_t s;
+	int set_count = 0;
+
+	if (!lv_is_raid(lv)) {
+		log_error("A raid LV with integrity is required.");
+		return 0;
+	}
+
+	if (!lv_raid_has_integrity(lv)) {
+		log_error("No integrity found in specified raid LV.");
+		return 0;
+	}
+
+	/*
+	 * In the case of dm-integrity, a new dm table line does not trigger a
+	 * table reload (see skip_reload_params_compare), so new settings are
+	 * not applied to an active integrity device.  We could add a flag to
+	 * override skip_reload_params_compare through all the layers to lift
+	 * this restriction.
+	 */
+	if (lv_is_active(lv)) {
+		log_error("LV must be inactive to change integrity settings.");
+		return 0;
+	}
+
+	if (!get_integrity_settings(cmd, &settings))
+		return_0;
+
+	/*
+	 * The new specified settings modify the current settings.
+	 * A current setting is not changed if a new value is not
+	 * specified.  Only certain settings can be changed.
+	 */
+	seg = first_seg(lv);
+
+	for (s = 0; s < seg->area_count; s++) {
+		lv_image = seg_lv(seg, s);
+		seg_image = first_seg(lv_image);
+
+		if (seg_is_integrity(seg_image)) {
+			if (settings.journal_watermark_set) {
+				seg_image->integrity_settings.journal_watermark_set = 1;
+				seg_image->integrity_settings.journal_watermark = settings.journal_watermark;
+				set_count++;
+			}
+			if (settings.commit_time_set) {
+				seg_image->integrity_settings.commit_time_set = 1;
+				seg_image->integrity_settings.commit_time = settings.commit_time;
+				set_count++;
+			}
+			if (settings.bitmap_flush_interval_set) {
+				seg_image->integrity_settings.bitmap_flush_interval_set = 1;
+				seg_image->integrity_settings.bitmap_flush_interval = settings.bitmap_flush_interval;
+				set_count++;
+			}
+			if (settings.allow_discards_set) {
+				seg_image->integrity_settings.allow_discards_set = 1;
+				seg_image->integrity_settings.allow_discards = settings.allow_discards;
+				set_count++;
+			}
+		}
+	}
+
+	/*
+	 * --integritysettings "" clears all previously configured settings,
+	 * so dm-integrity kernel code will revert to using its defaults.
+	 */
+
+	if (set_count)
+		goto out;
+
+	if (!arg_is_set(cmd, yes_ARG) &&
+	    yes_no_prompt("Clear all integrity settings? ") == 'n') {
+		log_print("No settings changed.");
+		return 1;
+	}
+
+	for (s = 0; s < seg->area_count; s++) {
+		lv_image = seg_lv(seg, s);
+		seg_image = first_seg(lv_image);
+
+		if (seg_is_integrity(seg_image)) {
+			seg_image->integrity_settings.journal_watermark_set = 0;
+			seg_image->integrity_settings.commit_time_set = 0;
+			seg_image->integrity_settings.bitmap_flush_interval_set = 0;
+			seg_image->integrity_settings.allow_discards_set = 0;
+		}
+	}
+
+ out:
+	/* Request caller to commit and reload metadata */
+	*mr |= MR_RELOAD;
 
 	return 1;
 }
@@ -872,7 +993,7 @@ static int _lvchange_writemostly(struct logical_volume *lv,
 	/*
 	 * Prohibit writebehind and writebehind during synchronization.
 	 *
-	 * FIXME: we can do better once we can distingush between
+	 * FIXME: we can do better once we can distinguish between
 	 *        an initial sync after a linear -> raid1 upconversion
 	 *        and any later additions of legs, requested resyncs
 	 *        via lvchange or leg repairs/replacements.
@@ -920,9 +1041,9 @@ static int _lvchange_writemostly(struct logical_volume *lv,
 			if ((tmp_str_len < 3) ||
 			    (tmp_str[tmp_str_len - 2] != ':'))
 				/* Default to 'y' if no mode specified */
-				sprintf(pv_names[i], "%s:y", tmp_str);
+				snprintf(pv_names[i], tmp_str_len + 3, "%s:y", tmp_str);
 			else
-				sprintf(pv_names[i], "%s", tmp_str);
+				dm_strncpy(pv_names[i], tmp_str, tmp_str_len + 3);
 			i++;
 		}
 
@@ -995,8 +1116,8 @@ static int _lvchange_recovery_rate(struct logical_volume *lv,
 
 	if (raid_seg->max_recovery_rate &&
 	    (raid_seg->max_recovery_rate < raid_seg->min_recovery_rate)) {
-		log_error("Minimum recovery rate cannot be higher than maximum.");
-		return 0;
+		log_print_unless_silent("Minimum recovery rate cannot be higher than maximum, adjusting.");
+		raid_seg->max_recovery_rate = raid_seg->min_recovery_rate;
 	}
 
 	/* Request caller to commit and reload metadata */
@@ -1143,7 +1264,7 @@ static int _commit_reload(struct logical_volume *lv, uint32_t mr)
 }
 
 /* Helper: check @opt_num is listed in @opts array */
-static int _is_option_listed(int opt_enum, int *options)
+static int _is_option_listed(int opt_enum, const int *options)
 {
 	int i;
 
@@ -1156,7 +1277,7 @@ static int _is_option_listed(int opt_enum, int *options)
 /* Check @opt_enum is an option allowing group commit/reload */
 static int _option_allows_group_commit(int opt_enum)
 {
-	int options[] = {
+	static const int _options[] = {
 		permission_ARG,
 		alloc_ARG,
 		contiguous_ARG,
@@ -1179,27 +1300,28 @@ static int _option_allows_group_commit(int opt_enum)
 		-1
 	};
 
-	return _is_option_listed(opt_enum, options);
+	return _is_option_listed(opt_enum, _options);
 }
 
 /* Check @opt_enum requires direct commit/reload */
 static int _option_requires_direct_commit(int opt_enum)
 {
-	int options[] = {
+	static const int _options[] = {
 		discards_ARG,
 		zero_ARG,
 		cachemode_ARG,
 		cachepolicy_ARG,
 		cachesettings_ARG,
 		vdosettings_ARG,
+		integritysettings_ARG,
 		-1
 	};
 
-	return _is_option_listed(opt_enum, options);
+	return _is_option_listed(opt_enum, _options);
 }
 
 /*
- * For each lvchange command definintion:
+ * For each lvchange command definition:
  *
  * lvchange_foo_cmd(cmd, argc, argv);
  * . set cmd fields that apply to "foo"
@@ -1396,6 +1518,10 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 			docmds++;
 			doit += _lvchange_vdo(cmd, lv, &mr);
 			break;
+		case integritysettings_ARG:
+			docmds++;
+			doit += _lvchange_integrity(cmd, lv, &mr);
+			break;
 		default:
 			log_error(INTERNAL_ERROR "Failed to check for option %s",
 				  arg_long_option_name(i));
@@ -1414,7 +1540,7 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 
 	doit_total += doit;
 
-	/* Bail out if no options wwre found or any processing of an option in the second group failed */
+	/* Bail out if no options were found or any processing of an option in the second group failed */
 	if (!docmds || docmds != doit_total)
 		return_ECMD_FAILED;
 
@@ -1901,6 +2027,6 @@ int lvchange_persistent_cmd(struct cmd_context *cmd, int argc, char **argv)
 int lvchange(struct cmd_context *cmd, int argc, char **argv)
 {
 	log_error(INTERNAL_ERROR "Missing function for command definition %d:%s.",
-		  cmd->command->command_index, cmd->command->command_id);
+		  cmd->command->command_index, command_enum(cmd->command->command_enum));
 	return ECMD_FAILED;
 }

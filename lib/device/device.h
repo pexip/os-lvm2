@@ -16,12 +16,14 @@
 #ifndef _LVM_DEVICE_H
 #define _LVM_DEVICE_H
 
+#include "base/data-struct/list.h"
 #include "lib/uuid/uuid.h"
 
+#include <stdint.h>
 #include <fcntl.h>
 
 #define DEV_REGULAR		0x00000002	/* Regular file? */
-#define DEV_ALLOCED		0x00000004	/* malloc used */
+#define DEV_ALLOCATED		0x00000004	/* malloc used */
 #define DEV_OPENED_RW		0x00000008	/* Opened RW */
 #define DEV_OPENED_EXCL		0x00000010	/* Opened EXCL */
 #define DEV_O_DIRECT		0x00000020	/* Use O_DIRECT */
@@ -32,8 +34,8 @@
 #define DEV_NOT_O_NOATIME	0x00000400	/* Don't use O_NOATIME */
 #define DEV_IN_BCACHE		0x00000800      /* dev fd is open and used in bcache */
 #define DEV_BCACHE_EXCL		0x00001000      /* bcache_fd should be open EXCL */
-/* unused                       0x00002000      */
-/* unused			0x00004000	*/
+#define DEV_ADDED_SYS_WWID	0x00002000      /* wwid has been added from sysfs wwid file */
+#define DEV_ADDED_VPD_WWIDS	0x00004000	/* wwids have been added from vpd_pg83 */
 #define DEV_BCACHE_WRITE	0x00008000      /* bcache_fd is open with RDWR */
 #define DEV_SCAN_FOUND_LABEL	0x00010000      /* label scan read dev and found label */
 #define DEV_IS_MD_COMPONENT	0x00020000	/* device is an md component */
@@ -41,6 +43,8 @@
 #define DEV_MATCHED_USE_ID	0x00080000	/* matched an entry from cmd->use_devices */
 #define DEV_SCAN_FOUND_NOLABEL	0x00100000	/* label_scan read, passed filters, but no lvm label */
 #define DEV_SCAN_NOT_READ	0x00200000	/* label_scan not able to read dev */
+#define DEV_ADDED_NVME_WWIDS	0x00400000	/* wwids have been ready from libnvme */
+#define DEV_UPDATE_USE_ID	0x00800000	/* update system.devices entry to use preferred wwid */
 
 /*
  * Support for external device info.
@@ -59,14 +63,39 @@ struct dev_ext {
 	void *handle;
 };
 
-#define DEV_ID_TYPE_SYS_WWID   0x0001
-#define DEV_ID_TYPE_SYS_SERIAL 0x0002
-#define DEV_ID_TYPE_MPATH_UUID 0x0003
-#define DEV_ID_TYPE_MD_UUID    0x0004
-#define DEV_ID_TYPE_LOOP_FILE  0x0005
-#define DEV_ID_TYPE_CRYPT_UUID 0x0006
-#define DEV_ID_TYPE_LVMLV_UUID 0x0007
-#define DEV_ID_TYPE_DEVNAME    0x0008
+#define DEV_ID_TYPE_SYS_WWID   1
+#define DEV_ID_TYPE_SYS_SERIAL 2
+#define DEV_ID_TYPE_MPATH_UUID 3
+#define DEV_ID_TYPE_MD_UUID    4
+#define DEV_ID_TYPE_LOOP_FILE  5
+#define DEV_ID_TYPE_CRYPT_UUID 6
+#define DEV_ID_TYPE_LVMLV_UUID 7
+#define DEV_ID_TYPE_DEVNAME    8
+#define DEV_ID_TYPE_WWID_NAA   9
+#define DEV_ID_TYPE_WWID_EUI  10
+#define DEV_ID_TYPE_WWID_T10  11
+/* reserve 12 for "scsi name string" if we decide to add that */
+#define DEV_ID_TYPE_NVME_EUI64 13
+#define DEV_ID_TYPE_NVME_NGUID 14
+#define DEV_ID_TYPE_NVME_UUID  15
+
+/* Max length of SCSI or NVME WWID */
+#define DEV_WWID_SIZE 128
+
+/*
+ * A wwid read from:
+ * /sys/dev/block/%d:%d/device/wwid
+ * /sys/dev/block/%d:%d/wwid
+ * /sys/dev/block/%d:%d/device/vpd_pg83
+ * or libnvme
+ */
+
+struct dev_wwid {
+	struct dm_list list;	/* dev->wwids */
+	uint16_t scsi_type;	/* 1,2,3 for SCSI NAA,EUI,T10 */
+	uint16_t nvme_type;	/* 1,2,3 for NVME EUI64,NGUID,UUID */
+	char id[DEV_WWID_SIZE];	/* includes prefix e.g. naa.,eui.,t10. */
+};
 
 /*
  * A device ID of a certain type for a device.
@@ -75,8 +104,7 @@ struct dev_ext {
  */
 
 struct dev_id {
-	struct dm_list list;
-	struct device *dev;
+	struct dm_list list;    /* dev->ids */
 	uint16_t idtype;	/* DEV_ID_TYPE_ */
 	char *idname;		/* id string determined by idtype */
 };
@@ -99,12 +127,18 @@ struct dev_use {
 	char *pvid;
 };
 
+struct dev_use_list {
+	struct dm_list list;
+	struct dev_use *du;
+};
+
 /*
  * All devices in LVM will be represented by one of these.
  * pointer comparisons are valid.
  */
 struct device {
 	struct dm_list aliases;	/* struct dm_str_list */
+	struct dm_list wwids; /* struct dev_wwid, used for multipath component detection */
 	struct dm_list ids; /* struct dev_id, different entries for different idtypes */
 	struct dev_id *id; /* points to the the ids entry being used for this dev */
 	dev_t dev;
@@ -154,6 +188,12 @@ struct device_list {
 	struct device *dev;
 };
 
+struct device_id_list {
+	struct dm_list list;
+	struct device *dev;
+	char pvid[ID_LEN + 1];
+};
+
 struct device_area {
 	struct device *dev;
 	uint64_t start;		/* Bytes */
@@ -190,7 +230,6 @@ int dev_open(struct device *dev);
 int dev_open_quiet(struct device *dev);
 int dev_open_flags(struct device *dev, int flags, int direct, int quiet);
 int dev_open_readonly(struct device *dev);
-int dev_open_readonly_buffered(struct device *dev);
 int dev_open_readonly_quiet(struct device *dev);
 int dev_close(struct device *dev);
 int dev_close_immediate(struct device *dev);
@@ -200,11 +239,19 @@ const char *dev_name(const struct device *dev);
 
 void dev_flush(struct device *dev);
 
-struct device *dev_create_file(const char *filename, struct device *dev,
-			       struct dm_str_list *alias, int use_malloc);
-void dev_destroy_file(struct device *dev);
-
 int dev_mpath_init(const char *config_wwids_file);
 void dev_mpath_exit(void);
+int parse_vpd_ids(const unsigned char *vpd_data, int vpd_datalen, struct dm_list *ids);
+int format_t10_id(const unsigned char *in, size_t in_bytes, unsigned char *out, size_t out_bytes);
+int format_general_id(const char *in, size_t in_bytes, unsigned char *out, size_t out_bytes);
+int parse_vpd_serial(const unsigned char *in, char *out, size_t outsize);
+
+/* dev_util */
+int device_id_list_remove(struct dm_list *devices, struct device *dev);
+struct device_id_list *device_id_list_find_dev(struct dm_list *devices, struct device *dev);
+int device_list_remove(struct dm_list *devices, struct device *dev);
+struct device_list *device_list_find_dev(struct dm_list *devices, struct device *dev);
+
+char *strdup_pvid(char *pvid);
 
 #endif

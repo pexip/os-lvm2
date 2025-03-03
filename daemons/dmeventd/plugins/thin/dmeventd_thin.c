@@ -87,7 +87,7 @@ static int _run_command(struct dso_state *state)
 	log_verbose("Executing command: %s", state->cmd_str);
 
 	/* TODO:
-	 *   Support parallel run of 'task' and it's waitpid maintainence
+	 *   Support parallel run of 'task' and it's waitpid maintenance
 	 *   ATM we can't handle signaling of  SIGALRM
 	 *   as signalling is not allowed while 'process_event()' is running
 	 */
@@ -155,7 +155,7 @@ static int _wait_for_pid(struct dso_state *state)
 }
 
 void process_event(struct dm_task *dmt,
-		   enum dm_event_mask event __attribute__((unused)),
+		   enum dm_event_mask evmask,
 		   void **user)
 {
 	const char *device = dm_task_get_name(dmt);
@@ -179,7 +179,7 @@ void process_event(struct dm_task *dmt,
 		return;
 	}
 
-	if (event & DM_EVENT_DEVICE_ERROR) {
+	if (evmask & DM_EVENT_DEVICE_ERROR) {
 		/* Error -> no need to check and do instant resize */
 		state->data_percent = state->metadata_percent = 0;
 		if (_use_policy(dmt, state))
@@ -245,7 +245,7 @@ void process_event(struct dm_task *dmt,
 	/*
 	 * Trigger action when threshold boundary is exceeded.
 	 * Report 80% threshold warning when it's used above 80%.
-	 * Only 100% is exception as it cannot be surpased so policy
+	 * Only 100% is exception as it cannot be surpassed so policy
 	 * action is called for:  >50%, >55% ... >95%, 100%
 	 */
 	state->metadata_percent = dm_make_percent(tps->used_metadata_blocks, tps->total_metadata_blocks);
@@ -379,7 +379,7 @@ int register_device(const char *device,
 
 		state->argv[1] = str + 1;  /* 1 argument - vg/lv */
 		_init_thread_signals(state);
-	} else /* Unuspported command format */
+	} else /* Unsupported command format */
 		goto inval;
 
 	state->pid = -1;

@@ -10,7 +10,7 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-
+SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -21,9 +21,9 @@ aux prepare_pvs 1
 
 OPTS="--nameprefixes --noheadings --rows"
 
-aux lvmconf 'report/pvs_cols="pv_name,pv_size"'
-aux lvmconf 'report/compact_output=0'
-aux lvmconf 'report/compact_output_cols=""'
+aux lvmconf 'report/pvs_cols="pv_name,pv_size"' \
+	    'report/compact_output=0' \
+	    'report/compact_output_cols=""'
 
 pvs $OPTS > out
 grep LVM2_PV_NAME out

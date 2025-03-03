@@ -40,7 +40,11 @@ SOURCES =\
 	device/dev-luks.c \
 	device/dev-dasd.c \
 	device/dev-lvm1-pool.c \
+	device/filesystem.c \
 	device/online.c \
+	device/parse_vpd.c \
+	device/nvme.c \
+	device/dev_util.c \
 	display/display.c \
 	error/errseg.c \
 	unknown/unknown.c \
@@ -139,7 +143,7 @@ LIB_STATIC = $(LIB_NAME).a
 CFLOW_LIST = $(SOURCES)
 CFLOW_LIST_TARGET = $(LIB_NAME).cflow
 
-PROGS_CFLAGS = $(BLKID_CFLAGS) $(UDEV_CFLAGS)
+PROGS_CFLAGS = $(BLKID_CFLAGS) $(LIBNVME_CFLAGS) $(UDEV_CFLAGS)
 
 include $(top_builddir)/make.tmpl
 

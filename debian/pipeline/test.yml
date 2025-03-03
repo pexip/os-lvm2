@@ -1,0 +1,29 @@
+test lintian:
+  stage: test
+  image: debian:sid-slim
+
+  variables:
+    GIT_STRATEGY: none
+    GIT_SUBMODULE_STRATEGY: none
+
+  script:
+  - apt install lintian
+  - lintian --version
+  - >
+    lintian
+    --fail-on error
+    --color always
+    --display-info
+    --pedantic
+    --allow-root
+    --suppress-tags malformed-debian-changelog-version,debian-revision-not-well-formed
+    debian/_build/*.changes
+
+  needs:
+  - job: source
+  - job: build
+    parallel:
+      matrix:
+      - JOB_HOST_ARCH:
+        - all
+        - amd64

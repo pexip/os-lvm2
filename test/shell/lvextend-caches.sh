@@ -16,6 +16,10 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
+case "$(uname -r)" in
+6.[0123]*|5.19*) skip "Skippen test that kills this kernel" ;;
+esac
+
 do_test()
 {
 	# create some initial data
@@ -108,7 +112,7 @@ which mkfs.xfs || skip
 mount_dir="mnt"
 mkdir -p "$mount_dir"
 
-aux prepare_devs 6 66 # want 64M of usable space from each dev
+aux prepare_devs 6 200 # want 200M of usable space from each dev
 
 # generate random data
 dd if=/dev/urandom of=pattern bs=512K count=1
@@ -119,28 +123,28 @@ vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
 # cache with cachepool|cachevol
 # cache with writeback|writethrough
 
-# lv1 is main LV: 128M
+# lv1 is main LV: 300M
 # lv2 is fast LV:  64M
 
-lvcreate -n $lv1 -L128M -an $vg "$dev1" "$dev2"
+lvcreate -n $lv1 -L300M -an $vg "$dev1" "$dev2"
 lvcreate -n $lv2 -L64M -an $vg "$dev3"
 lvconvert -y --type writecache --cachevol $lv2 $vg/$lv1
 lvs -a $vg -o+devices
 do_test
 
-lvcreate -n $lv1 -L128M -an $vg "$dev1" "$dev2"
+lvcreate -n $lv1 -L300M -an $vg "$dev1" "$dev2"
 lvcreate -n $lv2 -L64M -an $vg "$dev3"
 lvconvert -y --type cache --cachevol $lv2 --cachemode writeback $vg/$lv1
 lvs -a $vg -o+devices
 do_test
 
-lvcreate -n $lv1 -L128M -an $vg "$dev1" "$dev2"
+lvcreate -n $lv1 -L300M -an $vg "$dev1" "$dev2"
 lvcreate -n $lv2 -L64M -an $vg "$dev3"
 lvconvert -y --type cache --cachevol $lv2 --cachemode writethrough $vg/$lv1
 lvs -a $vg -o+devices
 do_test
 
-lvcreate -n $lv1 -L128M -an $vg "$dev1" "$dev2"
+lvcreate -n $lv1 -L300M -an $vg "$dev1" "$dev2"
 lvcreate -y --type cache-pool -n $lv2 -L64M --poolmetadataspare n $vg "$dev3" "$dev6"
 lvconvert -y --type cache --cachepool $lv2 --poolmetadataspare n $vg/$lv1
 lvs -a $vg -o+devices

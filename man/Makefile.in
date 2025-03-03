@@ -48,7 +48,8 @@ MAN8SO=lvm-config.8 lvm-dumpconfig.8
 MAN8DM=dmsetup.8 dmstats.8
 MAN8CLUSTER=
 
-ifeq (,$(findstring $(MAKECMDGOALS), distclean all_man install_all_man))
+MAN_ALL_GOALS := distclean all_man install_all_man
+ifneq (,$(filter $(MAN_ALL_GOALS),$(MAKECMDGOALS)))
   MAN7 += lvmcache.7 lvmthin.7 lvmvdo.7
   MAN8+=$(FSADMMAN) $(LVMPOLLDMAN) $(LVMLOCKDMAN) $(LVMDBUSDMAN) $(LVMIMPORTVDOMAN)
   MAN8DM+=$(BLKDEACTIVATEMAN) $(DMEVENTDMAN) $(DMFILEMAPDMAN)
@@ -133,12 +134,12 @@ all_man: man
 $(MAN5) $(MAN7) $(MAN8) $(MAN8SO) $(MAN8DM) $(MAN8CLUSTER): Makefile
 
 $(MANGENERATOR):
-	@echo "    [MAKE] $<"
+	$(SHOW) "    [MAKE] $<"
 	$(Q) $(MAKE) -C $(top_builddir) tools
 
 # Test whether or not the man page generator works
 $(TESTMAN): $(MANGENERATOR) Makefile
-	@echo "    [TSTMAN] $@"
+	$(SHOW) "    [TSTMAN] $@"
 	$(Q) - $(MANGENERATOR) --primary lvmconfig > $@
 
 SEE_ALSO=$(srcdir)/see_also.end
@@ -180,6 +181,7 @@ $(SED) -e "s+#VERSION#+$(LVM_VERSION)+" \
 	-e "s+#DEFAULT_PID_DIR#+$(DEFAULT_PID_DIR)+" \
 	-e "s+#SYSTEMD_GENERATOR_DIR#+$(SYSTEMD_GENERATOR_DIR)+" \
 	-e "s+#DEFAULT_LIBLINE#+$(DEFAULT_LIBLINE)+" \
+	-e "s+#DEFAULT_DMEVENTD_EXIT_ON_PATH#+$(DEFAULT_DMEVENTD_EXIT_ON_PATH)+" \
 	-e "s+#DEFAULT_MANGLING#+$(DEFAULT_MANGLING)+" $< > $@
 endef
 
@@ -202,6 +204,7 @@ $(SED) -i -e "/^.TH/ !s+-+\\\-+g" \
 	  -e "s+machine-id+machine\\\-id+g" \
 	  -e "s+lvm-full+lvm\\\-full+g" \
 	  -e "s+lvm-lvpoll+lvm\\\-lvpoll+g" \
+	  -e "s+\([[:digit:]]\)\s\([KMGTPE]iB\)+\1\\\ \2+g" \
 	  $@
 endef
 
@@ -236,55 +239,55 @@ checksed:
 	$(Q) $(RM) $@ $@-e
 
 %.5: $(srcdir)/%.5_main
-	@echo "    [MAN] $@"
+	$(SHOW) "    [MAN] $@"
 	$(Q) $(SUBSTVARS)
 	$(Q) $(ESCAPEHYPHENS)
 
 %.7: $(srcdir)/%.7_main
-	@echo "    [MAN] $@"
+	$(SHOW) "    [MAN] $@"
 	$(Q) $(SUBSTVARS)
 	$(Q) $(ESCAPEHYPHENS)
 
 %.8: $(srcdir)/%.8_main
-	@echo "    [MAN] $@"
+	$(SHOW) "    [MAN] $@"
 	$(Q) $(SUBSTVARS)
 	$(Q) $(ESCAPEHYPHENS)
 
 %.8: %.8_gen
-	@echo "    [MAN] $@"
+	$(SHOW) "    [MAN] $@"
 	$(Q) $(SUBSTVARS)
 	$(Q) $(ESCAPEHYPHENS)
 
 $(MAN8SO): lvmconfig.8
-	@echo "    [MAN] $@"
+	$(SHOW) "    [MAN] $@"
 	$(Q) echo ".so $<" > $@
 
 install_man5: $(MAN5)
-	@echo "    [INSTALL] $^"
+	$(SHOW) "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN5DIR)
 	$(Q) $(INSTALL_DATA) $^ $(MAN5DIR)/
 
 install_man7: $(MAN7)
-	@echo "    [INSTALL] $^"
+	$(SHOW) "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN7DIR)
 	$(Q) $(INSTALL_DATA) $^ $(MAN7DIR)/
 
 install_man8: $(MAN8) $(MAN8SO)
-	@echo "    [INSTALL] $^"
+	$(SHOW) "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN8DIR)
 	$(Q) $(INSTALL_DATA) $^ $(MAN8DIR)/
 
 install_lvm2: install_man5 install_man7 install_man8
 
 install_cluster: $(MAN8CLUSTER)
-ifdef MAN8CLUSTER
-	@echo "    [INSTALL] $^"
+ifneq ($(MAN8CLUSTER),)
+	$(SHOW) "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN8DIR)
 	$(Q) $(INSTALL_DATA) $^ $(MAN8DIR)/
 endif
 
 install_device-mapper: $(MAN8DM)
-	@echo "    [INSTALL] $^"
+	$(SHOW) "    [INSTALL] $^"
 	$(Q) $(INSTALL) -d $(MAN8DIR)
 	$(Q) $(INSTALL_DATA) $^ $(MAN8DIR)/
 
@@ -294,7 +297,7 @@ install_all_man: install install_systemd_generators
 
 # Copy generated man pages back to source tree as fallback for machines where generator doesn't work
 pregenerated_man: $(MANGENERATOR) $(TESTMAN)
-	@echo "    [GENERATE] $^"
+	$(SHOW) "    [GENERATE] $^"
 	$(Q) set -e ; test -s $(TESTMAN) && for i in $(srcdir)/*.8_des; do \
 		CMD=`basename $$i .8_des`; \
 		( $(MANGENERATOR) --primary $$CMD $$i && \

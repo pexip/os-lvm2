@@ -14,7 +14,7 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-which mkfs.xfs || skip
+which mkfs.ext4 || skip
 aux have_integrity 1 5 0 || skip
 # Avoid 4K ramdisk devices on older kernels
 aux kernel_at_least  5 10 || export LVM_TEST_PREFER_BRD=0
@@ -41,7 +41,7 @@ _prepare_vg() {
 }
 
 _add_new_data_to_mnt() {
-	mkfs.xfs -f -s size=4096 "$DM_DEV_DIR/$vg/$lv1"
+	mkfs.ext4 "$DM_DEV_DIR/$vg/$lv1"
 
         mount "$DM_DEV_DIR/$vg/$lv1" $mnt
 
@@ -94,37 +94,6 @@ _verify_data_on_lv() {
         lvchange -an $vg/$lv1
 }
 
-_sync_percent() {
-	local checklv=$1
-	get lv_field "$checklv" sync_percent | cut -d. -f1
-}
-
-_wait_recalc() {
-	local checklv=$1
-
-	for i in $(seq 1 10) ; do
-		sync=$(_sync_percent "$checklv")
-		echo "sync_percent is $sync"
-
-		if test "$sync" = "100"; then
-			return
-		fi
-
-		sleep 1
-	done
-
-	# TODO: There is some strange bug, first leg of RAID with integrity
-	# enabled never gets in sync. I saw this in BB, but not when executing
-	# the commands manually
-	if test -z "$sync"; then
-		echo "TEST\ WARNING: Resync of dm-integrity device '$checklv' failed"
-                dmsetup status "$DM_DEV_DIR/mapper/${checklv/\//-}"
-		exit
-	fi
-	echo "timeout waiting for recalc"
-	return 1
-}
-
 aux lvmconf \
         'activation/raid_fault_policy = "allocate"'
 
@@ -136,9 +105,9 @@ vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3" "$dev4"
 lvcreate --type raid1 -m 2 --raidintegrity y --ignoremonitoring -l 8 -n $lv1 $vg "$dev1" "$dev2" "$dev3"
 lvchange --monitor y $vg/$lv1
 lvs -a -o+devices $vg
-_wait_recalc $vg/${lv1}_rimage_0
-_wait_recalc $vg/${lv1}_rimage_1
-_wait_recalc $vg/${lv1}_rimage_2
+aux wait_recalc $vg/${lv1}_rimage_0
+aux wait_recalc $vg/${lv1}_rimage_1
+aux wait_recalc $vg/${lv1}_rimage_2
 aux wait_for_sync $vg $lv1
 _add_new_data_to_mnt
 
@@ -176,14 +145,13 @@ vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5"
 lvcreate --type raid1 -m 2 --raidintegrity y --ignoremonitoring -l 8 -n $lv1 $vg "$dev1" "$dev2" "$dev3"
 lvchange --monitor y $vg/$lv1
 lvs -a -o+devices $vg
-_wait_recalc $vg/${lv1}_rimage_0
-_wait_recalc $vg/${lv1}_rimage_1
-_wait_recalc $vg/${lv1}_rimage_2
+aux wait_recalc $vg/${lv1}_rimage_0
+aux wait_recalc $vg/${lv1}_rimage_1
+aux wait_recalc $vg/${lv1}_rimage_2
 aux wait_for_sync $vg $lv1
 _add_new_data_to_mnt
 
-aux disable_dev "$dev2"
-aux disable_dev "$dev1"
+aux disable_dev "$dev1" "$dev2"
 
 # wait for dmeventd to call lvconvert --repair which should
 # replace dev1 and dev2 with dev4 and dev5
@@ -200,8 +168,7 @@ grep "$dev3" out
 _add_more_data_to_mnt
 _verify_data_on_mnt
 
-aux enable_dev "$dev1"
-aux enable_dev "$dev2"
+aux enable_dev "$dev1" "$dev2"
 
 lvs -a -o+devices $vg | tee out
 not grep "$dev1" out
@@ -222,11 +189,11 @@ vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
 lvcreate --type raid6 --raidintegrity y --ignoremonitoring -l 8 -n $lv1 $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5"
 lvchange --monitor y $vg/$lv1
 lvs -a -o+devices $vg
-_wait_recalc $vg/${lv1}_rimage_0
-_wait_recalc $vg/${lv1}_rimage_1
-_wait_recalc $vg/${lv1}_rimage_2
-_wait_recalc $vg/${lv1}_rimage_3
-_wait_recalc $vg/${lv1}_rimage_4
+aux wait_recalc $vg/${lv1}_rimage_0
+aux wait_recalc $vg/${lv1}_rimage_1
+aux wait_recalc $vg/${lv1}_rimage_2
+aux wait_recalc $vg/${lv1}_rimage_3
+aux wait_recalc $vg/${lv1}_rimage_4
 aux wait_for_sync $vg $lv1
 _add_new_data_to_mnt
 
@@ -262,10 +229,10 @@ vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3" "$dev4" "$dev5"
 lvcreate --type raid10 --raidintegrity y --ignoremonitoring -l 8 -n $lv1 $vg "$dev1" "$dev2" "$dev3" "$dev4"
 lvchange --monitor y $vg/$lv1
 lvs -a -o+devices $vg
-_wait_recalc $vg/${lv1}_rimage_0
-_wait_recalc $vg/${lv1}_rimage_1
-_wait_recalc $vg/${lv1}_rimage_2
-_wait_recalc $vg/${lv1}_rimage_3
+aux wait_recalc $vg/${lv1}_rimage_0
+aux wait_recalc $vg/${lv1}_rimage_1
+aux wait_recalc $vg/${lv1}_rimage_2
+aux wait_recalc $vg/${lv1}_rimage_3
 aux wait_for_sync $vg $lv1
 _add_new_data_to_mnt
 
@@ -294,4 +261,3 @@ lvchange -an $vg/$lv1
 _verify_data_on_lv
 lvremove $vg/$lv1
 vgremove -ff $vg
-

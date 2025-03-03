@@ -7,16 +7,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import subprocess
 from . import cfg
 from .cmdhandler import options_to_cli_args, LvmExecutionMeta, call_lvm
 import dbus
-from .utils import pv_range_append, pv_dest_ranges, log_error, log_debug,\
-					mt_async_call
+from .utils import pv_range_append, pv_dest_ranges, log_error, log_debug
 from .request import RequestEntry
 import threading
 import time
-import traceback
 
 
 def pv_move_lv_cmd(move_options, lv_full_name,
@@ -65,18 +62,15 @@ def _move_callback(job_state, line_str):
 def _move_merge(interface_name, command, job_state):
 	# We need to execute these command stand alone by forking & exec'ing
 	# the command always as we will be getting periodic output from them on
-	# the status of the long running operation.
+	# the status of the long-running operation.
 
-	meta = LvmExecutionMeta(time.time(), 0, command, -1000, None, None)
-	cfg.blackbox.add(meta)
+	meta = LvmExecutionMeta(time.time(), 0, command)
+	cfg.flightrecorder.add(meta)
 
 	ec, stdout, stderr = call_lvm(command, line_cb=_move_callback,
 									cb_data=job_state)
-
-	with meta.lock:
-		meta.ended = time.time()
-		meta.ec = ec
-		meta.stderr_txt = stderr
+	ended = time.time()
+	meta.completed(ended, ec, stdout, stderr)
 
 	if ec == 0:
 		job_state.Percent = 100

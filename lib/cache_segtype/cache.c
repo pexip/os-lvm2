@@ -82,7 +82,7 @@ static void _cache_display(const struct lv_segment *seg)
 /*
  * When older metadata are loaded without newer settings,
  * set then to default settings (the one that could have been
- * used implicitely at that time).
+ * used implicitly at that time).
  *
  * Needs both segments cache and cache_pool to be loaded.
  */
@@ -144,8 +144,8 @@ static int _settings_text_import(struct lv_segment *seg,
 	 * Read in policy args:
 	 *   policy_settings {
 	 *	migration_threshold=2048
-	 *	sequention_threashold=100
-	 *	random_threashold=200
+	 *	sequential_threshold=100
+	 *	random_threshold=200
 	 *	read_promote_adjustment=10
 	 *	write_promote_adjustment=20
 	 *	discard_promote_adjustment=40
@@ -202,8 +202,7 @@ static int _settings_text_export(const struct lv_segment *seg,
 }
 
 static int _cache_pool_text_import(struct lv_segment *seg,
-				   const struct dm_config_node *sn,
-				   struct dm_hash_table *pv_hash __attribute__((unused)))
+				   const struct dm_config_node *sn)
 {
 	struct logical_volume *data_lv, *meta_lv;
 	const char *str = NULL;
@@ -277,7 +276,7 @@ static int _cache_pool_text_export(const struct lv_segment *seg,
 		outf(f, "metadata_format = " FMTu32, seg->cache_metadata_format);
 		break;
 	default:
-		log_error(INTERNAL_ERROR "LV %s is using unknown cache metadada format %u.",
+		log_error(INTERNAL_ERROR "LV %s is using unknown cache metadata format %u.",
 			  display_lvname(seg->lv), seg->cache_metadata_format);
 		return 0;
 	}
@@ -300,38 +299,6 @@ static void _destroy(struct segment_type *segtype)
 }
 
 #ifdef DEVMAPPER_SUPPORT
-/*
- * Parse and look for kernel symbol in /proc/kallsyms
- * this could be our only change to figure out there is
- * cache policy symbol already in the monolithic kernel
- * where 'modprobe dm-cache-smq' will simply not work
- */
-static int _lookup_kallsyms(const char *symbol)
-{
-	static const char _syms[] = "/proc/kallsyms";
-	int ret = 0;
-	char *line = NULL;
-	size_t len;
-	FILE *s;
-
-	if (!(s = fopen(_syms, "r")))
-		log_sys_debug("fopen", _syms);
-	else {
-		while (getline(&line, &len, s) != -1)
-			if (strstr(line, symbol)) {
-				ret = 1; /* Found symbol */
-				log_debug("Found kernel symbol%s.", symbol); /* space is in symbol */
-				break;
-			}
-
-		free(line);
-		if (fclose(s))
-			log_sys_debug("fclose", _syms);
-	}
-
-	return ret;
-}
-
 
 static int _target_present(struct cmd_context *cmd,
 			   const struct lv_segment *seg __attribute__((unused)),
@@ -339,21 +306,20 @@ static int _target_present(struct cmd_context *cmd,
 {
 	/* List of features with their kernel target version */
 	static const struct feature {
-		uint32_t maj;
-		uint32_t min;
-		unsigned cache_feature;
-		unsigned cache_alias;
+		uint16_t maj;
+		uint16_t min;
+		uint16_t cache_feature;
+		uint16_t cache_alias;
 		const char feature[12];
 		const char module[12]; /* check dm-%s */
-		const char ksymbol[12]; /* check for kernel symbol */
-		const char *aliasing;
+		const char aliasing[24];
 	} _features[] = {
 		{ 1, 10, CACHE_FEATURE_METADATA2, 0, "metadata2" },
 		/* Assumption: cache >=1.9 always aliases MQ policy */
 		{ 1, 9, CACHE_FEATURE_POLICY_SMQ, CACHE_FEATURE_POLICY_MQ, "policy_smq", "cache-smq",
-		 " smq_exit", " and aliases cache-mq" },
-		{ 1, 8, CACHE_FEATURE_POLICY_SMQ, 0, "policy_smq", "cache-smq", " smq_exit" },
-		{ 1, 3, CACHE_FEATURE_POLICY_MQ, 0, "policy_mq", "cache-mq", " mq_init" },
+		 " and aliases cache-mq" },
+		{ 1, 8, CACHE_FEATURE_POLICY_SMQ, 0, "policy_smq", "cache-smq" },
+		{ 1, 3, CACHE_FEATURE_POLICY_MQ, 0, "policy_mq", "cache-mq" },
 	};
 	static const char _lvmconf[] = "global/cache_disabled_features";
 	static unsigned _attrs = 0;
@@ -399,11 +365,10 @@ static int _target_present(struct cmd_context *cmd,
 			}
 			if (((maj > _features[i].maj) ||
 			     (maj == _features[i].maj && min >= _features[i].min)) &&
-			    ((_features[i].ksymbol[0] && _lookup_kallsyms(_features[i].ksymbol)) ||
-			     module_present(cmd, _features[i].module))) {
+			    module_present(cmd, _features[i].module)) {
 				log_debug_activation("Cache policy %s is available%s.",
 						     _features[i].module,
-						     _features[i].aliasing ? : "");
+						     _features[i].aliasing);
 				_attrs |= (_features[i].cache_feature | _features[i].cache_alias);
 			} else if (!_features[i].cache_alias)
 				log_very_verbose("Target %s does not support %s.",
@@ -457,7 +422,7 @@ static int _modules_needed(struct dm_pool *mem,
 }
 #endif /* DEVMAPPER_SUPPORT */
 
-static struct segtype_handler _cache_pool_ops = {
+static const struct segtype_handler _cache_pool_ops = {
 	.display = _cache_display,
 	.text_import = _cache_pool_text_import,
 	.text_import_area_count = _cache_pool_text_import_area_count,
@@ -472,8 +437,7 @@ static struct segtype_handler _cache_pool_ops = {
 };
 
 static int _cache_text_import(struct lv_segment *seg,
-			      const struct dm_config_node *sn,
-			      struct dm_hash_table *pv_hash __attribute__((unused)))
+			      const struct dm_config_node *sn)
 {
 	struct logical_volume *pool_lv, *origin_lv;
 	const char *name;
@@ -668,7 +632,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			return_0;
 
 		if (!(attr & CACHE_FEATURE_METADATA2)) {
-			log_error("LV %s has metadata format %u unsuported by kernel.",
+			log_error("LV %s has metadata format %u unsupported by kernel.",
 				  display_lvname(seg->lv), setting_seg->cache_metadata_format);
 			return 0;
 		}
@@ -740,7 +704,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			}
 		};
 
-                /* Check if cache settings are acceptable to knownm policies */
+                /* Check if cache settings are acceptable to known policies */
 		for (i = 0; i < DM_ARRAY_SIZE(_accepted); i++) {
 			if (strcasecmp(cache_pool_seg->policy_name, _accepted[i].name))
 				continue;
@@ -796,7 +760,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 }
 #endif /* DEVMAPPER_SUPPORT */
 
-static struct segtype_handler _cache_ops = {
+static const struct segtype_handler _cache_ops = {
 	.display = _cache_display,
 	.text_import = _cache_text_import,
 	.text_import_area_count = _cache_text_import_area_count,

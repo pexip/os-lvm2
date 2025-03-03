@@ -20,14 +20,10 @@ prlimit -h || skip
 
 aux lvmconf 'devices/pv_min_size = 1024'
 
-aux prepare_devs 200 1
-
-for i in $(seq 1 200); do
-	pvcreate "$DM_DEV_DIR/mapper/${PREFIX}pv$i"
-done
+aux prepare_pvs 200 1
 
 pvs > out
-test "$(grep pv out | wc -l)" -eq 200
+test "$(grep -c pv out)" -eq 200
 
 # Set the soft limit to 100 fd's when 200 PVs need to be open.
 # This requires lvm to increase its soft limit in order to
@@ -38,11 +34,11 @@ aux lvmconf 'devices/obtain_device_list_from_udev = 0'
 
 prlimit --nofile=100: pvs > out
 
-test "$(grep pv out | wc -l)" -eq 200
+test "$(grep -c pv out)" -eq 200
 
 aux lvmconf 'devices/obtain_device_list_from_udev = 1'
 
 prlimit --nofile=100: pvs > out
 
-test "$(grep pv out | wc -l)" -eq 200
+test "$(grep -c pv out)" -eq 200
 

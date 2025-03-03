@@ -22,11 +22,16 @@ export DM_ABORT_ON_INTERNAL_ERRORS=0
 
 aux lvmconf 'activation/raid_region_size = 16'
 
-aux target_at_least dm-mirror 1 10 0 || skip
-# Throttle mirroring
-aux throttle_dm_mirror || skip
+aux target_at_least dm-mirror 1 2 0 || skip
 
-aux prepare_pvs 6 60
+aux prepare_pvs 6 90
+
+for i in "$dev3" "$dev6" ; do
+	aux delay_dev "$i" 0 1 "$(get first_extent_sector "$i"):"
+done
+# fallback to mirror throttling
+# this does not work too well with fast CPUs
+test -f HAVE_DM_DELAY || { aux throttle_dm_mirror || skip ; }
 
 vgcreate -s 512k $vg "$dev1" "$dev2"
 pvcreate --metadatacopies 0 "$dev3"
@@ -41,9 +46,9 @@ for backgroundarg in "-b" "" ;
 do
 
 # Create multisegment LV
-lvcreate -an -Zn -l30 -n $lv1 $vg "$dev1"
-lvcreate -an -Zn -l30 -n $lv2 $vg "$dev2"
-lvcreate -an -Zn -l30 -n $lv1 $vg1 "$dev4"
+lvcreate -an -Zn -l60 -n $lv1 $vg "$dev1"
+lvcreate -an -Zn -l60 -n $lv2 $vg "$dev2"
+lvcreate -an -Zn -l60 -n $lv1 $vg1 "$dev4"
 lvextend -l+30 -n $vg1/$lv1 "$dev5"
 
 cmd1=(pvmove -i1 $backgroundarg $mode "$dev1" "$dev3")
@@ -55,10 +60,8 @@ if test -z "$backgroundarg" ; then
 	"${cmd1[@]}" &
 	aux wait_pvmove_lv_ready "$vg-pvmove0"
 	"${cmd2[@]}" &
-	aux wait_pvmove_lv_ready "$vg-pvmove1"
 	"${cmd3[@]}" &
-	aux wait_pvmove_lv_ready "$vg1-pvmove0"
-        lvs -a $vg $vg1
+	aux wait_pvmove_lv_ready "$vg-pvmove1" "$vg1-pvmove0"
 else
 	LVM_TEST_TAG="kill_me_$PREFIX" "${cmd1[@]}"
 	LVM_TEST_TAG="kill_me_$PREFIX" "${cmd2[@]}"

@@ -10,7 +10,7 @@
 from .automatedproperties import AutomatedProperties
 
 from . import utils
-from .utils import vg_obj_path_generate, log_error, _handle_execute
+from .utils import vg_obj_path_generate, log_error, _handle_execute, LvmBug
 import dbus
 from . import cmdhandler
 from . import cfg
@@ -21,14 +21,12 @@ from .utils import n, n32, d
 from .loader import common
 from .state import State
 from . import background
-from .utils import round_size, mt_remove_dbus_objects
+from .utils import round_size, mt_remove_dbus_objects, lvm_column_key
 from .job import JobState
 
-import traceback
 
-
-# Try and build a key for a LV, so that we sort the LVs with least dependencies
-# first.  This may be error prone because of the flexibility LVM
+# Try and build a key for a LV, so that we sort the LVs with the least dependencies
+# first.  This may be error-prone because of the flexibility LVM
 # provides and what you can stack.
 def get_key(i):
 
@@ -67,73 +65,80 @@ def lvs_state_retrieve(selection, cache_refresh=True):
 	if cache_refresh:
 		cfg.db.refresh()
 
-	# When building up the model, it's best to process LVs with the least
-	# dependencies to those that are dependant upon other LVs.  Otherwise, when
-	# we are trying to gather information we could be in a position where we
-	# don't have information available yet.
-	lvs = sorted(cfg.db.fetch_lvs(selection), key=get_key)
+	try:
+		# When building up the model, it's best to process LVs with the least
+		# dependencies to those that are dependent upon other LVs.  Otherwise, when
+		# we are trying to gather information we could be in a position where we
+		# don't have information available yet.
+		lvs = sorted(cfg.db.fetch_lvs(selection), key=get_key)
 
-	for l in lvs:
-		if cfg.vdo_support:
-			rc.append(LvStateVdo(
-				l['lv_uuid'], l['lv_name'],
-				l['lv_path'], n(l['lv_size']),
-				l['vg_name'],
-				l['vg_uuid'], l['pool_lv_uuid'],
-				l['pool_lv'], l['origin_uuid'], l['origin'],
-				n32(l['data_percent']), l['lv_attr'],
-				l['lv_tags'], l['lv_active'], l['data_lv'],
-				l['metadata_lv'], l['segtype'], l['lv_role'],
-				l['lv_layout'],
-				n32(l['snap_percent']),
-				n32(l['metadata_percent']),
-				n32(l['copy_percent']),
-				n32(l['sync_percent']),
-				n(l['lv_metadata_size']),
-				l['move_pv'],
-				l['move_pv_uuid'],
-				l['vdo_operating_mode'],
-				l['vdo_compression_state'],
-				l['vdo_index_state'],
-				n(l['vdo_used_size']),
-				d(l['vdo_saving_percent']),
-				l['vdo_compression'],
-				l['vdo_deduplication'],
-				l['vdo_use_metadata_hints'],
-				n32(l['vdo_minimum_io_size']),
-				n(l['vdo_block_map_cache_size']),
-				n32(l['vdo_block_map_era_length']),
-				l['vdo_use_sparse_index'],
-				n(l['vdo_index_memory_size']),
-				n(l['vdo_slab_size']),
-				n32(l['vdo_ack_threads']),
-				n32(l['vdo_bio_threads']),
-				n32(l['vdo_bio_rotation']),
-				n32(l['vdo_cpu_threads']),
-				n32(l['vdo_hash_zone_threads']),
-				n32(l['vdo_logical_threads']),
-				n32(l['vdo_physical_threads']),
-				n32(l['vdo_max_discard']),
-				l['vdo_write_policy'],
-				n32(l['vdo_header_size'])))
-		else:
-			rc.append(LvState(
-				l['lv_uuid'], l['lv_name'],
-				l['lv_path'], n(l['lv_size']),
-				l['vg_name'],
-				l['vg_uuid'], l['pool_lv_uuid'],
-				l['pool_lv'], l['origin_uuid'], l['origin'],
-				n32(l['data_percent']), l['lv_attr'],
-				l['lv_tags'], l['lv_active'], l['data_lv'],
-				l['metadata_lv'], l['segtype'], l['lv_role'],
-				l['lv_layout'],
-				n32(l['snap_percent']),
-				n32(l['metadata_percent']),
-				n32(l['copy_percent']),
-				n32(l['sync_percent']),
-				n(l['lv_metadata_size']),
-				l['move_pv'],
-				l['move_pv_uuid']))
+		for l in lvs:
+			if cfg.vdo_support:
+				rc.append(LvStateVdo(
+					l['lv_uuid'], l['lv_name'],
+					l['lv_path'], n(l['lv_size']),
+					l['vg_name'],
+					l['vg_uuid'], l['pool_lv_uuid'],
+					l['pool_lv'], l['origin_uuid'], l['origin'],
+					n32(l['data_percent']), l['lv_attr'],
+					l['lv_tags'], l['lv_active'], l['data_lv'],
+					l['metadata_lv'], l['segtype'], l['lv_role'],
+					l['lv_layout'],
+					n32(l['snap_percent']),
+					n32(l['metadata_percent']),
+					n32(l['copy_percent']),
+					n32(l['sync_percent']),
+					n(l['lv_metadata_size']),
+					l['move_pv'],
+					l['move_pv_uuid'],
+					l['vdo_operating_mode'],
+					l['vdo_compression_state'],
+					l['vdo_index_state'],
+					n(l['vdo_used_size']),
+					d(l['vdo_saving_percent']),
+					l['vdo_compression'],
+					l['vdo_deduplication'],
+					l['vdo_use_metadata_hints'],
+					n32(l['vdo_minimum_io_size']),
+					n(l['vdo_block_map_cache_size']),
+					n32(l['vdo_block_map_era_length']),
+					l['vdo_use_sparse_index'],
+					n(l['vdo_index_memory_size']),
+					n(l['vdo_slab_size']),
+					n32(l['vdo_ack_threads']),
+					n32(l['vdo_bio_threads']),
+					n32(l['vdo_bio_rotation']),
+					n32(l['vdo_cpu_threads']),
+					n32(l['vdo_hash_zone_threads']),
+					n32(l['vdo_logical_threads']),
+					n32(l['vdo_physical_threads']),
+					n32(l['vdo_max_discard']),
+					l['vdo_write_policy'],
+					n32(l['vdo_header_size'])))
+			else:
+				rc.append(LvState(
+					l['lv_uuid'], l['lv_name'],
+					l['lv_path'], n(l['lv_size']),
+					l['vg_name'],
+					l['vg_uuid'], l['pool_lv_uuid'],
+					l['pool_lv'], l['origin_uuid'], l['origin'],
+					n32(l['data_percent']), l['lv_attr'],
+					l['lv_tags'], l['lv_active'], l['data_lv'],
+					l['metadata_lv'], l['segtype'], l['lv_role'],
+					l['lv_layout'],
+					n32(l['snap_percent']),
+					n32(l['metadata_percent']),
+					n32(l['copy_percent']),
+					n32(l['sync_percent']),
+					n(l['lv_metadata_size']),
+					l['move_pv'],
+					l['move_pv_uuid']))
+	except KeyError as ke:
+		# Sometimes lvm omits returning one of the keys we requested.
+		key = ke.args[0]
+		if lvm_column_key(key):
+			raise LvmBug("missing JSON key: '%s'" % key)
+		raise ke
 	return rc
 
 
@@ -274,15 +279,15 @@ class LvStateVdo(LvState):
 					MetaDataPercent, CopyPercent, SyncPercent,
 					MetaDataSizeBytes, move_pv, move_pv_uuid,
 					vdo_operating_mode, vdo_compression_state, vdo_index_state,
-					vdo_used_size,vdo_saving_percent,vdo_compression,
-					vdo_deduplication,vdo_use_metadata_hints,
-					vdo_minimum_io_size,vdo_block_map_cache_size,
-					vdo_block_map_era_length,vdo_use_sparse_index,
-					vdo_index_memory_size,vdo_slab_size,vdo_ack_threads,
-					vdo_bio_threads,vdo_bio_rotation,vdo_cpu_threads,
-					vdo_hash_zone_threads,vdo_logical_threads,
-					vdo_physical_threads,vdo_max_discard,
-					vdo_write_policy,vdo_header_size):
+					vdo_used_size, vdo_saving_percent, vdo_compression,
+					vdo_deduplication, vdo_use_metadata_hints,
+					vdo_minimum_io_size, vdo_block_map_cache_size,
+					vdo_block_map_era_length, vdo_use_sparse_index,
+					vdo_index_memory_size, vdo_slab_size, vdo_ack_threads,
+					vdo_bio_threads, vdo_bio_rotation, vdo_cpu_threads,
+					vdo_hash_zone_threads, vdo_logical_threads,
+					vdo_physical_threads, vdo_max_discard,
+					vdo_write_policy, vdo_header_size):
 		super(LvStateVdo, self).__init__(Uuid, Name, Path, SizeBytes,
 					vg_name, vg_uuid, pool_lv_uuid, PoolLv,
 					origin_uuid, OriginLv, DataPercent, Attr, Tags, active,
@@ -371,8 +376,8 @@ class LvCommon(AutomatedProperties):
 			return dbus.Struct((self.state.Attr[index],
 				type_map.get(self.state.Attr[index], default)),
 								signature="(ss)")
-		except BaseException:
-			st = traceback.format_exc()
+		except BaseException as b:
+			st = utils.extract_stack_trace(b)
 			log_error("attr_struct: \n%s" % st)
 			return dbus.Struct(('?', 'Unavailable'), signature="(ss)")
 
@@ -595,7 +600,7 @@ class Lv(LvCommon):
 				optional_size = space + 512 - remainder
 
 		LvCommon.handle_execute(*cmdhandler.vg_lv_snapshot(
-			lv_name, snapshot_options,name, optional_size))
+			lv_name, snapshot_options, name, optional_size))
 		full_name = "%s/%s" % (dbo.vg_name_lookup(), name)
 		return cfg.om.get_object_path_by_lvm_id(full_name)
 
@@ -635,7 +640,7 @@ class Lv(LvCommon):
 
 		size_change = new_size_bytes - dbo.SizeBytes
 		LvCommon.handle_execute(*cmdhandler.lv_resize(
-			dbo.lvm_id, size_change,pv_dests, resize_options))
+			dbo.lvm_id, size_change, pv_dests, resize_options))
 		return "/"
 
 	@dbus.service.method(
@@ -744,7 +749,7 @@ class Lv(LvCommon):
 		cfg.worker_q.put(r)
 
 	@staticmethod
-	def _writecache_lv(lv_uuid, lv_name, lv_object_path, cache_options):
+	def _caching_common(method, lv_uuid, lv_name, lv_object_path, cache_options):
 		# Make sure we have a dbus object representing it
 		dbo = LvCommon.validate_dbus_object(lv_uuid, lv_name)
 
@@ -753,7 +758,7 @@ class Lv(LvCommon):
 
 		if lv_to_cache:
 			fcn = lv_to_cache.lv_full_name()
-			rc, out, err = cmdhandler.lv_writecache_lv(
+			rc, out, err = method(
 				dbo.lv_full_name(), fcn, cache_options)
 			if rc == 0:
 				# When we cache an LV, the cache pool and the lv that is getting
@@ -770,8 +775,13 @@ class Lv(LvCommon):
 		else:
 			raise dbus.exceptions.DBusException(
 				LV_INTERFACE, 'LV to cache with object path %s not present!' %
-				lv_object_path)
+							  lv_object_path)
 		return lv_converted
+
+	@staticmethod
+	def _writecache_lv(lv_uuid, lv_name, lv_object_path, cache_options):
+		return Lv._caching_common(cmdhandler.lv_writecache_lv, lv_uuid,
+									lv_name, lv_object_path, cache_options)
 
 	@dbus.service.method(
 		dbus_interface=LV_INTERFACE,
@@ -783,6 +793,39 @@ class Lv(LvCommon):
 			tmo, Lv._writecache_lv,
 			(self.Uuid, self.lvm_id, lv_object,
 			cache_options), cb, cbe)
+		cfg.worker_q.put(r)
+
+	@staticmethod
+	def _repair_raid_lv(lv_uuid, lv_name, new_pvs, repair_options):
+		# Make sure we have a dbus object representing it
+		pv_dests = []
+		dbo = LvCommon.validate_dbus_object(lv_uuid, lv_name)
+
+		# If we have PVs, verify them
+		if len(new_pvs):
+			for pv in new_pvs:
+				pv_dbus_obj = cfg.om.get_object_by_path(pv)
+				if not pv_dbus_obj:
+					raise dbus.exceptions.DBusException(
+						LV_INTERFACE,
+						'PV Destination (%s) not found' % pv)
+
+				pv_dests.append(pv_dbus_obj.lvm_id)
+
+		LvCommon.handle_execute(*cmdhandler.lv_raid_repair(
+			dbo.lvm_id, pv_dests, repair_options))
+		return "/"
+
+	@dbus.service.method(
+		dbus_interface=LV_INTERFACE,
+		in_signature='aoia{sv}',
+		out_signature='o',
+		async_callbacks=('cb', 'cbe'))
+	def RepairRaidLv(self, new_pvs, tmo, repair_options, cb, cbe):
+		r = RequestEntry(
+			tmo, Lv._repair_raid_lv,
+			(self.Uuid, self.lvm_id, new_pvs,
+			repair_options), cb, cbe, return_tuple=False)
 		cfg.worker_q.put(r)
 
 
@@ -845,10 +888,10 @@ class LvVdoPool(Lv):
 		cfg.worker_q.put(r)
 
 	@dbus.service.method(
-	dbus_interface=VDO_POOL_INTERFACE,
-	in_signature='ia{sv}',
-	out_signature='o',
-	async_callbacks=('cb', 'cbe'))
+		dbus_interface=VDO_POOL_INTERFACE,
+		in_signature='ia{sv}',
+		out_signature='o',
+		async_callbacks=('cb', 'cbe'))
 	def DisableCompression(self, tmo, comp_options, cb, cbe):
 		r = RequestEntry(
 			tmo, LvVdoPool._enable_disable_compression,
@@ -878,10 +921,10 @@ class LvVdoPool(Lv):
 		cfg.worker_q.put(r)
 
 	@dbus.service.method(
-	dbus_interface=VDO_POOL_INTERFACE,
-	in_signature='ia{sv}',
-	out_signature='o',
-	async_callbacks=('cb', 'cbe'))
+		dbus_interface=VDO_POOL_INTERFACE,
+		in_signature='ia{sv}',
+		out_signature='o',
+		async_callbacks=('cb', 'cbe'))
 	def DisableDeduplication(self, tmo, dedup_options, cb, cbe):
 		r = RequestEntry(
 			tmo, LvVdoPool._enable_disable_deduplication,
@@ -952,33 +995,8 @@ class LvCachePool(Lv):
 
 	@staticmethod
 	def _cache_lv(lv_uuid, lv_name, lv_object_path, cache_options):
-		# Make sure we have a dbus object representing cache pool
-		dbo = LvCommon.validate_dbus_object(lv_uuid, lv_name)
-
-		# Make sure we have dbus object representing lv to cache
-		lv_to_cache = cfg.om.get_object_by_path(lv_object_path)
-
-		if lv_to_cache:
-			fcn = lv_to_cache.lv_full_name()
-			rc, out, err = cmdhandler.lv_cache_lv(
-				dbo.lv_full_name(), fcn, cache_options)
-			if rc == 0:
-				# When we cache an LV, the cache pool and the lv that is getting
-				# cached need to be removed from the object manager and
-				# re-created as their interfaces have changed!
-				mt_remove_dbus_objects((dbo, lv_to_cache))
-				cfg.load()
-
-				lv_converted = cfg.om.get_object_path_by_lvm_id(fcn)
-			else:
-				raise dbus.exceptions.DBusException(
-					LV_INTERFACE,
-					'Exit code %s, stderr = %s' % (str(rc), err))
-		else:
-			raise dbus.exceptions.DBusException(
-				LV_INTERFACE, 'LV to cache with object path %s not present!' %
-				lv_object_path)
-		return lv_converted
+		return Lv._caching_common(cmdhandler.lv_cache_lv, lv_uuid, lv_name,
+									lv_object_path, cache_options)
 
 	@dbus.service.method(
 		dbus_interface=CACHE_POOL_INTERFACE,

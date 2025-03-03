@@ -45,7 +45,7 @@
  * c:  the name used to reference this value in command defs
  * d:  what to display in usage output for this value
  *
- * command defintions will use --option NAME, where NAME
+ * command definitions will use --option NAME, where NAME
  * is shown in val() field c.  NAME will be translated to
  * foo_VAL enum in field a, which is used in commands[]
  * structs.
@@ -95,8 +95,6 @@
  */
 
 val(none_VAL, NULL, "None", "ERR")             /* unused, for enum value 0 */
-val(conststr_VAL, NULL, "ConstString", "ERR")  /* used only for command defs */
-val(constnum_VAL, NULL, "ConstNumber", "ERR")  /* used only for command defs */
 val(bool_VAL, yes_no_arg, "Bool", "y|n")
 val(number_VAL, int_arg, "Number", NULL)
 val(snumber_VAL, int_arg_with_sign, "SNumber", "[+|-]Number")
@@ -138,12 +136,15 @@ val(metadatacopies_VAL, metadatacopies_arg, "unused", "unused")
 val(polloperation_VAL, polloperation_arg, "PollOp", "pvmove|convert|merge|merge_thin")
 val(writemostly_VAL, writemostly_arg, "WriteMostlyPV", "PV[:t|n|y]")
 val(syncaction_VAL, syncaction_arg, "SyncAction", "check|repair")
-val(reportformat_VAL, reportformat_arg, "ReportFmt", "basic|json")
+val(reportformat_VAL, reportformat_arg, "ReportFmt", "basic|json|json_std")
 val(configreport_VAL, configreport_arg, "ConfigReport", "log|vg|lv|pv|pvseg|seg")
 val(configtype_VAL, configtype_arg, "ConfigType", "current|default|diff|full|list|missing|new|profilable|profilable-command|profilable-metadata")
 val(repairtype_VAL, repairtype_arg, "RepairType", "pv_header|metadata|label_header")
 val(dumptype_VAL, dumptype_arg, "DumpType", "headers|metadata|metadata_all|metadata_search")
+val(headings_VAL, headings_arg, "HeadingsType", "none|abbrev|full|0|1|2")
+val(conststr_VAL, NULL, "ConstString", "ERR")  /* used only for command defs */
+val(constnum_VAL, NULL, "ConstNumber", "ERR")  /* used only for command defs */
 
 /* this should always be last */
-val(VAL_COUNT, NULL, NULL, NULL)
+val(VAL_COUNT, NULL, "", NULL)
 

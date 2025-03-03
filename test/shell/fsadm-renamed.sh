@@ -16,7 +16,7 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-aux prepare_vg 1 80
+aux prepare_vg 1 700
 
 vg_lv=$vg/$lv1
 vg_lv_ren=${vg_lv}_renamed
@@ -63,11 +63,11 @@ if not which "$i" ; then
 	continue
 fi
 
-lvcreate -n $lv1 -L20M $vg
+lvcreate -n $lv1 -L300M $vg
 
 case "$i" in
 *ext3)		MKFS_ARGS="-b1024 -j" ;;
-*xfs)		MKFS_ARGS="-l internal,size=1700b -f" ;;
+*xfs)		MKFS_ARGS="-l internal,size=64m -f" ;;
 *reiserfs)	MKFS_ARGS="-s 513 -f" ;;
 esac
 
@@ -77,40 +77,68 @@ echo "$i"
 # Adding couple udev wait ops as some older systemd
 # might get confused and was 'randomly/racy' umounting
 # devices  just mounted.
-# 
-# See for explanation: 
+#
+# See for explanation:
 #   https://github.com/systemd/systemd/commit/628c89cc68ab96fce2de7ebba5933725d147aecc
 #   https://github.com/systemd/systemd/pull/2017
 aux udev_wait
 
+# mount /dev/test/lv1 on /mnt
 mount "$dev_vg_lv" "$mount_dir"
 
 aux udev_wait
 
+# rename lv1 to lv1_renamed, now /dev/test/lv1_renamed is mounted on /mnt,
+# but "df" and "mount" commands will still show /dev/test/lv1 mounted on /mnt.
 lvrename $vg_lv $vg_lv_ren
 
 check_mounted
 
 # fails on renamed LV
+# lvextend -r test/lv1_renamed succeeds in extending the LV (as lv1_renamed),
+# but xfs_growfs /dev/test/lv1_renamed fails because it doesn't recognize
+# that device is mounted, because the old lv name reported as being mounted.
 fail lvresize -y -L+10M -r $vg_lv_ren
 
 # fails on unknown mountpoint  (FIXME: umount)
 not umount "$dev_vg_lv"
 
-lvcreate -L20 -n $lv1 $vg
+# create a new LV with the previous name of the renamed lv
+lvcreate -L300 -n $lv1 $vg
 "$i" $MKFS_ARGS "$dev_vg_lv"
 
 aux udev_wait
 
+# mount the new lv on a dir with a similar name as the other
+# now df will show
+# /dev/mapper/test-lv1 ... /mnt
+# /dev/mapper/test-lv1 ... /mnt $SPACE dir
 mount "$dev_vg_lv" "$mount_dolar_dir"
 
 check_mounted
 
+# try to resize the LV that was renamed:  lvextend -r test/lv1_renamed
+# this succeeds in extending the LV (lv1_renamed), but xfs_growfs fails
+# for the same reason as above, i.e. mount doesn't show the lv1_renamed
+# device is mounted anywhere.
 not lvresize -L+10M -r $vg_lv_ren
 
 umount "$mount_dir"
 
-lvresize -y -L+10M -r $vg_lv
+
+USE_NOT=
+# TODO: this is somewhat surprising for users
+# Detect if the 'lvresize' was compiled with HAVE_BLKID_SUBLKS_FSINFO
+# In such case --fs checksize is a supported parameter
+# otherwise command automatically fallbacks to fsadm and resize reiserfs
+not lvresize --fs checksize -L+1 $vg/XXX 2>err
+if not grep "Unknown --fs value" err ; then
+case "$i" in
+# ATM  fsadm is required instead of '-r' option with reiserfs
+*reiserfs) USE_NOT="not" ;;
+esac
+fi
+$USE_NOT lvresize -y -L+10M -r $vg_lv
 
 aux udev_wait
 

@@ -33,32 +33,61 @@ struct radix_tree *radix_tree_create(radix_value_dtr dtr, void *dtr_context);
 void radix_tree_destroy(struct radix_tree *rt);
 
 unsigned radix_tree_size(struct radix_tree *rt);
-bool radix_tree_insert(struct radix_tree *rt, uint8_t *kb, uint8_t *ke, union radix_value v);
-bool radix_tree_remove(struct radix_tree *rt, uint8_t *kb, uint8_t *ke);
+bool radix_tree_insert(struct radix_tree *rt, const void *key, size_t keylen, union radix_value v);
+bool radix_tree_remove(struct radix_tree *rt, const void *key, size_t keylen);
+// Returns: 1 success
+//	    0 failure during insert
+//	   -1 key had already existing value (that was updated)
+int radix_tree_uniq_insert(struct radix_tree *rt, const void *key, size_t keylen, union radix_value v);
 
 // Returns the number of values removed
-unsigned radix_tree_remove_prefix(struct radix_tree *rt, uint8_t *prefix_b, uint8_t *prefix_e);
+unsigned radix_tree_remove_prefix(struct radix_tree *rt, const void *prefix, size_t prefix_len);
 
-bool radix_tree_lookup(struct radix_tree *rt,
-		       uint8_t *kb, uint8_t *ke, union radix_value *result);
+bool radix_tree_lookup(struct radix_tree *rt, const void *key, size_t keylen,
+		       union radix_value *result);
 
 // The radix tree stores entries in lexicographical order.  Which means
 // we can iterate entries, in order.  Or iterate entries with a particular
 // prefix.
 struct radix_tree_iterator {
-        // Returns false if the iteration should end.
+	// Returns false if the iteration should end.
 	bool (*visit)(struct radix_tree_iterator *it,
-                      uint8_t *kb, uint8_t *ke, union radix_value v);
+		      const void *key, size_t keylen, union radix_value v);
 };
 
-void radix_tree_iterate(struct radix_tree *rt, uint8_t *kb, uint8_t *ke,
-                        struct radix_tree_iterator *it);
+void radix_tree_iterate(struct radix_tree *rt, const void *key, size_t keylen,
+			struct radix_tree_iterator *it);
+
+// Alternative traversing radix_tree.
+// Builds whole set all radix_tree  nr_values values.
+// After use, free(values).
+bool radix_tree_values(struct radix_tree *rt, const void *key, size_t keylen,
+		       union radix_value **values, unsigned *nr_values);
 
 // Checks that some constraints on the shape of the tree are
 // being held.  For debug only.
 bool radix_tree_is_well_formed(struct radix_tree *rt);
 void radix_tree_dump(struct radix_tree *rt, FILE *out);
 
+// Shortcut for ptr value return
+// Note: if value would be NULL, it's same result for not/found case.
+static inline void *radix_tree_lookup_ptr(struct radix_tree *rt, const void *key, size_t keylen)
+{
+	union radix_value v;
+	return radix_tree_lookup(rt, key, keylen, &v) ? v.ptr : NULL;
+}
+
+static inline bool radix_tree_insert_ptr(struct radix_tree *rt, const void *key, size_t keylen, void *ptr)
+{
+	union radix_value v = { .ptr = ptr };
+	return radix_tree_insert(rt, key, keylen, v);
+}
+
+static inline int radix_tree_uniq_insert_ptr(struct radix_tree *rt, const void *key, size_t keylen, void *ptr)
+{
+	union radix_value v = { .ptr = ptr };
+	return radix_tree_uniq_insert(rt, key, keylen, v);
+}
 //----------------------------------------------------------------
 
 #endif

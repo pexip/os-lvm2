@@ -44,12 +44,13 @@ static int _lv_tree_move(struct dm_list *lvh,
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list *lvh1;
 
-	/* Update the list pointer refering to the item moving to @vg_to. */
+	/* Update the list pointer referring to the item moving to @vg_to. */
 	if (lvh == *lvht)
 		*lvht = dm_list_next(lvh, lvh);
 
 	dm_list_move(&vg_to->lvs, lvh);
-	lv->vg = vg_to;
+	if (!lv_set_vg(lv, vg_to))
+		return_0;
 	lv->lvid.id[0] = lv->vg->id;
 
 	if (seg)
@@ -559,7 +560,8 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		return ECMD_FAILED;
 	}
 
-	lvmcache_label_scan(cmd);
+	if (!lvmcache_label_scan(cmd))
+		return_ECMD_FAILED;
 
 	if (!(vginfo_to = lvmcache_vginfo_from_vgname(vg_name_to, NULL))) {
 		if (!validate_name(vg_name_to)) {
@@ -701,6 +703,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	vg_to->status |= EXPORTED_VG;
 
 
+	/* coverity[format_string_injection] pool_metadata_spare_lv name is validated */
 	if (!handle_pool_metadata_spare(vg_to, 0, &vg_to->pvs, poolmetadataspare))
 		goto_bad;
 

@@ -39,8 +39,7 @@ static void _writecache_display(const struct lv_segment *seg)
 }
 
 static int _writecache_text_import(struct lv_segment *seg,
-				   const struct dm_config_node *sn,
-				   struct dm_hash_table *pv_hash __attribute__((unused)))
+				   const struct dm_config_node *sn)
 {
 	struct logical_volume *origin_lv = NULL;
 	struct logical_volume *fast_lv;
@@ -135,6 +134,18 @@ static int _writecache_text_import(struct lv_segment *seg,
 		seg->writecache_settings.max_age_set = 1;
 	}
 
+	if (dm_config_has_node(sn, "metadata_only")) {
+		if (!dm_config_get_uint32(sn, "metadata_only", &seg->writecache_settings.metadata_only))
+			return SEG_LOG_ERROR("Unknown writecache_setting in");
+		seg->writecache_settings.metadata_only_set = 1;
+	}
+
+	if (dm_config_has_node(sn, "pause_writeback")) {
+		if (!dm_config_get_uint32(sn, "pause_writeback", &seg->writecache_settings.pause_writeback))
+			return SEG_LOG_ERROR("Unknown writecache_setting in");
+		seg->writecache_settings.pause_writeback_set = 1;
+	}
+
 	if (dm_config_has_node(sn, "writecache_setting_key")) {
 		const char *key;
 		const char *val;
@@ -205,6 +216,14 @@ static int _writecache_text_export(const struct lv_segment *seg,
 
 	if (seg->writecache_settings.max_age_set) {
 	        outf(f, "max_age = %u", seg->writecache_settings.max_age);
+	}
+
+	if (seg->writecache_settings.metadata_only_set) {
+	        outf(f, "metadata_only = %u", seg->writecache_settings.metadata_only);
+	}
+
+	if (seg->writecache_settings.pause_writeback_set) {
+	        outf(f, "pause_writeback = %u", seg->writecache_settings.pause_writeback);
 	}
 
 	if (seg->writecache_settings.new_key && seg->writecache_settings.new_val) {
@@ -337,7 +356,7 @@ static int _writecache_add_target_line(struct dev_manager *dm,
 }
 #endif /* DEVMAPPER_SUPPORT */
 
-static struct segtype_handler _writecache_ops = {
+static const struct segtype_handler _writecache_ops = {
 	.display = _writecache_display,
 	.text_import = _writecache_text_import,
 	.text_import_area_count = _writecache_text_import_area_count,

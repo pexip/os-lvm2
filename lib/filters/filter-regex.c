@@ -161,6 +161,9 @@ static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct devic
 	if (cmd->enable_devices_list)
 		return 1;
 
+	if (cmd->filter_regex_skip)
+		return 1;
+
 	if (cmd->enable_devices_file && !cmd->filter_regex_with_devices_file) {
 		/* can't warn in create_filter because enable_devices_file is set later */
 		if (rf->config_filter && !rf->warned_filter) {
@@ -179,7 +182,7 @@ static int _accept_p(struct cmd_context *cmd, struct dev_filter *f, struct devic
 
 		if (m >= 0) {
 			if (dm_bit(rf->accept, m)) {
-				if (!first)
+				if (!first && !cmd->filter_regex_set_preferred_name_disable)
 					dev_set_preferred_name(sl, dev);
 
 				return 1;
@@ -222,7 +225,7 @@ struct dev_filter *regex_filter_create(const struct dm_config_value *patterns, i
 	if (!mem)
 		return_NULL;
 
-	if (!(rf = dm_pool_alloc(mem, sizeof(*rf))))
+	if (!(rf = dm_pool_zalloc(mem, sizeof(*rf))))
 		goto_bad;
 
 	rf->mem = mem;

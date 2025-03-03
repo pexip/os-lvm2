@@ -31,10 +31,10 @@ CLEAN_TARGETS += $(BASE_DEPENDS) $(BASE_OBJECTS) \
 	$(BASE_TARGET)
 
 $(BASE_TARGET): $(BASE_OBJECTS)
-	@echo "    [AR] $@"
+	$(SHOW) "    [AR] $@"
 	$(Q) $(RM) $@
 	$(Q) $(AR) rsv $@ $(BASE_OBJECTS) > /dev/null
 
-ifeq ("$(DEPENDS)","yes")
+ifeq ("$(USE_TRACKING)","yes")
 -include $(BASE_DEPENDS)
 endif

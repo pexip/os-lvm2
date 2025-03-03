@@ -52,7 +52,7 @@ static int _check_all_dm_devices(const char *vg_name, unsigned *found)
 	do {
 		/* TODO: Do we want to validate UUID LVM- prefix as well ? */
 		names = (struct dm_names *)((char *) names + next);
-		if (!dm_strncpy(vgname_buf, names->name, sizeof(vgname_buf))) {
+		if (!_dm_strncpy(vgname_buf, names->name, sizeof(vgname_buf))) {
 			r = 0;
 			goto_out;
 		}
@@ -132,7 +132,10 @@ int vgcfgrestore(struct cmd_context *cmd, int argc, char **argv)
 
 	clear_hint_file(cmd);
 
-	lvmcache_label_scan(cmd);
+	if (!lvmcache_label_scan(cmd)) {
+		unlock_vg(cmd, NULL, vg_name);
+		return_ECMD_FAILED;
+	}
 
 	cmd->handles_unknown_segments = 1;
 

@@ -16,6 +16,10 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
+case "$(uname -r)" in
+6.[0123]*|5.19*) skip "Skipped test that kills this kernel" ;;
+esac
+
 mkfs_mount_umount()
 {
         lvt=$1
@@ -59,11 +63,11 @@ mkdir -p "$mount_dir"
 # generate random data
 dd if=/dev/urandom of=pattern1 bs=512K count=1
 
-aux prepare_devs 4
+aux prepare_devs 4 310
 
 vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3" "$dev4"
 
-lvcreate -n $lv1 -l 16 -an $vg "$dev1" "$dev4"
+lvcreate -n $lv1 -L 300 -an $vg "$dev1" "$dev4"
 lvcreate -n $lv2 -l 4 -an $vg "$dev2"
 
 #
@@ -227,7 +231,7 @@ vgextend --restoremissing $vg "$dev2"
 #
 
 lvremove $vg/$lv2
-lvcreate -n $lv2 -l 14 -an $vg "$dev2" "$dev3"
+lvcreate -n $lv2 -l 14 -an $vg "$dev2:0-10" "$dev3"
 
 lvconvert -y --type cache --cachevol $lv2 --cachemode writethrough $vg/$lv1
 
@@ -263,7 +267,7 @@ mount_umount $lv1
 #
 
 lvremove $vg/$lv2
-lvcreate -n $lv2 -l 14 -an $vg "$dev2" "$dev3"
+lvcreate -n $lv2 -l 14 -an $vg "$dev2:0-10" "$dev3"
 
 lvconvert -y --type cache --cachevol $lv2 --cachemode writeback $vg/$lv1
 
@@ -301,7 +305,7 @@ vgextend --restoremissing $vg "$dev3"
 lvremove $vg/$lv1
 lvremove $vg/$lv2
 
-lvcreate -n $lv1 -l 16 -an $vg "$dev1" "$dev4"
+lvcreate -n $lv1 -L 300 -an $vg "$dev1:0-10" "$dev4"
 lvcreate -n $lv2 -l 4 -an $vg "$dev2"
 
 lvconvert -y --type cache --cachevol $lv2 --cachemode writethrough $vg/$lv1
@@ -330,7 +334,7 @@ mount_umount $lv1
 
 lvremove $vg/$lv1
 
-lvcreate -n $lv1 -l 16 -an $vg "$dev1" "$dev4"
+lvcreate -n $lv1 -L 300 -an $vg "$dev1:0-10" "$dev4"
 lvcreate -n $lv2 -l 4 -an $vg "$dev2"
 
 lvconvert -y --type cache --cachevol $lv2 --cachemode writethrough $vg/$lv1
@@ -364,7 +368,7 @@ mount_umount $lv1
 
 lvremove $vg/$lv1
 
-lvcreate -n $lv1 -l 16 -an $vg "$dev1" "$dev4"
+lvcreate -n $lv1 -L 300 -an $vg "$dev1:0-10" "$dev4"
 lvcreate -n $lv2 -l 4 -an $vg "$dev2"
 
 lvconvert -y --type cache --cachevol $lv2 --cachemode writethrough $vg/$lv1
@@ -395,7 +399,7 @@ mount_umount $lv1
 
 lvremove $vg/$lv1
 
-lvcreate -n $lv1 -l 16 -an $vg "$dev1" "$dev4"
+lvcreate -n $lv1 -L 300 -an $vg "$dev1:0-10" "$dev4"
 lvcreate -n $lv2 -l 4 -an $vg "$dev2"
 
 lvconvert -y --type cache --cachevol $lv2 --cachemode writeback $vg/$lv1

@@ -279,7 +279,7 @@ static int handle_cluster_request(struct clog_cpg *entry __attribute__((unused))
 	 * With resumes, we only handle our own.
 	 * Resume is a special case that requires
 	 * local action (to set up CPG), followed by
-	 * a cluster action to co-ordinate reading
+	 * a cluster action to coordinate reading
 	 * the disk and checkpointing
 	 */
 	if (tmp->u_rq.request_type == DM_ULOG_RESUME) {
@@ -1091,6 +1091,7 @@ static void cpg_message_callback(cpg_handle_t handle, const struct cpg_name *gna
 	    (rq->u_rq.request_type != DM_ULOG_RESUME) &&
 	    (rq->u_rq.request_type != DM_ULOG_CLEAR_REGION) &&
 	    (rq->u_rq.request_type != DM_ULOG_CHECKPOINT_READY)) {
+		/* coverity[suspicious_sizeof] allocation is using varargs data @end */
 		tmp_rq = malloc(DM_ULOG_REQUEST_SIZE);
 		if (!tmp_rq) {
 			/*
@@ -1340,6 +1341,7 @@ static void cpg_join_callback(struct clog_cpg *match,
 		goto out;
 	}
 
+	/* coverity[suspicious_sizeof] allocation is using varargs data @end */
 	rq = malloc(DM_ULOG_REQUEST_SIZE);
 	if (!rq) {
 		LOG_ERROR("cpg_config_callback: "
@@ -1632,7 +1634,7 @@ int create_cluster_cpg(char *uuid, uint64_t luid)
 
 	size = ((strlen(uuid) + 1) > CPG_MAX_NAME_LENGTH) ?
 		CPG_MAX_NAME_LENGTH : (strlen(uuid) + 1);
-	(void) dm_strncpy(new->name.value, uuid, size);
+	dm_strncpy(new->name.value, uuid, size);
 	new->name.length = (uint32_t)size;
 	new->luid = luid;
 

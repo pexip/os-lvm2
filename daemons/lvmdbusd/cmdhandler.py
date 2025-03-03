@@ -6,19 +6,18 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
-
+import errno
 from subprocess import Popen, PIPE
 import select
 import time
 import threading
 from itertools import chain
 import collections
-import traceback
 import os
 
 from lvmdbusd import cfg
 from lvmdbusd.utils import pv_dest_ranges, log_debug, log_error, add_no_notify,\
-							make_non_block, read_decoded
+			make_non_block, read_decoded, extract_stack_trace, LvmBug, add_config_option, get_error_msg
 from lvmdbusd.lvm_shell_proxy import LVMShellProxy
 
 try:
@@ -26,7 +25,6 @@ try:
 except ImportError:
 	import json
 
-SEP = '{|}'
 
 total_time = 0.0
 total_count = 0
@@ -38,7 +36,7 @@ cmd_lock = threading.RLock()
 
 class LvmExecutionMeta(object):
 
-	def __init__(self, start, ended, cmd, ec, stdout_txt, stderr_txt):
+	def __init__(self, start, ended, cmd, ec=-1000, stdout_txt=None, stderr_txt=None):
 		self.lock = threading.RLock()
 		self.start = start
 		self.ended = ended
@@ -49,32 +47,49 @@ class LvmExecutionMeta(object):
 
 	def __str__(self):
 		with self.lock:
-			return "EC= %d for %s\n" \
-				"STARTED: %f, ENDED: %f\n" \
+			if self.ended == 0:
+				ended_txt = "still running"
+				self.ended = time.time()
+			else:
+				ended_txt = str(time.ctime(self.ended))
+
+			return 'EC= %d for "%s"\n' \
+				"STARTED: %s, ENDED: %s, DURATION: %f\n" \
 				"STDOUT=%s\n" \
 				"STDERR=%s\n" % \
-				(self.ec, str(self.cmd), self.start, self.ended, self.stdout_txt,
-				self.stderr_txt)
+				(self.ec, " ".join(self.cmd), time.ctime(self.start), ended_txt, float(self.ended) - self.start,
+					self.stdout_txt,
+					self.stderr_txt)
+
+	def completed(self, end_time, ec, stdout_txt, stderr_txt):
+		with self.lock:
+			self.ended = end_time
+			self.ec = ec
+			self.stdout_txt = stdout_txt
+			self.stderr_txt = stderr_txt
 
 
 class LvmFlightRecorder(object):
 
 	def __init__(self, size=16):
 		self.queue = collections.deque(maxlen=size)
+		self.lock = threading.RLock()
 
 	def add(self, lvm_exec_meta):
-		self.queue.append(lvm_exec_meta)
+		with self.lock:
+			self.queue.append(lvm_exec_meta)
 
 	def dump(self):
-		with cmd_lock:
+		with self.lock:
 			if len(self.queue):
-				log_error("LVM dbus flight recorder START")
+				log_error("LVM dbus flight recorder START (in order of newest to oldest)")
 				for c in reversed(self.queue):
 					log_error(str(c))
 				log_error("LVM dbus flight recorder END")
+				self.queue.clear()
 
 
-cfg.blackbox = LvmFlightRecorder()
+cfg.flightrecorder = LvmFlightRecorder()
 
 
 def _debug_c(cmd, exit_code, out):
@@ -94,7 +109,7 @@ def call_lvm(command, debug=False, line_cb=None,
 					stdin, CALL MUST EXECUTE QUICKLY and not *block*
 					otherwise call_lvm function will fail to read
 					stdin/stdout.  Return value of call back is ignored
-	:param cb_data: Supplied to callback to allow caller access to
+	:param cb_data: Supplied to call back to allow caller access to
 								its own data
 
 	# Callback signature
@@ -106,6 +121,9 @@ def call_lvm(command, debug=False, line_cb=None,
 	command.insert(0, cfg.LVM_CMD)
 	command = add_no_notify(command)
 
+	# Ensure we get an error message when we fork & exec the lvm command line
+	command = add_config_option(command, "--config", 'log/command_log_selection="log_context!=''"')
+
 	process = Popen(command, stdout=PIPE, stderr=PIPE, close_fds=True,
 					env=os.environ)
 
@@ -115,10 +133,10 @@ def call_lvm(command, debug=False, line_cb=None,
 	make_non_block(process.stdout)
 	make_non_block(process.stderr)
 
-	while True:
+	while True and cfg.run.value != 0:
 		try:
 			rd_fd = [process.stdout.fileno(), process.stderr.fileno()]
-			ready = select.select(rd_fd, [], [], 2)
+			ready = select.select(rd_fd, [], [], cfg.G_LOOP_TMO)
 
 			for r in ready[0]:
 				if r == process.stdout.fileno():
@@ -133,8 +151,8 @@ def call_lvm(command, debug=False, line_cb=None,
 					if i != -1:
 						try:
 							line_cb(cb_data, stdout_text[stdout_index:i])
-						except:
-							st = traceback.format_exc()
+						except BaseException as be:
+							st = extract_stack_trace(be)
 							log_error("call_lvm: line_cb exception: \n %s" % st)
 						stdout_index = i + 1
 					else:
@@ -145,12 +163,31 @@ def call_lvm(command, debug=False, line_cb=None,
 				break
 		except IOError as ioe:
 			log_debug("call_lvm:" + str(ioe))
-			pass
+			break
 
-	if debug or process.returncode != 0:
-		_debug_c(command, process.returncode, (stdout_text, stderr_text))
+	if process.returncode is not None:
+		cfg.lvmdebug.lvm_complete()
+		if debug or (process.returncode != 0 and (process.returncode != 5 and "fullreport" in command)):
+			_debug_c(command, process.returncode, (stdout_text, stderr_text))
 
-	return process.returncode, stdout_text, stderr_text
+		try:
+			report_json = json.loads(stdout_text)
+		except json.decoder.JSONDecodeError:
+			# Some lvm commands don't return json even though we are asking for it to do so.
+			return process.returncode, stdout_text, stderr_text
+
+		error_msg = get_error_msg(report_json)
+		if error_msg:
+			stderr_text += error_msg
+
+		return process.returncode, report_json, stderr_text
+	else:
+		if cfg.run.value == 0:
+			raise SystemExit
+		# We can bail out before the lvm command finished when we get a signal
+		# which is requesting we exit
+		return -errno.EINTR, "", "operation interrupted"
+
 
 # The actual method which gets called to invoke the lvm command, can vary
 # from forking a new process to using lvm shell
@@ -165,18 +202,18 @@ def _shell_cfg():
 		_t_call = lvm_shell.call_lvm
 		cfg.SHELL_IN_USE = lvm_shell
 		return True
-	except Exception:
+	except Exception as e:
 		_t_call = call_lvm
 		cfg.SHELL_IN_USE = None
-		log_error(traceback.format_exc())
-		log_error("Unable to utilize lvm shell, dropping back to fork & exec")
+		log_error("Unable to utilize lvm shell, dropping "
+				  "back to fork & exec\n%s" % extract_stack_trace(e))
 		return False
 
 
 def set_execution(shell):
 	global _t_call
 	with cmd_lock:
-		# If the user requested lvm shell and we are currently setup that
+		# If the user requested lvm shell, and we are currently setup that
 		# way, just return
 		if cfg.SHELL_IN_USE and shell:
 			return True
@@ -200,11 +237,15 @@ def time_wrapper(command, debug=False):
 
 	with cmd_lock:
 		start = time.time()
+		meta = LvmExecutionMeta(start, 0, command)
+		# Add the partial metadata to flight recorder, so if the command hangs
+		# we will see what it was.
+		cfg.flightrecorder.add(meta)
 		results = _t_call(command, debug)
 		ended = time.time()
 		total_time += (ended - start)
 		total_count += 1
-		cfg.blackbox.add(LvmExecutionMeta(start, ended, command, *results))
+		meta.completed(ended, *results)
 	return results
 
 
@@ -214,42 +255,9 @@ call = time_wrapper
 # Default cmd
 # Place default arguments for every command here.
 def _dc(cmd, args):
-	c = [cmd, '--noheading', '--separator', '%s' % SEP, '--nosuffix',
-		'--unbuffered', '--units', 'b']
+	c = [cmd, '--nosuffix', '--unbuffered', '--units', 'b']
 	c.extend(args)
 	return c
-
-
-def parse(out):
-	rc = []
-
-	for line in out.split('\n'):
-		# This line includes separators, so process them
-		if SEP in line:
-			elem = line.split(SEP)
-			cleaned_elem = []
-			for e in elem:
-				e = e.strip()
-				cleaned_elem.append(e)
-
-			if len(cleaned_elem) > 1:
-				rc.append(cleaned_elem)
-		else:
-			t = line.strip()
-			if len(t) > 0:
-				rc.append(t)
-	return rc
-
-
-def parse_column_names(out, column_names):
-	lines = parse(out)
-	rc = []
-
-	for i in range(0, len(lines)):
-		d = dict(list(zip(column_names, lines[i])))
-		rc.append(d)
-
-	return rc
 
 
 def options_to_cli_args(options):
@@ -316,10 +324,12 @@ def vg_rename(vg_uuid, new_name, rename_options):
 	return call(cmd)
 
 
-def vg_remove(vg_name, remove_options):
+def vg_remove(vg_id, remove_options):
 	cmd = ['vgremove']
 	cmd.extend(options_to_cli_args(remove_options))
-	cmd.extend(['-f', vg_name])
+	cmd.extend(['-f', vg_id])
+	# https://bugzilla.redhat.com/show_bug.cgi?id=2175220 is preventing us from doing the following
+	# cmd.extend(['-f', "--select", "vg_uuid=%s" % vg_id])
 	return call(cmd)
 
 
@@ -542,6 +552,14 @@ def lv_vdo_deduplication(lv_path, enable, dedup_options):
 	return call(cmd)
 
 
+def lv_raid_repair(lv_path, new_pvs, repair_options):
+	cmd = ['lvconvert', '-y', '--repair']
+	cmd.append(lv_path)
+	cmd.extend(new_pvs)
+	cmd.extend(options_to_cli_args(repair_options))
+	return call(cmd)
+
+
 def supports_json():
 	cmd = ['help']
 	rc, out, err = call(cmd)
@@ -613,68 +631,25 @@ def lvm_full_report_json():
 		'--configreport', 'vg', '-o', ','.join(vg_columns),
 		'--configreport', 'lv', '-o', ','.join(lv_columns),
 		'--configreport', 'seg', '-o', ','.join(lv_seg_columns),
-		'--configreport', 'pvseg', '-o', ','.join(pv_seg_columns),
-		'--reportformat', 'json'
+		'--configreport', 'pvseg', '-o', ','.join(pv_seg_columns)
 	])
+
+	# We are running the fullreport command, we will ask lvm to output the debug
+	# data, so we can have the required information for lvm to debug the fullreport failures.
+	# Note: this is disabled by default and can be enabled with env. var.
+	# LVM_DBUSD_COLLECT_LVM_DEBUG=True
+	fn = cfg.lvmdebug.setup()
+	if fn is not None:
+		add_config_option(cmd, "--config", "log {level=7 file=%s syslog=0}" % fn)
 
 	rc, out, err = call(cmd)
 	# When we have an exported vg the exit code of lvs or fullreport will be 5
 	if rc == 0 or rc == 5:
-		# With the current implementation, if we are using the shell then we
-		# are using JSON and JSON is returned back to us as it was parsed to
-		# figure out if we completed OK or not
-		if cfg.SHELL_IN_USE:
-			assert(type(out) == dict)
-			return out
-		else:
-			try:
-				return json.loads(out)
-			except json.decoder.JSONDecodeError as joe:
-				log_error("JSONDecodeError %s, \n JSON=\n%s\n" %
-							(str(joe), out))
-				raise joe
-
-	return None
-
-
-def pv_retrieve_with_segs(device=None):
-	d = []
-	err = ""
-	out = ""
-	rc = 0
-
-	columns = ['pv_name', 'pv_uuid', 'pv_fmt', 'pv_size', 'pv_free',
-				'pv_used', 'dev_size', 'pv_mda_size', 'pv_mda_free',
-				'pv_ba_start', 'pv_ba_size', 'pe_start', 'pv_pe_count',
-				'pv_pe_alloc_count', 'pv_attr', 'pv_tags', 'vg_name',
-				'vg_uuid', 'pvseg_start', 'pvseg_size', 'segtype', 'pv_missing']
-
-	# Lvm has some issues where it returns failure when querying pvs when other
-	# operations are in process, see:
-	# https://bugzilla.redhat.com/show_bug.cgi?id=1274085
-	for i in range(0, 10):
-		cmd = _dc('pvs', ['-o', ','.join(columns)])
-
-		if device:
-			cmd.extend(device)
-
-		rc, out, err = call(cmd)
-
-		if rc == 0:
-			d = parse_column_names(out, columns)
-			break
-		else:
-			time.sleep(0.2)
-			log_debug("LVM Bug workaround, retrying pvs command...")
-
-	if rc != 0:
-		msg = "We were unable to get pvs to return without error after " \
-			"trying 10 times, RC=%d, STDERR=(%s), STDOUT=(%s)" % \
-			(rc, err, out)
-		log_error(msg)
-		raise RuntimeError(msg)
-
-	return d
+		if type(out) != dict:
+			raise LvmBug("lvm likely returned invalid JSON, lvm exit code = %d, output = %s, err= %s" %
+						 (rc, str(out), str(err)))
+		return out
+	raise LvmBug("'fullreport' exited with code '%d'" % rc)
 
 
 def pv_resize(device, size_bytes, create_options):
@@ -820,6 +795,10 @@ def activate_deactivate(op, name, activate, control_flags, options):
 		if (1 << 5) & control_flags:
 			cmd.append('--ignoreactivationskip')
 
+		# Shared locking (Cluster)
+		if (1 << 6) & control_flags:
+			op += 's'
+
 	if activate:
 		op += 'y'
 	else:
@@ -831,53 +810,6 @@ def activate_deactivate(op, name, activate, control_flags, options):
 	return call(cmd)
 
 
-def vg_retrieve(vg_specific):
-	if vg_specific:
-		assert isinstance(vg_specific, list)
-
-	columns = ['vg_name', 'vg_uuid', 'vg_fmt', 'vg_size', 'vg_free',
-				'vg_sysid', 'vg_extent_size', 'vg_extent_count',
-				'vg_free_count', 'vg_profile', 'max_lv', 'max_pv',
-				'pv_count', 'lv_count', 'snap_count', 'vg_seqno',
-				'vg_mda_count', 'vg_mda_free', 'vg_mda_size',
-				'vg_mda_used_count', 'vg_attr', 'vg_tags']
-
-	cmd = _dc('vgs', ['-o', ','.join(columns)])
-
-	if vg_specific:
-		cmd.extend(vg_specific)
-
-	d = []
-	rc, out, err = call(cmd)
-	if rc == 0:
-		d = parse_column_names(out, columns)
-
-	return d
-
-
-def lv_retrieve_with_segments():
-	columns = ['lv_uuid', 'lv_name', 'lv_path', 'lv_size',
-				'vg_name', 'pool_lv_uuid', 'pool_lv', 'origin_uuid',
-				'origin', 'data_percent',
-				'lv_attr', 'lv_tags', 'vg_uuid', 'lv_active', 'data_lv',
-				'metadata_lv', 'seg_pe_ranges', 'segtype', 'lv_parent',
-				'lv_role', 'lv_layout',
-				'snap_percent', 'metadata_percent', 'copy_percent',
-				'sync_percent', 'lv_metadata_size', 'move_pv', 'move_pv_uuid']
-
-	cmd = _dc('lvs', ['-a', '-o', ','.join(columns)])
-	rc, out, err = call(cmd)
-
-	d = []
-
-	if rc == 0:
-		d = parse_column_names(out, columns)
-
-	return d
-
-
 if __name__ == '__main__':
-	pv_data = pv_retrieve_with_segs()
-
-	for p in pv_data:
-		print(str(p))
+	# Leave this for future debug as needed
+	pass

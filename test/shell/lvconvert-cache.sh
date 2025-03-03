@@ -29,7 +29,7 @@ fail lvcreate -s -L2 $vg/cpool_cdata
 fail lvcreate -s -L2 $vg/cpool_cmeta
 
 ###########################
-# Check regular converion #
+# Check regular conversion #
 ###########################
 # lvcreate origin, lvcreate cache-pool, and lvconvert to cache
 lvcreate -an -Zn -L 2 -n $lv1 $vg
@@ -49,7 +49,7 @@ check lv_field $vg/$lv1 cache_policy ""
 check lv_field $vg/$lv1 cache_settings ""
 check lv_field $vg/$lv1 chunk_size "256.00k"
 
-# but allow to set them when specified explicitely on command line
+# but allow to set them when specified explicitly on command line
 lvconvert --yes --type cache-pool --cachemode writeback --cachepolicy mq \
 	--cachesettings sequential_threshold=1234 --cachesettings random_threshold=56 \
 	--cachepool $vg/$lv2
@@ -60,14 +60,14 @@ check lv_field $vg/$lv2 cache_settings "random_threshold=56,sequential_threshold
 
 # Check swap of cache pool metadata
 lvconvert --yes --type cache-pool --poolmetadata $lv4 $vg/$lv3
-UUID=$(get lv_field $vg/$lv5 uuid)
+UUID=$(get lv_field $vg/${lv3}_cmeta uuid)
 lvconvert --yes --cachepool $vg/$lv3 --poolmetadata $lv5
 check lv_field $vg/${lv3}_cmeta uuid "$UUID"
 
 # Check swap of cache pool metadata with --swapmetadata
 # (should swap back to lv5)
 lvconvert --yes --swapmetadata $vg/$lv3 --poolmetadata $lv5
-check lv_field $vg/$lv5 uuid "$UUID"
+check lv_field $vg/${lv3}_cmeta uuid "$UUID"
 
 #fail lvconvert --cachepool $vg/$lv1 --poolmetadata $vg/$lv2
 #lvconvert --yes --type cache-pool --poolmetadata $vg/$lv2 $vg/$lv1
@@ -167,6 +167,19 @@ fail lvconvert --repair $vg/cpool 2>&1 | tee out
 #grep "Cannot convert internal LV" out
 
 lvremove -f $vg
+
+#########################
+# Some testing variants #
+#########################
+
+for i in error zero
+do
+	lvcreate --type "$i" -L50G -n $lv1 $vg
+	lvcreate --type "$i" -L10G -n cpool $vg
+	lvconvert -y --cachepool $vg/cpool
+	lvconvert -y -H --cachepool $vg/cpool $vg/$lv1
+	lvremove -f $vg
+done
 
 ##########################
 # Prohibited conversions #

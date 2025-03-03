@@ -135,7 +135,7 @@ dry() {
 	$@
 }
 
-# Accept as succss also return code 1 with fsck
+# Accept as success also return code 1 with fsck
 accept_0_1() {
 	$@
 	local ret="$?"
@@ -164,7 +164,7 @@ cleanup() {
 		export _FSADM_YES _FSADM_EXTOFF
 		unset FSADM_RUNNING
 		test -n "${LVM_BINARY-}" && PATH=$_SAVEPATH
-		dry exec "$LVM" lvresize $VERB $FORCE -r -L"${NEWSIZE_ORIG}b" "$VOLUME_ORIG"
+		dry exec "$LVM" lvresize $VERB $FORCE $YES --fs resize_fsadm -L"${NEWSIZE_ORIG}b" "$VOLUME_ORIG"
 	fi
 
 	# error exit status for break
@@ -388,7 +388,7 @@ detect_device_size() {
 }
 
 # round up $1 / $2
-# could be needed to gaurantee 'at least given size'
+# could be needed to guarantee 'at least given size'
 # but it makes many troubles
 round_up_block_size() {
 	echo $(( ($1 + $2 - 1) / $2 ))
@@ -532,7 +532,7 @@ resize_xfs() {
 
 # Find active LUKS device on original volume
 # 1) look for LUKS device with well-known UUID format (CRYPT-LUKS[12]-<uuid>-<dmname>)
-# 2) the dm-crypt device has to be on top of original device (dont't support detached LUKS headers)
+# 2) the dm-crypt device has to be on top of original device (don't support detached LUKS headers)
 detect_luks_device() {
 	local _LUKS_VERSION
 	local _LUKS_UUID
@@ -586,7 +586,7 @@ resize_luks() {
 	decode_size "$1" 512
 
 	if [ $((NEWSIZE % 512)) -gt 0 ]; then
-		error "New size is not sector alligned"
+		error "New size is not sector aligned."
 	fi
 
 	if [ $((NEWBLOCKCOUNT - CRYPT_DATA_OFFSET)) -lt 1 ]; then
@@ -642,7 +642,7 @@ detect_crypt_device() {
 	NEWSIZE=$TMP
 
 	if [ $((L_NEWSIZE % 512)) -ne 0 ]; then
-		error "New size is not sector alligned"
+		error "New size is not sector aligned."
 	fi
 
 	CRYPT_RESIZE_BLOCKS=$NEWBLOCKCOUNT
@@ -693,7 +693,7 @@ resize() {
 }
 
 ####################################
-# Calclulate diff between two dates
+# Calculate diff between two dates
 #  LC_ALL=C input is expected the
 #  only one supported
 ####################################
@@ -776,7 +776,7 @@ trap "cleanup 2" 2
 # test if we are not invoked recursively
 test -n "${FSADM_RUNNING-}" && exit 0
 
-# test some prerequisities
+# test some prerequisites
 for i in "$TUNE_EXT" "$RESIZE_EXT" "$TUNE_REISER" "$RESIZE_REISER" \
 	"$TUNE_XFS" "$RESIZE_XFS" "$MOUNT" "$UMOUNT" "$MKDIR" \
 	"$RMDIR" "$BLOCKDEV" "$BLKID" "$GREP" "$READLINK" \

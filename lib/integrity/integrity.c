@@ -36,8 +36,7 @@ static void _integrity_display(const struct lv_segment *seg)
 }
 
 static int _integrity_text_import(struct lv_segment *seg,
-				   const struct dm_config_node *sn,
-				   struct dm_hash_table *pv_hash __attribute__((unused)))
+				   const struct dm_config_node *sn)
 {
 	struct integrity_settings *set;
 	struct logical_volume *origin_lv = NULL;
@@ -156,6 +155,12 @@ static int _integrity_text_import(struct lv_segment *seg,
 		set->sectors_per_bit_set = 1;
 	}
 
+	if (dm_config_has_node(sn, "allow_discards")) {
+		if (!dm_config_get_uint32(sn, "allow_discards", &set->allow_discards))
+			return SEG_LOG_ERROR("Unknown integrity_setting in");
+		set->allow_discards_set = 1;
+	}
+
 	seg->origin = origin_lv;
 	seg->integrity_meta_dev = meta_lv;
 	seg->lv->status |= INTEGRITY;
@@ -216,6 +221,9 @@ static int _integrity_text_export(const struct lv_segment *seg,
 
 	if (set->sectors_per_bit)
 		outf(f, "sectors_per_bit = %llu", (unsigned long long)set->sectors_per_bit);
+
+	if (set->allow_discards_set)
+		outf(f, "allow_discards = %u", set->allow_discards);
 
 	return 1;
 }
@@ -307,7 +315,7 @@ static int _integrity_add_target_line(struct dev_manager *dm,
 }
 #endif /* DEVMAPPER_SUPPORT */
 
-static struct segtype_handler _integrity_ops = {
+static const struct segtype_handler _integrity_ops = {
 	.display = _integrity_display,
 	.text_import = _integrity_text_import,
 	.text_import_area_count = _integrity_text_import_area_count,

@@ -15,9 +15,7 @@
 
 #include "lib/misc/lib.h"
 #include "lib/device/device.h"
-#include "lib/misc/lvm-string.h"
 #include "lib/config/defaults.h"
-#include "lib/metadata/metadata-exported.h"
 
 #include <stdarg.h>
 
@@ -123,9 +121,9 @@ void init_dmeventd_monitor(int reg)
 		_dmeventd_monitor = reg;
 }
 
-void init_disable_dmeventd_monitoring(int reg)
+void init_disable_dmeventd_monitoring(int disable)
 {
-	_disable_dmeventd_monitoring = reg;
+	_disable_dmeventd_monitoring = disable;
 }
 
 void init_background_polling(int polling)
@@ -164,7 +162,7 @@ void init_log_command(int log_name, int log_pid)
 		return;
 
 	else if (log_name && !log_pid)
-		(void) dm_strncpy(_log_command_info, _cmd_name, sizeof(_log_command_info));
+		dm_strncpy(_log_command_info, _cmd_name, sizeof(_log_command_info));
 
 	else if (!log_name && log_pid)
 		(void) dm_snprintf(_log_command_info, sizeof(_log_command_info), "%d", getpid());
@@ -210,9 +208,9 @@ void init_pv_min_size(uint64_t sectors)
 	_pv_min_size = sectors;
 }
 
-void set_cmd_name(const char *cmd)
+void set_cmd_name(const char *cmd_name)
 {
-	(void) dm_strncpy(_cmd_name, cmd, sizeof(_cmd_name));
+	dm_strncpy(_cmd_name, cmd_name, sizeof(_cmd_name));
 }
 
 const char *get_cmd_name(void)
@@ -222,7 +220,7 @@ const char *get_cmd_name(void)
 
 void set_sysfs_dir_path(const char *path)
 {
-	(void) dm_strncpy(_sysfs_dir_path, path, sizeof(_sysfs_dir_path));
+	dm_strncpy(_sysfs_dir_path, path, sizeof(_sysfs_dir_path));
 }
 
 const char *log_command_info(void)
@@ -235,9 +233,9 @@ const char *log_command_file(void)
 	return _log_command_file;
 }
 
-void init_error_message_produced(int value)
+void init_error_message_produced(int produced)
 {
-	_error_message_produced = value;
+	_error_message_produced = produced;
 }
 
 int error_message_produced(void)

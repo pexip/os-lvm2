@@ -48,7 +48,7 @@ fake_metadata_() {
 	for i in $(seq 10 $1)
 	do
 		echo ' <device dev_id="'$i'" mapped_blocks="30" transaction="0" creation_time="0" snap_time="0">'
-		echo '  <range_mapping origin_begin="0" data_begin="0" length="29" time="0"/>'
+		echo '  <range_mapping origin_begin="0" data_begin="0" length="30" time="0"/>'
 		echo ' </device>'
 		set +x
 	done
@@ -86,22 +86,26 @@ fake_metadata_ 400 2 >data
 # Swap volume with restored fake metadata
 lvconvert -y --chunksize 64k --thinpool $vg/pool --poolmetadata $vg/$lv1
 
-# Not alllowed when thin-pool metadata free space is <75% for 2M meta
+# Not allowed when thin-pool metadata free space is <75% for 2M meta
 fail lvcreate -V20 $vg/pool
 
 
 lvchange -an $vg/pool
 
-# Consume more then (100% - 4MiB) out of 32MiB metadata volume  (>87.5%)
+# Consume more than (100% - 4MiB) out of 32MiB metadata volume  (>87.5%)
 # (Test for less than 4MiB free space in metadata, which is less than 25%)
 DATA=7200  # Newer version of thin-pool have hidden reserve, so use lower value
 test -z "$BIG_DATA" || DATA=7400
 fake_metadata_ "$DATA" 2 >data
 "$LVM_TEST_THIN_RESTORE_CMD" -i data -o "$DM_DEV_DIR/mapper/$vg-$lv2"
+
+# Check the restored metadata are OK for thin_check
+"$LVM_TEST_THIN_CHECK_CMD" "$DM_DEV_DIR/mapper/$vg-$lv2"
+
 # Swap volume with restored fake metadata
 lvconvert -y --chunksize 64k --thinpool $vg/pool --poolmetadata $vg/$lv2
 lvchange -ay $vg/pool
-# Check generated metadata consume more then 88%
+# Check generated metadata consume more than 88%
 test "$(meta_percent_)" -gt "88"
 lvchange -an $vg/pool
 
@@ -115,7 +119,7 @@ lvs -a $vg
 lvextend --use-policies --config "\
 activation/thin_pool_autoextend_percent=1 \
 activation/thin_pool_autoextend_threshold=99" $vg/pool
-# Originaly wanted to test <88% -
+# Originally wanted to test <88% -
 #  however some older kernels consume a bit more space, so be happy
 #  when it's <90%
 test "$(meta_percent_)" -lt "90"

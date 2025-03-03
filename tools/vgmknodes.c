@@ -18,9 +18,14 @@
 static int _vgmknodes_single(struct cmd_context *cmd, struct logical_volume *lv,
 			     struct processing_handle *handle __attribute__((unused)))
 {
-	if (arg_is_set(cmd, refresh_ARG) && lv_is_visible(lv))
-		if (!lv_refresh(cmd, lv))
+	if (arg_is_set(cmd, refresh_ARG) && lv_is_visible(lv)) {
+		if (!lv_refresh(cmd, lv)) {
+			log_error("Refresh failed for %s.", display_lvname(lv));
 			return_ECMD_FAILED;
+		}
+		if (!sync_local_dev_names(cmd))
+			stack;
+	}
 
 	if (!lv_mknodes(cmd, lv))
 		return_ECMD_FAILED;
@@ -30,8 +35,10 @@ static int _vgmknodes_single(struct cmd_context *cmd, struct logical_volume *lv,
 
 int vgmknodes(struct cmd_context *cmd, int argc, char **argv)
 {
-	if (!lv_mknodes(cmd, NULL))
-		return_ECMD_FAILED;
+	if (!dm_udev_get_sync_support()) {
+		if (!lv_mknodes(cmd, NULL))
+			return_ECMD_FAILED;
+	}
 
 	return process_each_lv(cmd, argc, argv, NULL, NULL, LCK_VG_READ, NULL, NULL, &_vgmknodes_single);
 }

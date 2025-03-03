@@ -17,11 +17,13 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-# Use local for this test vdo configuratoin
-VDOCONF="-f vdotestconf.yml"
+# Use local for this test vdo configuration
+VDO_CONFIG="vdotestconf.yml"
+VDOCONF="-f $VDO_CONFIG"
 #VDOCONF=""
-export VDOCONF
+export VDOCONF VDO_CONFIG
 VDONAME="${PREFIX}-TESTVDO"
+export DM_UUID_PREFIX=$PREFIX
 
 # VDO automatically starts dmeventd
 aux prepare_dmeventd
@@ -29,21 +31,31 @@ aux prepare_dmeventd
 #
 # Main
 #
-which vdo || skip
+if not which vdo ; then
+	which lvm_vdo_wrapper || skip "Missing 'lvm_vdo_wrapper'."
+	which oldvdoformat || skip "Emulation of vdo manager 'oldvdoformat' missing."
+	which oldvdoprepareforlvm || skip "Emulation of vdo manager 'oldvdoprepareforlvm' missing."
+	# enable expansion of aliasis within script itself
+	shopt -s expand_aliases
+	alias vdo='lvm_vdo_wrapper'
+	export VDO_BINARY=lvm_vdo_wrapper
+	echo "Using 'lvm_vdo_wrapper' emulation of 'vdo' manager."
+fi
 which mkfs.ext4 || skip
 export MKE2FS_CONFIG="$TESTDIR/lib/mke2fs.conf"
 
-aux have_vdo 6 2 0 || skip
+# Conversion can be made with this version of vdo driver
+aux have_vdo 6 2 3 || skip
 
-aux prepare_devs 2 10000
+# With new upstream VDO conversion is not supported
+aux have_vdo 9 0 0 && skip
+
+aux prepare_devs 2 20000
 
 aux extend_filter_LVMTEST
 
+export TMPDIR=$PWD
 
-
-
-# Conversion can be made with this version of vdo driver
-aux have_vdo 6 2 5 || skip
 
 #
 #  Check conversion of VDO volume made on some LV
@@ -54,10 +66,11 @@ vgcreate $vg "$dev1"
 
 lvcreate -L5G -n $lv1 $vg
 
-vdo create $VDOCONF --name "$VDONAME" --device="$DM_DEV_DIR/$vg/$lv1" --vdoLogicalSize=10G
+# use some not so 'well' aligned virtual|logical size
+vdo create $VDOCONF --name "$VDONAME" --device "$DM_DEV_DIR/$vg/$lv1" --vdoSlabSize 128M --vdoLogicalSize 10G
 
 mkfs -E nodiscard "$DM_DEV_DIR/mapper/$VDONAME"
-
+##XXXXX
 # Different VG name fails
 not lvm_import_vdo -y -v --name $vg1/$lv1 "$DM_DEV_DIR/$vg/$lv1"
 
@@ -75,7 +88,7 @@ lvremove -f $vg
 # Test user can specify different VDO LV name (so the original LV is renamed)
 lvcreate -y -L5G -n $lv1 $vg
 
-vdo create $VDOCONF --name "$VDONAME" --device="$DM_DEV_DIR/$vg/$lv1" --vdoLogicalSize=10G
+vdo create $VDOCONF --name "$VDONAME" --device "$DM_DEV_DIR/$vg/$lv1" --vdoSlabSize 128M --vdoLogicalSize 10G
 
 lvm_import_vdo -y --name $vg/$lv2 "$DM_DEV_DIR/$vg/$lv1"
 
@@ -95,7 +108,7 @@ vgcreate $vg2 "$dev2"
 #
 # Check conversion of VDO volume on non-LV device and with >2T size
 #
-vdo create $VDOCONF --name "$VDONAME" --device="$dev1" --vdoLogicalSize=3T
+vdo create $VDOCONF --name "$VDONAME" --device "$dev1" --vdoSlabSize 128M --vdoLogicalSize 3T
 
 # Fail with an already existing volume group $vg2
 not lvm_import_vdo --dry-run -y -v --name $vg2/$lv1 "$dev1" |& tee err
@@ -117,32 +130,40 @@ vgremove -f $vg
 aux teardown_devs
 aux prepare_devs 1 23456
 
-vdo create $VDOCONF --name "$VDONAME" --device="$dev1" --vdoLogicalSize=23G
+vdo create $VDOCONF --name "$VDONAME" --device "$dev1" --vdoSlabSize 128M --vdoLogicalSize 23G
 
 mkfs -E nodiscard "$DM_DEV_DIR/mapper/$VDONAME"
 
-lvm_import_vdo -y -v --name $vg1/$lv2 "$dev1"
+lvm_import_vdo --vdo-config "$VDO_CONFIG" -y -v --name $vg1/$lv2 "$dev1"
 
 fsck -n "$DM_DEV_DIR/$vg1/$lv2"
 
 vgremove -f $vg1
 
-aux teardown_devs
 
 
-# Check with some real non-DM device from system
-# this needs to dropping DM_DEV_DIR
+########################################################################
+#
+# Preparation of already moved header works only with fake vdo wrapper
+#
+########################################################################
+test "${VDO_BINARY-}" != "lvm_vdo_wrapper" && exit
 
-aux prepare_loop 60000 || skip
+aux wipefs_a "$dev1"
 
-test -f LOOP
-LOOP=$(< LOOP)
+# let's assume users with VDO target have 'new' enough version of stat too
+# otherwise use more universal code from lvm_vdo_import
+read major minor < <(stat -c '%Hr %Lr' $(readlink -e "$dev1"))
+dmsetup create "$PREFIX-vdotest" --table "0 30280004 linear $major:$minor 32"
 
-aux extend_filter "a|$LOOP|"
-aux extend_devices "$LOOP"
+TEST="$DM_DEV_DIR/mapper/$PREFIX-vdotest"
+
+aux wipefs_a "$TEST"
+aux extend_filter "a|$TEST|"
+aux extend_devices "$TEST"
 
 #
-# Unfortunatelly generates this in syslog:
+# Unfortunately generates this in syslog:
 #
 # vdo-start-by-dev@loop0.service: Main process exited, code=exited, status=1/FAILURE
 # vdo-start-by-dev@loop0.service: Failed with result 'exit-code'.
@@ -155,7 +176,9 @@ aux extend_devices "$LOOP"
 #
 # automate...
 #
-vdo create $VDOCONF --name "$VDONAME" --device="$LOOP" --vdoLogicalSize=23G \
+
+# use slightly smaller size then 'rounded' 23G - to enforce vdo_logicalSize rounding
+vdo create $VDOCONF --name "$VDONAME" --device "$TEST" --vdoSlabSize 128M --vdoLogicalSize 24117240K\
 	--blockMapCacheSize 192 \
 	--blockMapPeriod 2048 \
 	--emulate512 disabled \
@@ -169,17 +192,52 @@ vdo create $VDOCONF --name "$VDONAME" --device="$LOOP" --vdoLogicalSize=23G \
 	--vdoHashZoneThreads 3 \
 	--vdoLogicalThreads 3 \
 	--writePolicy async-unsafe
+dmsetup table
 
 # Get VDO table line
 dmsetup table "$VDONAME" | tr " " "\n" | sed -e '5,6d' -e '12d' | tee vdo-orig
 
-DM_DEV_DIR="" lvm_import_vdo -y --name $vg/$lv "$LOOP"
-lvs -a $vg
+mkfs.ext4 -E nodiscard "$DM_DEV_DIR/mapper/$VDONAME"
+rm -f debug.log*
 
+# For the easy table validation of conversion we use old version4 format
+aux lvmconf 'global/vdo_disabled_features = [ "version4" ]'
+
+#
+# Try to prepare 'broken' case where header was moved by older tool to 2M position
+#
+export LVM_VDO_PREPARE=oldvdoprepareforlvm2M
+if which "$LVM_VDO_PREPARE" ; then
+# Use old vdoprepareforlvm tool, that always moves header to 2M offset
+cp "$VDO_CONFIG" "$VDO_CONFIG.backup"
+lvm_import_vdo --abort-after-vdo-convert --vdo-config "$VDO_CONFIG" -v -y --name $vg/$lv "$TEST"
+rm -f debug.log*
+# Restore VDO configuration (as it's been removed with successful vdo conversion
+cp "$VDO_CONFIG.backup" "$VDO_CONFIG"
+# Check VDO header is seen at 2M offset
+blkid -c /dev/null --probe --offset 2M "$TEST" || die "VDO header at unknown offset, expected 2M!"
+fi
+
+unset LVM_VDO_PREPARE
+
+#lvm_import_vdo --no-snapshot --vdo-config "$VDO_CONFIG" -v -y --name $vg/$lv "$TEST"
+lvm_import_vdo --vdo-config "$VDO_CONFIG" --uuid-prefix "$PREFIX" -v -y --name $vg/$lv "$TEST"
+dmsetup table
+
+# check our filesystem is OK
+fsck -n "$DM_DEV_DIR/$vg/$lv"
+
+# Compare converted LV uses same VDO table line
 dmsetup table "$vg-${lv}_vpool-vpool" | tr " " "\n" | sed -e '5,6d' -e '12d' | tee new-vdo-lv
+
+tail -n+3 vdo-orig >vdo-orig-3
+tail -n+3 new-vdo-lv >new-vdo-lv-3
 
 # Check there is a match between VDO and LV managed volume
 # (when differentiating parameters are deleted first)
-diff -u vdo-orig new-vdo-lv || die "Found mismatching VDO table lines!"
+# we need to skip first 2 lines as the device size gets rounded to match VG extent size
+diff -u vdo-orig-3 new-vdo-lv-3 || die "Found mismatching VDO table lines!"
 
 check lv_field $vg/$lv size "23.00g"
+
+vgremove -f $vg

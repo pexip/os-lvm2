@@ -1,0 +1,5 @@
+variables:
+  DEB_BUILD_OPTIONS: terse
+  DEBIAN_FRONTEND: noninteractive
+  DEBFULLNAME: $CI_SERVER_NAME $CI_SERVER_HOST
+  DEBEMAIL: nobody@debian.org

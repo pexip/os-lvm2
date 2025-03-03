@@ -19,6 +19,7 @@
 #include "lib/activate/activate.h"
 #include "lib/commands/toolcontext.h"
 #include "lib/format_text/archiver.h"
+#include "base/data-struct/radix-tree.h"
 
 struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 			      const char *vg_name)
@@ -46,12 +47,6 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 	vg->vgmem = vgmem;
 	vg->alloc = ALLOC_NORMAL;
 
-	if (!(vg->hostnames = dm_hash_create(14))) {
-		log_error("Failed to allocate VG hostname hashtable.");
-		dm_pool_destroy(vgmem);
-		return NULL;
-	}
-
 	dm_list_init(&vg->pvs);
 	dm_list_init(&vg->pv_write_list);
 	dm_list_init(&vg->lvs);
@@ -61,6 +56,7 @@ struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 	dm_list_init(&vg->removed_historical_lvs);
 	dm_list_init(&vg->removed_pvs);
 	dm_list_init(&vg->msg_list);
+	dm_list_init(&vg->lockd_free_lvs);
 
 	log_debug_mem("Allocated VG %s at %p.", vg->name ? : "<no name>", (void *)vg);
 
@@ -81,7 +77,16 @@ static void _free_vg(struct volume_group *vg)
 
 	if (vg->committed_cft)
 		config_destroy(vg->committed_cft);
-	dm_hash_destroy(vg->hostnames);
+
+	if (vg->lv_names)
+		radix_tree_destroy(vg->lv_names);
+
+	if (vg->lv_uuids)
+		radix_tree_destroy(vg->lv_uuids);
+
+	if (vg->pv_names)
+		radix_tree_destroy(vg->pv_names);
+
 	dm_pool_destroy(vg->vgmem);
 }
 
@@ -114,9 +119,7 @@ int link_lv_to_vg(struct volume_group *vg, struct logical_volume *lv)
 	if (vg_max_lv_reached(vg))
 		stack;
 
-	if (!(lvl = dm_pool_zalloc(vg->vgmem, sizeof(*lvl))))
-		return_0;
-
+	lvl = &lv->lvl;
 	lvl->lv = lv;
 	lv->vg = vg;
 	dm_list_add(&vg->lvs, &lvl->list);
@@ -134,6 +137,12 @@ int unlink_lv_from_vg(struct logical_volume *lv)
 
 	dm_list_move(&lv->vg->removed_lvs, &lvl->list);
 	lv->status |= LV_REMOVED;
+
+	/* lv->lv_name stays valid for historical LV usage
+	 * So just remove the name from active lv_names */
+	if (lv->vg->lv_names &&
+	    !radix_tree_remove(lv->vg->lv_names, lv->name, strlen(lv->name)))
+		stack;
 
 	return 1;
 }

@@ -18,6 +18,9 @@
 
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
+#include "lib/commands/cmd_enum.h"
+#include "lib/log/lvm-logging.h"
+#include "lib/misc/lvm-string.h"
 
 #include <limits.h>
 
@@ -92,8 +95,9 @@ struct cmd_context {
 	 */
 	const char *cmd_line;
 	const char *name; /* needed before cmd->command is set */
-	struct command_name *cname;
+	const struct command_name *cname;
 	struct command *command;
+	int command_enum; /* duplicate from command->command_enum for lib code */
 	char **argv;
 	struct arg_values *opt_arg_values;
 	struct dm_list arg_value_groups;
@@ -118,6 +122,7 @@ struct cmd_context {
 	 * Machine and system identification.
 	 */
 	const char *system_id;
+	const char *product_uuid;
 	const char *hostname;
 	const char *kernel_vsn;
 
@@ -136,6 +141,7 @@ struct cmd_context {
 	 */
 	unsigned is_long_lived:1;		/* optimises persistent_filter handling */
 	unsigned is_interactive:1;
+	unsigned running_on_valgrind:1;
 	unsigned check_pv_dev_sizes:1;
 	unsigned handles_missing_pvs:1;
 	unsigned handles_unknown_segments:1;
@@ -144,6 +150,7 @@ struct cmd_context {
 	unsigned degraded_activation:1;
 	unsigned auto_set_activation_skip:1;
 	unsigned si_unit_consistency:1;
+	unsigned report_strict_type_mode:1;
 	unsigned report_binary_values_as_numeric:1;
 	unsigned report_mark_hidden_devices:1;
 	unsigned metadata_read_only:1;
@@ -158,6 +165,10 @@ struct cmd_context {
 	unsigned vg_read_print_access_error:1;	/* print access errors from vg_read */
 	unsigned allow_mixed_block_sizes:1;
 	unsigned force_access_clustered:1;
+	unsigned lockd_creating_thin_pool:1;
+	unsigned lockd_creating_thin_volume:1;
+	unsigned lockd_created_thin_pool:1;
+	unsigned lockd_created_thin_volume:1;
 	unsigned lockd_gl_disable:1;
 	unsigned lockd_vg_disable:1;
 	unsigned lockd_lv_disable:1;
@@ -185,12 +196,15 @@ struct cmd_context {
 	unsigned pvscan_recreate_hints:1;	/* enable special case hint handling for pvscan --cache */
 	unsigned scan_lvs:1;
 	unsigned wipe_outdated_pvs:1;
+	unsigned devices_file_hash_mismatch:1;
+	unsigned devices_file_hash_ignore:1;
 	unsigned enable_devices_list:1;		/* command is using --devices option */
 	unsigned enable_devices_file:1;		/* command is using devices file */
 	unsigned pending_devices_file:1;	/* command may create and enable devices file */
 	unsigned create_edit_devices_file:1;	/* command expects to create and/or edit devices file */
 	unsigned edit_devices_file:1;		/* command expects to edit devices file */
 	unsigned filter_deviceid_skip:1;	/* don't use filter-deviceid */
+	unsigned filter_regex_skip:1;		/* don't use filter-regex */
 	unsigned filter_regex_with_devices_file:1; /* use filter-regex even when devices file is enabled */
 	unsigned filter_nodata_only:1;          /* only use filters that do not require data from the dev */
 	unsigned run_by_dmeventd:1;		/* command is being run by dmeventd */
@@ -203,7 +217,14 @@ struct cmd_context {
 	unsigned event_activation:1;		/* whether event_activation is set */
 	unsigned udevoutput:1;
 	unsigned online_vg_file_removed:1;
-	unsigned disable_dm_devs:1;		/* temporarily disable use of dm devs cache */
+	unsigned filter_regex_set_preferred_name_disable:1; /* prevent dev_set_preferred_name */
+	unsigned device_ids_check_product_uuid:1;
+	unsigned device_ids_check_hostname:1;
+	unsigned device_ids_refresh_trigger:1;
+	unsigned device_ids_invalid:1;
+	unsigned device_ids_auto_import:1;
+	unsigned get_vgname_from_options:1;     /* used by lvconvert */
+	unsigned vg_write_validates_vg:1;
 
 	/*
 	 * Devices and filtering.
@@ -212,10 +233,9 @@ struct cmd_context {
 	struct dm_list use_devices;		/* struct dev_use for each entry in devices file */
 	const char *md_component_checks;
 	const char *search_for_devnames;	/* config file setting */
+	struct dm_list device_ids_check_serial;
 	const char *devicesfile;                /* from --devicesfile option */
 	struct dm_list deviceslist;             /* from --devices option, struct dm_str_list */
-
-	struct dm_list *cache_dm_devs;		/* cache with UUIDs from DM_DEVICE_LIST (when available) */
 
 	/*
 	 * Configuration.
@@ -244,6 +264,7 @@ struct cmd_context {
 	 * Paths.
 	 */
 	const char *lib_dir;			/* cache value global/library_dir */
+	const char *device_id_sysfs_dir;
 	char system_dir[PATH_MAX];
 	char dev_dir[PATH_MAX];
 	char proc_dir[PATH_MAX];
@@ -257,7 +278,7 @@ struct cmd_context {
 	/*
 	 * Buffers.
 	 */
-	char display_buffer[NAME_LEN * 10];	/* ring buffer for upto 10 longest vg/lv names */
+	char display_buffer[NAME_LEN * 10];	/* ring buffer for up to 10 longest vg/lv names */
 	unsigned display_lvname_idx;		/* index to ring buffer */
 	char *linebuffer;
 
@@ -269,6 +290,8 @@ struct cmd_context {
 	unsigned rand_seed;
 	struct dm_list pending_delete;		/* list of LVs for removal */
 	struct dm_pool *pending_delete_mem;	/* memory pool for pending deletes */
+	struct vdo_convert_params *lvcreate_vcp;/* params for LV to VDO conversion */
+	uint32_t lockopt;			/* LOCKOPT_* from --lockopt string */
 };
 
 /*
@@ -296,7 +319,6 @@ int init_run_by_dmeventd(struct cmd_context *cmd);
  * is only used for reading config settings from lvm.conf,
  * which are at cmd->cft.
  */
-struct cmd_context *create_config_context(void);
 void destroy_config_context(struct cmd_context *cmd);
 
 struct format_type *get_format_by_name(struct cmd_context *cmd, const char *format);

@@ -10,8 +10,11 @@ dmeventd \(em Device-mapper event daemon
 .RB [ -d
 .RB [ -d
 .RB [ -d ]]]
+.RB [ -e
+.BR exit_on_path ]
 .RB [ -f ]
 .RB [ -h ]
+.RB [ -i ]
 .RB [ -l ]
 .RB [ -R ]
 .RB [ -V ]
@@ -36,12 +39,28 @@ debug messages sent to syslog.
 Each extra d adds more debugging information.
 .
 .TP
+.B -e exit_on_path
+Specifies the file path whose presence is checked by the daemon when it
+receives a signal (SIGINT, SIGTERM) and allows to exit even if there are still
+monitored devices.
+This can help with system shutdown where devices
+have not been unmonitored properly.
+To disable this behavior set this to the empty string "".
+Default value is "\fI#DEFAULT_DMEVENTD_EXIT_ON_PATH#\fP".
+.
+.TP
 .B -f
 Don't fork, run in the foreground.
 .
 .TP
 .B -h
 Show help information.
+.
+.TP
+.B -i
+Query the running daemon instance for the status information. The format is
+internal and unstable and it is targeted for developers.
+Format may change between versions.
 .
 .TP
 .B -l
@@ -92,7 +111,7 @@ it gets umounted if possible.
 .B Thin
 Monitors how full a thin pool data and metadata is becoming and emits
 a warning to syslog when it exceeds 80% full.
-The warning is repeated when more then 85%, 90% and 95%
+The warning is repeated when more than 85%, 90% and 95%
 of the thin pool is filled. See
 .BR lvm.conf (5).
 When a thin pool fills over 50% (data or metadata) thin plugin calls
@@ -103,7 +122,7 @@ when it's been filled above configured threshold
 \fBactivation/thin_pool_autoextend_threshold\fP.
 If the command fails, dmeventd thin plugin will keep
 retrying execution with increasing time delay between
-retries upto 42 minutes.
+retries up to 42 minutes.
 User may also configure external command to support more advanced
 maintenance operations of a thin pool.
 Such external command can e.g. remove some unneeded snapshots,
@@ -122,7 +141,7 @@ Command can also read status with tools like \fBlvs\fP(8).
 .B Vdo
 Monitors how full a VDO pool data is becoming and emits
 a warning to syslog when it exceeds 80% full.
-The warning is repeated when more then 85%, 90% and 95%
+The warning is repeated when more than 85%, 90% and 95%
 of the VDO pool is filled. See
 .BR lvm.conf (5).
 When a VDO pool fills over 50% vdo plugin calls
@@ -133,7 +152,7 @@ when it's been filled above the configured threshold
 \fBactivation/vdo_pool_autoextend_threshold\fP.
 If the command fails, dmeventd vdo plugin will keep
 retrying execution with increasing time delay between
-retries upto 42 minutes.
+retries up to 42 minutes.
 User may also configure external command to support more advanced
 maintenance operations of a VDO pool.
 Such external command can e.g. remove some unneeded space
@@ -151,22 +170,22 @@ Command can also read status with tools like \fBlvs\fP(8).
 .
 .TP
 .B DMEVENTD_THIN_POOL_DATA
-Variable is set by thin plugin and is available to executed program. Value present
-actual usage of thin pool data volume. Variable is not set when error event
-is processed.
+Variable is set by thin plugin and is available to executed program.
+Value present actual usage of thin pool data volume.
+Variable is not set when error event is processed.
 .TP
 .B DMEVENTD_THIN_POOL_METADATA
-Variable is set by thin plugin and is available to executed program. Value present
-actual usage of thin pool metadata volume. Variable is not set when error event
-is processed.
+Variable is set by thin plugin and is available to executed program.
+Value present actual usage of thin pool metadata volume.
+Variable is not set when error event is processed.
 .TP
 .B DMEVENTD_VDO_POOL
-Variable is set by vdo plugin and is available to executed program. Value present
-actual usage of VDO pool data volume. Variable is not set when error event
-is processed.
+Variable is set by vdo plugin and is available to executed program.
+Value present actual usage of VDO pool data volume.
+Variable is not set when error event is processed.
 .TP
 .B LVM_RUN_BY_DMEVENTD
-Variable is set by thin and vdo plugin to prohibit recursive interation
+Variable is set by thin and vdo plugin to prohibit recursive interaction
 with dmeventd by any executed lvm2 command from
 a thin_command, vdo_command environment.
 .

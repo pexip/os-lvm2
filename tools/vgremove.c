@@ -14,6 +14,7 @@
  */
 
 #include "tools.h"
+#include "lib/device/online.h"
 
 static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg,
@@ -33,7 +34,7 @@ static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 	struct processing_handle void_handle = {0};
 
 	/*
-	 * Single force is equivalent to sinle --yes
+	 * Single force is equivalent to single --yes
 	 * Even multiple --yes are equivalent to single --force
 	 * When we require -ff it cannot be replaces with -f -y
 	 */
@@ -69,11 +70,13 @@ static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 	    !lvremove_single(cmd, vg->pool_metadata_spare_lv, &void_handle))
 		return_ECMD_FAILED;
 
-	if (!lockd_free_vg_before(cmd, vg, 0))
+	if (!lockd_free_vg_before(cmd, vg, 0, arg_count(cmd, yes_ARG)))
 		return_ECMD_FAILED;
 
 	if (!force && !vg_remove_check(vg))
 		return_ECMD_FAILED;
+
+	online_vgremove(vg);
 
 	vg_remove_pvs(vg);
 

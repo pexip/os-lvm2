@@ -67,7 +67,7 @@ struct log_c {
 	uint32_t recoverer;
 	uint64_t recovering_region; /* -1 means not recovering */
 	uint64_t skip_bit_warning; /* used to warn if region skipped */
-	int sync_search;
+	unsigned sync_search;
 
 	int resume_override;
 
@@ -220,7 +220,7 @@ static int rw_log(struct log_c *lc, int do_write)
 	if (r < 0)
 		LOG_ERROR("[%s] rw_log:  read failure: %s",
 			  SHORT_UUID(lc->uuid), strerror(errno));
-	if (r != lc->disk_size)
+	if ((unsigned) r != lc->disk_size)
 		return -EIO; /* Failed disk read */
 	return 0;
 }
@@ -254,7 +254,7 @@ static int read_log(struct log_c *lc)
 	bitset_size = lc->region_count / 8;
 	bitset_size += (lc->region_count % 8) ? 1 : 0;
 
-	/* 'lc->clean_bits + 1' becasue dm_bitset_t leads with a uint32_t */
+	/* 'lc->clean_bits + 1' because dm_bitset_t leads with a uint32_t */
 	memcpy(lc->clean_bits + 1, (char *)lc->disk_buffer + 1024, bitset_size);
 
 	return 0;
@@ -281,7 +281,7 @@ static int write_log(struct log_c *lc)
 	bitset_size = lc->region_count / 8;
 	bitset_size += (lc->region_count % 8) ? 1 : 0;
 
-	/* 'lc->clean_bits + 1' becasue dm_bitset_t leads with a uint32_t */
+	/* 'lc->clean_bits + 1' because dm_bitset_t leads with a uint32_t */
 	memcpy((char *)lc->disk_buffer + 1024, lc->clean_bits + 1, bitset_size);
 
 	if (rw_log(lc, 1)) {
@@ -292,13 +292,13 @@ static int write_log(struct log_c *lc)
 }
 
 /* FIXME Rewrite this function taking advantage of the udev changes (where in use) to improve its efficiency! */
-static int find_disk_path(char *major_minor_str, char *path_rtn, int *unlink_path __attribute__((unused)))
+static int find_disk_path(char *major_minor_str, char *path_rtn, size_t sz, int *unlink_path __attribute__((unused)))
 {
 	int r;
 	DIR *dp;
 	struct dirent *dep;
 	struct stat statbuf;
-	int major, minor;
+	unsigned major, minor;
 
 	if (!strstr(major_minor_str, ":")) {
 		r = stat(major_minor_str, &statbuf);
@@ -306,7 +306,7 @@ static int find_disk_path(char *major_minor_str, char *path_rtn, int *unlink_pat
 			return -errno;
 		if (!S_ISBLK(statbuf.st_mode))
 			return -EINVAL;
-		sprintf(path_rtn, "%s", major_minor_str);
+		dm_strncpy(path_rtn, major_minor_str, sz);
 		return 0;
 	}
 
@@ -329,7 +329,7 @@ static int find_disk_path(char *major_minor_str, char *path_rtn, int *unlink_pat
 		 * wanted.
 		 */
 
-		sprintf(path_rtn, "/dev/mapper/%s", dep->d_name);
+		snprintf(path_rtn, sz, "/dev/mapper/%s", dep->d_name);
 		if (stat(path_rtn, &statbuf) < 0) {
 			LOG_DBG("Unable to stat %s", path_rtn);
 			continue;
@@ -394,7 +394,7 @@ static int _clog_ctr(char *uuid, uint64_t luid,
 			goto fail;
 		}
 
-		r = find_disk_path(argv[0], disk_path, &unlink_path);
+		r = find_disk_path(argv[0], disk_path, sizeof(disk_path), &unlink_path);
 		if (r) {
 			LOG_ERROR("Unable to find path to device %s", argv[0]);
 			goto fail;
@@ -452,7 +452,7 @@ static int _clog_ctr(char *uuid, uint64_t luid,
 	lc->skip_bit_warning = region_count;
 	lc->disk_fd = -1;
 	lc->log_dev_failed = 0;
-	if (!dm_strncpy(lc->uuid, uuid, DM_UUID_LEN)) {
+	if (!_dm_strncpy(lc->uuid, uuid, DM_UUID_LEN)) {
 		LOG_ERROR("Cannot use too long UUID %s.", uuid);
 		r = -EINVAL;
 		goto fail;
@@ -927,7 +927,7 @@ int local_resume(struct dm_ulog_request *rq)
  *
  * Since this value doesn't change, the kernel
  * should not need to talk to server to get this
- * The function is here for completness
+ * The function is here for completeness
  *
  * Returns: 0 on success, -EXXX on failure
  */
@@ -1018,7 +1018,7 @@ static int clog_in_sync(struct dm_ulog_request *rq)
 	 * happen for reads is that additional read attempts may be
 	 * taken.
 	 *
-	 * Futher investigation may be required to determine if there are
+	 * Further investigation may be required to determine if there are
 	 * similar possible outcomes when the mirror is in the process of
 	 * recovering.  In that case, lc->in_sync would not have been set
 	 * yet.

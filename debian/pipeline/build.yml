@@ -1,0 +1,42 @@
+build:
+  stage: build
+  image: debian:sid-slim
+
+  parallel:
+    matrix:
+    - JOB_HOST_ARCH:
+      - all
+      - amd64
+      - arm64
+      - i386
+      - s390x
+
+  variables:
+    GIT_STRATEGY: none
+    GIT_SUBMODULE_STRATEGY: none
+
+  script:
+  - apt upgrade
+  - |
+    # Install build-deps
+    if [[ $JOB_HOST_ARCH = all ]]; then
+      BUILDPACKAGE_ARGS="--build=all"
+      apt build-dep --indep-only ./debian/_build/*.dsc
+    else
+      BUILDPACKAGE_ARGS="--build=any --host-arch=$JOB_HOST_ARCH"
+      apt build-dep --arch-only --host-architecture $JOB_HOST_ARCH ./debian/_build/*.dsc
+      JOB_HOST_GNU_TYPE_PACKAGE=$(dpkg-architecture --host-arch $JOB_HOST_ARCH --query DEB_HOST_GNU_TYPE | tr _ -)
+      # Workaround for non-multiarch build-essential. See https://bugs.debian.org/666743
+      apt install binutils-$JOB_HOST_GNU_TYPE_PACKAGE gcc-$JOB_HOST_GNU_TYPE_PACKAGE g++-$JOB_HOST_GNU_TYPE_PACKAGE libc6-dev:$JOB_HOST_ARCH
+    fi
+  - dpkg-source -x debian/_build/*.dsc debian/_build/src
+  - chown nobody -R debian/_build
+  - ( cd debian/_build/src; runuser -u nobody -- dpkg-buildpackage --jobs=auto $BUILDPACKAGE_ARGS )
+
+  interruptible: true
+  needs:
+  - source
+  artifacts:
+    paths:
+    - debian/_build/*_${JOB_HOST_ARCH}.*
+    expire_in: 2 days

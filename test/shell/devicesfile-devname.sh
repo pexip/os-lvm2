@@ -12,6 +12,8 @@
 
 test_description='devices file with devnames'
 
+SKIP_WITH_LVMPOLLD=1
+
 . lib/inittest
 
 aux prepare_devs 7
@@ -35,7 +37,9 @@ mkdir "$DFDIR" || true
 DF="$DFDIR/system.devices"
 ORIG="$DFDIR/orig.devices"
 
-aux lvmconf 'devices/use_devicesfile = 1'
+aux lvmconf "devices/use_devicesfile = 1" \
+	"global/event_activation = 1"
+
 
 pvcreate "$dev1"
 ls "$DF"
@@ -479,7 +483,7 @@ not grep "$dev1" "$DF"
 ls "$RUNDIR/lvm/pvs_online/$PVID1"
 ls "$RUNDIR/lvm/pvs_online/$PVID2"
 not ls "$RUNDIR/lvm/pvs_online/$PVID3"
-check lv_field $vg1/$lv1 lv_active "active"
+lvs -qq -o active $vg1/$lv1 | grep active
 # pvs updates the DF
 pvs |tee out
 grep "$dev1" out
@@ -550,6 +554,66 @@ vgchange -an $vg2
 vgremove -ff $vg1
 vgremove -ff $vg2
 
+# bz 2225419
+
+touch "$DF"
+vgcreate $vg1 "$dev1"
+vgcreate $vg2 "$dev2"
+
+# PVID with dashes for matching pvs -o+uuid output
+OPVID1=`pvs "$dev1" --noheading -o uuid | awk '{print $1}'`
+OPVID2=`pvs "$dev2" --noheading -o uuid | awk '{print $1}'`
+# PVID without dashes for matching devices file fields
+PVID1=`pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}'`
+PVID2=`pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}'`
+
+NODEV=${dev1}12345
+
+lvmdevices --deldev "$dev1"
+lvmdevices --deldev "$dev2"
+
+# dev1 is correct
+echo "IDTYPE=devname IDNAME=$dev1 DEVNAME=$dev1 PVID=$PVID1" >> "$DF"
+# dev2 has no PVID
+echo "IDTYPE=devname IDNAME=$dev2 DEVNAME=$dev2 PVID=." >> "$DF"
+# Non-existent device has PVID for dev2
+echo "IDTYPE=devname IDNAME=$NODEV DEVNAME=$NODEV PVID=$PVID2" >> "$DF"
+
+cat "$DF"
+
+pvs -o name,uuid |tee out
+
+grep "$dev1" out | tee out1
+grep "$dev2" out | tee out2
+grep "$OPVID1" out1
+grep "$OPVID2" out2
+not grep "$NODEV" out
+
+not grep "$NODEV" "$DF"
+grep "IDNAME=$dev1" "$DF" | tee out1
+grep "IDNAME=$dev2" "$DF" | tee out2
+grep "$PVID1" out1
+grep "$PVID2" out2
+grep "DEVNAME=$dev1" out1
+grep "DEVNAME=$dev2" out2
+
+rm "$DF"
+aux wipefs_a "$dev1" "$dev2"
+
+
+# bz 2119473
+
+aux lvmconf "devices/search_for_devnames = \"none\""
+sed -e "s|DEVNAME=$dev1|DEVNAME=.|" "$ORIG" > tmp1.devices
+sed -e "s|IDNAME=$dev1|IDNAME=.|" tmp1.devices > "$DF"
+pvs
+lvmdevices
+pvcreate -ff --yes --uuid "$PVID1" --norestorefile $dev1
+grep "$PVID1" "$DF" |tee out
+grep "DEVNAME=$dev1" out
+grep "IDNAME=$dev1" out
+aux lvmconf "devices/search_for_devnames = \"auto\""
+
 # devnames change so the new devname now refers to a filtered device,
 # e.g. an mpath or md component, which is not scanned
 
@@ -568,13 +632,7 @@ wait_md_create() {
         echo "$md" > WAIT_MD_DEV
 }
 
-aux wipefs_a "$dev1"
-aux wipefs_a "$dev2"
-aux wipefs_a "$dev3"
-aux wipefs_a "$dev4"
-
-mddev="/dev/md33"
-not grep $mddev /proc/mdstat || skip
+aux wipefs_a "$dev1" "$dev2" "$dev3" "$dev4"
 
 rm "$DF"
 touch "$DF"
@@ -590,7 +648,9 @@ OPVID2=`pvs "$dev2" --noheading -o uuid | awk '{print $1}'`
 PVID1=`pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}'`
 PVID2=`pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}'`
 
-mdadm --create --metadata=1.0 "$mddev" --level 1 --raid-devices=2 "$dev3" "$dev4"
+aux mdadm_create --metadata=1.0 --level 1 --raid-devices=2 "$dev3" "$dev4"
+mddev=$(< MD_DEV)
+
 wait_md_create "$mddev"
 
 sed -e "s|DEVNAME=$dev1|DEVNAME=$dev3|" "$ORIG" > tmp1.devices

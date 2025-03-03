@@ -21,27 +21,34 @@ union lvid;
 struct lv_segment;
 enum activation_change;
 
+struct lv_list {
+	struct dm_list list;
+	struct logical_volume *lv;
+};
+
 struct logical_volume {
+	/* NOTE: lvid must be the first structure member as it's used for
+	 * offsetof()  calculation in report.c  with columns.h */
 	union lvid lvid;
 	const char *name;
 
 	struct volume_group *vg;
 
-	uint64_t status;
-	alloc_policy_t alloc;
 	struct profile *profile;
+	uint64_t status;
+	uint64_t size;		/* Sectors visible */
+	uint32_t le_count;	/* Logical extents visible */
+	alloc_policy_t alloc;
 	uint32_t read_ahead;
 	int32_t major;
 	int32_t minor;
-
-	uint64_t size;		/* Sectors visible */
-	uint32_t le_count;	/* Logical extents visible */
 
 	uint32_t origin_count;
 	uint32_t external_count;
 	struct dm_list snapshot_segs;
 	struct lv_segment *snapshot;
 
+	struct lv_list lvl;
 	struct dm_list segments;
 	struct dm_list tags;
 	struct dm_list segs_using_this_lv;
@@ -58,6 +65,8 @@ struct logical_volume {
 	uint64_t timestamp;
 	unsigned new_lock_args:1;
 	unsigned to_remove:1; /* set when LV is known to be removed */
+	unsigned lockd_thin_pool_locked:1; /* set after locking thin pool in lvmlockd */
+	unsigned lockd_thin_pool_unlocked:1; /* set after unlocking thin pool in lvmlockd */
 	const char *hostname;
 	const char *lock_args;
 };
@@ -93,6 +102,7 @@ struct historical_logical_volume {
 	struct dm_list indirect_glvs; /* list of struct generic_logical_volume */
 	unsigned checked:1; /* set if this historical LV has been checked for validity */
 	unsigned valid:1;   /* historical LV is valid if there's at least one live LV among ancestors */
+	unsigned fresh:1;   /* historical LV has just been created (the original LV just removed) */
 };
 
 struct generic_logical_volume {
@@ -114,7 +124,6 @@ struct logical_volume *lv_data_lv(const struct logical_volume *lv);
 struct logical_volume *lv_convert(const struct logical_volume *lv);
 struct logical_volume *lv_origin(const struct logical_volume *lv);
 struct logical_volume *lv_mirror_log(const struct logical_volume *lv);
-struct logical_volume *lv_data(const struct logical_volume *lv);
 struct logical_volume *lv_metadata_lv(const struct logical_volume *lv);
 struct logical_volume *lv_pool_lv(const struct logical_volume *lv);
 
@@ -153,6 +162,8 @@ char *lvseg_kernel_discards_dup(struct dm_pool *mem, const struct lv_segment *se
 /* LV modification functions */
 int lv_set_creation(struct logical_volume *lv,
 		    const char *hostname, uint64_t timestamp);
+int lv_set_name(struct logical_volume *lv, const char *lv_name);
+int lv_set_vg(struct logical_volume *lv, struct volume_group *vg);
 int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
 		     enum activation_change activate);
 

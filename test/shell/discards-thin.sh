@@ -15,6 +15,7 @@
 
 
 SKIP_WITH_LVMPOLLD=1
+SKIP_WITH_LVMLOCKD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
@@ -61,7 +62,7 @@ lvchange -an $vg/pool $vg/pool1
 # Cannot convert, since thin volumes are still active
 not lvchange --discards passdown $vg/pool
 
-# Deactive thin volumes
+# Deactivate thin volumes
 lvchange -an $vg/origin $vg/snap
 
 lvchange --discards passdown $vg/pool

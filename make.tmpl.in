@@ -13,15 +13,10 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-ifneq ("@SILENT_RULES@","yes")
-	V ?= 1
-endif
 
-ifeq ($(V),1)
-	Q=
-else
-	Q=@
-endif
+V ?= $(if ("@SILENT_RULES@","yes"),,1)
+Q := $(if $(V),,@)
+SHOW := $(if $(V),@true,@echo)
 
 SHELL = @SHELL@
 
@@ -62,13 +57,16 @@ PYTHON3 = @PYTHON3@
 PYCOMPILE = $(top_srcdir)/autoconf/py-compile
 
 LIBS += @LIBS@ $(SELINUX_LIBS) $(UDEV_LIBS) $(RT_LIBS) $(M_LIBS)
-LVMLIBS = $(DMEVENT_LIBS) $(READLINE_LIBS) $(EDITLINE_LIBS) $(SYSTEMD_LIBS) $(BLKID_LIBS) $(AIO_LIBS) $(LIBS)
+LVMLIBS = $(DMEVENT_LIBS) $(READLINE_LIBS) $(EDITLINE_LIBS) $(LIBSYSTEMD_LIBS)\
+ $(BLKID_LIBS) $(LIBNVME_LIBS) $(AIO_LIBS) $(LIBS)
 # Extra libraries always linked with static binaries
-STATIC_LIBS = $(PTHREAD_LIBS)
+STATIC_LIBS = $(PTHREAD_LIBS) $(SELINUX_STATIC_LIBS) $(UDEV_STATIC_LIBS) $(BLKID_STATIC_LIBS) $(M_LIBS)
 DEFS += @DEFS@
 # FIXME set this only where it's needed, not globally?
 CFLAGS ?= @COPTIMISE_FLAG@ @CFLAGS@
+CPPFLAGS ?= @CPPFLAGS@
 LDFLAGS ?= @LDFLAGS@
+STATIC_LDFLAGS += @STATIC_LDFLAGS@
 CLDFLAGS += @CLDFLAGS@
 ELDFLAGS += @ELDFLAGS@
 LDDEPS += @LDDEPS@
@@ -82,18 +80,31 @@ AIO_CFLAGS = @AIO_CFLAGS@
 AIO_LIBS = @AIO_LIBS@
 BLKID_CFLAGS = @BLKID_CFLAGS@
 BLKID_LIBS = @BLKID_LIBS@
+BLKID_STATIC_LIBS = @BLKID_STATIC_LIBS@
 CPG_CFLAGS = @CPG_CFLAGS@
 CPG_LIBS = @CPG_LIBS@
 EDITLINE_CFLAGS = @EDITLINE_CFLAGS@
 EDITLINE_LIBS = @EDITLINE_LIBS@
+LIBDLM_CFLAGS = @LIBDLM_CFLAGS@
+LIBDLM_LIBS = @LIBDLM_LIBS@
+LIBDLMCONTROL_CFLAGS = @LIBDLMCONTROL_CFLAGS@
+LIBDLMCONTROL_LIBS = @LIBDLMCONTROL_LIBS@
+LIBNVME_CFLAGS = @LIBNVME_CFLAGS@
+LIBNVME_LIBS = @LIBNVME_LIBS@
+LIBSANLOCKCLIENT_CFLAGS = @LIBSANLOCKCLIENT_CFLAGS@
+LIBSANLOCKCLIENT_LIBS = @LIBSANLOCKCLIENT_LIBS@
+LIBSEAGATEILM_CFLAGS = @LIBSEAGATEILM_CFLAGS@
+LIBSEAGATEILM_LIBS = @LIBSEAGATEILM_LIBS@
+LIBSYSTEMD_CFLAGS = @LIBSYSTEMD_CFLAGS@
+LIBSYSTEMD_LIBS = @LIBSYSTEMD_LIBS@
 PTHREAD_LIBS = @PTHREAD_LIBS@
 READLINE_CFLAGS = @READLINE_CFLAGS@
 READLINE_LIBS = @READLINE_LIBS@
 SELINUX_LIBS = @SELINUX_LIBS@
-SYSTEMD_CFLAGS = @SYSTEMD_CFLAGS@
-SYSTEMD_LIBS = @SYSTEMD_LIBS@
+SELINUX_STATIC_LIBS = @SELINUX_STATIC_LIBS@
 UDEV_CFLAGS = @UDEV_CFLAGS@
 UDEV_LIBS = @UDEV_LIBS@
+UDEV_STATIC_LIBS = @UDEV_STATIC_LIBS@
 VALGRIND_CFLAGS = @VALGRIND_CFLAGS@
 VALGRIND_LIBS = @VALGRIND_LIBS@
 
@@ -128,11 +139,23 @@ systemd_generator_dir = $(DESTDIR)$(SYSTEMD_GENERATOR_DIR)
 systemd_dir = $(DESTDIR)@systemdutildir@
 tmpfiles_dir = $(DESTDIR)@tmpfilesdir@
 ocf_scriptdir = $(DESTDIR)@OCFDIR@
-PYTHON_PREFIX = $(DESTDIR)$(prefix)
+PYTHON_PREFIX = $(prefix)
 
 # N.B. No $(DESTDIR) prefix here.
 python2dir = @PYTHON2DIR@
 python3dir = @PYTHON3DIR@
+
+# Define macro NewLine for use in $(foreach) with 2 blank lines
+ifeq (1, $(firstword $(V)))
+define newline
+
+
+endef
+else
+define newline
+;
+endef
+endif
 
 USRLIB_RELPATH = $(shell echo $(abspath $(usrlibdir) $(libdir)) | \
   $(AWK) -f $(top_srcdir)/scripts/relpath.awk)
@@ -147,6 +170,18 @@ DEFAULT_LOCK_DIR = @DEFAULT_LOCK_DIR@
 DEFAULT_RUN_DIR = @DEFAULT_RUN_DIR@
 DEFAULT_PID_DIR = @DEFAULT_PID_DIR@
 DEFAULT_MANGLING = @MANGLING@
+DEFAULT_DMEVENTD_EXIT_ON_PATH = @DEFAULT_DMEVENTD_EXIT_ON_PATH@
+
+#----------------------------------------------------------------------
+# From http://blog.melski.net/tag/debugging-makefiles/
+#
+# Usage: make print-CC print-CXX print-LD
+#----------------------------------------------------------------------
+print-%:
+	@echo '$*=$($*)'
+	@echo '  origin = $(origin $*)'
+	@echo '  flavor = $(flavor $*)'
+	@echo '   value = $(value  $*)'
 
 # Setup vpath search paths for some suffixes
 vpath %.c $(srcdir)
@@ -164,10 +199,15 @@ ifndef MAKEFLAGS
 MAKEFLAGS = @JOBS@
 endif
 
+# Hiding dir entering makes hard for editors to look for files
+#ifneq (1, $(firstword $(V)))
+#MAKEFLAGS += --no-print-directory
+#endif
+
 # Handle installation of files
 ifeq ("@WRITE_INSTALL@", "yes")
 # leaving defaults
-M_INSTALL_SCRIPT =
+M_INSTALL_SCRIPT = -m 755
 M_INSTALL_DATA = -m 644
 else
 M_INSTALL_PROGRAM = -m 555
@@ -232,12 +272,31 @@ WFLAGS += -Wsync-nand
 endif
 endif
 
-ifneq ("@STATIC_LINK@", "yes")
-ifeq ("@HAVE_PIE@", "yes")
 ifeq ("@HAVE_FULL_RELRO@", "yes")
+comma := ,
+ifneq ("@STATIC_LINK@", "yes")
+ifeq (,$(findstring -z$(comma)relro,$(LDFLAGS)))
+  LDFLAGS += -Wl,-z,relro
+endif
+ifeq (,$(findstring -z$(comma)now,$(LDFLAGS)))
+  LDFLAGS += -Wl,-z,now
+endif
+# TODO: think about configure option for this flag
+# for now leave decision on distro maintainer
+#ifeq (,$(findstring -z$(comma)pack-relative-relocs,$(LDFLAGS)))
+#  LDFLAGS += -Wl,-z,pack-relative-relocs
+#endif
+# For systems with old readline library that requires extra libs to link with
+# we stick to default --no-as-needed and we avoid adding --as-needed flag
+ifneq (-l,$(findstring -l,$(filter-out %readline,$(READLINE_LIBS))))
+ifeq (,$(findstring --as-needed,$(LDFLAGS)))
+  LDFLAGS += -Wl,--as-needed
+endif
+endif
+
+ifeq ("@HAVE_PIE@", "yes")
   EXTRA_EXEC_CFLAGS += -fPIE
-  EXTRA_EXEC_LDFLAGS += -Wl,-z,relro,-z,now -pie -fPIE
-  CLDFLAGS += -Wl,-z,relro
+  EXTRA_EXEC_LDFLAGS += -pie -fPIE
 endif
 endif
 endif
@@ -276,12 +335,10 @@ endif
 endif
 
 ifeq ("@BUILD_DMEVENTD@", "yes")
-  DMEVENT_LIBS = -ldevmapper-event -L$(interfacebuilddir) -ldevmapper
-  LDFLAGS += -L$(top_builddir)/daemons/dmeventd
-  CLDFLAGS += -L$(top_builddir)/daemons/dmeventd
+  DMEVENT_LIBS = -L$(top_builddir)/daemons/dmeventd -ldevmapper-event -L$(interfacebuilddir) -ldevmapper
 endif
 
-# Combination of DEBUG_POOL and DEBUG_ENFORCE_POOL_LOCKING is not suppored.
+# Combination of DEBUG_POOL and DEBUG_ENFORCE_POOL_LOCKING is not supported.
 #DEFS += -DDEBUG_POOL
 # Default pool locking is using the crc checksum. With mprotect memory
 # enforcing compilation faulty memory write could be easily found.
@@ -338,7 +395,10 @@ SUBDIRS.cflow := $(SUBDIRS:=.cflow)
 SUBDIRS.clean := $(SUBDIRS:=.clean)
 SUBDIRS.distclean := $(SUBDIRS:=.distclean)
 
-TARGETS += $(LIB_SHARED) $(LIB_STATIC)
+TARGETS += $(LIB_STATIC)
+ifeq ("@SHARED_LINK@", "yes")
+  TARGETS += $(LIB_SHARED)
+endif
 
 INTERNAL_LIBS = \
 	$(top_builddir)/libdaemon/client/libdaemonclient.a \
@@ -454,46 +514,46 @@ DEPFLAGS=-MT $@ -MMD -MP -MF $*.d
 DEFS+=-D_FILE_OFFSET_BITS=64
 
 %.o: %.c $(DEPS)
-	@echo "    [CC] $(<F)"
+	$(SHOW) "    [CC] $(<F)"
 	@mkdir -p $(@D)
-	$(Q) $(CC) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CFLAGS_$@) $< -o $@
+	$(Q) $(CC) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CFLAGS_$@) $(CPPFLAGS) $< -o $@
 
 %.o: %.cpp $(DEPS)
-	@echo "    [CXX] $(<F)"
+	$(SHOW) "    [CXX] $(<F)"
 	@mkdir -p $(@D)
 	$(Q) $(CXX) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) $< -o $@
 
 %.pot: %.c $(DEPS)
-	@echo "    [CC] $(<F)"
+	$(SHOW) "    [CC] $(<F)"
 	@mkdir -p $(@D)
-	$(Q) $(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) -include $(top_builddir)/po/pogen.h $(DEFS) $(WFLAGS) $(CFLAGS) $< >$@
+	$(Q) $(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) -include $(top_builddir)/po/pogen.h $(DEFS) $(WFLAGS) $(CFLAGS) $(CPPFLAGS)  $< >$@
 
 %.so: %.o
-	@echo "    [CC] $(<F)"
-	$(Q) $(CC) -c $(CFLAGS) $(CLDFLAGS) $< $(LIBS) -o $@
+	$(SHOW) "    [CC] $(<F)"
+	$(Q) $(CC) -c $(CFLAGS) $(LDFLAGS) $(CLDFLAGS) $< $(LIBS) -o $@
 
 ifneq (,$(LIB_SHARED))
 
 TARGETS += $(LIB_SHARED).$(LIB_VERSION)
 $(LIB_SHARED).$(LIB_VERSION): $(OBJECTS) $(LDDEPS)
-	@echo "    [CC] $@"
+	$(SHOW) "    [CC] $@"
 ifeq ("@LIB_SUFFIX@","so")
 	$(Q) $(CC) -shared -Wl,-soname,$(notdir $@) \
-		$(CFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
+		$(CFLAGS) $(LDFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
 endif
 ifeq ("@LIB_SUFFIX@","dylib")
 	$(Q) $(CC) -dynamiclib -dylib_current_version,$(LIB_VERSION) \
-		$(CFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
+		$(CFLAGS) $(LDFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
 endif
 
 $(LIB_SHARED): $(LIB_SHARED).$(LIB_VERSION)
-	@echo "    [LN] $@"
+	$(SHOW) "    [LN] $@"
 	$(Q) $(LN_S) -f $(<F) $@
 
 CLEAN_TARGETS += $(LDDEPS) .exported_symbols_generated
 
 install_lib_shared: $(LIB_SHARED)
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(libdir)/$(<F).$(LIB_VERSION)
 	$(Q) $(INSTALL_DIR) $(usrlibdir)
 	$(Q) $(LN_S) -f $(USRLIB_RELPATH)$(<F).$(LIB_VERSION) $(usrlibdir)/$(<F)
@@ -502,19 +562,19 @@ install_lib_shared: $(LIB_SHARED)
 #        and for compatibility links in libdir are created
 #        when the code is fixed links could be removed.
 install_dm_plugin: $(LIB_SHARED)
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(libdir)/device-mapper/$(<F)
 	$(Q) $(LN_S) -f device-mapper/$(<F) $(libdir)/$(<F)
 
 install_lvm2_plugin: $(LIB_SHARED)
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(libdir)/lvm2/$(<F)
 	$(Q) $(LN_S) -f lvm2/$(<F) $(libdir)/$(<F)
 	$(Q) $(LN_S) -f $(<F) $(libdir)/$(<F).$(LIB_VERSION)
 endif
 
 $(LIB_STATIC): $(OBJECTS)
-	@echo "    [AR] $@"
+	$(SHOW) "    [AR] $@"
 	$(Q) $(RM) $@
 	$(Q) $(AR) rsv $@ $(OBJECTS) > /dev/null
 
@@ -522,7 +582,7 @@ $(LIB_STATIC): $(OBJECTS)
 .PRECIOUS: %.d
 
 %.mo: %.po
-	@echo "    [MSGFMT] $(<F)"
+	$(SHOW) "    [MSGFMT] $(<F)"
 	$(Q) $(MSGFMT) -o $@ $<
 
 CLEAN_TARGETS += \
@@ -531,7 +591,7 @@ CLEAN_TARGETS += \
 	$(POTFILES) $(CLEAN_CFLOW)
 
 cleandir:
-	@echo "    [CLEANDIR]"
+	$(SHOW) "    [CLEANDIR]"
 ifneq (,$(firstword $(CLEAN_DIRS)))
 	$(Q) $(RM) -r $(CLEAN_DIRS)
 endif
@@ -540,7 +600,7 @@ endif
 clean: $(SUBDIRS.clean) cleandir
 
 distclean: cleandir $(SUBDIRS.distclean)
-	@echo "    [DISTCLEAN]"
+	$(SHOW) "    [DISTCLEAN]"
 ifneq (,$(firstword $(DISTCLEAN_DIRS)))
 	$(Q) $(RM) -r $(DISTCLEAN_DIRS)
 endif
@@ -580,8 +640,10 @@ else
 endif
 
 ifeq ("$(USE_TRACKING)","yes")
-ifeq (,$(findstring $(MAKECMDGOALS),cscope.out cflow clean distclean lcov lcov-reset \
- help check check_local check_cluster check_lvmpolld run-unit-test tags))
+MAKE_NODEPS_GOALS := cscope.out cflow clean distclean lcov lcov-reset\
+ help check check_local check_cluster check_lvmpolld run-unit-test tags
+ifeq (,$(filter $(MAKE_NODEPS_GOALS),$(MAKECMDGOALS)))
+.SECONDARY:
 # Note: no tabs before -include
     -include $(SOURCES:.c=.d) $(SOURCES2:.c=.d) $(CXXSOURCES:.cpp=.d)
 endif

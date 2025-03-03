@@ -59,7 +59,10 @@ test -f "lib/flavour-$LVM_TEST_FLAVOUR" || { echo "NOTE: Flavour '$LVM_TEST_FLAV
 test -n "$SKIP_WITHOUT_CLVMD" && test "$LVM_TEST_LOCKING" -ne 3 && initskip
 test -n "$SKIP_WITH_CLVMD" && test "$LVM_TEST_LOCKING" = 3 && initskip
 
-test -n "$SKIP_WITH_LVMPOLLD" && test -n "$LVM_TEST_LVMPOLLD" && test -z "$LVM_TEST_LVMLOCKD" && initskip
+# When requested testing LVMLOCKD & LVMPOLLD - ignore skipping of marked test for lvmpolld
+test -n "$LVM_TEST_LVMLOCKD" && test -n "$LVM_TEST_LVMPOLLD" && SKIP_WITH_LVMPOLLD=
+
+test -n "$SKIP_WITH_LVMPOLLD" && test -n "$LVM_TEST_LVMPOLLD" && initskip
 
 test -n "$SKIP_WITH_LVMLOCKD" && test -n "$LVM_TEST_LVMLOCKD" && initskip
 
@@ -79,9 +82,14 @@ TESTOLDPWD=$(pwd)
 COMMON_PREFIX="LVMTEST"
 PREFIX="${COMMON_PREFIX}$$"
 
-# Check we are not conflickting with some exiting setup
+# Check we are not conflicting with some exiting setup
 if test -z "$SKIP_ROOT_DM_CHECK" ; then
-	dmsetup table | not grep "${PREFIX}[^0-9]" || die "DM table already has devices with prefix $PREFIX!"
+	d=$(dmsetup info -c -o name --noheadings --rows -S "suspended=Suspended||name=~${PREFIX}[^0-9]")
+	case "$d" in
+	"No devices found") ;;
+	"") ;;
+	*) die "DM table already has either suspended or $PREFIX prefixed devices: $d" ;;
+	esac
 fi
 
 test -n "$LVM_TEST_DIR" || LVM_TEST_DIR=${TMPDIR:-/tmp}
@@ -106,25 +114,29 @@ else
 fi
 
 cd "$TESTDIR"
-mkdir lib
+mkdir lib tmp
 
 # Setting up symlink from $i to $TESTDIR/lib
+# library libdevmapper-event-lvm2.so.2.03 is needed with name
 test -n "${abs_top_builddir+varset}" && \
-    find "$abs_top_builddir/daemons/dmeventd/plugins/" -name '*.so' \
+    find "$abs_top_builddir/daemons/dmeventd/plugins/" -name '*.so*' \
     -exec ln -s -t lib "{}" +
 find "$TESTOLDPWD/lib" ! \( -name '*.sh' -o -name '*.[cdo]' \
     -o -name '*~' \)  -exec ln -s -t lib "{}" +
+LD_LIBRARY_PATH="$TESTDIR/lib:$LD_LIBRARY_PATH"
 
 DM_DEFAULT_NAME_MANGLING_MODE=none
 DM_DEV_DIR="$TESTDIR/dev"
 LVM_SYSTEM_DIR="$TESTDIR/etc"
+TMPDIR="$TESTDIR/tmp"
 # abort on the internal dm errors in the tests (allowing test user override)
 DM_ABORT_ON_INTERNAL_ERRORS=${DM_ABORT_ON_INTERNAL_ERRORS:-1}
 DM_DEBUG_WITH_LINE_NUMBERS=${DM_DEBUG_WITH_LINE_NUMBERS:-1}
 
 export DM_DEFAULT_NAME_MANGLING_MODE DM_DEV_DIR LVM_SYSTEM_DIR DM_ABORT_ON_INTERNAL_ERRORS
-
 mkdir "$LVM_SYSTEM_DIR" "$DM_DEV_DIR"
+MACHINEID=$(uuidgen 2>/dev/null || echo "abcdefabcdefabcdefabcdefabcdefab")
+echo "${MACHINEID//-/}" > "$LVM_SYSTEM_DIR/machine-id"   # remove all '-'
 if test -n "$LVM_TEST_DEVDIR" ; then
 	test -d "$LVM_TEST_DEVDIR" || die "Test device directory LVM_TEST_DEVDIR=\"$LVM_TEST_DEVDIR\" is not valid."
 	DM_DEV_DIR=$LVM_TEST_DEVDIR
@@ -140,7 +152,7 @@ fi
 echo "$TESTNAME" >TESTNAME
 # Require 50M of free space in testdir
 test "$(df -k -P . | awk '/\// {print $4}')" -gt $(( SKIP_WITH_LOW_SPACE * 1024 )) || \
-	skip "Testing requires more then ${SKIP_WITH_LOW_SPACE}M of free space in directory $TESTDIR!\\n$(df -H | sed -e 's,^,## DF:   ,')"
+	skip "Testing requires more than ${SKIP_WITH_LOW_SPACE}M of free space in directory $TESTDIR!\\n$(df -H | sed -e 's,^,## DF:   ,')"
 
 echo "Kernel is $(uname -a)"
 # Report SELinux mode
@@ -159,6 +171,14 @@ test -n "$BASH" && set -euE -o pipefail
 # Vars for harness
 echo "@TESTDIR=$TESTDIR"
 echo "@PREFIX=$PREFIX"
+
+# Date of executed test
+echo "## DATE: $(date || true)"
+
+# Hostname IP address
+HOSTNAME=$(hostname -I 2>/dev/null) || HOSTNAME=
+HOSTNAME="$(hostname 2>/dev/null) ${HOSTNAME}" || true
+echo "## HOST: $HOSTNAME"
 
 if test -z "$SKIP_ROOT_DM_CHECK" ; then
 	aux lvmconf

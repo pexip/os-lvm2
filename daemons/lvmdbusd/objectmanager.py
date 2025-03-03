@@ -9,12 +9,11 @@
 
 import sys
 import threading
-import traceback
 import dbus
 import os
 import copy
 from . import cfg
-from .utils import log_debug, pv_obj_path_generate, log_error
+from .utils import log_debug, log_error, extract_stack_trace
 from .automatedproperties import AutomatedProperties
 
 
@@ -40,8 +39,8 @@ class ObjectManager(AutomatedProperties):
 				for k, v in list(obj._objects.items()):
 					path, props = v[0].emit_data()
 					rc[path] = props
-			except Exception:
-				traceback.print_exc(file=sys.stdout)
+			except Exception as e:
+				log_error("_get_managed_objects exception, bailing: \n%s" % extract_stack_trace(e))
 				sys.exit(1)
 			return rc
 
@@ -52,15 +51,6 @@ class ObjectManager(AutomatedProperties):
 		r = cfg.create_request_entry(-1, ObjectManager._get_managed_objects,
 									(self, ), cb, cbe, False)
 		cfg.worker_q.put(r)
-
-	def locked(self):
-		"""
-		If some external code need to run across a number of different
-		calls into ObjectManager while blocking others they can use this method
-		to lock others out.
-		:return:
-		"""
-		return ObjectManagerLock(self.rlock)
 
 	@dbus.service.signal(
 		dbus_interface="org.freedesktop.DBus.ObjectManager",
@@ -169,8 +159,8 @@ class ObjectManager(AutomatedProperties):
 			# print('Registering object path %s for %s' %
 			# (path, dbus_object.lvm_id))
 
-			# We want fast access to the object by a number of different ways
-			# so we use multiple hashs with different keys
+			# We want fast access to the object by a number of different ways,
+			# so we use multiple hashes with different keys
 			self._lookup_add(dbus_object, path, dbus_object.lvm_id,
 				dbus_object.Uuid)
 
@@ -219,7 +209,7 @@ class ObjectManager(AutomatedProperties):
 
 	def get_object_by_lvm_id(self, lvm_id):
 		"""
-		Given an lvm identifier, return the object registered for it
+		Given a lvm identifier, return the object registered for it
 		:param lvm_id: The lvm identifier
 		"""
 		with self.rlock:
@@ -230,7 +220,7 @@ class ObjectManager(AutomatedProperties):
 
 	def get_object_path_by_lvm_id(self, lvm_id):
 		"""
-		Given an lvm identifier, return the object path for it
+		Given a lvm identifier, return the object path for it
 		:param lvm_id: The lvm identifier
 		:return: Object path or '/' if not found
 		"""
@@ -287,7 +277,7 @@ class ObjectManager(AutomatedProperties):
 		register it with the object manager for the specified uuid & lvm_id.
 		Note: If path create is not None, uuid and lvm_id cannot be equal
 		:param uuid: The uuid for the lvm object we are searching for
-		:param lvm_id: The lvm name (eg. pv device path, vg name, lv full name)
+		:param lvm_id: The lvm name (e.g. pv device path, vg name, lv full name)
 		:param path_create: If not None, create the path using this function if
 				we fail to find the object by uuid or lvm_id.
 		:returns None if lvm asset not found and path_create == None otherwise
@@ -305,18 +295,17 @@ class ObjectManager(AutomatedProperties):
 			if uuid == lvm_id:
 				path = self._id_lookup(lvm_id)
 			else:
-				# We have a uuid and a lvm_id we can do sanity checks to ensure
+				# We have an uuid and a lvm_id we can do sanity checks to ensure
 				# that they are consistent
 
-				# If a PV is missing it's device path is '[unknown]' or some
+				# If a PV is missing its device path is '[unknown]' or some
 				# other text derivation of unknown.  When we find that a PV is
-				# missing we will clear out the lvm_id as it's likely not unique
-				# and thus not useful and potentially harmful for lookups.
-				if path_create == pv_obj_path_generate and \
-						cfg.db.pv_missing(uuid):
+				# missing we will clear out the lvm_id as it's not unique
+				# and thus not useful and harmful for lookups.
+				if cfg.db.pv_missing(uuid):
 					lvm_id = None
 
-				# Lets check for the uuid first
+				# Let's check for the uuid first
 				path = self._id_lookup(uuid)
 				if path:
 					# Ensure table lookups are correct
@@ -337,29 +326,3 @@ class ObjectManager(AutomatedProperties):
 			#	(uuid, lvm_id, str(path_create), path))
 
 			return path
-
-
-class ObjectManagerLock(object):
-	"""
-	The sole purpose of this class is to allow other code the ability to
-	lock the object manager using a `with` statement, eg.
-
-	with cfg.om.locked():
-		# Do stuff with object manager
-
-	This will ensure that the lock is always released (assuming this is done
-	correctly)
-	"""
-
-	def __init__(self, recursive_lock):
-		self._lock = recursive_lock
-
-	def __enter__(self):
-		# Acquire lock
-		self._lock.acquire()
-
-	# noinspection PyUnusedLocal
-	def __exit__(self, e_type, e_value, e_traceback):
-		# Release lock
-		self._lock.release()
-		self._lock = None

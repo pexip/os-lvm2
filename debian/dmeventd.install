@@ -1,5 +1,5 @@
-lib/*/libdevmapper-event-*
-lib/*/device-mapper/libdevmapper-event-*
-lib/systemd/system/dm-event*
-sbin/dmeventd
+usr/lib/*/libdevmapper-event-*
+usr/lib/*/device-mapper/libdevmapper-event-*
+usr/lib/systemd/system/dm-event*
+usr/sbin/dmeventd
 usr/share/man/man8/dmeventd.8

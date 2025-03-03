@@ -2,7 +2,7 @@
 .SH SEE ALSO
 .
 .nh
-.ad l
+.na
 .BR lvm (8),
 .BR lvm.conf (5),
 .BR lvmconfig (8),
@@ -66,6 +66,8 @@
 .P
 .BR lvmsystemid (7),
 .BR lvmreport (7),
+.BR lvmcache (7),
 .BR lvmraid (7),
 .BR lvmthin (7),
-.BR lvmcache (7)
+.BR lvmvdo (7),
+.BR lvmautoactivation (7)

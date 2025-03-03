@@ -1,3 +1,37 @@
+lvm2 (2.03.31-1) unstable; urgency=medium
+
+  * New upstream release.
+
+  [ Luke W Faraone ]
+  * Include lvresize_fs_helper (Closes: #1068733)
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 03 Mar 2025 22:04:46 +0100
+
+lvm2 (2.03.27-1) unstable; urgency=medium
+
+  * New upstream release.
+
+  [ Guillem Jover ]
+  * Turn initramfs hooks into debhelper fragment files.
+  * Remove imperative activation of update-initramfs trigger.
+  * Perform full /usr-move on all absolute paths.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 04 Nov 2024 10:06:21 +0100
+
+lvm2 (2.03.22-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 24 Feb 2024 16:41:00 +0100
+
+lvm2 (2.03.16-3) unstable; urgency=medium
+
+  * Remove obsolete dependency on lsb-base.
+  * Expect systemd relates files in /usr. (closes: #1052666)
+  * Move all remaining files to /usr.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 06 Jan 2024 18:47:24 +0100
+
 lvm2 (2.03.16-2) unstable; urgency=medium
 
   * Remove remaining unused init scripts.
@@ -656,7 +690,7 @@ lvm2 (2.02.66-3) unstable; urgency=high
 
   * Import upstream version 2.02.72:
     - CVE-2010-2526: Fix insecure communication between lvm2 and clvmd.
-     (Closes: #591204)          
+     (Closes: #591204)
     - Only use single node clvm if explicitly requested.
 
  -- Bastian Blank <waldi@debian.org>  Thu, 19 Aug 2010 14:44:02 +0200
@@ -1123,7 +1157,7 @@ lvm2 (2.00.32-1) unstable; urgency=low
   * Don't make /lib/lvm2 the default library directory as it causes initrd
     troubles.
     Closes: #287042
-  
+
  -- Patrick Caulfield <patrick@debian.org>  Fri, 24 Dec 2004 12:27:05 +0000
 
 lvm2 (2.00.31-1) unstable; urgency=low
@@ -1151,7 +1185,7 @@ lvm2 (2.00.25-1) unstable; urgency=low
   * Remove "is not recommended for production use" from package description.
     Closes: #278919
   * Add lvm2create_initrd to documentation directory.
-  
+
  -- Patrick Caulfield <patrick@debian.org>  Wed,  3 Nov 2004 09:37:56 +0000
 
 lvm2 (2.00.24-2) unstable; urgency=low
@@ -1336,7 +1370,7 @@ lvm2 (1.95.15-3) unstable; urgency=low
  -- Andres Salomon <dilinger@voxel.net>  Thu, 07 Aug 2003 01:04:59 -0400
 
 lvm2 (1.95.15-2) unstable; urgency=low
-  
+
   * Calm-before-the-storm release; the next one will either be 2.00 (once
     the kill-yer-VGs bug is fixed) or 1.95 with lvm10 compatibility (once
     patrick returns from vacation).
@@ -1412,7 +1446,7 @@ lvm2 (0.95.04cvs20020304) unstable; urgency=low
   * Add dmsetup as a suggestion.
   * Add /etc/lvm/lvm.conf conffile.
   * Add undocumented(7) for the commands missing manpages.
-  
+
  -- Andres Salomon <dilinger@mp3revolution.net>  Mon,  4 Mar 2002 04:51:26 -0500
 
 lvm2 (0.95.02cvs20020220) unstable; urgency=low

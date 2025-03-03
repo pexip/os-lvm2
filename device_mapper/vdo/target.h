@@ -81,7 +81,6 @@ struct dm_vdo_target_params {
 		uint32_t block_map_era_length;	// format period
 		uint32_t block_map_period;      // supported alias
 	};
-	uint32_t check_point_frequency;
 	uint32_t index_memory_size_mb;  // format
 
 	uint32_t slab_size_mb;          // format
@@ -107,6 +106,8 @@ struct dm_vdo_target_params {
 
 bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 				   uint64_t vdo_size);
+
+bool dm_vdo_parse_logical_size(const char *vdo_path, uint64_t *logical_blocks);
 
 //----------------------------------------------------------------
 

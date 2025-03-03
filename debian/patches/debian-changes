@@ -1,129 +1,137 @@
+diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml
+index 423807f40cad15b787004db891f0ea19cdcd5997..a3240a084f5f4374c38470467d51462e4d6bf905 100644
+--- a/.gitlab-ci.yml
++++ b/.gitlab-ci.yml
+@@ -1,104 +1,6 @@
+-stages:
+-  - approve
+-  - test
+-
+-approve1:
+-  stage: approve
+-  script:
+-    - echo "Approved..."
+-  rules:
+-    # TODO: Filter only safe repositories, or user in developers
+-    - if: $CI_PROJECT_PATH != "csonto/lvm2" && $CI_PROJECT_PATH != "lvmteam/lvm2"
+-      when: manual
+-    # TODO: for other branches than main/rhel: run pipeline only when requested:
+-    - if: $CI_COMMIT_BRANCH != "main" && $CI_COMMIT_BRANCH !~ "^rhel.*"
+-      when: manual
+-    - when: on_success
+-  allow_failure: false
+-
+-
+-pages:
+-  image: elecnix/ikiwiki
+-  stage: test
+-  script:
+-    - ikiwiki --setup ikiwiki.setup --libdir themes/ikistrap/lib
+-  artifacts:
+-    paths:
+-      - public
+-  only:
+-    refs:
+-      - main
+-    changes:
+-      - doc/**/*
+-      - ikiwiki.setup
+-
+-
+-# TODO:
+-# - check results of autoreconf and make generate - may need additional commit
+-#     - we need a particular setup (rawhide OR latest supported fedora?)
+-# - do make rpm and publish results as artifacts - we will use packit/COPR for this eventually
+-
+-# Run on any commits to main (master), rhel8, rhel9 branches
+-test-job:
+-  stage: test
+-  parallel:
+-    matrix:
+-      - TAG: rhel8
+-        CONFIGURE: >
+-          --with-cluster=internal
+-          --enable-cmirrord
+-      - TAG: rhel9
+-        CONFIGURE: >
+-          --with-default-use-devices-file=1
+-          --enable-app-machineid
+-          --enable-editline
+-          --disable-readline
+-  artifacts:
+-    paths:
+-      - test/results/
+-    expire_in: 1 week
+-  tags:
+-      - ${TAG}
+-  timeout: 2h
+-  script:
+-    # Common options go here, diffs to the above matrix
+-    - >
+-      ./configure ${CONFIGURE}
+-      --enable-fsadm
+-      --enable-write_install
+-      --enable-pkgconfig
+-      --enable-cmdlib
+-      --enable-dmeventd
+-      --enable-blkid_wiping
+-      --enable-udev_sync
+-      --with-thin=internal
+-      --with-cache=internal
+-      --enable-lvmpolld
+-      --enable-lvmlockd-dlm --enable-lvmlockd-dlmcontrol
+-      --enable-lvmlockd-sanlock
+-      --enable-dbus-service --enable-notify-dbus
+-      --enable-dmfilemapd
+-      --with-writecache=internal
+-      --with-vdo=internal --with-vdo-format=/usr/bin/vdoformat
+-      --with-integrity=internal
+-      --disable-silent-rules
+-    - make
+-    - rm -rf test/results
+-    - mkdir -p /dev/shm/lvm2-test
+-    - mount -o remount,dev /dev/shm
+-    # TODO: Need to distinguish failed test from failed harness
+-    # TODO: Also need a way to find if run is incomplete, e.g. full disk resulting in many skipped tests
+-    - VERBOSE=0 BATCH=1 LVM_TEST_DIR=/dev/shm/lvm2-test make check || true
+-    - rm -rf /dev/shm/lvm2-test
+-    - cut -d' ' -f2 test/results/list | sort | uniq -c
+-    # Filter artifacts - keep only logs from tests which are not pass
+-    - cd test/results && rm $(grep 'passed$' list | cut -d' ' -f1 | sed -e 's|/|_|g' -e 's|.*|\0.txt|')
+-    # TODO: Keep a list of known failures, and translate into regexp - or simply use python...
+-    - if grep failed test/results/list | grep -v '\\\(dbustest\|lvconvert-mirror\)\.sh' | sort; then false; else true; fi
+-  rules:
+-    # Filter only safe repositories, or user in developers:
+-    # NOTE: Already done in approve stage, may be more caution than necessary
+-    - if: $CI_PROJECT_PATH != "csonto/lvm2" && $CI_PROJECT_PATH != "lvmteam/lvm2"
+-      when: manual
+-    - when: on_success
+-
++include:
++- local: debian/pipeline/workflow.yml
++- local: debian/pipeline/variables.yml
++- local: debian/pipeline/source.yml
++- local: debian/pipeline/build.yml
++- local: debian/pipeline/test.yml
 diff --git a/configure.ac b/configure.ac
-index 6cdf1a7e6..181a62be8 100644
+index e5e5e71ce1bf8df56b62b284490c167d4b1b594a..121d2b61b200299b606aa85368d10d993e36ac55 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -708,8 +708,8 @@ AC_ARG_VAR([AIO_LIBS], [linker flags for AIO])
- ################################################################################
- dnl -- Disable readline
- AC_ARG_ENABLE([readline],
--	      AS_HELP_STRING([--disable-readline], [disable readline support]),
--	      READLINE=$enableval, READLINE=maybe)
-+	      AC_HELP_STRING([--disable-readline], [disable readline support]),
-+	      READLINE=$enableval, READLINE=yes)
- 
- ################################################################################
- dnl -- Disable editline
-@@ -1181,26 +1181,6 @@ AC_MSG_RESULT($BLKID_WIPING)
- AC_DEFINE_UNQUOTED(DEFAULT_USE_BLKID_WIPING, [$DEFAULT_USE_BLKID_WIPING],
- 		   [Use blkid wiping by default.])
- 
--################################################################################
--dnl -- Enable udev-systemd protocol to instantiate a service for background jobs
--dnl -- Requires systemd version 205 at least (including support for systemd-run)
--AC_ARG_ENABLE(udev-systemd-background-jobs,
--	      AS_HELP_STRING([--disable-udev-systemd-background-jobs],
--			     [disable udev-systemd protocol to instantiate a service for background job]),
--	      UDEV_SYSTEMD_BACKGROUND_JOBS=$enableval,
--	      UDEV_SYSTEMD_BACKGROUND_JOBS=maybe)
--
--if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" != no; then
--	AS_IF([test "$SYSTEMD_MIN_VERSION" -ge 205],
--	      UDEV_SYSTEMD_BACKGROUND_JOBS=yes,
--	      AS_IF([test "$UDEV_SYSTEMD_BACKGROUND_JOBS" = maybe],
--		     [UDEV_SYSTEMD_BACKGROUND_JOBS=no],
--		     [AC_MSG_ERROR([bailing out... systemd >= 205 is required])]))
--fi
--
--AC_MSG_CHECKING(whether to use udev-systemd protocol for jobs in background)
--AC_MSG_RESULT($UDEV_SYSTEMD_BACKGROUND_JOBS)
--
- ################################################################################
- dnl -- Enable udev synchronisation
- AC_MSG_CHECKING(whether to enable synchronisation with udev processing)
-@@ -1430,21 +1410,9 @@ AC_MSG_RESULT($SELINUX)
- ################################################################################
- dnl -- Check for selinux
- if test "$SELINUX" = yes; then
--	AC_CHECK_LIB([sepol], [sepol_check_context], [
--		AC_DEFINE([HAVE_SEPOL], 1, [Define to 1 if sepol_check_context is available.])
--		SELINUX_LIBS="-lsepol"])
--
--	AC_CHECK_LIB([selinux], [is_selinux_enabled], [
--		AC_CHECK_HEADERS([selinux/selinux.h],, hard_bailout)
--		AC_CHECK_HEADERS([selinux/label.h])
--		AC_DEFINE([HAVE_SELINUX], 1, [Define to 1 to include support for selinux.])
--		SELINUX_LIBS="-lselinux $SELINUX_LIBS"
--		SELINUX_PC="libselinux"
--		HAVE_SELINUX=yes ], [
--		AC_MSG_WARN(Disabling selinux)
--		SELINUX_LIBS=
--		SELINUX_PC=
--		HAVE_SELINUX=no ])
-+	AC_DEFINE([HAVE_SELINUX], 1, [Define to 1 to include support for selinux.])
-+	SELINUX_LIBS="$($PKG_CONFIG --libs libselinux)"
-+	SELINUX_LIBS_STATIC="$($PKG_CONFIG --libs --static libselinux)"
- fi
- 
- ################################################################################
-@@ -1644,7 +1612,8 @@ AC_ARG_WITH(tmpfilesdir,
- ################################################################################
- dnl -- Ensure additional headers required
- if test "$READLINE" = yes; then
--	AC_CHECK_HEADERS(readline/readline.h readline/history.h,,hard_bailout)
-+	AC_CHECK_LIB([readline], [readline], [READLINE_LIBS="-lreadline"], AC_MSG_ERROR(bailing out))
-+	AC_DEFINE([READLINE_SUPPORT], 1, [Define to 1 to include the LVM readline shell.])
- fi
- AC_MSG_CHECKING(whether to enable readline)
- AC_MSG_RESULT($READLINE)
-@@ -1690,11 +1659,7 @@ if test "$BUILD_DMFILEMAPD" = yes; then
- fi
+@@ -1742,11 +1742,7 @@ AS_IF([test "$BUILD_DMFILEMAPD" = "yes"], [
+ ])
  
  ################################################################################
 -AC_PATH_TOOL(MODPROBE_CMD, modprobe, [], [$PATH_SBIN])
 -
--if test -n "$MODPROBE_CMD"; then
+-AS_IF([test -n "$MODPROBE_CMD"], [
 -	AC_DEFINE_UNQUOTED([MODPROBE_CMD], ["$MODPROBE_CMD"], [The path to 'modprobe', if available.])
--fi
+-])
 +AC_DEFINE_UNQUOTED([MODPROBE_CMD], ["/sbin/modprobe"], [The path to 'modprobe', if available.])
  
  SYSCONFDIR="$(eval echo $(eval echo $sysconfdir))"
  
-@@ -1798,6 +1763,9 @@ AC_ARG_WITH(interface,
- test "$interface" != ioctl && AC_MSG_ERROR([--with-interface=ioctl required. fs no longer supported.])
- AC_MSG_RESULT($interface)
- 
-+################################################################################
-+PKG_CHECK_MODULES([LIBSYSTEMD],[libsystemd],[HAVE_LIBSYSTEMD=yes],[HAVE_LIBSYSTEMD=no])
-+
- ################################################################################
- read DM_LIB_VERSION < "$srcdir"/VERSION_DM 2>/dev/null || DM_LIB_VERSION=Unknown
- AC_DEFINE_UNQUOTED(DM_LIB_VERSION, "$DM_LIB_VERSION", [Library version])
-@@ -1884,6 +1852,7 @@ AC_SUBST(FSADM)
- AC_SUBST(FSADM_PATH)
- AC_SUBST(BLKDEACTIVATE)
- AC_SUBST(HAVE_LIBDL)
-+AC_SUBST(HAVE_LIBSYSTEMD)
- AC_SUBST(HAVE_REALTIME)
- AC_SUBST(HAVE_VALGRIND)
- AC_SUBST(INTEGRITY)
-@@ -1933,6 +1902,7 @@ AC_SUBST(SALCK_CFLAGS)
- AC_SUBST(SALCK_LIBS)
- AC_SUBST(SBINDIR)
- AC_SUBST(SELINUX_LIBS)
-+AC_SUBST(SELINUX_LIBS_STATIC)
- AC_SUBST(SELINUX_PC)
- AC_SUBST(SYSCONFDIR)
- AC_SUBST(SNAPSHOTS)
-@@ -1951,7 +1921,6 @@ AC_SUBST(CACHE_RESTORE_CMD)
- AC_SUBST(UDEV_PC)
- AC_SUBST(UDEV_RULES)
- AC_SUBST(UDEV_SYNC)
--AC_SUBST(UDEV_SYSTEMD_BACKGROUND_JOBS)
- AC_SUBST(UDEV_RULE_EXEC_DETECTION)
- AC_SUBST(UDEV_HAS_BUILTIN_BLKID)
- AC_SUBST(USE_TRACKING)
 diff --git a/daemons/dmeventd/.exported_symbols b/daemons/dmeventd/.exported_symbols
-index fab74dc1d..46c14fb5a 100644
+index fab74dc1d6f3dd8e740a3806d8424855bb399df6..46c14fb5ae4935104891f41e2cd626078baf22f9 100644
 --- a/daemons/dmeventd/.exported_symbols
 +++ b/daemons/dmeventd/.exported_symbols
 @@ -1,4 +1,4 @@
@@ -135,10 +143,10 @@ index fab74dc1d..46c14fb5a 100644
 +dm_event_daemon_talk
  dm_event_get_version
 diff --git a/daemons/dmeventd/dmeventd.c b/daemons/dmeventd/dmeventd.c
-index d89ab4af8..d31a5d558 100644
+index b823a0476e267db1b40579051c19866b37434fce..97249515ce5bb8e5a60e4605d281fef6fa156648 100644
 --- a/daemons/dmeventd/dmeventd.c
 +++ b/daemons/dmeventd/dmeventd.c
-@@ -1986,7 +1986,7 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
+@@ -2025,7 +2025,7 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
  	unsigned long mask_value, timeout_value;
  	int i, ret;
  
@@ -147,7 +155,7 @@ index d89ab4af8..d31a5d558 100644
  	free(msg.data);
  	msg.data = NULL;
  
-@@ -2019,7 +2019,7 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
+@@ -2058,7 +2058,7 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
  			continue;
  		}
  
@@ -156,77 +164,114 @@ index d89ab4af8..d31a5d558 100644
  				dso_name,
  				dev_name,
  				(enum dm_event_mask) mask_value,
-@@ -2046,7 +2046,7 @@ static void _restart_dmeventd(void)
- 	const char *e;
+@@ -2083,7 +2083,7 @@ static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
+ 	}
  
  	/* Get the list of registrations from the running daemon. */
--	if (!init_fifos(&fifos)) {
-+	if (!dm_event_daemon_init_fifos(&fifos)) {
- 		fprintf(stderr, "WARNING: Could not initiate communication with existing dmeventd.\n");
- 		exit(EXIT_FAILURE);
+-	if (!init_fifos(fifos)) {
++	if (!dm_event_daemon_init_fifos(fifos)) {
+ 		fprintf(stderr, "Could not initiate communication with existing dmeventd.\n");
+ 		return 0;
  	}
-@@ -2063,7 +2063,7 @@ static void _restart_dmeventd(void)
+@@ -2099,7 +2099,7 @@ static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
+ 		goto out;
+ 	}
+ 
+-	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0)) {
++	if (dm_event_daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0)) {
+ 		fprintf(stderr, "Failed to acquire status from existing dmeventd.\n");
+ 		goto out;
+ 	}
+@@ -2121,7 +2121,7 @@ static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
+ 		printf("%s does not monitor any device.\n", name);
+ 
+ 	if (version >= 2) {
+-		if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
++		if (dm_event_daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
+ 			fprintf(stderr, "Failed to acquire parameters from existing dmeventd.\n");
+ 			goto out;
+ 		}
+@@ -2131,7 +2131,7 @@ static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
+ 
+ 	ret = 1;
+ out:
+-	fini_fifos(fifos);
++	dm_event_daemon_fini_fifos(fifos);
+ 
+ 	return ret;
+ }
+@@ -2151,7 +2151,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
+ 	}
+ 
+ 	/* Get the list of registrations from the running daemon. */
+-	if (!init_fifos(fifos)) {
++	if (!dm_event_daemon_init_fifos(fifos)) {
+ 		fprintf(stderr, "WARNING: Could not initiate communication with existing dmeventd.\n");
+ 		return 0;
+ 	}
+@@ -2168,7 +2168,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
  		goto bad;
  	}
  
--	if (daemon_talk(&fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
-+	if (dm_event_daemon_talk(&fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
+-	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
++	if (dm_event_daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
  		goto bad;
  
  	message = strchr(msg.data, ' ') + 1;
-@@ -2087,7 +2087,7 @@ static void _restart_dmeventd(void)
+@@ -2192,7 +2192,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
  	}
  
  	if (version >= 2) {
--		if (daemon_talk(&fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
-+		if (dm_event_daemon_talk(&fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
+-		if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
++		if (dm_event_daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
  			fprintf(stderr, "Failed to acquire parameters from old dmeventd.\n");
  			goto bad;
  		}
-@@ -2107,7 +2107,7 @@ static void _restart_dmeventd(void)
+@@ -2212,7 +2212,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
  	}
  #endif
  
--	if (daemon_talk(&fifos, &msg, DM_EVENT_CMD_DIE, "-", "-", 0, 0)) {
-+	if (dm_event_daemon_talk(&fifos, &msg, DM_EVENT_CMD_DIE, "-", "-", 0, 0)) {
+-	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_DIE, "-", "-", 0, 0)) {
++	if (dm_event_daemon_talk(fifos, &msg, DM_EVENT_CMD_DIE, "-", "-", 0, 0)) {
  		fprintf(stderr, "Old dmeventd refused to die.\n");
  		goto bad;
  	}
-@@ -2123,13 +2123,13 @@ static void _restart_dmeventd(void)
- 	}
+@@ -2221,7 +2221,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
+ 	    ((e = getenv(SD_ACTIVATION_ENV_VAR_NAME)) && strcmp(e, "1")))
+ 		_systemd_activation = 1;
  
- 	if (!_systemd_activation) {
--		fini_fifos(&fifos);
-+		dm_event_daemon_fini_fifos(&fifos);
- 		return;
- 	}
+-	fini_fifos(fifos);
++	dm_event_daemon_fini_fifos(fifos);
+ 
+ 	/* Give a few seconds dmeventd to finish */
+ 	_wait_for_new_pid();
+@@ -2230,7 +2230,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
+ 		return 2; // continue with dmeventd start up
  
  	/* Reopen fifos. */
--	fini_fifos(&fifos);
--	if (!init_fifos(&fifos)) {
-+	dm_event_daemon_fini_fifos(&fifos);
-+	if (!dm_event_daemon_init_fifos(&fifos)) {
+-	if (!init_fifos(fifos)) {
++	if (!dm_event_daemon_init_fifos(fifos)) {
  		fprintf(stderr, "Could not initiate communication with new instance of dmeventd.\n");
- 		exit(EXIT_FAILURE);
+ 		return 0;
  	}
-@@ -2139,10 +2139,10 @@ static void _restart_dmeventd(void)
+@@ -2240,10 +2240,10 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
  		goto bad;
  	}
  
--	fini_fifos(&fifos);
-+	dm_event_daemon_fini_fifos(&fifos);
- 	exit(EXIT_SUCCESS);
+-	fini_fifos(fifos);
++	dm_event_daemon_fini_fifos(fifos);
+ 	return 1;
  bad:
--	fini_fifos(&fifos);
-+	dm_event_daemon_fini_fifos(&fifos);
- 	exit(EXIT_FAILURE);
+-	fini_fifos(fifos);
++	dm_event_daemon_fini_fifos(fifos);
+ 	return 0;
  }
  
 diff --git a/daemons/dmeventd/dmeventd.h b/daemons/dmeventd/dmeventd.h
-index afe0b0c4b..a3dad10a0 100644
+index e8e22765e99b05846a6a94afaaa39ad355b56ba4..9d5253736560b31daaf5f01729b3f80d8f6e576d 100644
 --- a/daemons/dmeventd/dmeventd.h
 +++ b/daemons/dmeventd/dmeventd.h
-@@ -65,12 +65,12 @@ struct dm_event_fifos {
+@@ -67,12 +67,12 @@ struct dm_event_fifos {
  
  /* Implemented in libdevmapper-event.c, but not part of public API. */
  // FIXME  misuse of bitmask as enum
@@ -234,7 +279,7 @@ index afe0b0c4b..a3dad10a0 100644
 +int dm_event_daemon_talk(struct dm_event_fifos *fifos,
  		struct dm_event_daemon_message *msg, int cmd,
  		const char *dso_name, const char *dev_name,
- 		enum dm_event_mask evmask, uint32_t timeout);
+ 		unsigned evmask, uint32_t timeout);
 -int init_fifos(struct dm_event_fifos *fifos);
 -void fini_fifos(struct dm_event_fifos *fifos);
 +int dm_event_daemon_init_fifos(struct dm_event_fifos *fifos);
@@ -243,7 +288,7 @@ index afe0b0c4b..a3dad10a0 100644
  
  #endif /* __DMEVENTD_DOT_H__ */
 diff --git a/daemons/dmeventd/libdevmapper-event.c b/daemons/dmeventd/libdevmapper-event.c
-index 30df1da21..282293463 100644
+index 485f04605c3ae550b5282a6e89b1eadf7c2f2619..d46defde8b6a15364c0c1ccebbc07adbe4ac4201 100644
 --- a/daemons/dmeventd/libdevmapper-event.c
 +++ b/daemons/dmeventd/libdevmapper-event.c
 @@ -349,7 +349,7 @@ static int _daemon_write(struct dm_event_fifos *fifos,
@@ -254,8 +299,8 @@ index 30df1da21..282293463 100644
 +int dm_event_daemon_talk(struct dm_event_fifos *fifos,
  		struct dm_event_daemon_message *msg, int cmd,
  		const char *dso_name, const char *dev_name,
- 		enum dm_event_mask evmask, uint32_t timeout)
-@@ -499,7 +499,7 @@ start_server:
+ 		unsigned evmask, uint32_t timeout)
+@@ -528,7 +528,7 @@ static int _start_daemon(char *dmeventd_path, struct dm_event_fifos *fifos)
  	return ret;
  }
  
@@ -264,7 +309,7 @@ index 30df1da21..282293463 100644
  {
  	/* FIXME? Is fifo the most suitable method? Why not share
  	   comms/daemon code with something else e.g. multipath? */
-@@ -537,10 +537,10 @@ static int _init_client(char *dmeventd_path, struct dm_event_fifos *fifos)
+@@ -569,10 +569,10 @@ static int _init_client(char *dmeventd_path, struct dm_event_fifos *fifos)
  	if (!_start_daemon(dmeventd_path, fifos))
  		return_0;
  
@@ -277,7 +322,7 @@ index 30df1da21..282293463 100644
  {
  	if (fifos->client >= 0 && close(fifos->client))
  		log_sys_debug("close", fifos->client_path);
-@@ -627,16 +627,16 @@ static int _do_event(int cmd, char *dmeventd_path, struct dm_event_daemon_messag
+@@ -661,16 +661,16 @@ static int _do_event(int cmd, char *dmeventd_path, struct dm_event_daemon_messag
  		goto_out;
  	}
  
@@ -297,9 +342,9 @@ index 30df1da21..282293463 100644
  
  	return ret;
  }
-@@ -845,7 +845,7 @@ int dm_event_get_version(struct dm_event_fifos *fifos, int *version) {
- 	char *p;
+@@ -880,7 +880,7 @@ int dm_event_get_version(struct dm_event_fifos *fifos, int *version) {
  	struct dm_event_daemon_message msg = { 0 };
+ 	int ret = 0;
  
 -	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_HELLO, NULL, NULL, 0, 0))
 +	if (dm_event_daemon_talk(fifos, &msg, DM_EVENT_CMD_HELLO, NULL, NULL, 0, 0))
@@ -307,283 +352,42 @@ index 30df1da21..282293463 100644
  	p = msg.data;
  	*version = 0;
 diff --git a/daemons/lvmdbusd/Makefile.in b/daemons/lvmdbusd/Makefile.in
-index d9cf5d886..2fa80c465 100644
+index 08b061fb29707886b0bc113ee998aa8cabd66318..745a9fb0af12b00ff92f9d364ae0bf6f65ea65cb 100644
 --- a/daemons/lvmdbusd/Makefile.in
 +++ b/daemons/lvmdbusd/Makefile.in
-@@ -16,7 +16,7 @@ top_srcdir = @top_srcdir@
- top_builddir = @top_builddir@
- 
- lvmdbuspydir = $(python3dir)/lvmdbusd
--lvmdbusdir = $(DESTDIR)$(lvmdbuspydir)
-+lvmdbusdir = $(lvmdbuspydir)
- 
- LVMDBUS_SRCDIR_FILES = \
- 	automatedproperties.py \
-@@ -61,9 +61,6 @@ install_lvmdbusd: $(LVMDBUSD)
- 	$(Q) $(INSTALL_DIR) $(lvmdbusdir)
+@@ -58,8 +58,6 @@ install_lvmdbusd: $(LVMDBUSD)
+ 	$(Q) $(INSTALL_DIR) $(lvmdbusdir) $(lvmdbusdir)/__pycache__
  	$(Q) (cd $(srcdir); $(INSTALL_DATA) $(LVMDBUS_SRCDIR_FILES) $(lvmdbusdir))
  	$(Q) $(INSTALL_DATA) $(LVMDBUS_BUILDDIR_FILES) $(lvmdbusdir)
 -	$(Q) PYTHON=$(PYTHON3) $(PYCOMPILE) --destdir "$(DESTDIR)" --basedir "$(lvmdbuspydir)" $(LVMDBUS_SRCDIR_FILES) $(LVMDBUS_BUILDDIR_FILES)
--	$(Q) $(CHMOD) 755 $(lvmdbusdir)/__pycache__
 -	$(Q) $(CHMOD) 444 $(lvmdbusdir)/__pycache__/*.py[co]
  
  install_lvm2: install_lvmdbusd
  
-diff --git a/daemons/lvmlockd/Makefile.in b/daemons/lvmlockd/Makefile.in
-index 91beb1ad8..44378b01b 100644
---- a/daemons/lvmlockd/Makefile.in
-+++ b/daemons/lvmlockd/Makefile.in
-@@ -15,8 +15,6 @@ srcdir = @srcdir@
- top_srcdir = @top_srcdir@
- top_builddir = @top_builddir@
- 
--USE_SD_NOTIFY=yes
--
- SOURCES = lvmlockd-core.c
- 
- ifeq ("@BUILD_LOCKDSANLOCK@", "yes")
-@@ -46,15 +44,10 @@ CFLOW_TARGET = lvmlockd
- 
- include $(top_builddir)/make.tmpl
- 
--CFLAGS += $(EXTRA_EXEC_CFLAGS)
-+CFLAGS += $(EXTRA_EXEC_CFLAGS) $(LIBSYSTEMD_CFLAGS) -DUSE_SD_NOTIFY
- INCLUDES += -I$(top_srcdir)/libdaemon/server
- LDFLAGS += -L$(top_builddir)/libdaemon/server $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS)
--LIBS += $(DAEMON_LIBS) $(PTHREAD_LIBS)
--
--ifeq ($(USE_SD_NOTIFY),yes)
--	CFLAGS += $(shell pkg-config --cflags libsystemd) -DUSE_SD_NOTIFY
--	LIBS += $(shell pkg-config --libs libsystemd)
--endif
-+LIBS += $(DAEMON_LIBS) $(PTHREAD_LIBS) $(LIBSYSTEMD_LIBS)
- 
- lvmlockd: $(OBJECTS) $(top_builddir)/libdaemon/server/libdaemonserver.a $(INTERNAL_LIBS)
- 	@echo "    [CC] $@"
 diff --git a/make.tmpl.in b/make.tmpl.in
-index cccda10d6..01f149cc9 100644
+index a80aca167a07004a5945bb7a346872b1e1264162..5f3a804f3cf827ecb0fc5d1ae10b01449a92cd05 100644
 --- a/make.tmpl.in
 +++ b/make.tmpl.in
-@@ -27,20 +27,10 @@ SHELL = @SHELL@
- 
- @SET_MAKE@
- 
--# Allow environment to override any built-in default value for CC.
--# If there is a built-in default, CC is NOT set to @CC@ here.
--CC ?= @CC@
--
--# If $(CC) holds the usual built-in default value of 'cc' then replace it with
--# the configured value.
--# (To avoid this and force the use of 'cc' from the environment, supply its
--# full path.)
--ifeq ($(CC), cc)
--  CC = @CC@
--endif
--
-+CC = @CC@
- RANLIB = @RANLIB@
- INSTALL = @INSTALL@
-+INSTALL_DATA = @INSTALL@ -m 644
- MKDIR_P = @MKDIR_P@
- MSGFMT = @MSGFMT@
- LCOV = @LCOV@
-@@ -68,6 +58,7 @@ STATIC_LIBS = $(PTHREAD_LIBS)
- DEFS += @DEFS@
- # FIXME set this only where it's needed, not globally?
- CFLAGS ?= @COPTIMISE_FLAG@ @CFLAGS@
-+CPPFLAGS ?= @CPPFLAGS@
- LDFLAGS ?= @LDFLAGS@
- CLDFLAGS += @CLDFLAGS@
- ELDFLAGS += @ELDFLAGS@
-@@ -95,6 +86,9 @@ SYSTEMD_LIBS = @SYSTEMD_LIBS@
- UDEV_CFLAGS = @UDEV_CFLAGS@
- UDEV_LIBS = @UDEV_LIBS@
- VALGRIND_CFLAGS = @VALGRIND_CFLAGS@
-+LIBSYSTEMD_CFLAGS = @LIBSYSTEMD_CFLAGS@
-+LIBSYSTEMD_LIBS = @LIBSYSTEMD_LIBS@
-+USE_TRACKING = @USE_TRACKING@
- VALGRIND_LIBS = @VALGRIND_LIBS@
- 
- # Setup directory variables
-@@ -134,8 +128,7 @@ PYTHON_PREFIX = $(DESTDIR)$(prefix)
- python2dir = @PYTHON2DIR@
- python3dir = @PYTHON3DIR@
- 
--USRLIB_RELPATH = $(shell echo $(abspath $(usrlibdir) $(libdir)) | \
--  $(AWK) -f $(top_srcdir)/scripts/relpath.awk)
-+USRLIB_RELPATH = @libdir@/
- 
- SYSTEMD_GENERATOR_DIR = @systemdutildir@/system-generators
- DEFAULT_SYS_DIR = @DEFAULT_SYS_DIR@
-@@ -165,22 +158,14 @@ MAKEFLAGS = @JOBS@
- endif
- 
- # Handle installation of files
--ifeq ("@WRITE_INSTALL@", "yes")
--# leaving defaults
--M_INSTALL_SCRIPT =
--M_INSTALL_DATA = -m 644
--else
--M_INSTALL_PROGRAM = -m 555
--M_INSTALL_DATA = -m 444
--endif
--INSTALL_PROGRAM = $(INSTALL) $(M_INSTALL_PROGRAM) $(STRIP)
--INSTALL_DATA = $(INSTALL) -p $(M_INSTALL_DATA)
--INSTALL_WDATA = $(INSTALL) -p -m 644
-+INSTALL_PROGRAM = $(INSTALL)
-+INSTALL_DATA = $(INSTALL) -m 644
-+INSTALL_WDATA = $(INSTALL_DATA)
- 
- INSTALL_DIR = $(INSTALL) -m 755 -d
- INSTALL_ROOT_DIR = $(INSTALL) -m 700 -d
- INSTALL_ROOT_DATA = $(INSTALL) -m 600
--INSTALL_SCRIPT = $(INSTALL) -p $(M_INSTALL_PROGRAM)
-+INSTALL_SCRIPT = $(INSTALL_PROGRAM)
- 
- .SUFFIXES:
- .SUFFIXES: .c .cpp .d .o .so .a .po .pot .mo .dylib
-@@ -456,17 +441,17 @@ DEFS+=-D_FILE_OFFSET_BITS=64
- %.o: %.c $(DEPS)
- 	@echo "    [CC] $(<F)"
- 	@mkdir -p $(@D)
--	$(Q) $(CC) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CFLAGS_$@) $< -o $@
-+	$(Q) $(CC) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CFLAGS_$@) $(CPPFLAGS) $< -o $@
- 
+@@ -521,7 +521,7 @@ DEFS+=-D_FILE_OFFSET_BITS=64
  %.o: %.cpp $(DEPS)
- 	@echo "    [CXX] $(<F)"
+ 	$(SHOW) "    [CXX] $(<F)"
  	@mkdir -p $(@D)
 -	$(Q) $(CXX) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) $< -o $@
 +	$(Q) $(CXX) $(DEPFLAGS) -c $(INCLUDES) $(VALGRIND_CFLAGS) $(DEFS) $(DEFS_$@) $(WFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) $(CPPFLAGS) $< -o $@
  
  %.pot: %.c $(DEPS)
- 	@echo "    [CC] $(<F)"
- 	@mkdir -p $(@D)
--	$(Q) $(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) -include $(top_builddir)/po/pogen.h $(DEFS) $(WFLAGS) $(CFLAGS) $< >$@
-+	$(Q) $(CC) -E $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) -include $(top_builddir)/po/pogen.h $(DEFS) $(WFLAGS) $(CFLAGS) $(CPPFLAGS) $< >$@
- 
- %.so: %.o
- 	@echo "    [CC] $(<F)"
-diff --git a/scripts/blk_availability_systemd_red_hat.service.in b/scripts/blk_availability_systemd_red_hat.service.in
-index 4102566be..17414ac37 100644
---- a/scripts/blk_availability_systemd_red_hat.service.in
-+++ b/scripts/blk_availability_systemd_red_hat.service.in
-@@ -7,7 +7,6 @@ Conflicts=shutdown.target
- 
- [Service]
- Type=oneshot
--ExecStart=/usr/bin/true
- ExecStop=@SBINDIR@/blkdeactivate -u -l wholevg -m disablequeueing -r wait
- RemainAfterExit=yes
- 
-diff --git a/udev/10-dm.rules.in b/udev/10-dm.rules.in
-index b4fa52ab7..69d2c47ec 100644
---- a/udev/10-dm.rules.in
-+++ b/udev/10-dm.rules.in
-@@ -32,7 +32,6 @@ KERNEL=="device-mapper", NAME="(DM_DIR)/control"
- 
- SUBSYSTEM!="block", GOTO="dm_end"
- KERNEL!="dm-[0-9]*", GOTO="dm_end"
--(DM_EXEC_RULE)
- 
- # Device created, major and minor number assigned - "add" event generated.
- # Table loaded - no event generated.
-@@ -50,7 +49,7 @@ ACTION!="add|change", GOTO="dm_end"
- # These flags are encoded in DM_COOKIE variable that was introduced in
- # kernel version 2.6.31. Therefore, we can use this feature with
- # kernels >= 2.6.31 only. Cookie is not decoded for remove event.
--ENV{DM_COOKIE}=="?*", IMPORT{program}="(DM_EXEC)/dmsetup udevflags $env{DM_COOKIE}"
-+ENV{DM_COOKIE}=="?*", IMPORT{program}="/sbin/dmsetup udevflags $env{DM_COOKIE}"
- 
- # Rule out easy-to-detect inappropriate events first.
- ENV{DISK_RO}=="1", GOTO="dm_disable"
-@@ -68,6 +67,7 @@ IMPORT{db}="DM_UDEV_LOW_PRIORITY_FLAG"
- IMPORT{db}="DM_UDEV_DISABLE_LIBRARY_FALLBACK_FLAG"
- IMPORT{db}="DM_UDEV_PRIMARY_SOURCE_FLAG"
- IMPORT{db}="DM_UDEV_FLAG7"
-+IMPORT{db}="DM_UDEV_RULES"
- IMPORT{db}="DM_UDEV_RULES_VSN"
- LABEL="dm_flags_done"
- 
-@@ -84,7 +84,7 @@ LABEL="dm_flags_done"
- # script to not remove the existing udev database so we can reuse the information
- # stored at the time of device activation in the initrd.
- ACTION!="add", GOTO="dm_no_coldplug"
--ENV{DM_UDEV_RULES_VSN}!="1", ENV{DM_UDEV_PRIMARY_SOURCE_FLAG}!="1", GOTO="dm_disable"
-+ENV{DM_UDEV_PRIMARY_SOURCE_FLAG}!="1", GOTO="dm_disable"
- ENV{DM_ACTIVATION}="1"
- LABEL="dm_no_coldplug"
- 
-@@ -130,6 +130,7 @@ ENV{DM_SUSPENDED}=="Suspended", ENV{DM_SUSPENDED}="1"
- # possible future changes.
- # VSN 1 - original rules
- # VSN 2 - add support for synthesized events
-+ENV{DM_UDEV_RULES}="1"
- ENV{DM_UDEV_RULES_VSN}="2"
- 
- ENV{DM_UDEV_DISABLE_DM_RULES_FLAG}!="1", ENV{DM_NAME}=="?*", SYMLINK+="(DM_DIR)/$env{DM_NAME}"
-diff --git a/udev/69-dm-lvm-metad.rules.in b/udev/69-dm-lvm-metad.rules.in
-index a2384f2af..264c40e4a 100644
---- a/udev/69-dm-lvm-metad.rules.in
-+++ b/udev/69-dm-lvm-metad.rules.in
-@@ -46,7 +46,7 @@ LABEL="next"
- KERNEL!="md[0-9]*", GOTO="next"
- IMPORT{db}="LVM_MD_PV_ACTIVATED"
- ACTION=="add", ENV{LVM_MD_PV_ACTIVATED}=="1", GOTO="lvm_scan"
--ACTION=="change", ENV{LVM_MD_PV_ACTIVATED}!="1", TEST=="md/array_state", ENV{LVM_MD_PV_ACTIVATED}="1", GOTO="lvm_scan"
-+ACTION=="change", ENV{LVM_MD_PV_ACTIVATED}!="1", ENV{LVM_MD_PV_ACTIVATED}="1", GOTO="lvm_scan"
- ACTION=="add", KERNEL=="md[0-9]*p[0-9]*", GOTO="lvm_scan"
- ENV{LVM_MD_PV_ACTIVATED}!="1", ENV{SYSTEMD_READY}="0"
- GOTO="lvm_end"
-@@ -55,7 +55,7 @@ GOTO="lvm_end"
- LABEL="next"
- KERNEL!="loop[0-9]*", GOTO="next"
- ACTION=="add", ENV{LVM_LOOP_PV_ACTIVATED}=="1", GOTO="lvm_scan"
--ACTION=="change", ENV{LVM_LOOP_PV_ACTIVATED}!="1", TEST=="loop/backing_file", ENV{LVM_LOOP_PV_ACTIVATED}="1", GOTO="lvm_scan"
-+ACTION=="change", ENV{LVM_LOOP_PV_ACTIVATED}!="1", ENV{LVM_LOOP_PV_ACTIVATED}="1", GOTO="lvm_scan"
- ENV{LVM_LOOP_PV_ACTIVATED}!="1", ENV{SYSTEMD_READY}="0"
- GOTO="lvm_end"
- 
-@@ -63,17 +63,15 @@ GOTO="lvm_end"
- # For "systemd_background" mode, systemd takes care of this by activating
- # the lvm2-pvscan@.service only once.
- LABEL="next"
--ACTION!="(PVSCAN_ACTION)", GOTO="lvm_end"
-+TEST!="/run/systemd/system", ACTION!="add", GOTO="lvm_end"
-+TEST=="/run/systemd/system", ACTION!="add|change", GOTO="lvm_end"
- 
- LABEL="lvm_scan"
- 
- ENV{SYSTEMD_READY}="1"
- 
--# The method for invoking pvscan is selected at build time with the option
--# --(enable|disable)-udev-systemd-background-jobs to "configure".
--# On modern distributions with recent systemd, it's "systemd_background";
--# on others, "direct_pvscan".
--GOTO="(PVSCAN_RULE)"
-+TEST!="/run/systemd/system", GOTO="direct_pvscan"
-+TEST=="/run/systemd/system", GOTO="systemd_background"
- 
- LABEL="systemd_background"
- 
-@@ -121,6 +119,6 @@ LABEL="direct_pvscan"
- #  MD    |          |      X      |       X*       |                   |
- #  loop  |          |      X      |       X*       |                   |
- #  other |    X     |             |       X        |                   |   X
--RUN+="(LVM_EXEC)/lvm pvscan --cache --aay --autoactivation event --major $major --minor $minor", ENV{LVM_SCANNED}="1"
-+RUN+="(LVM_EXEC)/lvm pvscan --cache --activate ay --major $major --minor $minor", ENV{LVM_SCANNED}="1"
- 
- LABEL="lvm_end"
+ 	$(SHOW) "    [CC] $(<F)"
 diff --git a/udev/69-dm-lvm.rules.in b/udev/69-dm-lvm.rules.in
-index 14e7dd26d..b32b94ac7 100644
+index f7a6eef8fa772f7bec37d375d954dc7daf1f672f..ce0ab8ca176695027283229f266d5810081fb391 100644
 --- a/udev/69-dm-lvm.rules.in
 +++ b/udev/69-dm-lvm.rules.in
-@@ -80,8 +80,14 @@ ENV{SYSTEMD_READY}="1"
+@@ -85,8 +85,14 @@ LABEL="lvm_scan"
  # it's better suited to appearing in the journal.
  
  IMPORT{program}="(LVM_EXEC)/lvm pvscan --cache --listvg --checkcomplete --vgonline --autoactivation event --udevoutput --journal=output $env{DEVNAME}"
 +TEST!="/run/systemd/system", GOTO="lvm_direct_vgchange"
 +
- ENV{LVM_VG_NAME_COMPLETE}=="?*", RUN+="/usr/bin/systemd-run --no-block --property DefaultDependencies=no --unit lvm-activate-$env{LVM_VG_NAME_COMPLETE} (LVM_EXEC)/lvm vgchange -aay --autoactivation event $env{LVM_VG_NAME_COMPLETE}"
+ ENV{LVM_VG_NAME_COMPLETE}=="?*", RUN+="(SYSTEMDRUN) --no-block --property DefaultDependencies=no --unit lvm-activate-$env{LVM_VG_NAME_COMPLETE} (LVM_EXEC)/lvm vgchange -aay --autoactivation event $env{LVM_VG_NAME_COMPLETE}"
  GOTO="lvm_end"
  
 +LABEL="lvm_direct_vgchange"
@@ -592,18 +396,8 @@ index 14e7dd26d..b32b94ac7 100644
 +
  LABEL="lvm_end"
  
-diff --git a/udev/95-dm-notify.rules.in b/udev/95-dm-notify.rules.in
-index 80d59d37d..d22abba1a 100644
---- a/udev/95-dm-notify.rules.in
-+++ b/udev/95-dm-notify.rules.in
-@@ -9,4 +9,4 @@
- # a cookie value sent within "change" and "remove" events (the cookie
- # value is set before by that process for every action requested).
- 
--ENV{DM_COOKIE}=="?*", RUN+="(DM_EXEC)/dmsetup udevcomplete $env{DM_COOKIE}"
-+ENV{DM_COOKIE}=="?*", RUN+="/sbin/dmsetup udevcomplete $env{DM_COOKIE}"
 diff --git a/udev/Makefile.in b/udev/Makefile.in
-index e777dda16..0e237dd13 100644
+index 166a4572ab7e7e5a8d9c0986abed0f409fe029a9..00d9e4f7e0b2e4954fbb13a2c1ebaac799899c47 100644
 --- a/udev/Makefile.in
 +++ b/udev/Makefile.in
 @@ -17,8 +17,8 @@ top_builddir = @top_builddir@
@@ -615,24 +409,12 @@ index e777dda16..0e237dd13 100644
 +DM_RULES=55-dm.rules 60-persistent-storage-dm.rules 95-dm-notify.rules
 +LVM_RULES=56-lvm.rules 69-lvm.rules
  
- DM_DIR=$(shell $(GREP) "\#define DM_DIR" $(top_srcdir)/libdm/misc/dm-ioctl.h | $(AWK) '{print $$3}')
+ DM_DIR=$(shell $(AWK) '/^.define DM_DIR/ {print $$3}' $(top_srcdir)/libdm/misc/dm-ioctl.h)
  
-@@ -43,16 +43,20 @@ else
- BLKID_RULE=IMPORT{program}=\"${SBIN}\/blkid -o udev -p \$$tempnode\"
- endif
- 
--ifeq ("@UDEV_SYSTEMD_BACKGROUND_JOBS@", "yes")
--PVSCAN_RULE=systemd_background
--PVSCAN_ACTION=add|change
--else
--PVSCAN_RULE=direct_pvscan
--PVSCAN_ACTION=add
--endif
--
+@@ -46,6 +46,18 @@ endif
  %.rules: $(srcdir)/%.rules.in
--	$(Q) $(SED) -e "s+(DM_DIR)+$(DM_DIR)+;s+(BINDIR)+$(BINDIR)+;s+(BLKID_RULE)+$(BLKID_RULE)+;s+(PVSCAN_RULE)+$(PVSCAN_RULE)+;s+(PVSCAN_ACTION)+$(PVSCAN_ACTION)+;s+(DM_EXEC_RULE)+$(DM_EXEC_RULE)+;s+(DM_EXEC)+$(DM_EXEC)+;s+(LVM_EXEC_RULE)+$(LVM_EXEC_RULE)+;s+(LVM_EXEC)+$(LVM_EXEC)+;" $< >$@
-+	$(Q) $(SED) -e "s+(DM_DIR)+$(DM_DIR)+;s+(BINDIR)+$(BINDIR)+;s+(BLKID_RULE)+$(BLKID_RULE)+;s+(DM_EXEC_RULE)+$(DM_EXEC_RULE)+;s+(DM_EXEC)+$(DM_EXEC)+;s+(LVM_EXEC_RULE)+$(LVM_EXEC_RULE)+;s+(LVM_EXEC)+$(LVM_EXEC)+;" $< >$@
-+
+ 	$(Q) $(SED) -e "s+(DM_DIR)+$(DM_DIR)+;s+(SYSTEMDRUN)+$(SYSTEMDRUN)+;s+(BLKID_RULE)+$(BLKID_RULE)+;s+(DM_EXEC_RULE)+$(DM_EXEC_RULE)+;s+(DM_EXEC)+$(DM_EXEC)+;s+(LVM_EXEC_RULE)+$(LVM_EXEC_RULE)+;s+(LVM_EXEC)+$(LVM_EXEC)+;" $< >$@
+ 
 +55-dm.rules: 10-dm.rules
 +	ln -s $< $@
 +
@@ -644,6 +426,7 @@ index e777dda16..0e237dd13 100644
 +
 +69-lvm.rules: 69-dm-lvm.rules
 +	ln -s $< $@
- 
++
  %_install: %.rules
- 	@echo "    [INSTALL] $<"
+ 	$(SHOW) "    [INSTALL] $<"
+ 	$(Q) $(INSTALL_DATA) -D $< $(udevdir)/$(<F)

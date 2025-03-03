@@ -53,6 +53,8 @@ struct parser {
 	int no_dup_node_check;	/* whether to disable dup node checking */
 	const char *key;        /* last obtained key */
 	unsigned ignored_creation_time;
+	unsigned section_indent;
+	const char *stop_after_section;
 };
 
 struct config_output {
@@ -70,11 +72,10 @@ static struct dm_config_value *_value(struct parser *p);
 static struct dm_config_value *_type(struct parser *p);
 static int _match_aux(struct parser *p, int t);
 static struct dm_config_value *_create_value(struct dm_pool *mem);
-static struct dm_config_node *_create_node(struct dm_pool *mem);
+static struct dm_config_value *_create_str_value(struct dm_pool *mem, const char *str, size_t str_len);
+static struct dm_config_node *_create_node(struct dm_pool *mem, const char *key, size_t key_len);
 static char *_dup_tok(struct parser *p);
 static char *_dup_token(struct dm_pool *mem, const char *b, const char *e);
-
-static const int _sep = '/';
 
 #define MAX_INDENT 32
 
@@ -86,20 +87,24 @@ static const int _sep = '/';
    } \
 } while(0)
 
+/* match token */
 static int _tok_match(const char *str, const char *b, const char *e)
 {
-	while (*str && (b != e)) {
-		if (*str++ != *b++)
+	while (b < e) {
+		if (!*str ||
+		    (*str != *b))
 			return 0;
+		++str;
+		++b;
 	}
 
-	return !(*str || (b != e));
+	return !*str; /* token is matching for \0 end */
 }
 
 struct dm_config_tree *dm_config_create(void)
 {
 	struct dm_config_tree *cft;
-	struct dm_pool *mem = dm_pool_create("config", 10 * 1024);
+	struct dm_pool *mem = dm_pool_create("config", 63 * 1024);
 
 	if (!mem) {
 		log_error("Failed to allocate config pool.");
@@ -173,23 +178,24 @@ static struct dm_config_node *_config_reverse(struct dm_config_node *head)
 	return middle;
 }
 
-static int _do_dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end, int no_dup_node_check)
+static int _do_dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end,
+			       int no_dup_node_check, const char *section)
 {
 	/* TODO? if (start == end) return 1; */
 
-	struct parser *p;
-	if (!(p = dm_pool_zalloc(cft->mem, sizeof(*p))))
-		return_0;
+	struct parser p = {
+		.mem = cft->mem,
+		.tb = start,
+		.te = start,
+		.fb = start,
+		.fe = end,
+		.line = 1,
+		.stop_after_section = section,
+		.no_dup_node_check = no_dup_node_check
+	};
 
-	p->mem = cft->mem;
-	p->fb = start;
-	p->fe = end;
-	p->tb = p->te = p->fb;
-	p->line = 1;
-	p->no_dup_node_check = no_dup_node_check;
-
-	_get_token(p, TOK_SECTION_E);
-	if (!(cft->root = _file(p)))
+	_get_token(&p, TOK_SECTION_E);
+	if (!(cft->root = _file(&p)))
 		return_0;
 
 	cft->root = _config_reverse(cft->root);
@@ -199,12 +205,23 @@ static int _do_dm_config_parse(struct dm_config_tree *cft, const char *start, co
 
 int dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end)
 {
-	return _do_dm_config_parse(cft, start, end, 0);
+	return _do_dm_config_parse(cft, start, end, 0, NULL);
 }
 
 int dm_config_parse_without_dup_node_check(struct dm_config_tree *cft, const char *start, const char *end)
 {
-	return _do_dm_config_parse(cft, start, end, 1);
+	return _do_dm_config_parse(cft, start, end, 1, NULL);
+}
+
+/*
+ * Stop parsing more sections after given section is parsed.
+ * Only non-section config nodes are then still parsed.
+ * It can be useful, when parsing i.e. lvm2 metadata and only physical_volumes config node is needed.
+ * This function is automatically running without_dup_node_check.
+ */
+int dm_config_parse_only_section(struct dm_config_tree *cft, const char *start, const char *end, const char *section)
+{
+	return _do_dm_config_parse(cft, start, end, 1, section);
 }
 
 struct dm_config_tree *dm_config_from_string(const char *config_settings)
@@ -470,23 +487,33 @@ int dm_config_write_node_out(const struct dm_config_node *cn,
 /*
  * parser
  */
-static char *_dup_string_tok(struct parser *p)
+static const char *_string_tok(struct parser *p, size_t *len)
 {
-	char *str;
+	ptrdiff_t d = p->te - p->tb;
 
-	p->tb++, p->te--;	/* strip "'s */
-
-	if (p->te < p->tb) {
+	if (d < 2) {
 		log_error("Parse error at byte %" PRIptrdiff_t " (line %d): "
 			  "expected a string token.",
 			  p->tb - p->fb + 1, p->line);
 		return NULL;
 	}
 
-	if (!(str = _dup_tok(p)))
+	*len = (size_t)(d - 2); /* strip "'s */
+
+	return p->tb + 1;
+}
+
+static char *_dup_string_tok(struct parser *p)
+{
+	const char *tok;
+	size_t len;
+	char *str;
+
+	if (!(tok = _string_tok(p, &len)))
 		return_NULL;
 
-	p->te++;
+	if (!(str = _dup_token(p->mem, tok, tok + len)))
+		return_NULL;
 
 	return str;
 }
@@ -508,10 +535,9 @@ static struct dm_config_node *_make_node(struct dm_pool *mem,
 {
 	struct dm_config_node *n;
 
-	if (!(n = _create_node(mem)))
+	if (!(n = _create_node(mem, key_b, key_e - key_b)))
 		return_NULL;
 
-	n->key = _dup_token(mem, key_b, key_e);
 	if (parent) {
 		n->parent = parent;
 		n->sib = parent->child;
@@ -526,17 +552,18 @@ static struct dm_config_node *_find_or_make_node(struct dm_pool *mem,
 						 const char *path,
 						 int no_dup_node_check)
 {
+	const int sep = '/';
 	const char *e;
 	struct dm_config_node *cn = parent ? parent->child : NULL;
 	struct dm_config_node *cn_found = NULL;
 
 	while (cn || mem) {
 		/* trim any leading slashes */
-		while (*path && (*path == _sep))
+		while (*path && (*path == sep))
 			path++;
 
 		/* find the end of this segment */
-		for (e = path; *e && (*e != _sep); e++) ;
+		for (e = path; *e && (*e != sep); e++) ;
 
 		/* hunt for the node */
 		cn_found = NULL;
@@ -580,6 +607,8 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 	struct dm_config_node *root;
 	struct dm_config_value *value;
 	char *str;
+	size_t len;
+	char buf[8192];
 
 	if (p->t == TOK_STRING_ESCAPED) {
 		if (!(str = _dup_string_tok(p)))
@@ -593,9 +622,16 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 
 		match(TOK_STRING);
 	} else {
-		if (!(str = _dup_tok(p)))
-			return_NULL;
-
+		len = p->te - p->tb;
+		if (len < (sizeof(buf) - 1)) {
+			/* Use stack for smaller string */
+			str = buf;
+			memcpy(str, p->tb, len);
+			str[len] = '\0';
+		} else {
+			if (!(str = _dup_tok(p)))
+				return_NULL;
+		}
 		match(TOK_IDENTIFIER);
 	}
 
@@ -609,12 +645,28 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 		return_NULL;
 
 	if (p->t == TOK_SECTION_B) {
+		if (p->stop_after_section)
+			++p->section_indent;
 		match(TOK_SECTION_B);
 		while (p->t != TOK_SECTION_E) {
 			if (!(_section(p, root)))
 				return_NULL;
 		}
 		match(TOK_SECTION_E);
+		if (p->stop_after_section && (--p->section_indent == 1)) {
+			if (!strcmp(str, p->stop_after_section)) {
+				/* Found stopping section name -> parsing is finished.
+				 * Now try to find the sequence "\n}\n" from end of b
+				 * parsed buffer to continue filling remaining nodes */
+				for (p->te = p->fe - 1; p->te > p->tb; --p->te)
+					if ((p->te[-2] == '\n') &&
+					    (p->te[-1] == '}') &&
+					    (p->te[ 0] == '\n')) {
+						p->t = TOK_SECTION_E;
+						break;
+					}
+			}
+		}
 	} else {
 		match(TOK_EQ);
 		p->key = root->key;
@@ -671,16 +723,14 @@ static struct dm_config_value *_value(struct parser *p)
 static struct dm_config_value *_type(struct parser *p)
 {
 	/* [+-]{0,1}[0-9]+ | [0-9]*\.[0-9]* | ".*" */
-	struct dm_config_value *v = _create_value(p->mem);
-	char *str;
-
-	if (!v) {
-		log_error("Failed to allocate type value");
-		return NULL;
-	}
+	struct dm_config_value *v;
+	const char *str;
+	size_t len;
 
 	switch (p->t) {
 	case TOK_INT:
+		if (!(v = _create_value(p->mem)))
+			break;
 		v->type = DM_CFG_INT;
 		errno = 0;
 		v->v.i = strtoll(p->tb, NULL, 0);	/* FIXME: check error */
@@ -701,6 +751,8 @@ static struct dm_config_value *_type(struct parser *p)
 		break;
 
 	case TOK_FLOAT:
+		if (!(v = _create_value(p->mem)))
+			break;
 		v->type = DM_CFG_FLOAT;
 		errno = 0;
 		v->v.f = strtod(p->tb, NULL);	/* FIXME: check error */
@@ -712,31 +764,31 @@ static struct dm_config_value *_type(struct parser *p)
 		break;
 
 	case TOK_STRING:
-		v->type = DM_CFG_STRING;
-
-		if (!(v->v.str = _dup_string_tok(p)))
+		if (!(str = _string_tok(p, &len)))
 			return_NULL;
 
-		match(TOK_STRING);
+		if ((v = _create_str_value(p->mem, str, len))) {
+			v->type = DM_CFG_STRING;
+			match(TOK_STRING);
+		}
 		break;
 
 	case TOK_STRING_BARE:
-		v->type = DM_CFG_STRING;
-
-		if (!(v->v.str = _dup_tok(p)))
-			return_NULL;
-
-		match(TOK_STRING_BARE);
+		if ((v = _create_str_value(p->mem, p->tb, p->te - p->tb))) {
+			v->type = DM_CFG_STRING;
+			match(TOK_STRING_BARE);
+		}
 		break;
 
 	case TOK_STRING_ESCAPED:
-		v->type = DM_CFG_STRING;
-
-		if (!(str = _dup_string_tok(p)))
+		if (!(str = _string_tok(p, &len)))
 			return_NULL;
-		dm_unescape_double_quotes(str);
-		v->v.str = str;
-		match(TOK_STRING_ESCAPED);
+
+		if ((v = _create_str_value(p->mem, str, len))) {
+			v->type = DM_CFG_STRING;
+			dm_unescape_double_quotes((char*)v->v.str);
+			match(TOK_STRING_ESCAPED);
+		}
 		break;
 
 	default:
@@ -744,6 +796,12 @@ static struct dm_config_value *_type(struct parser *p)
 			  p->tb - p->fb + 1, p->line);
 		return NULL;
 	}
+
+	if (!v) {
+		log_error("Failed to allocate type value.");
+		return NULL;
+	}
+
 	return v;
 }
 
@@ -761,60 +819,52 @@ static int _match_aux(struct parser *p, int t)
  */
 static void _get_token(struct parser *p, int tok_prev)
 {
-	int values_allowed = 0;
-
+	/* Should next token be interpreted as value instead of identifier? */
+	const int values_allowed = (tok_prev == TOK_EQ ||
+				    tok_prev == TOK_ARRAY_B ||
+				    tok_prev == TOK_COMMA);
 	const char *te;
+	char c;
 
 	p->tb = p->te;
 	_eat_space(p);
-	if (p->tb == p->fe || !*p->tb) {
+	if (p->tb == p->fe ||
+	    !((c = *p->tb))) {
 		p->t = TOK_EOF;
 		return;
 	}
 
-	/* Should next token be interpreted as value instead of identifier? */
-	if (tok_prev == TOK_EQ || tok_prev == TOK_ARRAY_B ||
-	    tok_prev == TOK_COMMA)
-		values_allowed = 1;
-
 	p->t = TOK_INT;		/* fudge so the fall through for
 				   floats works */
+	te = p->te + 1;         /* next character */
 
-	te = p->te;
-	switch (*te) {
+	switch (c) {
 	case SECTION_B_CHAR:
 		p->t = TOK_SECTION_B;
-		te++;
 		break;
 
 	case SECTION_E_CHAR:
 		p->t = TOK_SECTION_E;
-		te++;
 		break;
 
 	case '[':
 		p->t = TOK_ARRAY_B;
-		te++;
 		break;
 
 	case ']':
 		p->t = TOK_ARRAY_E;
-		te++;
 		break;
 
 	case ',':
 		p->t = TOK_COMMA;
-		te++;
 		break;
 
 	case '=':
 		p->t = TOK_EQ;
-		te++;
 		break;
 
 	case '"':
 		p->t = TOK_STRING_ESCAPED;
-		te++;
 		while ((te != p->fe) && (*te) && (*te != '"')) {
 			if ((*te == '\\') && (te + 1 != p->fe) &&
 			    *(te + 1))
@@ -828,7 +878,6 @@ static void _get_token(struct parser *p, int tok_prev)
 
 	case '\'':
 		p->t = TOK_STRING;
-		te++;
 		while ((te != p->fe) && (*te) && (*te != '\''))
 			te++;
 
@@ -852,7 +901,7 @@ static void _get_token(struct parser *p, int tok_prev)
 	case '+':
 	case '-':
 		if (values_allowed) {
-			while (++te != p->fe) {
+			for (; te != p->fe; ++te) {
 				if (!isdigit((int) *te)) {
 					if (*te == '.') {
 						if (p->t != TOK_FLOAT) {
@@ -869,10 +918,10 @@ static void _get_token(struct parser *p, int tok_prev)
 
 	default:
 		p->t = TOK_IDENTIFIER;
-		while ((te != p->fe) && (*te) && !isspace(*te) &&
-		       (*te != '#') && (*te != '=') &&
-		       (*te != SECTION_B_CHAR) &&
-		       (*te != SECTION_E_CHAR))
+		while ((te != p->fe) && ((c = *te)) && !isspace(c) &&
+		       (c != '#') && (c != '=') &&
+		       (c != SECTION_B_CHAR) &&
+		       (c != SECTION_E_CHAR))
 			te++;
 		if (values_allowed)
 			p->t = TOK_STRING_BARE;
@@ -885,16 +934,19 @@ static void _get_token(struct parser *p, int tok_prev)
 static void _eat_space(struct parser *p)
 {
 	while (p->tb != p->fe) {
-		if (*p->te == '#')
+		if (!isspace(*p->te)) {
+			if (*p->te != '#')
+				break;
+
 			while ((p->te != p->fe) && (*p->te != '\n') && (*p->te))
 				++p->te;
+		}
 
-		else if (!isspace(*p->te))
-			break;
-
-		while ((p->te != p->fe) && isspace(*p->te)) {
+		while (p->te != p->fe) {
 			if (*p->te == '\n')
 				++p->line;
+			else if (!isspace(*p->te))
+				break;
 			++p->te;
 		}
 
@@ -910,9 +962,44 @@ static struct dm_config_value *_create_value(struct dm_pool *mem)
 	return dm_pool_zalloc(mem, sizeof(struct dm_config_value));
 }
 
-static struct dm_config_node *_create_node(struct dm_pool *mem)
+static struct dm_config_value *_create_str_value(struct dm_pool *mem, const char *str, size_t str_len)
 {
-	return dm_pool_zalloc(mem, sizeof(struct dm_config_node));
+	struct dm_config_value *cv;
+	char *str_buf;
+
+	if (!(cv = dm_pool_alloc(mem, sizeof(struct dm_config_value) + str_len + 1)))
+		return_NULL;
+
+	memset(cv, 0, sizeof(*cv));
+
+	if (str) {
+		str_buf = (char *)(cv + 1);
+		memcpy(str_buf, str, str_len);
+		str_buf[str_len] = '\0';
+		cv->v.str = str_buf;
+	}
+
+	return cv;
+}
+
+static struct dm_config_node *_create_node(struct dm_pool *mem, const char *key, size_t key_len)
+{
+	struct dm_config_node *cn;
+	char *key_buf;
+
+	if (!(cn = dm_pool_alloc(mem, sizeof(struct dm_config_node) + key_len + 1)))
+		return_NULL;
+
+	memset(cn, 0, sizeof(*cn));
+
+	if (key) {
+		key_buf = (char *)(cn + 1);
+		memcpy(key_buf, key, key_len);
+		key_buf[key_len] = '\0';
+		cn->key = key_buf;
+	}
+
+	return cn;
 }
 
 static char *_dup_token(struct dm_pool *mem, const char *b, const char *e)
@@ -1329,19 +1416,20 @@ static struct dm_config_value *_clone_config_value(struct dm_pool *mem,
 {
 	struct dm_config_value *new_cv;
 
-	if (!(new_cv = _create_value(mem))) {
-		log_error("Failed to clone config value.");
-		return NULL;
+	if (v->type == DM_CFG_STRING) {
+		if (!(new_cv = _create_str_value(mem, v->v.str, strlen(v->v.str)))) {
+			log_error("Failed to clone string config value.");
+			return NULL;
+		}
+	} else {
+		if (!(new_cv = _create_value(mem))) {
+			log_error("Failed to clone config value.");
+			return NULL;
+		}
+		new_cv->v = v->v;
 	}
 
 	new_cv->type = v->type;
-	if (v->type == DM_CFG_STRING) {
-		if (!(new_cv->v.str = dm_pool_strdup(mem, v->v.str))) {
-			log_error("Failed to clone config string value.");
-			return NULL;
-		}
-	} else
-		new_cv->v = v->v;
 
 	if (v->next && !(new_cv->next = _clone_config_value(mem, v->next)))
 		return_NULL;
@@ -1358,13 +1446,8 @@ struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const 
 		return NULL;
 	}
 
-	if (!(new_cn = _create_node(mem))) {
+	if (!(new_cn = _create_node(mem, cn->key, cn->key ? strlen(cn->key) : 0))) {
 		log_error("Failed to clone config node.");
-		return NULL;
-	}
-
-	if ((cn->key && !(new_cn->key = dm_pool_strdup(mem, cn->key)))) {
-		log_error("Failed to clone config node key.");
 		return NULL;
 	}
 
@@ -1378,23 +1461,20 @@ struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const 
 	return new_cn;
 }
 
-struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *node, int sib)
+struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *cn, int sib)
 {
-	return dm_config_clone_node_with_mem(cft->mem, node, sib);
+	return dm_config_clone_node_with_mem(cft->mem, cn, sib);
 }
 
 struct dm_config_node *dm_config_create_node(struct dm_config_tree *cft, const char *key)
 {
 	struct dm_config_node *cn;
 
-	if (!(cn = _create_node(cft->mem))) {
+	if (!(cn = _create_node(cft->mem, key, strlen(key)))) {
 		log_error("Failed to create config node.");
 		return NULL;
 	}
-	if (!(cn->key = dm_pool_strdup(cft->mem, key))) {
-		log_error("Failed to create config node's key.");
-		return NULL;
-	}
+
 	cn->parent = NULL;
 	cn->v = NULL;
 

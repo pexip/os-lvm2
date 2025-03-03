@@ -1,0 +1,40 @@
+stages:
+- source
+- build
+- test
+
+workflow:
+  rules:
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: $CI_COMMIT_BRANCH =~ /^debian\//
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  - if: $CI_PIPELINE_SOURCE == "schedule"
+  - if: $CI_PIPELINE_SOURCE == "web"
+
+default:
+  before_script:
+  - |
+    # Setup apt
+    : ${JOB_BUILD_ARCH:=$(dpkg --print-architecture)}
+    : ${JOB_HOST_ARCH:=$(dpkg --print-architecture)}
+    if [[ $JOB_HOST_ARCH != $JOB_BUILD_ARCH ]] && [[ $JOB_HOST_ARCH != all ]]; then
+      export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-} nocheck"
+      export DEB_BUILD_PROFILES="${DEB_BUILD_PROFILES:-} cross"
+    fi
+    if [[ $JOB_HOST_ARCH != all ]]; then
+      dpkg --add-architecture $JOB_HOST_ARCH
+    fi
+    function apt() {
+      local e tmp
+      tmp=$(mktemp)
+      apt-get -o APT::Install-Recommends=false -o DPkg::Options::=--force-unsafe-io -qy "$@" >$tmp 2>&1 || e=$?
+      if [[ $e -gt 0 ]]; then
+        cat $tmp
+        rm $tmp
+        false
+      else
+        rm $tmp
+        true
+      fi
+    }
+  - apt update

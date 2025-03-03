@@ -22,14 +22,13 @@ from . import lvmdb
 from gi.repository import GLib
 from .fetch import StateUpdate
 from .manager import Manager
-import traceback
 import queue
 from . import udevwatch
-from .utils import log_debug, log_error
+from .utils import log_debug, log_error, log_msg, DebugMessages
 import argparse
 import os
 import sys
-from .cmdhandler import LvmFlightRecorder, supports_vdo
+from .cmdhandler import LvmFlightRecorder, supports_vdo, supports_json
 from .request import RequestEntry
 
 
@@ -42,7 +41,7 @@ def process_request():
 	while cfg.run.value != 0:
 		# noinspection PyBroadException
 		try:
-			req = cfg.worker_q.get(True, 5)
+			req = cfg.worker_q.get(True, cfg.G_LOOP_TMO)
 			log_debug(
 				"Method start: %s with args %s (callback = %s)" %
 				(str(req.method), str(req.arguments), str(req.cb)))
@@ -50,12 +49,15 @@ def process_request():
 			log_debug("Method complete: %s" % str(req.method))
 		except queue.Empty:
 			pass
-		except Exception:
-			st = traceback.format_exc()
+		except SystemExit:
+			break
+		except Exception as e:
+			st = utils.extract_stack_trace(e)
 			utils.log_error("process_request exception: \n%s" % st)
+	log_debug("process_request thread exiting!")
 
 
-def check_bb_size(value):
+def check_fr_size(value):
 	v = int(value)
 	if v < 0:
 		raise argparse.ArgumentTypeError(
@@ -65,7 +67,7 @@ def check_bb_size(value):
 
 def install_signal_handlers():
 	# Because of the glib main loop stuff the python signal handler code is
-	# apparently not usable and we need to use the glib calls instead
+	# apparently not usable, and we need to use the glib calls instead
 	signal_add = None
 
 	if hasattr(GLib, 'unix_signal_add'):
@@ -77,13 +79,13 @@ def install_signal_handlers():
 		signal_add(GLib.PRIORITY_HIGH, signal.SIGHUP, utils.handler, signal.SIGHUP)
 		signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, utils.handler, signal.SIGINT)
 		signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, utils.handler, signal.SIGUSR1)
+		signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, utils.handler, signal.SIGUSR2)
+		signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, utils.handler, signal.SIGTERM)
 	else:
 		log_error("GLib.unix_signal_[add|add_full] are NOT available!")
 
 
-def main():
-	start = time.time()
-	# Add simple command line handling
+def process_args():
 	parser = argparse.ArgumentParser()
 	parser.add_argument(
 		"--udev", action='store_true',
@@ -104,101 +106,137 @@ def main():
 		default=False,
 		dest='use_lvm_shell')
 	parser.add_argument(
-		"--blackboxsize",
-		help="Size of the black box flight recorder, 0 to disable",
+		"--frsize",
+		help="Size of the flight recorder (num. entries), 0 to disable (signal 12 to dump)",
 		default=10,
-		type=check_bb_size,
-		dest='bb_size')
+		type=check_fr_size,
+		dest='fr_size')
 
-	use_session = os.getenv('LVMDBUSD_USE_SESSION', False)
+	args = parser.parse_args()
 
-	# Ensure that we get consistent output for parsing stdout/stderr
+	if not args.use_json:
+		log_error("Daemon no longer supports lvm without JSON support, exiting!")
+		sys.exit(1)
+	else:
+		if not supports_json():
+			log_error("Un-supported version of LVM, daemon requires JSON output, exiting!")
+			sys.exit(1)
+
+	# Add udev watching
+	if args.use_udev:
+		# Make sure this msg ends up in the journal, so we know
+		log_msg('The --udev option is no longer supported,'
+				'the daemon always uses a combination of dbus notify from lvm tools and udev')
+
+	return args
+
+
+def running_under_systemd():
+	""""
+	Checks to see if we are running under systemd, by checking daemon fd 0, 1
+	systemd sets stdin to /dev/null and 1 & 2 are a socket
+	"""
+	base = "/proc/self/fd"
+	stdout = os.readlink("%s/0" % base)
+	if stdout == "/dev/null":
+		stdout = os.readlink("%s/1" % base)
+		if "socket" in stdout:
+			return True
+	return False
+
+
+def main():
+	start = time.time()
+	use_session = os.getenv('LVM_DBUSD_USE_SESSION', False)
+
+	# Ensure that we get consistent output for parsing stdout/stderr and that we
+	# are using the lvmdbusd profile.
 	os.environ["LC_ALL"] = "C"
+	os.environ["LVM_COMMAND_PROFILE"] = "lvmdbusd"
 
-	cfg.args = parser.parse_args()
+	# Indicator if we are running under systemd
+	cfg.systemd = running_under_systemd()
+
+	# Add simple command line handling
+	cfg.args = process_args()
+
 	cfg.create_request_entry = RequestEntry
 
 	# We create a flight recorder in cmdhandler too, but we replace it here
 	# as the user may be specifying a different size.  The default one in
 	# cmdhandler is for when we are running other code with a different main.
-	cfg.blackbox = LvmFlightRecorder(cfg.args.bb_size)
+	cfg.flightrecorder = LvmFlightRecorder(cfg.args.fr_size)
 
-	if cfg.args.use_lvm_shell and not cfg.args.use_json:
-		log_error("You cannot specify --lvmshell and --nojson")
-		sys.exit(1)
+	# Create a circular buffer for debug logs
+	cfg.debug = DebugMessages()
+
+	log_debug("Using lvm binary: %s" % cfg.LVM_CMD)
 
 	# We will dynamically add interfaces which support vdo if it
 	# exists.
 	cfg.vdo_support = supports_vdo()
-
-	if cfg.vdo_support and not cfg.args.use_json:
-		log_error("You cannot specify --nojson when lvm has VDO support")
-		sys.exit(1)
 
 	# List of threads that we start up
 	thread_list = []
 
 	install_signal_handlers()
 
-	dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-	dbus.mainloop.glib.threads_init()
+	with utils.LockFile(cfg.LOCK_FILE):
+		dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+		dbus.mainloop.glib.threads_init()
 
-	cmdhandler.set_execution(cfg.args.use_lvm_shell)
+		cmdhandler.set_execution(cfg.args.use_lvm_shell)
 
-	if use_session:
-		cfg.bus = dbus.SessionBus()
-	else:
-		cfg.bus = dbus.SystemBus()
-	# The base name variable needs to exist for things to work.
-	# noinspection PyUnusedLocal
-	base_name = dbus.service.BusName(BUS_NAME, cfg.bus)
-	cfg.om = Lvm(BASE_OBJ_PATH)
-	cfg.om.register_object(Manager(MANAGER_OBJ_PATH))
+		if use_session:
+			cfg.bus = dbus.SessionBus()
+		else:
+			cfg.bus = dbus.SystemBus()
+		# The base name variable needs to exist for things to work.
+		# noinspection PyUnusedLocal
+		base_name = dbus.service.BusName(BUS_NAME, cfg.bus)
+		cfg.om = Lvm(BASE_OBJ_PATH)
+		cfg.om.register_object(Manager(MANAGER_OBJ_PATH))
 
-	cfg.db = lvmdb.DataStore(cfg.args.use_json, cfg.vdo_support)
+		cfg.db = lvmdb.DataStore(vdo_support=cfg.vdo_support)
 
-	# Using a thread to process requests, we cannot hang the dbus library
-	# thread that is handling the dbus interface
-	thread_list.append(
-		threading.Thread(target=process_request, name='process_request'))
+		# Using a thread to process requests, we cannot hang the dbus library
+		# thread that is handling the dbus interface
+		thread_list.append(
+			threading.Thread(target=process_request, name='process_request'))
 
-	# Have a single thread handling updating lvm and the dbus model so we
-	# don't have multiple threads doing this as the same time
-	updater = StateUpdate()
-	thread_list.append(updater.thread)
+		# Have a single thread handling updating lvm and the dbus model, so we
+		# don't have multiple threads doing this as the same time
+		updater = StateUpdate()
+		thread_list.append(updater.thread)
 
-	cfg.load = updater.load
+		cfg.load = updater.load
 
-	cfg.loop = GLib.MainLoop()
+		cfg.loop = GLib.MainLoop()
 
-	for thread in thread_list:
-		thread.damon = True
-		thread.start()
+		for thread in thread_list:
+			thread.daemon = True
+			thread.start()
 
-	# Add udev watching
-	if cfg.args.use_udev:
-		log_debug('Utilizing udev to trigger updates')
+		# In all cases we are going to monitor for udev until we get an
+		# ExternalEvent.  In the case where we get an external event and the user
+		# didn't specify --udev we will stop monitoring udev
+		udevwatch.add()
 
-	# In all cases we are going to monitor for udev until we get an
-	# ExternalEvent.  In the case where we get an external event and the user
-	# didn't specify --udev we will stop monitoring udev
-	udevwatch.add()
+		end = time.time()
+		log_debug(
+			'Service ready! total time= %.4f, lvm time= %.4f count= %d' %
+			(end - start, cmdhandler.total_time, cmdhandler.total_count),
+			'bg_black', 'fg_light_green')
 
-	end = time.time()
-	log_debug(
-		'Service ready! total time= %.4f, lvm time= %.4f count= %d' %
-		(end - start, cmdhandler.total_time, cmdhandler.total_count),
-		'bg_black', 'fg_light_green')
+		try:
+			if cfg.run.value != 0:
+				cfg.loop.run()
+				udevwatch.remove()
 
-	try:
-		if cfg.run.value != 0:
-			cfg.loop.run()
-			udevwatch.remove()
-
-			for thread in thread_list:
-				thread.join()
-	except KeyboardInterrupt:
-		# If we are unable to register signal handler, we will end up here when
-		# the service gets a ^C or a kill -2 <parent pid>
-		utils.handler(signal.SIGINT)
+				for thread in thread_list:
+					thread.join()
+		except KeyboardInterrupt:
+			# If we are unable to register signal handler, we will end up here when
+			# the service gets a ^C or a kill -2 <parent pid>
+			utils.handler(signal.SIGINT)
 	return 0
