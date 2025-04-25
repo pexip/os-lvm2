@@ -144,8 +144,8 @@ int print_flags(char *buffer, size_t size, enum pv_vg_lv_e type, int mask, uint6
 	if (!(flags = _get_flags(type)))
 		return_0;
 
-	if (!emit_to_buffer(&buffer, &size, "["))
-		return_0;
+	if (size)
+		buffer[0] = 0;
 
 	for (f = 0; flags[f].mask; f++) {
 		if (status & flags[f].mask) {
@@ -158,20 +158,13 @@ int print_flags(char *buffer, size_t size, enum pv_vg_lv_e type, int mask, uint6
 			if (!flags[f].description)
 				continue;
 
-			if (!first) {
-				if (!emit_to_buffer(&buffer, &size, ", "))
-					return_0;
-			} else
-				first = 0;
-	
-			if (!emit_to_buffer(&buffer, &size, "\"%s\"",
+			if (!emit_to_buffer(&buffer, &size, "%s\"%s\"",
+					    (!first) ? ", " : "",
 					    flags[f].description))
 				return_0;
+			first = 0;
 		}
 	}
-
-	if (!emit_to_buffer(&buffer, &size, "]"))
-		return_0;
 
 	if (status)
 		log_warn(INTERNAL_ERROR "Metadata inconsistency: "
@@ -192,7 +185,7 @@ int read_flags(uint64_t *status, enum pv_vg_lv_e type, int mask, const struct dm
 	if (cv->type == DM_CFG_EMPTY_ARRAY)
 		goto out;
 
-	while (cv) {
+	do {
 		if (cv->type != DM_CFG_STRING) {
 			log_error("Status value is not a string.");
 			return 0;
@@ -228,8 +221,7 @@ int read_flags(uint64_t *status, enum pv_vg_lv_e type, int mask, const struct dm
 			return 0;
 		}
 
-		cv = cv->next;
-	}
+	} while ((cv = cv->next));
 
       out:
 	*status |= s;
@@ -239,51 +231,39 @@ int read_flags(uint64_t *status, enum pv_vg_lv_e type, int mask, const struct dm
 /*
  * Parse extra status flags from segment "type" string.
  * These flags are seen as INCOMPATIBLE by any older lvm2 code.
- * All flags separated by '+' are trimmed from passed string.
- * All UNKNOWN flags will again cause the "UNKNOWN" segtype.
+ * Returns 0 and prints warning for an UNKNOWN flag.
  *
  * Note: using these segtype status flags instead of actual
- * status flags ensures wanted incompatiblity.
+ * status flags ensures wanted incompatibility.
  */
-int read_segtype_lvflags(uint64_t *status, char *segtype_str)
+int read_lvflags(uint64_t *status, const char *flags_str)
 {
-	unsigned i;
 	const struct flag *flags = _lv_flags;
-	char *delim;
-	char *flag, *buffer, *str;
-
-	if (!(str = strchr(segtype_str, '+')))
-		return 1; /* No flags */
-
-	if (!(buffer = strdup(str + 1))) {
-		log_error("Cannot duplicate segment string.");
-		return 0;
-	}
-
-	delim = buffer;
+	const char *delim;
+	size_t len;
+	unsigned i;
 
 	do {
-		flag = delim;
-		if ((delim = strchr(delim, '+')))
-			*delim++ = '\0';
+		if ((delim = strchr(flags_str, '+')))
+			len = delim - flags_str;
+		else
+			len = strlen(flags_str);
 
-		for (i = 0; flags[i].description; i++)
+		for (i = 0; flags[i].kind; ++i)
 			if ((flags[i].kind & SEGTYPE_FLAG) &&
-			    !strcmp(flags[i].description, flag)) {
+			    !strncmp(flags_str, flags[i].description, len) &&
+			    !flags[i].description[len]) {
 				*status |= flags[i].mask;
-				break;
+				break; /* Found matching flag */
 			}
 
-	} while (delim && flags[i].description); /* Till no more flags in type appear */
+		if (!flags[i].kind) {
+			log_warn("WARNING: Unrecognised flag(s) %s.", flags_str);
+			return 0;  /* Unknown flag is incompatible */
+		}
 
-	if (!flags[i].description)
-		/* Unknown flag is incompatible - returns unmodified segtype_str */
-		log_warn("WARNING: Unrecognised flag %s in segment type %s.",
-			 flag, segtype_str);
-	else
-		*str = '\0'; /* Cut away 1st. '+' */
-
-	free(buffer);
+		flags_str = delim + 1;
+	}  while (delim);	/* Till no more flags in type appear */
 
 	return 1;
 }

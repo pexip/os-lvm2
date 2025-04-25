@@ -35,7 +35,7 @@ git clone -b upstream . ${TMP}/upstream
   cd ${TMP}/upstream
   git rm -rfq .
   tar --strip-components=1 -xaf ${TMP}/lvm2_${VERSION}.orig.tar.xz
-  git add -A
+  git add -fA
   git commit -m "Import lvm2_${VERSION}.orig.tar"
   git tag upstream/${VERSION}
   git push origin refs/heads/upstream refs/tags/upstream/${VERSION}

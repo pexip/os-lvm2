@@ -19,26 +19,25 @@ SKIP_WITH_LVMPOLLD=1
 
 aux have_cache 1 3 0 || skip
 
-aux prepare_vg 2
+aux prepare_vg
 
-SIZE_MB=4
+SIZE_MB=200
 
-# Data device on later delayed dev1
-lvcreate -L4 -n cpool $vg "$dev1"
-lvconvert -y --type cache-pool $vg/cpool "$dev2"
-lvcreate -H -L $SIZE_MB -n $lv1 --chunksize 32k --cachemode writeback --cachepool $vg/cpool $vg "$dev2"
+# Use large zero device and later delayed metadata dev1
+lvcreate -L$((SIZE_MB * 2))M --type zero -n cpool $vg
+lvconvert -y --type cache-pool --chunksize 32k $vg/cpool "$dev1"
+lvcreate -L$((SIZE_MB * 2))M --type zero -n $lv1 $vg
+lvconvert -y -H --chunksize 32k --cachemode writeback --cachepool $vg/cpool $vg/$lv1
 
 #
 # Ensure cache gets promoted blocks
 #
-for i in $(seq 1 3) ; do
-echo 3 >/proc/sys/vm/drop_caches
-dd if=/dev/zero of="$DM_DEV_DIR/$vg/$lv1" bs=1M count=$SIZE_MB conv=fdatasync || true
-echo 3 >/proc/sys/vm/drop_caches
-dd if="$DM_DEV_DIR/$vg/$lv1" of=/dev/null bs=1M count=$SIZE_MB || true
+for i in $(seq 1 2) ; do
+dd if=/dev/zero of="$DM_DEV_DIR/$vg/$lv1" bs=1M count=$SIZE_MB oflag=direct || true
+dd if="$DM_DEV_DIR/$vg/$lv1" of=/dev/null bs=1M count=$SIZE_MB iflag=direct || true
 done
 
-aux delay_dev "$dev2" 0 300 "$(get first_extent_sector "$dev2"):"
+aux delay_dev "$dev1" 0 200 "$(get first_extent_sector "$dev1"):"
 dd if=/dev/zero of="$DM_DEV_DIR/$vg/$lv1" bs=1M count=$SIZE_MB
 
 lvdisplay --maps $vg
@@ -53,20 +52,21 @@ test "$(get lv_field $vg/$lv1 cache_dirty_blocks)" -gt 0 || {
 LVM_TEST_TAG="kill_me_$PREFIX" lvconvert -vvvv --splitcache $vg/$lv1 >logconvert 2>&1 &
 PID_CONVERT=$!
 for i in {1..50}; do
-	dmsetup table "$vg-$lv1" |& tee out
-	grep cleaner out && break
+	out=$(dmsetup status --noflush "$vg-$lv1")
+	case "$out" in
+	  *cleaner*) break;;
+	esac
 	echo "$i: Waiting for cleaner policy on $vg/$lv1"
-	sleep .05
+	sleep .03
 done
 test "$i" -ge 49 && die "Waited for cleaner policy on $vg/$lv1 too long!"
 
-# While lvconvert updated table to 'cleaner' policy now it 
+# While lvconvert updated table to 'cleaner' policy now it
 # should be running in 'Flushing' loop and just 1 KILL should
 # cause abortion of flushing
 kill -INT $PID_CONVERT
 aux enable_dev "$dev2"
 wait
-
 #cat logconvert || true
 
 # Problem of this test is, in older kernels, even the initial change to cleaner
@@ -74,7 +74,7 @@ wait
 # dirty blocks - so the test can't really break the cache clearing.
 #
 # So the failure of test is reported only for recent kernels > 5.6
-# ans skipped otherwise - as those can't be fixed anyway
+# and skipped otherwise - as those can't be fixed anyway
 grep -E "Flushing.*aborted" logconvert || {
 	cat logconvert || true
 	vgremove -f $vg
@@ -84,5 +84,6 @@ grep -E "Flushing.*aborted" logconvert || {
 
 # check the table got restored
 check grep_dmsetup table $vg-$lv1 "writeback"
+lvdisplay --maps $vg
 
 vgremove -f $vg

@@ -36,7 +36,8 @@ vgcreate $SHARED $vg "$dev3" "$dev4"
 
 # create 2 disk MD raid1 array
 # by default using metadata format 1.0 with data at the end of device
-aux mdadm_create --metadata=1.0 --level=1 --chunk=64 --raid-devices=2 "$dev1" "$dev2"
+# passing --chunk=64 makes mdadm non functional
+aux mdadm_create --metadata=1.0 --level=1 --raid-devices=2 "$dev1" "$dev2"
 
 mddev=$(< MD_DEV)
 pvdev=$(< MD_DEV_PV)
@@ -81,7 +82,8 @@ dmsetup info -c
 
 # if for any reason array went up - stop it again
 if mdadm --detail "$mddev" ; then
-	mdadm --stop "$mddev"
+	mdadm --stop "$mddev" || true
+	sleep 1
 	aux udev_wait
 	should not mdadm --detail "$mddev"
 fi

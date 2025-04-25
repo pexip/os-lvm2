@@ -310,7 +310,8 @@ int dev_open_flags(struct device *dev, int flags, int direct, int quiet)
 
 	if (dm_list_empty(&dev->aliases)) {
 		/* shouldn't happen */
-		log_print("Cannot open device %d:%d with no valid paths.", (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+		log_print_unless_silent("Cannot open device %u:%u with no valid paths.",
+					MAJOR(dev->dev), MINOR(dev->dev));
 		return 0;
 	}
 	name = dev_name(dev);
@@ -447,11 +448,6 @@ int dev_open_readonly(struct device *dev)
 	return dev_open_flags(dev, O_RDONLY, 1, 0);
 }
 
-int dev_open_readonly_buffered(struct device *dev)
-{
-	return dev_open_flags(dev, O_RDONLY, 0, 0);
-}
-
 int dev_open_readonly_quiet(struct device *dev)
 {
 	return dev_open_flags(dev, O_RDONLY, 1, 1);
@@ -464,9 +460,6 @@ static void _close(struct device *dev)
 	dev->fd = -1;
 
 	log_debug_devs("Closed %s", dev_name(dev));
-
-	if (dev->flags & DEV_ALLOCED)
-		dev_destroy_file(dev);
 }
 
 static int _dev_close(struct device *dev, int immediate)

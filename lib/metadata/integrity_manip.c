@@ -50,7 +50,8 @@ int lv_is_integrity_origin(const struct logical_volume *lv)
  * plus some initial space for journals.
  * (again from trial and error testing.)
  */
-static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes)
+static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes, uint32_t journal_sectors,
+						       uint32_t extent_size)
 {
 	uint64_t meta_bytes;
 	uint64_t initial_bytes;
@@ -58,8 +59,16 @@ static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes)
 	/* Every 500M of data needs 4M of metadata. */
 	meta_bytes = ((lv_size_bytes / (500 * ONE_MB_IN_BYTES)) + 1) * (4 * ONE_MB_IN_BYTES);
 
+	if (journal_sectors) {
+		/* for calculating the metadata LV size for the specified
+		   journal size, round the specified journal size up to the
+		   nearest extent.  extent_size is in sectors. */
+		initial_bytes = dm_round_up(journal_sectors, (int64_t)extent_size) * 512;
+		goto out;
+	}
+
 	/*
-	 * initial space used for journals
+	 * initial space used for journals (when journal size is not specified):
 	 * lv_size <= 512M -> 4M
 	 * lv_size <= 1G   -> 8M
 	 * lv_size <= 4G   -> 32M
@@ -71,9 +80,12 @@ static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes)
 		initial_bytes = 8 * ONE_MB_IN_BYTES;
 	else if (lv_size_bytes <= (4ULL * ONE_GB_IN_BYTES))
 		initial_bytes = 32 * ONE_MB_IN_BYTES;
-	else if (lv_size_bytes > (4ULL * ONE_GB_IN_BYTES))
+	else // if (lv_size_bytes > (4ULL * ONE_GB_IN_BYTES))
 		initial_bytes = 64 * ONE_MB_IN_BYTES;
-
+ out:
+	log_debug("integrity_meta_bytes %llu from lv_size_bytes %llu meta_bytes %llu initial_bytes %llu journal_sectors %u",
+		  (unsigned long long)(meta_bytes+initial_bytes), (unsigned long long)lv_size_bytes,
+		  (unsigned long long)meta_bytes, (unsigned long long)initial_bytes, journal_sectors);
 	return meta_bytes + initial_bytes;
 }
 
@@ -84,6 +96,7 @@ static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes)
 static int _lv_create_integrity_metadata(struct cmd_context *cmd,
 				struct volume_group *vg,
 				struct lvcreate_params *lp,
+				struct integrity_settings *settings,
 				struct logical_volume **meta_lv)
 {
 	char metaname[NAME_LEN] = { 0 };
@@ -99,6 +112,7 @@ static int _lv_create_integrity_metadata(struct cmd_context *cmd,
 		.read_ahead = DM_READ_AHEAD_NONE,
 		.stripes = 1,
 		.vg_name = vg->name,
+		.temporary = 1,
 		.zero = 0,
 		.wipe_signatures = 0,
 		.suppress_zero_warn = 1,
@@ -114,12 +128,12 @@ static int _lv_create_integrity_metadata(struct cmd_context *cmd,
 	lp_meta.pvh = lp->pvh;
 
 	lv_size_bytes = (uint64_t)lp->extents * (uint64_t)vg->extent_size * 512;
-	meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes);
+	meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes, settings->journal_sectors, vg->extent_size);
 	meta_sectors = meta_bytes / 512;
 	lp_meta.extents = meta_sectors / vg->extent_size;
 
-	log_print_unless_silent("Creating integrity metadata LV %s with size %s.",
-		  metaname, display_size(cmd, meta_sectors));
+	log_verbose("Creating integrity metadata LV %s with size %s.",
+		    metaname, display_size(cmd, meta_sectors));
 
 	dm_list_init(&lp_meta.tags);
 
@@ -180,7 +194,7 @@ int lv_extend_integrity_in_raid(struct logical_volume *lv, struct dm_list *pvh)
 		}
 
 		lv_size_bytes = lv_iorig->size * 512;
-		meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes);
+		meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes, 0, 0);
 		meta_sectors = meta_bytes / 512;
 		meta_extents = meta_sectors / vg->extent_size;
 
@@ -217,16 +231,17 @@ int lv_extend_integrity_in_raid(struct logical_volume *lv, struct dm_list *pvh)
 	return 1;
 }
 
-int lv_remove_integrity_from_raid(struct logical_volume *lv)
+int lv_remove_integrity_from_raid(struct logical_volume *lv, char **remove_images)
 {
-	struct logical_volume *iorig_lvs[DEFAULT_RAID_MAX_IMAGES];
-	struct logical_volume *imeta_lvs[DEFAULT_RAID_MAX_IMAGES];
+	struct logical_volume *iorig_lvs[DEFAULT_RAID_MAX_IMAGES] = { 0 };
+	struct logical_volume *imeta_lvs[DEFAULT_RAID_MAX_IMAGES] = { 0 };
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct volume_group *vg = lv->vg;
 	struct lv_segment *seg_top, *seg_image;
 	struct logical_volume *lv_image;
 	struct logical_volume *lv_iorig;
 	struct logical_volume *lv_imeta;
+	char *max_image_array = remove_images ? *remove_images : NULL;
 	uint32_t area_count, s;
 	int is_active = lv_is_active(lv);
 
@@ -239,11 +254,18 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 		return 0;
 	}
 
+	log_debug("Removing integrity from raid LV %s %s", display_lvname(lv), remove_images ? "partial" : "");
+
 	area_count = seg_top->area_count;
 
 	for (s = 0; s < area_count; s++) {
+		if (max_image_array && !max_image_array[s])
+			continue;
+
 		lv_image = seg_lv(seg_top, s);
 		seg_image = first_seg(lv_image);
+
+		log_debug("Removing integrity layers from %s", lv_image->name);
 
 		if (!(lv_imeta = seg_image->integrity_meta_dev)) {
 			log_error("LV %s segment has no integrity metadata device.", display_lvname(lv));
@@ -279,10 +301,15 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 	}
 
 	for (s = 0; s < area_count; s++) {
+		if (max_image_array && !max_image_array[s])
+			continue;
+
 		lv_iorig = iorig_lvs[s];
 		lv_imeta = imeta_lvs[s];
 
 		if (is_active) {
+			log_debug("Deactivating unused integrity layers %s %s", lv_iorig->name, lv_imeta->name);
+
 			if (!deactivate_lv(cmd, lv_iorig))
 				log_error("Failed to deactivate unused iorig LV %s.", lv_iorig->name);
 
@@ -292,6 +319,8 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 
 		lv_imeta->status &= ~INTEGRITY_METADATA;
 		lv_set_visible(lv_imeta);
+
+		log_debug("Removing unused integrity LVs %s %s", lv_iorig->name, lv_imeta->name);
 
 		if (!lv_remove(lv_iorig))
 			log_error("Failed to remove unused iorig LV %s.", lv_iorig->name);
@@ -358,8 +387,8 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 		} else if (!lbs_4k && !lbs_512) {
 			if (!settings->block_size)
 				settings->block_size = 512;
-			log_print("Using integrity block size %u with unknown device logical block size.",
-				  settings->block_size);
+			log_print_unless_silent("Using integrity block size %u with unknown device logical block size.",
+						settings->block_size);
 		} else {
 			goto_bad;
 		}
@@ -372,7 +401,7 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 		}
 
 		/*
-		 * get_fs_block_size() returns the libblkid BLOCK_SIZE value,
+		 * fs_block_size_and_type() returns the libblkid BLOCK_SIZE value,
 		 * where libblkid has fs-specific code to set BLOCK_SIZE to the
 		 * value we need here.
 		 *
@@ -382,9 +411,9 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 		 * value the block size, but it's possible values are not the same
 		 * as xfs's, and do not seem to relate directly to the device LBS.
 		 */
-		rv = get_fs_block_size(pathname, &fs_block_size);
+		rv = fs_block_size_and_type(pathname, &fs_block_size, NULL, NULL);
 		if (!rv || !fs_block_size) {
-			int use_bs;
+			unsigned use_bs;
 
 			if (lbs_4k && pbs_4k) {
 				use_bs = 4096;
@@ -407,8 +436,8 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 
 			settings->block_size = use_bs;
 
-			log_print("Using integrity block size %u for unknown file system block size, logical block size %u, physical block size %u.",
-				  settings->block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
+			log_print_unless_silent("Using integrity block size %u for unknown file system block size, logical block size %u, physical block size %u.",
+						settings->block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
 			goto out;
 		}
 
@@ -418,13 +447,13 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 				   for an application that expects a given io size/alignment is possible. */
 				settings->block_size = 512;
 				if (fs_block_size > 512)
-					log_print("Limiting integrity block size to 512 because the LV is active.");
+					log_print_unless_silent("Limiting integrity block size to 512 because the LV is active.");
 			} else if (fs_block_size <= 4096)
 				settings->block_size = fs_block_size;
 			else
 				settings->block_size = 4096; /* dm-integrity max is 4096 */
-			log_print("Using integrity block size %u for file system block size %u.",
-				  settings->block_size, fs_block_size);
+			log_print_unless_silent("Using integrity block size %u for file system block size %u.",
+						settings->block_size, fs_block_size);
 		} else {
 			/* let user specify integrity block size that is less than fs block size */
 			if (settings->block_size > fs_block_size) {
@@ -432,8 +461,8 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 					  settings->block_size, fs_block_size);
 				goto bad;
 			}
-			log_print("Using integrity block size %u for file system block size %u.",
-				  settings->block_size, fs_block_size);
+			log_print_unless_silent("Using integrity block size %u for file system block size %u.",
+						settings->block_size, fs_block_size);
 		}
 	}
 out:
@@ -483,7 +512,7 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 	struct logical_volume *imeta_lvs[DEFAULT_RAID_MAX_IMAGES];
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct volume_group *vg = lv->vg;
-	struct logical_volume *lv_image, *lv_imeta, *lv_iorig;
+	struct logical_volume *lv_image, *lv_imeta;
 	struct lv_segment *seg_top, *seg_image;
 	struct pv_list *pvl;
 	const struct segment_type *segtype;
@@ -504,11 +533,6 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 
 	if (!dm_list_empty(&lv->segs_using_this_lv)) {
 		log_error("Integrity can only be added to top level raid LV.");
-		return 0;
-	}
-
-	if (lv_is_origin(lv)) {
-		log_error("Integrity cannot be added to snapshot origins.");
 		return 0;
 	}
 
@@ -601,7 +625,7 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 		lp.pvh = use_pvh;
 		lp.extents = lv_image->size / vg->extent_size;
 
-		if (!_lv_create_integrity_metadata(cmd, vg, &lp, &meta_lv))
+		if (!_lv_create_integrity_metadata(cmd, vg, &lp, settings, &meta_lv))
 			goto_bad;
 
 		revert_meta_lvs++;
@@ -676,12 +700,14 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 		log_debug("Adding integrity to raid image %s", lv_image->name);
 
 		/*
+		 * lv_iorig returned by insert_layer_for_lv() (but unused here)
 		 * "lv_iorig" is a new LV with new id, but with the segments
 		 * from "lv_image". "lv_image" keeps the existing name and id,
 		 * but gets a new integrity segment, in place of the segments
 		 * that were moved to lv_iorig.
 		 */
-		if (!(lv_iorig = insert_layer_for_lv(cmd, lv_image, INTEGRITY, "_iorig")))
+		/* coverity[format_string_injection] lv name is already validated */
+		if (!insert_layer_for_lv(cmd, lv_image, 0, "_iorig"))
 			goto_bad;
 
 		lv_image->status |= INTEGRITY;
@@ -935,16 +961,15 @@ int lv_integrity_mismatches(struct cmd_context *cmd,
 			    const struct logical_volume *lv,
 			    uint64_t *mismatches)
 {
-	struct lv_with_info_and_seg_status status;
+	struct lv_with_info_and_seg_status status = {
+		.seg_status.type = SEG_STATUS_NONE,
+	};
 
 	if (lv_is_raid(lv) && lv_raid_has_integrity((struct logical_volume *)lv))
 		return lv_raid_integrity_total_mismatches(cmd, lv, mismatches);
 
 	if (!lv_is_integrity(lv))
 		return_0;
-
-	memset(&status, 0, sizeof(status));
-	status.seg_status.type = SEG_STATUS_NONE;
 
 	status.seg_status.seg = first_seg(lv);
 
@@ -977,4 +1002,30 @@ fail:
 	dm_pool_destroy(status.seg_status.mem);
 	return 0;
 }
+
+int integrity_settings_to_str_list(struct integrity_settings *settings, struct dm_list *result, struct dm_pool *mem)
+{
+	int errors = 0;
+
+	if (settings->journal_watermark_set)
+		if (!setting_str_list_add("journal_watermark", settings->journal_watermark, NULL, result, mem))
+                        errors++;
+
+	if (settings->commit_time_set)
+		if (!setting_str_list_add("commit_time", settings->commit_time, NULL, result, mem))
+			errors++;
+
+	if (settings->bitmap_flush_interval_set)
+		if (!setting_str_list_add("bitmap_flush_interval", settings->bitmap_flush_interval, NULL, result, mem))
+			errors++;
+
+	if (settings->allow_discards_set)
+		if (!setting_str_list_add("allow_discards", settings->allow_discards, NULL, result, mem))
+			errors++;
+	if (errors)
+		log_warn("Failed to create list of integrity settings.");
+
+	return 1;
+}
+
 

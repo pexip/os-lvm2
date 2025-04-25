@@ -14,7 +14,7 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
-aux prepare_devs 2
+aux prepare_devs 3
 
 vgcreate $SHARED --metadatasize 128k $vg1 "$dev1"
 lvcreate -l100%FREE -n $lv1 $vg1
@@ -27,7 +27,7 @@ invalid vgimport
 # Cannot combine -a and VG name
 invalid vgexport -a $vg
 invalid vgimport -a $vg1
-# Cannot export unknonw VG
+# Cannot export unknown VG
 fail vgexport ${vg1}-non
 fail vgimport ${vg1}-non
 # Cannot export VG with active volumes
@@ -84,6 +84,45 @@ lvchange -ay $vg1/$lv1 $vg2/$lv1
 vgchange -an $vg1 $vg2
 
 vgremove -ff $vg1 $vg2
+
+pvremove "$dev1"
+pvremove "$dev2"
+
+# Test vgimportclone with incomplete list of devs, and with nomda PV.
+vgcreate $SHARED --vgmetadatacopies 2 $vg1 "$dev1" "$dev2" "$dev3"
+lvcreate -l1 -an $vg1
+not vgimportclone -n newvgname "$dev1"
+not vgimportclone -n newvgname "$dev2"
+not vgimportclone -n newvgname "$dev3"
+not vgimportclone -n newvgname "$dev1" "$dev2"
+not vgimportclone -n newvgname "$dev1" "$dev3"
+not vgimportclone -n newvgname "$dev2" "$dev3"
+vgimportclone -n ${vg1}new "$dev1" "$dev2" "$dev3"
+lvs ${vg1}new
+vgremove -y ${vg1}new
+pvremove "$dev1"
+pvremove "$dev2"
+pvremove "$dev3"
+
+# Test importing a non-duplicate pv using the existing vg name
+vgcreate $vg1 "$dev1"
+vgimportclone -n $vg1 "$dev1"
+vgs ${vg1}1
+not vgs $vg1
+vgremove ${vg1}1
+
+# Test importing a non-duplicate pv using the existing vg name
+# Another existing VG is using the initial generated vgname with
+# the "1" suffix, so "2" is used.
+vgcreate $vg1 "$dev1"
+vgcreate ${vg1}1 "$dev2"
+vgimportclone -n $vg1 "$dev1"
+vgs ${vg1}1
+vgs ${vg1}2
+vgremove ${vg1}1
+vgremove ${vg1}2
+pvremove "$dev1"
+pvremove "$dev2"
 
 # Verify that if we provide the -n|--basevgname,
 # the number suffix is not added unnecessarily.

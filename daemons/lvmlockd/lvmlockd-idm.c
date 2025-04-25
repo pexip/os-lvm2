@@ -13,7 +13,7 @@
 
 #include "tools/tool.h"
 
-#include "daemon-server.h"
+#include "libdaemon/server/daemon-server.h"
 #include "lib/mm/xlate.h"
 
 #include "lvmlockd-internal.h"
@@ -136,7 +136,7 @@ static int lm_idm_scsi_directory_select(const struct dirent *s)
 	return 0;
 }
 
-static int lm_idm_scsi_find_block_dirctory(const char *block_path)
+static int lm_idm_scsi_find_block_directory(const char *block_path)
 {
 	struct stat stats;
 
@@ -252,7 +252,7 @@ static char *lm_idm_scsi_get_block_device_node(const char *scsi_path)
 		goto fail;
 	}
 
-	ret = lm_idm_scsi_find_block_dirctory(blk_path);
+	ret = lm_idm_scsi_find_block_directory(blk_path);
 	if (ret < 0) {
 		log_error("Fail to find block path %s", blk_path);
 		goto fail;
@@ -364,7 +364,7 @@ static void lm_idm_update_vb_timestamp(uint64_t *vb_timestamp)
 
 	/*
 	 * It's possible that the multiple nodes have no clock
-	 * synchronization with microsecond prcision and the time
+	 * synchronization with microsecond precision and the time
 	 * is going backward.  For this case, simply increment the
 	 * existing timestamp and write out to drive.
 	 */
@@ -391,7 +391,7 @@ int lm_prepare_lockspace_idm(struct lockspace *ls)
 	return 0;
 }
 
-int lm_add_lockspace_idm(struct lockspace *ls, int adopt)
+int lm_add_lockspace_idm(struct lockspace *ls, int adopt_only, int adopt_ok)
 {
 	char killpath[IDM_FAILURE_PATH_LEN];
 	char killargs[IDM_FAILURE_ARGS_LEN];
@@ -490,7 +490,7 @@ out:
 	return rv;
 }
 
-static int lm_add_resource_idm(struct lockspace *ls, struct resource *r)
+int lm_add_resource_idm(struct lockspace *ls, struct resource *r)
 {
 	struct rd_idm *rdi = (struct rd_idm *)r->lm_data;
 
@@ -530,7 +530,7 @@ static int to_idm_mode(int ld_mode)
 
 int lm_lock_idm(struct lockspace *ls, struct resource *r, int ld_mode,
 		struct val_blk *vb_out, char *lv_uuid, struct pvs *pvs,
-		int adopt)
+		int adopt_only, int adopt_ok)
 {
 	struct lm_idm *lmi = (struct lm_idm *)ls->lm_data;
 	struct rd_idm *rdi = (struct rd_idm *)r->lm_data;

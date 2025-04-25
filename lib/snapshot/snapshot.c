@@ -34,9 +34,7 @@ static const char *_snap_target_name(const struct lv_segment *seg,
 
 	return lvseg_name(seg);
 }
-
-static int _snap_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
-			struct dm_hash_table *pv_hash __attribute__((unused)))
+static int _snap_text_import(struct lv_segment *seg, const struct dm_config_node *sn)
 {
 	uint32_t chunk_size;
 	struct logical_volume *org, *cow;
@@ -229,7 +227,7 @@ static void _snap_destroy(struct segment_type *segtype)
 	free(segtype);
 }
 
-static struct segtype_handler _snapshot_ops = {
+static const struct segtype_handler _snapshot_ops = {
 	.target_name = _snap_target_name,
 	.text_import = _snap_text_import,
 	.text_export = _snap_text_export,

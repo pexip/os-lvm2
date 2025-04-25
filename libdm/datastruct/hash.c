@@ -30,7 +30,7 @@ struct dm_hash_table {
 };
 
 /* Permutation of the Integers 0 through 255 */
-static unsigned char _nums[] = {
+static const unsigned char _nums[] = {
 	1, 14, 110, 25, 97, 174, 132, 119, 138, 170, 125, 118, 27, 233, 140, 51,
 	87, 197, 177, 107, 234, 169, 56, 68, 30, 7, 173, 73, 188, 40, 36, 65,
 	49, 213, 104, 190, 57, 211, 148, 223, 48, 115, 15, 2, 67, 186, 210, 28,
@@ -262,7 +262,7 @@ int dm_hash_insert_allow_multiple(struct dm_hash_table *t, const char *key,
 
 /*
  * Look through multiple entries with the same key for one that has a
- * matching val and return that.  If none have maching val, return NULL.
+ * matching val and return that.  If none have matching val, return NULL.
  */
 void *dm_hash_lookup_with_val(struct dm_hash_table *t, const char *key,
 			      const void *val, uint32_t val_len)

@@ -15,15 +15,15 @@
 #ifndef _LVM_UTIL_H
 #define _LVM_UTIL_H
 
-#include <inttypes.h>
+#include "device_mapper/all.h"
 
-#define min(a, b) ({ typeof(a) _a = (a); \
-		     typeof(b) _b = (b); \
+#define min(a, b) ({ __typeof__(a) _a = (a); \
+		     __typeof__(b) _b = (b); \
 		     (void) (&_a == &_b); \
 		     _a < _b ? _a : _b; })
 
-#define max(a, b) ({ typeof(a) _a = (a); \
-		     typeof(b) _b = (b); \
+#define max(a, b) ({ __typeof__(a) _a = (a); \
+		     __typeof__(b) _b = (b); \
 		     (void) (&_a == &_b); \
 		     _a > _b ? _a : _b; })
 
@@ -34,6 +34,13 @@
 #else
 #define uninitialized_var(x) x = x
 #endif
+
+/* Use wrapper for checked results */
+static inline __attribute__((warn_unused_result))
+	int _dm_strncpy(char *dest, const char *src, size_t n)
+{
+	return dm_strncpy(dest, src, n);
+}
 
 /*
  * GCC 3.4 adds a __builtin_clz, which uses the count leading zeros (clz)

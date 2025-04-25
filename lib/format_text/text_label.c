@@ -383,7 +383,7 @@ static int _read_mda_header_and_metadata(const struct format_type *fmt,
 		 * somehow between the two reads.)
 		 */
 		if (!retries) {
-			log_print("Retrying metadata scan.");
+			log_print_unless_silent("Retrying metadata scan.");
 			retries++;
 			dev_invalidate(mdac->area.dev);
 			goto retry;
@@ -660,7 +660,7 @@ static void _fmt_text_destroy(struct labeller *l)
 	free(l);
 }
 
-struct label_ops _text_ops = {
+static const struct label_ops _text_ops = {
 	.can_handle = _text_can_handle,
 	.write = _text_write,
 	.read = _text_read,

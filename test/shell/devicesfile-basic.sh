@@ -12,6 +12,8 @@
 
 test_description='devices file'
 
+SKIP_WITH_LVMPOLLD=1
+
 . lib/inittest
 
 aux prepare_devs 7
@@ -31,13 +33,7 @@ _clear_online_files() {
 }
 
 wipe_all() {
-	aux wipefs_a "$dev1"
-	aux wipefs_a "$dev2"
-	aux wipefs_a "$dev3"
-	aux wipefs_a "$dev4"
-	aux wipefs_a "$dev5"
-	aux wipefs_a "$dev6"
-	aux wipefs_a "$dev7"
+	aux wipefs_a "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6" "$dev7"
 }
 
 # The tests run with system dir of "/etc" but lvm when running
@@ -47,10 +43,28 @@ mkdir -p "$DFDIR" || true
 DF="$DFDIR/system.devices"
 
 #
+# Test that unused system.devices is renamed
+#
+
+aux lvmconf 'devices/use_devicesfile = 1'
+wipe_all
+rm -f "$DF"
+rm -f "$DF.unused.*"
+touch "$DF"
+pvcreate "$dev1"
+grep "$dev1" "$DF"
+aux lvmconf 'devices/use_devicesfile = 0'
+pvs "$dev1"
+not ls "$DF"
+ls "$DF"-unused*
+rm -f "$DF-unused.*"
+
+#
 # Test with use_devicesfile=0 (no devices file is being applied by default)
 #
 
-aux lvmconf 'devices/use_devicesfile = 0'
+aux lvmconf "devices/use_devicesfile = 0" \
+        "global/event_activation = 1"
 
 wipe_all
 rm -f "$DF"
@@ -103,6 +117,11 @@ not ls "$DFDIR/system.devices"
 # verify devices file is working
 vgs --devicesfile test.devices $vg1
 not vgs --devicesfile test.devices $vg2
+
+# misspelled override name fails
+not vgs --devicesfile doesnotexist $vg1
+not vgs --devicesfile doesnotexist $vg2
+not vgs --devicesfile doesnotexist
 
 # devicesfile and devices cannot be used together
 not vgs --devicesfile test.devices --devices "$dev1","$dev1" $vg1

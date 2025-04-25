@@ -13,13 +13,12 @@
  */
 
 #include "libdm/misc/dmlib.h"
-#include "libdm-targets.h"
+#include "libdm/ioctl/libdm-targets.h"
 #include "libdm-common.h"
 #include "libdm/misc/kdev_t.h"
 #include "libdm/misc/dm-ioctl.h"
 
 #include <stdarg.h>
-#include <sys/param.h>
 #include <sys/utsname.h>
 
 #define MAX_TARGET_PARAMSIZE 500000
@@ -144,14 +143,16 @@ struct thin_message {
 struct load_segment {
 	struct dm_list list;
 
-	unsigned type;
-
 	uint64_t size;
+
+	unsigned type;
 
 	unsigned area_count;		/* Linear + Striped + Mirrored + Crypt */
 	struct dm_list areas;		/* Linear + Striped + Mirrored + Crypt */
 
 	uint32_t stripe_size;		/* Striped + raid */
+
+	uint32_t region_size;		/* Mirror + raid */
 
 	int persistent;			/* Snapshot */
 	uint32_t chunk_size;		/* Snapshot */
@@ -160,10 +161,9 @@ struct load_segment {
 	struct dm_tree_node *merge;	/* Snapshot */
 
 	struct dm_tree_node *log;	/* Mirror */
-	uint32_t region_size;		/* Mirror + raid */
 	unsigned clustered;		/* Mirror */
 	unsigned mirror_area_count;	/* Mirror */
-	uint32_t flags;			/* Mirror + raid + Cache */
+	uint64_t flags;			/* Mirror + Raid + Cache */
 	char *uuid;			/* Clustered mirror log */
 
 	const char *policy_name;	/* Cache */
@@ -236,7 +236,7 @@ struct load_properties {
 	/*
 	 * Preload tree normally only loads and not resume, but there is
 	 * automatic resume when target is extended, as it's believed
-	 * there can be no i/o flying to this 'new' extedend space
+	 * there can be no i/o flying to this 'new' extended space
 	 * from any device above. Reason is that preloaded target above
 	 * may actually need to see its bigger subdevice before it
 	 * gets suspended. As long as devices are simple linears
@@ -249,12 +249,16 @@ struct load_properties {
 	/*
 	 * Call node_send_messages(), set to 2 if there are messages
 	 * When != 0, it validates matching transaction id, thus thin-pools
-	 * where transation_id is passed as 0 are never validated, this
-	 * allows external managment of thin-pool TID.
+	 * where transaction_id is passed as 0 are never validated, this
+	 * allows external management of thin-pool TID.
 	 */
 	unsigned send_messages;
 	/* Skip suspending node's children, used when sending messages to thin-pool */
 	int skip_suspend;
+
+	/* Suspend and Resume siblings after node activation with udev flags*/
+	unsigned reactivate_siblings;
+	uint16_t reactivate_udev_flags;
 };
 
 /* Two of these used to join two nodes with uses and used_by. */
@@ -305,7 +309,7 @@ struct dm_tree {
 	int retry_remove;		/* 1 retries remove if not successful */
 	uint32_t cookie;
 	char buf[DM_NAME_LEN + 32];	/* print buffer for device_name (major:minor) */
-	const char **optional_uuid_suffixes;	/* uuid suffixes ignored when matching */
+	const char * const *optional_uuid_suffixes;	/* uuid suffixes ignored when matching */
 };
 
 /*
@@ -497,7 +501,8 @@ static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
 	struct dm_tree_node *node;
 	dev_t dev;
 
-	if (!(node = dm_pool_zalloc(dtree->mem, sizeof(*node))) ||
+	if (!dtree || !dtree->mem ||
+	    !(node = dm_pool_zalloc(dtree->mem, sizeof(*node))) ||
 	    !(node->name = dm_pool_strdup(dtree->mem, name)) ||
 	    !(node->uuid = dm_pool_strdup(dtree->mem, uuid))) {
 		log_error("_create_dm_tree_node alloc failed.");
@@ -547,6 +552,7 @@ void dm_tree_set_optional_uuid_suffixes(struct dm_tree *dtree, const char **opti
 	dtree->optional_uuid_suffixes = optional_uuid_suffixes;
 }
 
+static const char *_node_name(struct dm_tree_node *dnode);
 static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 						       const char *uuid)
 {
@@ -554,28 +560,26 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 	const char *default_uuid_prefix;
 	size_t default_uuid_prefix_len;
 	const char *suffix, *suffix_position;
-	char uuid_without_suffix[DM_UUID_LEN];
+	char uuid_without_suffix[DM_UUID_LEN + 1];
 	unsigned i = 0;
-	const char **suffix_list = dtree->optional_uuid_suffixes;
+	const char * const *suffix_list = dtree->optional_uuid_suffixes;
 
 	if ((node = dm_hash_lookup(dtree->uuids, uuid))) {
-		log_debug("Matched uuid %s in deptree.", uuid);
+		log_debug_activation("Matched uuid %s %s in deptree.", uuid, _node_name(node));
 		return node;
 	}
-
-	default_uuid_prefix = dm_uuid_prefix();
-	default_uuid_prefix_len = strlen(default_uuid_prefix);
 
 	if (suffix_list && (suffix_position = strrchr(uuid, '-'))) {
 		while ((suffix = suffix_list[i++])) {
 			if (strcmp(suffix_position + 1, suffix))
 				continue;
 
-			(void) strncpy(uuid_without_suffix, uuid, sizeof(uuid_without_suffix));
+			dm_strncpy(uuid_without_suffix, uuid, sizeof(uuid_without_suffix));
 			uuid_without_suffix[suffix_position - uuid] = '\0';
 
 			if ((node = dm_hash_lookup(dtree->uuids, uuid_without_suffix))) {
-				log_debug("Matched uuid %s (missing suffix -%s) in deptree.", uuid_without_suffix, suffix);
+				log_debug_activation("Matched uuid %s %s (missing suffix -%s) in deptree.",
+						     uuid_without_suffix, _node_name(node), suffix);
 				return node;
 			}
 
@@ -583,15 +587,17 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 		};
 	}
 	
-	if (strncmp(uuid, default_uuid_prefix, default_uuid_prefix_len))
-		return NULL;
+	default_uuid_prefix = dm_uuid_prefix();
+	default_uuid_prefix_len = strlen(default_uuid_prefix);
 
-	if ((node = dm_hash_lookup(dtree->uuids, uuid + default_uuid_prefix_len))) {
-		log_debug("Matched uuid %s (missing prefix) in deptree.", uuid + default_uuid_prefix_len);
+	if ((strncmp(uuid, default_uuid_prefix, default_uuid_prefix_len) == 0) &&
+	    (node = dm_hash_lookup(dtree->uuids, uuid + default_uuid_prefix_len))) {
+		log_debug_activation("Matched uuid %s %s (missing prefix) in deptree.",
+				     uuid + default_uuid_prefix_len, _node_name(node));
 		return node;
 	}
 
-	log_debug("Not matched uuid %s in deptree.", uuid);
+	log_debug_activation("Not matched uuid %s in deptree.", uuid);
 	return NULL;
 }
 
@@ -653,7 +659,8 @@ void *dm_tree_node_get_context(const struct dm_tree_node *node)
 	return node->context;
 }
 
-int dm_tree_node_size_changed(const struct dm_tree_node *dnode)
+DM_EXPORT_NEW_SYMBOL(int, dm_tree_node_size_changed, 1_02_110)
+	(const struct dm_tree_node *dnode)
 {
 	return dnode->props.size_changed;
 }
@@ -924,7 +931,7 @@ static int _check_device_not_in_use(const char *name, struct dm_info *info)
 	} else if (dm_device_has_holders(info->major, info->minor))
 		reason = "is used by another device";
 	else if (dm_device_has_mounted_fs(info->major, info->minor))
-		reason = "constains a filesystem in use";
+		reason = "contains a filesystem in use";
 	else
 		return 1;
 
@@ -1878,6 +1885,68 @@ static int _rename_conflict_exists(struct dm_tree_node *parent,
 	return 0;
 }
 
+/*
+ * Reactivation of sibling nodes
+ *
+ * Function is used when activating origin and its thick snapshots
+ * to ensure udev is processing first the origin LV and all the
+ * snapshot LVs are processed afterwards.
+ */
+static int _reactivate_siblings(struct dm_tree_node *dnode,
+				const char *uuid_prefix,
+				size_t uuid_prefix_len)
+{
+	struct dm_tree_node *child;
+	const char *uuid;
+	void *handle = NULL;
+	int r = 1;
+
+	/* Wait for udev before reactivating siblings */
+	if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
+		stack;
+
+	dm_tree_set_cookie(dnode, 0);
+
+	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
+		if (child->props.reactivate_siblings) {
+			/* Skip 'leading' device in this group, marked with flag */
+			child->props.reactivate_siblings = 0;
+			continue;
+		}
+
+		if (!(uuid = dm_tree_node_get_uuid(child))) {
+			stack;
+			continue;
+		}
+
+		if (!_uuid_prefix_matches(uuid, uuid_prefix, uuid_prefix_len))
+			continue;
+
+		if (!_suspend_node(child->name, child->info.major, child->info.minor,
+				   child->dtree->skip_lockfs,
+				   child->dtree->no_flush, &child->info)) {
+			log_error("Unable to suspend %s (" FMTu32
+				  ":" FMTu32 ")", child->name,
+				  child->info.major, child->info.minor);
+			r = 0;
+			continue;
+		}
+		if (!_resume_node(child->name, child->info.major, child->info.minor,
+				  child->props.read_ahead, child->props.read_ahead_flags,
+				  &child->info, &child->dtree->cookie,
+				  child->props.reactivate_udev_flags, // use these flags
+				  child->info.suspended)) {
+			log_error("Failed to suspend %s (" FMTu32
+				  ":" FMTu32 ")", child->name,
+				  child->info.major, child->info.minor);
+			r = 0;
+			continue;
+		}
+	}
+
+	return r;
+}
+
 int dm_tree_activate_children(struct dm_tree_node *dnode,
 				 const char *uuid_prefix,
 				 size_t uuid_prefix_len)
@@ -1959,12 +2028,17 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 			/*
 			 * FIXME: Implement delayed error reporting
 			 * activation should be stopped only in the case,
-			 * the submission of transation_id message fails,
+			 * the submission of transaction_id message fails,
 			 * resume should continue further, just whole command
 			 * has to report failure.
 			 */
 			if (r && (child->props.send_messages > 1) &&
 			    !(r = _node_send_messages(child, uuid_prefix, uuid_prefix_len, 1)))
+				stack;
+
+			/* Reactivate only for fresh activated origin */
+			if (r && child->props.reactivate_siblings &&
+			    (!(r = _reactivate_siblings(dnode, uuid_prefix, uuid_prefix_len))))
 				stack;
 		}
 		if (awaiting_peer_rename)
@@ -2044,7 +2118,7 @@ static int _build_dev_string(char *devbuf, size_t bufsize, struct dm_tree_node *
 	return 1;
 }
 
-/* simplify string emiting code */
+/* simplify string emitting code */
 #define EMIT_PARAMS(p, str...)\
 do {\
 	int w;\
@@ -2853,7 +2927,7 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 		if (!child->info.exists && !(node_created = _create_node(child, dnode)))
 			return_0;
 
-		/* Propagate delayed resume from exteded child node */
+		/* Propagate delayed resume from extended child node */
 		if (child->props.delay_resume_if_extended)
 			dnode->props.delay_resume_if_extended = 1;
 
@@ -3000,6 +3074,10 @@ int dm_tree_node_add_snapshot_origin_target(struct dm_tree_node *dnode,
 	/* Resume snapshot origins after new snapshots */
 	dnode->activation_priority = 1;
 
+	if (!dnode->info.exists)
+		/* Reactivate siblings for this origin after being resumed */
+		dnode->props.reactivate_siblings = 1;
+
 	/*
 	 * Don't resume the origin immediately in case it is a non-trivial 
 	 * target that must not be active more than once concurrently!
@@ -3062,6 +3140,20 @@ static int _add_snapshot_target(struct dm_tree_node *node,
 			/* Resume merging snapshot after snapshot-merge */
 			seg->merge->activation_priority = 2;
 		}
+	} else if (!origin_node->info.exists) {
+		/* Keep original udev_flags for reactivation. */
+		node->props.reactivate_udev_flags = node->udev_flags;
+
+		/* Reactivation is needed if the origin's -real device is not in DM table.
+		 * For this case after the resume of its origin LV we resume its snapshots
+		 * with updated udev_flags to completely avoid udev scanning for the first resume.
+		 * Reactivation then resumes snapshots with original udev_flags.
+		 */
+		node->udev_flags |= DM_SUBSYSTEM_UDEV_FLAG0 |
+			DM_UDEV_DISABLE_DISK_RULES_FLAG |
+			DM_UDEV_DISABLE_OTHER_RULES_FLAG;
+		log_debug_activation("Using udev_flags 0x%x for activation of %s.",
+				     node->udev_flags, node->name);
 	}
 
 	return 1;
@@ -3268,7 +3360,7 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
  * - maximum 253 legs in a raid set (MD kernel limitation)
  * - delta_disks for disk add/remove reshaping
  * - data_offset for out-of-place reshaping
- * - data_copies to cope witth odd numbers of raid10 disks
+ * - data_copies to cope with odd numbers of raid10 disks
  */
 int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
 					        uint64_t size,
@@ -3316,7 +3408,7 @@ DM_EXPORT_NEW_SYMBOL(int, dm_tree_node_add_cache_target, 1_02_138)
 {
 	struct dm_config_node *cn;
 	struct load_segment *seg;
-	static const uint64_t _modemask =
+	const uint64_t _modemask =
 		DM_CACHE_FEATURE_PASSTHROUGH |
 		DM_CACHE_FEATURE_WRITETHROUGH |
 		DM_CACHE_FEATURE_WRITEBACK;
@@ -3443,7 +3535,7 @@ int dm_tree_node_add_replicator_dev_target(struct dm_tree_node *node,
 					   uint32_t slog_flags,
 					   uint32_t slog_region_size)
 {
-	log_error("Replicator targer is unsupported.");
+	log_error("Replicator target is unsupported.");
 	return 0;
 }
 
@@ -3888,12 +3980,12 @@ int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
 				       uint32_t data_block_size)
 {
 	/* Old version supported only these FEATURE bits, others were ignored so masked them */
-	static const uint64_t _mask =
+	const uint64_t mask =
 		DM_CACHE_FEATURE_WRITEBACK |
 		DM_CACHE_FEATURE_WRITETHROUGH |
 		DM_CACHE_FEATURE_PASSTHROUGH;
 
-	return dm_tree_node_add_cache_target(node, size, feature_flags & _mask,
+	return dm_tree_node_add_cache_target(node, size, feature_flags & mask,
 					     metadata_uuid, data_uuid, origin_uuid,
 					     policy_name, policy_settings, data_block_size);
 }

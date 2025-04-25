@@ -1,3 +1,15 @@
+#!/usr/bin/env bash
+
+# Copyright (C) 2021 Red Hat, Inc. All rights reserved.
+#
+# This copyrighted material is made available to anyone wishing to use,
+# modify, copy, or redistribute it subject to the terms and conditions
+# of the GNU General Public License v.2.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
 SKIP_WITH_LVMPOLLD=1
 SKIP_WITH_LVMLOCKD=1
 
@@ -22,24 +34,21 @@ aux prepare_devs 4
 # skip rhel5 which doesn't seem to have /dev/mapper/LVMTESTpv1
 aux driver_at_least 4 15 || skip
 
+test "$DM_DEV_DIR" = "/dev" || skip "Only works with /dev access -> make check LVM_TEST_DEVDIR=/dev"
+
 DFDIR="$LVM_SYSTEM_DIR/devices"
 mkdir -p "$DFDIR" || true
 DF="$DFDIR/system.devices"
 
 # Because mapping devno to devname gets dm name from sysfs
-aux lvmconf 'devices/scan = "/dev"'
-base1=$(basename $dev1)
-base2=$(basename $dev2)
-base3=$(basename $dev3)
-base4=$(basename $dev4)
-bd1=/dev/mapper/$base1
-bd2=/dev/mapper/$base2
-bd3=/dev/mapper/$base3
-bd4=/dev/mapper/$base4
-aux extend_filter "a|/dev/mapper/$base1|"
-aux extend_filter "a|/dev/mapper/$base2|"
-aux extend_filter "a|/dev/mapper/$base3|"
-aux extend_filter "a|/dev/mapper/$base4|"
+aux lvmconf 'devices/scan = "/dev"' \
+	"global/event_activation = 1"
+
+bd1="$DM_DEV_DIR/mapper/$(basename $dev1)"
+bd2="$DM_DEV_DIR/mapper/$(basename $dev2)"
+bd3="$DM_DEV_DIR/mapper/$(basename $dev3)"
+bd4="$DM_DEV_DIR/mapper/$(basename $dev4)"
+aux extend_filter "a|$bd1|" "a|$bd2|" "a|$bd3|" "a|$bd4|"
 
 # Changing names will confuse df based on devname
 if lvmdevices; then
@@ -91,15 +100,15 @@ _clear_online_files
 pvscan --cache "$bd1"
 pvscan --cache "$bd2"
 strace -e io_submit vgchange -aay --autoactivation event $vg1 2>&1|tee trace.out
-test "$(grep io_submit trace.out | wc -l)" -eq 3
+test "$(grep -c io_submit trace.out)" -eq 3
 rm trace.out
 
 strace -e io_submit pvscan --cache "$bd3" 2>&1|tee trace.out
-test "$(grep io_submit trace.out | wc -l)" -eq 1
+test "$(grep -c io_submit trace.out)" -eq 1
 rm trace.out
 
 strace -e io_submit vgchange -aay --autoactivation event $vg2 2>&1|tee trace.out
-test "$(grep io_submit trace.out | wc -l)" -eq 2
+test "$(grep -c io_submit trace.out)" -eq 2
 rm trace.out
 fi
 
@@ -197,6 +206,41 @@ check lv_field $vg2/$lv1 lv_active "active"
 vgchange -an $vg1
 vgchange -an $vg2
 
-vgremove -f $vg1
-vgremove -f $vg2
+# vgremove clears online files
+
+PVID1=$(pvs "$bd1" --noheading -o uuid | tr -d - | awk '{print $1}')
+PVID2=$(pvs "$bd2" --noheading -o uuid | tr -d - | awk '{print $1}')
+PVID3=$(pvs "$bd3" --noheading -o uuid | tr -d - | awk '{print $1}')
+
+_clear_online_files
+
+pvscan --cache --listvg --checkcomplete --vgonline --autoactivation event --udevoutput --journal=output "$bd1"
+pvscan --cache --listvg --checkcomplete --vgonline --autoactivation event --udevoutput --journal=output "$bd2"
+vgchange -aay --autoactivation event $vg1
+check lv_field $vg1/$lv1 lv_active "active"
+check lv_field $vg1/$lv2 lv_active "active"
+check lv_field $vg2/$lv1 lv_active ""
+
+pvscan --cache --listvg --checkcomplete --vgonline --autoactivation event --udevoutput --journal=output "$bd3"
+vgchange -aay --autoactivation event $vg2
+check lv_field $vg2/$lv1 lv_active "active"
+
+ls "$RUNDIR/lvm/pvs_online/$PVID1"
+ls "$RUNDIR/lvm/pvs_online/$PVID2"
+ls "$RUNDIR/lvm/pvs_online/$PVID3"
+ls "$RUNDIR/lvm/pvs_lookup/$vg1"
+ls "$RUNDIR/lvm/vgs_online/$vg1"
+ls "$RUNDIR/lvm/vgs_online/$vg2"
+
+vgremove -y $vg1
+
+not ls "$RUNDIR/lvm/pvs_online/$PVID1"
+not ls "$RUNDIR/lvm/pvs_online/$PVID2"
+not ls "$RUNDIR/lvm/pvs_lookup/$vg1"
+not ls "$RUNDIR/lvm/vgs_online/$vg1"
+
+vgremove -y $vg2
+
+not ls "$RUNDIR/lvm/pvs_online/$PVID3"
+not ls "$RUNDIR/lvm/vgs_online/$vg2"
 

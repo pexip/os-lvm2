@@ -16,9 +16,12 @@
 #define LVMLOCKD_SOCKET DEFAULT_RUN_DIR "/lvmlockd.socket"
 #define LVMLOCKD_ADOPT_FILE DEFAULT_RUN_DIR "/lvmlockd.adopt"
 
+#define LVMLOCKD_USE_SANLOCK_LVB 0
+
 /* Wrappers to open/close connection */
 
-static inline daemon_handle lvmlockd_open(const char *sock)
+static inline __attribute__((always_inline))
+	daemon_handle lvmlockd_open(const char *sock)
 {
 	daemon_info lvmlockd_info = {
 		.path = "lvmlockd",
@@ -51,5 +54,8 @@ static inline void lvmlockd_close(daemon_handle h)
 #define EREMOVED  219
 #define EDEVOPEN  220 /* sanlock failed to open lvmlock LV */
 #define ELMERR    221
+#define EORPHAN   222
+#define EADOPT_NONE  223
+#define EADOPT_RETRY 224
 
 #endif	/* _LVM_LVMLOCKD_CLIENT_H */

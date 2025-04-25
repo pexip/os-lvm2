@@ -61,16 +61,16 @@ struct text_vg_version_ops {
 			       struct lvmcache_vgsummary *vgsummary);
 };
 
-struct text_vg_version_ops *text_vg_vsn1_init(void);
+const struct text_vg_version_ops *text_vg_vsn1_init(void);
 
 int print_flags(char *buffer, size_t size, enum pv_vg_lv_e type, int mask, uint64_t status);
 int read_flags(uint64_t *status, enum pv_vg_lv_e type, int mask, const struct dm_config_value *cv);
 
 int print_segtype_lvflags(char *buffer, size_t size, uint64_t status);
-int read_segtype_lvflags(uint64_t *status, char *segtype_str);
+int read_lvflags(uint64_t *status, const char *flags_str);
 
 int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp);
-size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf, uint32_t *alloc_size);
+size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf, uint32_t *buf_size);
 struct volume_group *text_read_metadata_file(struct format_instance *fid,
 					 const char *file,
 					 time_t *when, char **desc);

@@ -1,4 +1,4 @@
-# Copyright (C) 2011-2018 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2011-2024 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -20,6 +20,7 @@ UNIT_SOURCE=\
 	test/unit/bcache_utils_t.c \
 	test/unit/bitset_t.c \
 	test/unit/config_t.c \
+	test/unit/dmhash_t.c \
 	test/unit/dmlist_t.c \
 	test/unit/dmstatus_t.c \
 	test/unit/framework.c \
@@ -45,7 +46,7 @@ lib/liblvm-internal.a: lib
 libdaemon/client/libdaemonclient.a: libdaemon
 
 $(UNIT_TARGET): $(UNIT_OBJECTS) $(LVMINTERNAL_LIBS)
-	@echo "    [LD] $@"
+	$(SHOW) "    [LD] $@"
 	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) \
 	      -o $@ $+ $(LVMLIBS)
 
@@ -60,6 +61,6 @@ run-unit-test: $(UNIT_TARGET)
 		cd $$OLDPWD ;\
 		$(RM) -r "$${TESTDIR:?}"
 
-ifeq ("$(DEPENDS)","yes")
--include $(UNIT_SOURCE:%.c=%.d)
+ifeq ("$(USE_TRACKING)","yes")
+-include $(UNIT_DEPENDS)
 endif

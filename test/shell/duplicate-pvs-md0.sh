@@ -27,6 +27,9 @@ _clear_online_files() {
 
 . lib/inittest
 
+# Running lvmdbusd with its fullreport scannnig changes $RUNDIR results
+pgrep lvmdbusd && skip "Test cannot work, while there is running lvmdbusd."
+
 MD_LEVEL=${MD_LEVEL-0}
 
 aux prepare_devs 4 10
@@ -76,7 +79,7 @@ grep "$mddev" out
 not grep "$dev1" out
 not grep "$dev2" out
 # N.B. in this case hints are disabled for duplicate pvs seen by scan
-# it would be preferrable if this didn't happen as in auto mode, but it's ok.
+# it would be preferable if this didn't happen as in auto mode, but it's ok.
 test "$pass" = "auto" && grep "$mddev" "$HINTS"
 not grep "$dev1" "$HINTS"
 not grep "$dev2" "$HINTS"
@@ -147,7 +150,7 @@ not pvs "$dev1"
 not pvs "$dev2"
 pvs | tee out
 not grep "$mddev" out
-# N.B. it would be preferrable if dev1 did not appear in hints but it's ok
+# N.B. it would be preferable if dev1 did not appear in hints but it's ok
 # not grep "$dev1" $HINTS
 not grep "$dev1" out
 not grep "$dev2" out
@@ -178,9 +181,7 @@ test ! -f "$RUNDIR/lvm/vgs_online/$vg"
 #lvs -o active $vg |tee out || true
 #not grep "active" out
 
-aux wipefs_a "$dev1"
-aux wipefs_a "$dev2"
-aux udev_wait
+aux wipefs_a "$dev1" "$dev2"
 
 ##########################################
 # PV on an md raidX device
@@ -214,7 +215,7 @@ not grep "$dev1" out
 not grep "$dev2" out
 pvscan --cache
 not grep "$mddev" "$HINTS"
-# N.B. would be preferrable for this md component to not be in hints
+# N.B. would be preferable for this md component to not be in hints
 # grep "$dev1" $HINTS
 not grep "$dev1" "$HINTS"
 not grep "$dev2" "$HINTS"
@@ -242,9 +243,7 @@ aux enable_dev "$dev2"
 lvmdevices --deldev $mddev || true
 aux cleanup_md_dev
 
-aux wipefs_a "$dev1"
-aux wipefs_a "$dev2"
-aux udev_wait
+aux wipefs_a "$dev1" "$dev2"
 
 if [ "$MD_LEVEL" = "1" ] ; then
 ##########################################
@@ -303,10 +302,7 @@ pvscan --cache -aay "$dev4"
 test ! -f "$RUNDIR/lvm/pvs_online/$PVIDMD"
 test ! -f "$RUNDIR/lvm/vgs_online/$vg"
 
-aux wipefs_a "$dev1"
-aux wipefs_a "$dev2"
-aux wipefs_a "$dev4"
-aux udev_wait
+aux wipefs_a "$dev1" "$dev2" "$dev4"
 fi   # MD_LEVEL == 1
 
 # next loop with 'start'

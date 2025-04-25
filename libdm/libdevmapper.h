@@ -183,7 +183,7 @@ struct dm_versions {
 
 int dm_get_library_version(char *version, size_t size);
 int dm_task_get_driver_version(struct dm_task *dmt, char *version, size_t size);
-int dm_task_get_info(struct dm_task *dmt, struct dm_info *dmi);
+int dm_task_get_info(struct dm_task *dmt, struct dm_info *info);
 
 /*
  * This function returns dm device's UUID based on the value
@@ -283,15 +283,15 @@ int dm_task_add_target(struct dm_task *dmt,
 #define DM_FORMAT_DEV_BUFSIZE	13	/* Minimum bufsize to handle worst case. */
 int dm_format_dev(char *buf, int bufsize, uint32_t dev_major, uint32_t dev_minor);
 
-/* Use this to retrive target information returned from a STATUS call */
+/* Use this to retrieve target information returned from a STATUS call */
 void *dm_get_next_target(struct dm_task *dmt,
 			 void *next, uint64_t *start, uint64_t *length,
 			 char **target_type, char **params);
 
 /*
- * Following dm_get_status_* functions will allocate approriate status structure
+ * Following dm_get_status_* functions will allocate appropriate status structure
  * from passed mempool together with the necessary character arrays.
- * Destroying the mempool will release all asociated allocation.
+ * Destroying the mempool will release all associated allocation.
  */
 
 /* Parse params from STATUS call for mirror target */
@@ -451,7 +451,7 @@ int dm_get_status_thin(struct dm_pool *mem, const char *params,
  *
  * Operations on dm_stats objects include managing statistics regions
  * and obtaining and manipulating current counter values from the
- * kernel. Methods are provided to return baisc count values and to
+ * kernel. Methods are provided to return basic count values and to
  * derive time-based metrics when a suitable interval estimate is
  * provided.
  *
@@ -544,7 +544,7 @@ int dm_stats_bind_from_fd(struct dm_stats *dms, int fd);
 int dm_message_supports_precise_timestamps(void);
 
 /*
- * Precise timetamps and histogram support.
+ * Precise timestamps and histogram support.
  * 
  * Test for the presence of precise_timestamps and histogram support.
  */
@@ -554,7 +554,7 @@ int dm_stats_driver_supports_histogram(void);
 /*
  * Returns 1 if the specified region has the precise_timestamps feature
  * enabled (i.e. produces nanosecond-precision counter values) or 0 for
- * a region using the default milisecond precision.
+ * a region using the default millisecond precision.
  */
 int dm_stats_get_region_precise_timestamps(const struct dm_stats *dms,
 					   uint64_t region_id);
@@ -563,7 +563,7 @@ int dm_stats_get_region_precise_timestamps(const struct dm_stats *dms,
  * Returns 1 if the region at the current cursor location has the
  * precise_timestamps feature enabled (i.e. produces
  * nanosecond-precision counter values) or 0 for a region using the
- * default milisecond precision.
+ * default millisecond precision.
  */
 int dm_stats_get_current_region_precise_timestamps(const struct dm_stats *dms);
 
@@ -741,7 +741,7 @@ void dm_stats_buffer_destroy(struct dm_stats *dms, char *buffer);
  * following a dm_stats_list() or dm_stats_populate() call.
  *
  * The value returned is the number of registered regions visible with the
- * progam_id value used for the list or populate operation and may not be
+ * program_id value used for the list or populate operation and may not be
  * equal to the highest present region_id (either due to program_id
  * filtering or gaps in the sequence of region_id values).
  *
@@ -754,7 +754,7 @@ uint64_t dm_stats_get_nr_regions(const struct dm_stats *dms);
  * following a dm_stats_list() or dm_stats_populate() call.
  *
  * The value returned is the number of registered groups visible with the
- * progam_id value used for the list or populate operation and may not be
+ * program_id value used for the list or populate operation and may not be
  * equal to the highest present group_id (either due to program_id
  * filtering or gaps in the sequence of group_id values).
  *
@@ -813,7 +813,7 @@ int dm_stats_get_region_nr_histogram_bins(const struct dm_stats *dms,
  * complete.
  *
  * An optional unit suffix of 's', 'ms', 'us', or 'ns' may be used to
- * specify units of seconds, miliseconds, microseconds, or nanoseconds:
+ * specify units of seconds, milliseconds, microseconds, or nanoseconds:
  *
  *   bounds_str="1ns,1us,1ms,1s"
  *   bounds_str="500us,1ms,1500us,2ms"
@@ -821,12 +821,12 @@ int dm_stats_get_region_nr_histogram_bins(const struct dm_stats *dms,
  *
  * The smallest valid unit of time for a histogram specification depends
  * on whether the region uses precise timestamps: for a region with the
- * default milisecond precision the smallest possible histogram boundary
- * magnitude is one milisecond: attempting to use a histogram with a
- * boundary less than one milisecond when creating a region will cause
+ * default millisecond precision the smallest possible histogram boundary
+ * magnitude is one millisecond: attempting to use a histogram with a
+ * boundary less than one millisecond when creating a region will cause
  * the region to be created with the precise_timestamps feature enabled.
  *
- * On sucess a pointer to the struct dm_histogram representing the
+ * On success a pointer to the struct dm_histogram representing the
  * bounds values is returned, or NULL in the case of error. The returned
  * pointer should be freed using dm_free() when no longer required.
  */
@@ -842,9 +842,9 @@ struct dm_histogram *dm_histogram_bounds_from_string(const char *bounds_str);
  *
  * The smallest valid unit of time for a histogram specification depends
  * on whether the region uses precise timestamps: for a region with the
- * default milisecond precision the smallest possible histogram boundary
- * magnitude is one milisecond: attempting to use a histogram with a
- * boundary less than one milisecond when creating a region will cause
+ * default millisecond precision the smallest possible histogram boundary
+ * magnitude is one millisecond: attempting to use a histogram with a
+ * boundary less than one millisecond when creating a region will cause
  * the region to be created with the precise_timestamps feature enabled.
  */
 struct dm_histogram *dm_histogram_bounds_from_uint64(const uint64_t *bounds);
@@ -1235,7 +1235,7 @@ int dm_stats_get_current_area_offset(const struct dm_stats *dms,
 				     uint64_t *offset);
 
 int dm_stats_get_current_area_len(const struct dm_stats *dms,
-				       uint64_t *start);
+				       uint64_t *len);
 
 /*
  * Return a pointer to the program_id string for region at the current
@@ -1261,7 +1261,7 @@ const char *dm_stats_get_current_region_aux_data(const struct dm_stats *dms);
  * be expressed as "M-N", where M and N are the start and end region_id
  * values for the range.
  */
-int dm_stats_create_group(struct dm_stats *dms, const char *group,
+int dm_stats_create_group(struct dm_stats *dms, const char *members,
 			  const char *alias, uint64_t *group_id);
 
 /*
@@ -1501,7 +1501,7 @@ const char *dm_sysfs_dir(void);
 
 /*
  * Configure default UUID prefix string.
- * Conventionally this is a short capitalised prefix indicating the subsystem
+ * Conventionally this is a short capitalized prefix indicating the subsystem
  * that is managing the devices, e.g. "LVM-" or "MPATH-".
  * To support stacks of devices from different subsystems, recursive functions
  * stop recursing if they reach a device with a different prefix.
@@ -1544,7 +1544,7 @@ int dm_device_has_mounted_fs(uint32_t major, uint32_t minor);
 
 
 /*
- * Callback is invoked for individal mountinfo lines,
+ * Callback is invoked for individual mountinfo lines,
  * minor, major and mount target are parsed and unmangled.
  */
 typedef int (*dm_mountinfo_line_callback_fn) (char *line, unsigned maj, unsigned min,
@@ -1658,7 +1658,7 @@ void *dm_tree_node_get_context(const struct dm_tree_node *node);
 /*
  * Returns  0 when node size and its children is unchanged.
  * Returns  1 when node or any of its children has increased size.
- * Rerurns -1 when node or any of its children has reduced size.
+ * Returns -1 when node or any of its children has reduced size.
  */
 int dm_tree_node_size_changed(const struct dm_tree_node *dnode);
 
@@ -1845,7 +1845,7 @@ struct dm_tree_node_raid_params {
 };
 
 /*
- * Version 2 of above node raid params struct to keeep API compatibility.
+ * Version 2 of above node raid params struct to keep API compatibility.
  *
  * Extended for more than 64 legs (max 253 in the MD kernel runtime!),
  * delta_disks for disk add/remove reshaping,
@@ -1868,7 +1868,7 @@ struct dm_tree_node_raid_params_v2 {
 	 * 'rebuilds' and 'writemostly' are bitfields that signify
 	 * which devices in the array are to be rebuilt or marked
 	 * writemostly.  The kernel supports up to 253 legs.
-	 * We limit ourselvs by choosing a lower value
+	 * We limit ourselves by choosing a lower value
 	 * for DEFAULT_RAID_MAX_IMAGES.
 	 */
 	uint64_t rebuilds[RAID_BITMAP_SIZE];
@@ -1905,7 +1905,7 @@ struct dm_config_node;
  *
  * policy_settings {
  *    migration_threshold=2048
- *    sequention_threashold=100
+ *    sequential_threshold=100
  *    ...
  * }
  *
@@ -1962,7 +1962,7 @@ int dm_tree_node_add_replicator_dev_target(struct dm_tree_node *node,
 /* End of Replicator API */
 
 /*
- * FIXME: Defines bellow are based on kernel's dm-thin.c defines
+ * FIXME: Defines below are based on kernel's dm-thin.c defines
  * DATA_DEV_BLOCK_SIZE_MIN_SECTORS (64 * 1024 >> SECTOR_SHIFT)
  * DATA_DEV_BLOCK_SIZE_MAX_SECTORS (1024 * 1024 * 1024 >> SECTOR_SHIFT)
  */
@@ -2028,7 +2028,7 @@ int dm_tree_node_set_thin_pool_error_if_no_space(struct dm_tree_node *node,
 int dm_tree_node_set_thin_pool_read_only(struct dm_tree_node *node,
 					 unsigned read_only);
 /*
- * FIXME: Defines bellow are based on kernel's dm-thin.c defines
+ * FIXME: Defines below are based on kernel's dm-thin.c defines
  * MAX_DEV_ID ((1 << 24) - 1)
  */
 #define DM_THIN_MAX_DEVICE_ID (UINT32_C((1 << 24) - 1))
@@ -2046,9 +2046,9 @@ void dm_tree_node_set_presuspend_node(struct dm_tree_node *node,
 				      struct dm_tree_node *presuspend_node);
 
 int dm_tree_node_add_target_area(struct dm_tree_node *node,
-				    const char *dev_name,
-				    const char *dlid,
-				    uint64_t offset);
+				 const char *dev_name,
+				 const char *uuid,
+				 uint64_t offset);
 
 /*
  * Only for temporarily-missing raid devices where changes are tracked.
@@ -2779,9 +2779,9 @@ int dm_fclose(FILE *stream);
  * Pointer to the buffer is stored in *buf.
  * Returns -1 on failure leaving buf undefined.
  */
-int dm_asprintf(char **buf, const char *format, ...)
+int dm_asprintf(char **result, const char *format, ...)
     __attribute__ ((format(printf, 2, 3)));
-int dm_vasprintf(char **buf, const char *format, va_list ap)
+int dm_vasprintf(char **result, const char *format, va_list aq)
     __attribute__ ((format(printf, 2, 0)));
 
 /*
@@ -3058,6 +3058,7 @@ const void *dm_report_value_cache_get(struct dm_report *rh, const char *name);
 #define DM_REPORT_OUTPUT_FIELD_UNQUOTED		0x00000010
 #define DM_REPORT_OUTPUT_COLUMNS_AS_ROWS	0x00000020
 #define DM_REPORT_OUTPUT_MULTIPLE_TIMES		0x00000040
+#define DM_REPORT_OUTPUT_FIELD_IDS_IN_HEADINGS	0x00000080
 
 struct dm_report *dm_report_init(uint32_t *report_types,
 				 const struct dm_report_object_type *types,
@@ -3129,7 +3130,7 @@ void dm_report_free(struct dm_report *rh);
  * Prefix added to each field name with DM_REPORT_OUTPUT_FIELD_NAME_PREFIX
  */
 int dm_report_set_output_field_name_prefix(struct dm_report *rh,
-					   const char *report_prefix);
+					   const char *output_field_name_prefix);
 
 int dm_report_set_selection(struct dm_report *rh, const char *selection);
 
@@ -3170,7 +3171,8 @@ struct dm_report_group;
 typedef enum dm_report_group_type_e {
 	DM_REPORT_GROUP_SINGLE,
 	DM_REPORT_GROUP_BASIC,
-	DM_REPORT_GROUP_JSON
+	DM_REPORT_GROUP_JSON,
+	DM_REPORT_GROUP_JSON_STD
 } dm_report_group_type_t;
 
 struct dm_report_group *dm_report_group_create(dm_report_group_type_t type, void *data);
@@ -3330,7 +3332,7 @@ int dm_stats_get_metric(const struct dm_stats *dms, int metric,
 int dm_stats_get_rd_merges_per_sec(const struct dm_stats *dms, double *rrqm,
 				   uint64_t region_id, uint64_t area_id);
 
-int dm_stats_get_wr_merges_per_sec(const struct dm_stats *dms, double *rrqm,
+int dm_stats_get_wr_merges_per_sec(const struct dm_stats *dms, double *wrqm,
 				   uint64_t region_id, uint64_t area_id);
 
 int dm_stats_get_reads_per_sec(const struct dm_stats *dms, double *rd_s,
@@ -3344,7 +3346,7 @@ int dm_stats_get_read_sectors_per_sec(const struct dm_stats *dms,
 				      uint64_t area_id);
 
 int dm_stats_get_write_sectors_per_sec(const struct dm_stats *dms,
-				       double *wr_s, uint64_t region_id,
+				       double *wsec_s, uint64_t region_id,
 				       uint64_t area_id);
 
 int dm_stats_get_average_request_size(const struct dm_stats *dms,
@@ -3535,6 +3537,7 @@ struct dm_config_tree *dm_config_create(void);
 struct dm_config_tree *dm_config_from_string(const char *config_settings);
 int dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end);
 int dm_config_parse_without_dup_node_check(struct dm_config_tree *cft, const char *start, const char *end);
+int dm_config_parse_only_section(struct dm_config_tree *cft, const char *start, const char *end, const char *section);
 
 void *dm_config_get_custom(struct dm_config_tree *cft);
 void dm_config_set_custom(struct dm_config_tree *cft, void *custom);
@@ -3559,7 +3562,7 @@ void dm_config_destroy(struct dm_config_tree *cft);
 
 /* Simple output line by line. */
 typedef int (*dm_putline_fn)(const char *line, void *baton);
-/* More advaced output with config node reference. */
+/* More advanced output with config node reference. */
 typedef int (*dm_config_node_out_fn)(const struct dm_config_node *cn, const char *line, void *baton);
 
 /*
@@ -3581,7 +3584,7 @@ int dm_config_write_one_node_out(const struct dm_config_node *cn, const struct d
 
 struct dm_config_node *dm_config_find_node(const struct dm_config_node *cn, const char *path);
 int dm_config_has_node(const struct dm_config_node *cn, const char *path);
-int dm_config_remove_node(struct dm_config_node *parent, struct dm_config_node *remove);
+int dm_config_remove_node(struct dm_config_node *parent, struct dm_config_node *rem_node);
 const char *dm_config_find_str(const struct dm_config_node *cn, const char *path, const char *fail);
 const char *dm_config_find_str_allow_empty(const struct dm_config_node *cn, const char *path, const char *fail);
 int dm_config_find_int(const struct dm_config_node *cn, const char *path, int fail);
@@ -3613,7 +3616,7 @@ unsigned dm_config_maybe_section(const char *str, unsigned len);
 
 const char *dm_config_parent_name(const struct dm_config_node *n);
 
-struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const struct dm_config_node *node, int siblings);
+struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const struct dm_config_node *cn, int siblings);
 struct dm_config_node *dm_config_create_node(struct dm_config_tree *cft, const char *key);
 struct dm_config_value *dm_config_create_value(struct dm_config_tree *cft);
 struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *cn, int siblings);
@@ -3622,7 +3625,7 @@ struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const st
  * Common formatting flags applicable to all config node types (lower 16 bits).
  */
 #define DM_CONFIG_VALUE_FMT_COMMON_ARRAY             0x00000001 /* value is array */
-#define DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES      0x00000002 /* add spaces in "key = value" pairs in constrast to "key=value" for better readability */
+#define DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES      0x00000002 /* add spaces in "key = value" pairs in contrast to "key=value" for better readability */
 
 /*
  * Type-related config node formatting flags (higher 16 bits).
@@ -3668,7 +3671,7 @@ struct dm_pool *dm_config_memory(struct dm_config_tree *cft);
  */
 #define DM_UDEV_DISABLE_DM_RULES_FLAG 0x0001
 /*
- * DM_UDEV_DISABLE_SUBSYTEM_RULES_FLAG is set in case we need to disable
+ * DM_UDEV_DISABLE_SUBSYSTEM_RULES_FLAG is set in case we need to disable
  * subsystem udev rules, but still we need the general DM udev rules to
  * be applied (to create the nodes and symlinks under /dev and /dev/disk).
  */
@@ -3739,7 +3742,7 @@ struct dm_pool *dm_config_memory(struct dm_config_tree *cft);
 int dm_cookie_supported(void);
 
 /*
- * Udev synchronisation functions.
+ * Udev synchronization functions.
  */
 void dm_udev_set_sync_support(int sync_with_udev);
 int dm_udev_get_sync_support(void);

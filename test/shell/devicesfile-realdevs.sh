@@ -12,6 +12,8 @@
 
 test_description='devices file with real devs'
 
+SKIP_WITH_LVMPOLLD=1
+
 . lib/inittest
 
 #
@@ -32,7 +34,7 @@ if [ -z ${LVM_TEST_DEVICE_LIST+x} ]; then echo "LVM_TEST_DEVICE_LIST is unset" &
 
 test -e "$LVM_TEST_DEVICE_LIST" || skip
 
-num_devs=$(cat $LVM_TEST_DEVICE_LIST | wc -l)
+num_devs=$(wc -l < "$LVM_TEST_DEVICE_LIST")
 
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
@@ -84,6 +86,7 @@ for dev in "${REAL_DEVICES[@]}"; do
 	pvid=`pvs $dev --noheading -o uuid | tr -d - | awk '{print $1}'`
 
 	sys_wwid_file="/sys/dev/block/$maj:$min/device/wwid"
+	sys_wwid_nvme_file="/sys/dev/block/$maj:$min/wwid"
 	sys_serial_file="/sys/dev/block/$maj:$min/device/serial"
 	sys_dm_uuid_file="/sys/dev/block/$maj:$min/dm/uuid"
 	sys_md_uuid_file="/sys/dev/block/$maj:$min/md/uuid"
@@ -91,6 +94,9 @@ for dev in "${REAL_DEVICES[@]}"; do
 
 	if test -e $sys_wwid_file; then
 		sys_file=$sys_wwid_file
+		idtype="sys_wwid"
+	elif test -e $sys_wwid_nvme_file; then
+		sys_file=$sys_wwid_nvme_file
 		idtype="sys_wwid"
 	elif test -e $sys_serial_file; then
 		sys_file=$sys_serial_file
@@ -302,8 +308,6 @@ pvid1=`pvs $dev1 --noheading -o uuid | tr -d - | awk '{print $1}'`
 pvid2=`pvs $dev2 --noheading -o uuid | tr -d - | awk '{print $1}'`
 test "$pvid1" != "$pvid2" || die "same uuid"
 
-id1=`pvs $dev1 --noheading -o deviceid | tr -d - | awk '{print $1}'`
-id2=`pvs $dev2 --noheading -o deviceid | tr -d - | awk '{print $1}'`
 test "$id1" != "$id2" || die "same device id"
 
 grep $dev1 $DF
@@ -457,7 +461,7 @@ grep $did1 $DF
 # file corruption.)
 # So, if the deviceid *is* corrupted, as we do here, then standard
 # commands won't correct it.  We need to use delpvid/addpvid explicitly
-# to say that we are targetting the given pvid.
+# to say that we are targeting the given pvid.
 
 rm $DF
 sed "s/$did1/baddid/" "$DF.orig" |tee $DF

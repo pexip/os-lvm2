@@ -59,7 +59,7 @@ sel() {
 		return 1
 	}
 
-	items_found=$(wc -l "$OUT_LOG_FILE" | cut -f 1 -d ' ')
+	items_found=$(wc -l < "$OUT_LOG_FILE")
 
 	# the number of lines on output must match
 	test "$items_found" -eq $# || {
@@ -196,9 +196,9 @@ sel lv 'lv_minor=undef' vol1 vol2 abc orig snap
 sel lv 'lv_minor=unknown' vol1 vol2 abc orig snap
 sel lv 'lv_minor=254' xyz
 # also test synonym for string field type
-sel lv 'seg_monitor=undefined' vol1 vol2 abc abc orig snap xyz
+sel lv 'seg_monitor=undefined' vol1 vol2 abc abc orig xyz
 
-# if size unit not spefied, the 'm' (MiB) unit is used by default
+# if size unit not specified, the 'm' (MiB) unit is used by default
 sel lv 'lv_size=8' vol1
 
 # no need to use quotes for the whole selection string if it does not clash with shell

@@ -25,6 +25,7 @@
 #include "lib/commands/toolcontext.h"
 #include "lib/device/device_id.h"
 #include "libdaemon/client/config-util.h"
+#include "base/data-struct/radix-tree.h"
 
 #include <stdarg.h>
 #include <time.h>
@@ -53,8 +54,7 @@ typedef int (*nl_fn) (struct formatter * f);
  * exporting the vg, ie. writing it to a file.
  */
 struct formatter {
-	struct dm_pool *mem;	/* pv names allocated from here */
-	struct dm_hash_table *pv_names;	/* dev_name -> pv_name (eg, pv1) */
+	struct radix_tree *pv_idx;	/* dev_name id -> pv_name (eg, pv1) */
 
 	union {
 		FILE *fp;	/* where we're writing to */
@@ -71,6 +71,7 @@ struct formatter {
 	int indent;		/* current level of indentation */
 	int error;
 	int header;		/* 1 => comments at start; 0 => end */
+	int with_comment;       /* 1 => prepare comment sting */
 };
 
 static struct utsname _utsname;
@@ -224,35 +225,34 @@ static int _out_with_comment_raw(struct formatter *f,
  */
 static int _sectors_to_units(uint64_t sectors, char *buffer, size_t s)
 {
-	static const char *_units[] = {
+	static const char _units[][16] = {
 		"Kilobytes",
 		"Megabytes",
 		"Gigabytes",
 		"Terabytes",
 		"Petabytes",
 		"Exabytes",
-		NULL
 	};
 
-	int i;
+	unsigned i;
 	double d = (double) sectors;
 
 	/* to convert to K */
 	d /= 2.0;
 
-	for (i = 0; (d > 1024.0) && _units[i]; i++)
+	for (i = 0; (d > 1024.0) && i < DM_ARRAY_SIZE(_units); ++i)
 		d /= 1024.0;
 
 	return dm_snprintf(buffer, s, "# %g %s", d, _units[i]) > 0;
 }
 
-/* increment indention level */
+/* increment indentation level */
 void out_inc_indent(struct formatter *f)
 {
 	_inc_indent(f);
 }
 
-/* decrement indention level */
+/* decrement indentation level */
 void out_dec_indent(struct formatter *f)
 {
 	_dec_indent(f);
@@ -274,8 +274,11 @@ int out_size(struct formatter *f, uint64_t size, const char *fmt, ...)
 	va_list ap;
 	int r;
 
-	if (!_sectors_to_units(size, buffer, sizeof(buffer)))
-		return 0;
+	if (f->with_comment) {
+		if (!_sectors_to_units(size, buffer, sizeof(buffer)))
+			return 0;
+	} else
+		buffer[0] = 0;
 
 	_out_with_comment(f, buffer, fmt, ap);
 
@@ -358,17 +361,17 @@ static int _print_header(struct cmd_context *cmd, struct formatter *f,
 	return 1;
 }
 
-static int _print_flag_config(struct formatter *f, uint64_t status, int type)
+static int _print_flag_config(struct formatter *f, uint64_t status, enum pv_vg_lv_e type)
 {
 	char buffer[4096];
 
 	if (!print_flags(buffer, sizeof(buffer), type, STATUS_FLAG, status))
 		return_0;
-	outf(f, "status = %s", buffer);
+	outf(f, "status = [%s]", buffer);
 
 	if (!print_flags(buffer, sizeof(buffer), type, COMPATIBLE_FLAG, status))
 		return_0;
-	outf(f, "flags = %s", buffer);
+	outf(f, "flags = [%s]", buffer);
 
 	return 1;
 }
@@ -391,28 +394,19 @@ static char *_alloc_printed_str_list(struct dm_list *list)
 		return NULL;
 	}
 
-	if (!emit_to_buffer(&buf, &size, "["))
-		goto_bad;
+	buffer[0] = 0;
 
 	dm_list_iterate_items(sl, list) {
-		if (!first) {
-			if (!emit_to_buffer(&buf, &size, ", "))
-				goto_bad;
-		} else
-			first = 0;
-
-		if (!emit_to_buffer(&buf, &size, "\"%s\"", sl->str))
-			goto_bad;
+		if (!emit_to_buffer(&buf, &size, "%s\"%s\"",
+				    (!first) ? ", " : "",
+				    sl->str)) {
+			free(buffer);
+			return_NULL;
+		}
+		first = 0;
 	}
 
-	if (!emit_to_buffer(&buf, &size, "]"))
-		goto_bad;
-
 	return buffer;
-
-bad:
-	free(buffer);
-	return_NULL;
 }
 
 static int _out_list(struct formatter *f, struct dm_list *list,
@@ -423,7 +417,7 @@ static int _out_list(struct formatter *f, struct dm_list *list,
 	if (!dm_list_empty(list)) {
 		if (!(buffer = _alloc_printed_str_list(list)))
 			return_0;
-		if (!out_text(f, "%s = %s", list_name, buffer)) {
+		if (!out_text(f, "%s = [%s]", list_name, buffer)) {
 			free(buffer);
 			return_0;
 		}
@@ -497,29 +491,18 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 	return 1;
 }
 
-/*
- * Get the pv%d name from the formatters hash
- * table.
- */
-static const char *_get_pv_name_from_uuid(struct formatter *f, char *uuid)
+/* Get the pv index  %d name from the formatters radix tree. */
+static int _get_pv_idx(const struct formatter *f, const struct physical_volume *pv)
 {
-	const char *pv_name = dm_hash_lookup(f->pv_names, uuid);
+	union radix_value idx;
 
-	if (!pv_name)
-		log_error(INTERNAL_ERROR "PV name for uuid %s missing from text metadata export hash table.",
-			  uuid);
+	if (!pv || !radix_tree_lookup(f->pv_idx, &pv, sizeof(pv), &idx)) {
+		log_error(INTERNAL_ERROR "PV name for %s missing in metadata export radix tree.",
+			  (pv) ? pv_dev_name(pv) : "");
+		return -1;
+	}
 
-	return pv_name;
-}
-
-static const char *_get_pv_name(struct formatter *f, struct physical_volume *pv)
-{
-	char uuid[64] __attribute__((aligned(8)));
-
-	if (!pv || !id_write_format(&pv->id, uuid, sizeof(uuid)))
-		return_NULL;
-
-	return _get_pv_name_from_uuid(f, uuid);
+	return (int) idx.n;
 }
 
 static int _print_pvs(struct formatter *f, struct volume_group *vg)
@@ -527,7 +510,7 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 	struct pv_list *pvl;
 	struct physical_volume *pv;
 	char buffer[PATH_MAX * 2];
-	const char *name;
+	int idx;
 	const char *idtype, *idname;
 
 	outf(f, "physical_volumes {");
@@ -539,11 +522,11 @@ static int _print_pvs(struct formatter *f, struct volume_group *vg)
 		if (!id_write_format(&pv->id, buffer, sizeof(buffer)))
 			return_0;
 
-		if (!(name = _get_pv_name_from_uuid(f, buffer)))
+		if ((idx = _get_pv_idx(f, pv)) < 0)
 			return_0;
 
 		outnl(f);
-		outf(f, "%s {", name);
+		outf(f, "pv%d {", idx);
 		_inc_indent(f);
 
 		outf(f, "id = \"%s\"", buffer);
@@ -627,8 +610,8 @@ static int _print_segment(struct formatter *f, struct volume_group *vg,
 int out_areas(struct formatter *f, const struct lv_segment *seg,
 	      const char *type)
 {
-	const char *name;
 	unsigned int s;
+	int idx;
 	struct physical_volume *pv;
 
 	outnl(f);
@@ -644,11 +627,11 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 					  s, type, display_lvname(seg->lv));
 				return 0;
 			}
-				
-			if (!(name = _get_pv_name(f, pv)))
+
+			if ((idx = _get_pv_idx(f, pv)) < 0)
 				return_0;
 
-			outf(f, "\"%s\", %u%s", name,
+			outf(f, "\"pv%d\", %u%s", idx,
 			     seg_pe(seg, s),
 			     (s == seg->area_count - 1) ? "" : ",");
 			break;
@@ -697,10 +680,14 @@ static int _print_timestamp(struct formatter *f,
 	struct tm *local_tm;
 
 	if (ts) {
-		strncpy(buf, "# ", buf_size);
-		if (!(local_tm = localtime(&ts)) ||
-		    !strftime(buf + 2, buf_size - 2,
-			      "%Y-%m-%d %T %z", local_tm))
+		if (f->with_comment) {
+			/* generate timestamp only for commented output */
+			strncpy(buf, "# ", buf_size);
+			if (!(local_tm = localtime(&ts)) ||
+			    !strftime(buf + 2, buf_size - 2,
+				      "%Y-%m-%d %T %z", local_tm))
+				buf[0] = 0;
+		} else
 			buf[0] = 0;
 
 		outfc(f, buf, "%s = " FMTu64, name, (uint64_t) ts);
@@ -851,25 +838,19 @@ static int _alloc_printed_indirect_descendants(struct dm_list *indirect_glvs, ch
 		return 0;
 	}
 	buf = *buffer;
-
-	if (!emit_to_buffer(&buf, &buf_size, "["))
-		goto_bad;
+	buf[0] = 0;
 
 	dm_list_iterate_items(user_glvl, indirect_glvs) {
 		if (user_glvl->glv->is_historical)
 			continue;
-		if (!first) {
-			if (!emit_to_buffer(&buf, &buf_size, ", "))
-				goto_bad;
-		} else
-			first = 0;
 
-		if (!emit_to_buffer(&buf, &buf_size, "\"%s\"", user_glvl->glv->live->name))
+		if (!emit_to_buffer(&buf, &buf_size, "%s\"%s\"",
+				    (!first) ? ", " : "",
+				    user_glvl->glv->live->name))
 			goto_bad;
-	}
 
-	if (!emit_to_buffer(&buf, &buf_size, "]"))
-		goto_bad;
+		first = 0;
+	}
 
 	return 1;
 bad:
@@ -908,7 +889,7 @@ static int _print_historical_lv_with_descendants(struct formatter *f, struct his
 	}
 
 	if (descendants_buffer)
-		outf(f, "descendants = %s", descendants_buffer);
+		outf(f, "descendants = [%s]", descendants_buffer);
 
 	_dec_indent(f);
 	outf(f, "}");
@@ -955,35 +936,22 @@ static int _print_historical_lvs(struct formatter *f, struct volume_group *vg)
  * 'pv2' etc.  This function builds a hash table
  * to enable a quick lookup from device -> name.
  */
-static int _build_pv_names(struct formatter *f, struct volume_group *vg)
+static int _build_pv_idx(struct formatter *f, struct volume_group *vg)
 {
-	int count = 0;
+	union radix_value count = { 0 };
 	struct pv_list *pvl;
 	struct physical_volume *pv;
-	char buffer[32], *name;
-	char uuid[64];
 
-	if (!(f->mem = dm_pool_create("text pv_names", 512)))
-		return_0;
-
-	if (!(f->pv_names = dm_hash_create(115)))
+	if (!(f->pv_idx = radix_tree_create(NULL, NULL)))
 		return_0;
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		pv = pvl->pv;
 
 		/* FIXME But skip if there's already an LV called pv%d ! */
-		if (dm_snprintf(buffer, sizeof(buffer), "pv%d", count++) < 0)
+		if (!radix_tree_insert(f->pv_idx, &pv, sizeof(pv), count))
 			return_0;
-
-		if (!(name = dm_pool_strdup(f->mem, buffer)))
-			return_0;
-
-		if (!id_write_format(&pv->id, uuid, sizeof(uuid)))
-			return_0;
-
-		if (!dm_hash_insert(f->pv_names, uuid, name))
-			return_0;
+		count.n++;
 	}
 
 	return 1;
@@ -994,7 +962,7 @@ static int _text_vg_export(struct formatter *f,
 {
 	int r = 0;
 
-	if (!_build_pv_names(f, vg))
+	if (!_build_pv_idx(f, vg))
 		goto_out;
 
 	if (f->header && !_print_header(vg->cmd, f, desc))
@@ -1030,14 +998,9 @@ static int _text_vg_export(struct formatter *f,
 	r = 1;
 
       out:
-	if (f->mem) {
-		dm_pool_destroy(f->mem);
-		f->mem = NULL;
-	}
-
-	if (f->pv_names) {
-		dm_hash_destroy(f->pv_names);
-		f->pv_names = NULL;
+	if (f->pv_idx) {
+		radix_tree_destroy(f->pv_idx);
+		f->pv_idx = NULL;
 	}
 
 	return r;
@@ -1050,6 +1013,7 @@ int text_vg_export_file(struct volume_group *vg, const char *desc, FILE *fp)
 		.indent = 0,
 		.header = 1,
 		.out_with_comment = &_out_with_comment_file,
+		.with_comment = 1,
 		.nl = &_nl_file,
 		.data.fp = fp,
 	};

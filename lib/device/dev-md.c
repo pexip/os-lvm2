@@ -44,6 +44,7 @@ static int _dev_has_md_magic(struct device *dev, uint64_t sb_offset)
 		return_0;
 
 	if ((md_magic == MD_SB_MAGIC) ||
+	    /* coverity[result_independent_of_operands] */
 	     ((MD_SB_MAGIC != xlate32(MD_SB_MAGIC)) && (md_magic == xlate32(MD_SB_MAGIC))))
 		return 1;
 
@@ -322,8 +323,8 @@ static int _md_sysfs_attribute_snprintf(char *path, size_t size,
 	if (MAJOR(dev) != dt->md_major)
 		return ret;
 
-	ret = dm_snprintf(path, size, "%s/dev/block/%d:%d/md/%s", sysfs_dir,
-			  (int)MAJOR(dev), (int)MINOR(dev), attribute);
+	ret = dm_snprintf(path, size, "%s/dev/block/%u:%u/md/%s", sysfs_dir,
+			  MAJOR(dev), MINOR(dev), attribute);
 	if (ret < 0) {
 		log_error("dm_snprintf md %s failed", attribute);
 		return ret;
@@ -335,8 +336,8 @@ static int _md_sysfs_attribute_snprintf(char *path, size_t size,
 			return ret;
 		}
 		/* old sysfs structure */
-		ret = dm_snprintf(path, size, "%s/block/md%d/md/%s",
-				  sysfs_dir, (int)MINOR(dev), attribute);
+		ret = dm_snprintf(path, size, "%s/block/md%u/md/%s",
+				  sysfs_dir, MINOR(dev), attribute);
 		if (ret < 0) {
 			log_error("dm_snprintf old md %s failed", attribute);
 			return ret;

@@ -300,7 +300,7 @@ int backup_remove(struct cmd_context *cmd, const char *vg_name)
 	/*
 	 * Let this fail silently.
 	 */
-	if (unlink(path))
+	if (unlink(path) && (errno != ENOENT))
 		log_sys_debug("unlink", path);
 
 	return 1;
@@ -542,6 +542,8 @@ int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
 				break;
 			}
 		}
+		if (!check_lv_segments_complete_vg(lvl->lv))
+			goto_out;
 	}
 
 	missing_pvs = vg_missing_pv_count(vg);

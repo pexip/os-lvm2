@@ -17,6 +17,11 @@ SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
+# Since this test is currently using 'system's' hints,
+# it cannot be running, while lvmdbusd operates in the system.
+# FIXME: sometimes test suite itself 'leaks' lvmdbusd process.
+pgrep lvmdbusd && skip "Can't run this test, while lvmdbusd is running"
+
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
 HINTS="$RUNDIR/lvm/hints"
@@ -84,9 +89,7 @@ grep "$dev1" $HINTS
 grep "$dev2" $HINTS
 grep "$dev3" $HINTS
 
-aux wipefs_a "$dev1"
-aux wipefs_a "$dev2"
-aux wipefs_a "$dev3"
+aux wipefs_a "$dev1" "$dev2" "$dev3"
 
 #
 # vg1 uses dev1,dev2
@@ -110,12 +113,12 @@ not grep scan: tmptest
 
 if which strace; then
 strace -e io_submit pvs 2>&1|tee tmptest
-test "$(grep io_submit tmptest | wc -l)" -eq 3
+test "$(grep -c io_submit tmptest)" -eq 3
 
 # test that 'pvs -a' submits seven reads, one for each device,
 # and one more in vg_read rescan check
 strace -e io_submit pvs -a 2>&1|tee tmptest
-test "$(grep io_submit tmptest | wc -l)" -eq 7
+test "$(grep -c io_submit tmptest)" -eq 7
 fi
 
 #
@@ -264,8 +267,8 @@ lvcreate -l1 -n $lv2 $vg1
 lvcreate -l1 -an -n $lv3 $vg1
 lvchange -an $vg1
 lvremove $vg1/$lv3
-lvresize -l+1 $vg1/$lv2
-lvresize -l-1 $vg1/$lv2
+lvresize --fs ignore -l+1 $vg1/$lv2
+lvresize --fs ignore -l-1 $vg1/$lv2
 lvdisplay
 pvdisplay
 vgdisplay
@@ -449,7 +452,7 @@ rm tmp-old tmp-new tmp-newuuid
 
 
 #
-# Test incorrent pvid-to-vgname info in hints is detected
+# Test incorrect pvid-to-vgname info in hints is detected
 #
 
 # this vgcreate invalidates current hints

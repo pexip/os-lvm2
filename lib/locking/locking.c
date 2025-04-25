@@ -23,6 +23,7 @@
 #include "lib/mm/memlock.h"
 #include "lib/config/defaults.h"
 #include "lib/cache/lvmcache.h"
+#include "lib/display/display.h"
 #include "lib/misc/lvm-signal.h"
 
 #include <assert.h>
@@ -206,7 +207,7 @@ int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, const str
 	if (!_blocking_supported)
 		flags |= LCK_NONBLOCK;
 
-	if (!dm_strncpy(resource, vol, sizeof(resource))) {
+	if (!_dm_strncpy(resource, vol, sizeof(resource))) {
 		log_error(INTERNAL_ERROR "Resource name %s is too long.", vol);
 		return 0;
 	}
@@ -330,7 +331,6 @@ int vg_write_lock_held(void)
 
 int sync_local_dev_names(struct cmd_context* cmd)
 {
-	dm_device_list_destroy(&cmd->cache_dm_devs);
 	memlock_unlock(cmd);
 	fs_unlock();
 	return 1;
@@ -408,7 +408,7 @@ int lock_global(struct cmd_context *cmd, const char *mode)
 		return 0;
 
 	if (!lockd_global(cmd, mode)) {
-		lockf_global(cmd, "un");
+		(void) lockf_global(cmd, "un");
 		return 0;
 	}
 

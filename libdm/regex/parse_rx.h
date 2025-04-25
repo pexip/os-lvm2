@@ -16,6 +16,8 @@
 #ifndef _DM_PARSE_REGEX_H
 #define _DM_PARSE_REGEX_H
 
+#include "libdm/misc/dmlib.h"
+
 enum {
 	CAT,
 	STAR,
@@ -40,7 +42,7 @@ struct rx_node {
 	dm_bitset_t charset;
 	struct rx_node *left, *right;
 
-	/* used to build the dfa for the toker */
+	/* used to build the dfa for the token */
         unsigned charset_index;
 	int nullable, final;
 	dm_bitset_t firstpos;

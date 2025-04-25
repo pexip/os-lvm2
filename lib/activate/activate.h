@@ -107,8 +107,12 @@ int target_present(struct cmd_context *cmd, const char *target_name,
 int target_version(const char *target_name, uint32_t *maj,
 		   uint32_t *min, uint32_t *patchlevel);
 
-int get_device_list(const struct volume_group *vg, struct dm_list **devs,
+int get_dm_active_devices(const struct volume_group *vg, struct dm_list **devs,
 		    unsigned *devs_features);
+int devno_dm_uuid(struct cmd_context *cmd, int major, int minor,
+		  char *uuid_buf, size_t uuid_buf_size);
+int dev_dm_uuid(struct cmd_context *cmd, struct device *dev,
+                char *uuid_buf, size_t uuid_buf_size);
 
 int raid4_is_supported(struct cmd_context *cmd, const struct segment_type *segtype);
 int lvm_dm_prefix_check(int major, int minor, const char *prefix);
@@ -204,6 +208,8 @@ int lv_thin_pool_status(const struct logical_volume *lv, int flush,
 int lv_vdo_pool_status(const struct logical_volume *lv, int flush,
 		       struct lv_status_vdo **status);
 int lv_vdo_pool_percent(const struct logical_volume *lv, dm_percent_t *percent);
+int lv_vdo_pool_size_config(const struct logical_volume *lv,
+			    struct vdo_pool_size_config *cfg);
 
 /*
  * Return number of LVs in the VG that are active.
@@ -258,7 +264,7 @@ struct dev_usable_check_params {
  * Returns 1 if mapped device is not suspended, blocked or
  * is using a reserved name.
  */
-int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv);
+int dm_device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv);
 
 /*
  * Declaration moved here from fs.h to keep header fs.h hidden

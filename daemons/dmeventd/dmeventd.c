@@ -23,12 +23,12 @@
 #include "libdm/misc/dm-logging.h"
 #include "base/memory/zalloc.h"
 
+#include "libdaemon/server/daemon-stray.h"
+
 #include <dlfcn.h>
 #include <pthread.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/time.h>
 #include <sys/resource.h>
 #include <signal.h>
 #include <arpa/inet.h>		/* for htonl, ntohl */
@@ -92,12 +92,10 @@ static const size_t THREAD_STACK_SIZE = 300 * 1024;
 /* Default idle exit timeout 1 hour (in seconds) */
 static const time_t DMEVENTD_IDLE_EXIT_TIMEOUT = 60 * 60;
 
-static int _debug_level = 0;
-static int _use_syslog = 1;
 static int _systemd_activation = 0;
 static int _foreground = 0;
-static int _restart = 0;
 static time_t _idle_since = 0;
+static const char *_exit_on = DEFAULT_DMEVENTD_EXIT_ON_PATH;
 static char **_initial_registrations = 0;
 
 /* FIXME Make configurable at runtime */
@@ -202,9 +200,9 @@ struct message_data {
 	char *dso_name;		/* Name of DSO. */
 	char *device_uuid;	/* Mapped device path. */
 	char *events_str;	/* Events string as fetched from message. */
-	enum dm_event_mask events_field;	/* Events bitfield. */
-	char *timeout_str;
+	unsigned events_field;	/* Events bitfield. */
 	uint32_t timeout_secs;
+	char *timeout_str;
 	struct dm_event_daemon_message *msg;	/* Pointer to message buffer. */
 };
 
@@ -238,7 +236,7 @@ struct thread_status {
 	int status;		/* See DM_THREAD_{REGISTERING,RUNNING,DONE} */
 
 	int events;		/* bitfield for event filter. */
-	int current_events;	/* bitfield for occured events. */
+	int current_events;	/* bitfield for occurred events. */
 	struct dm_task *wait_task;
 	int pending;		/* Set when event filter change is pending */
 	time_t next_time;
@@ -270,7 +268,7 @@ static void _free_dso_data(struct dso_data *data)
 
 static struct dso_data *_alloc_dso_data(struct message_data *data)
 {
-	struct dso_data *ret = (typeof(ret)) zalloc(sizeof(*ret));
+	struct dso_data *ret = (__typeof__(ret)) zalloc(sizeof(*ret));
 
 	if (!ret)
 		return_NULL;
@@ -429,7 +427,7 @@ static struct thread_status *_alloc_thread_status(const struct message_data *dat
 	if (!(thread->device.name = strdup(data->device_uuid)))
 		goto_out;
 
-	/* runs ioctl and may register lvm2 pluging */
+	/* runs ioctl and may register lvm2 plugin */
 	thread->processing = 1;
 	thread->status = DM_THREAD_REGISTERING;
 
@@ -522,7 +520,7 @@ static int _fetch_string(char **ptr, char **src, const int delimiter)
 			*p = delimiter;
 			*src = p;
 		}
-		(*src)++; /* Skip delmiter, next field */
+		(*src)++; /* Skip delimiter, next field */
 	} else if ((len = strlen(*src))) {
 		/* No delimiter, item ends with '\0' */
 		if (!(*ptr = strdup(*src))) {
@@ -723,12 +721,18 @@ static int _get_status(struct message_data *message_data)
 static int _get_parameters(struct message_data *message_data) {
 	struct dm_event_daemon_message *msg = message_data->msg;
 	int size;
+	char idle_buf[32] = "";
+
+	if (_idle_since)
+		(void)dm_snprintf(idle_buf, sizeof(idle_buf), " idle=%lu", (long unsigned) (time(NULL) - _idle_since));
 
 	free(msg->data);
-	if ((size = dm_asprintf(&msg->data, "%s pid=%d daemon=%s exec_method=%s",
+	if ((size = dm_asprintf(&msg->data, "%s pid=%d daemon=%s exec_method=%s exit_on=\"%s\"%s",
 				message_data->id, getpid(),
 				_foreground ? "no" : "yes",
-				_systemd_activation ? "systemd" : "direct")) < 0) {
+				_systemd_activation ? "systemd" : "direct",
+				_exit_on,
+				idle_buf)) < 0) {
 		stack;
 		return -ENOMEM;
 	}
@@ -987,6 +991,7 @@ static void _monitor_unregister(void *arg)
 	DEBUGLOG("Unregistering monitor for %s.", thread->device.name);
 	_unregister_for_timeout(thread);
 
+	/* coverity[missing_lock] no missing lock here */
 	if ((thread->status != DM_THREAD_REGISTERING) &&
 	    !_do_unregister_device(thread))
 		log_error("%s: %s unregister failed.", __func__,
@@ -997,6 +1002,8 @@ static void _monitor_unregister(void *arg)
 	_lock_mutex();
 	thread->status = DM_THREAD_DONE; /* Last access to thread memory! */
 	_unlock_mutex();
+	if (_exit_now)  /* Exit is already in-progress, wake-up sleeping select() */
+		kill(getpid(), SIGINT);
 }
 
 /* Device monitoring thread. */
@@ -1043,9 +1050,9 @@ static void *_monitor_thread(void *arg)
 			_unlock_mutex();
 
 			_do_process_event(thread);
-			thread->current_events = 0; /* Current events processed */
 
 			_lock_mutex();
+			thread->current_events = 0; /* Current events processed */
 			thread->processing = 0;
 
 			/*
@@ -1159,6 +1166,36 @@ static int _unregister_for_event(struct message_data *message_data)
 	DEBUGLOG("Unregistered event for %s.", thread->device.name);
 
 	return ret;
+}
+
+static void _unregister_all_threads(void)
+{
+	struct thread_status *thread, *tmp;
+
+	_lock_mutex();
+
+	dm_list_iterate_items_safe(thread, tmp, &_thread_registry)
+		_update_events(thread, 0);
+
+	_unlock_mutex();
+}
+
+static void _wait_for_new_pid(void)
+{
+	unsigned long st_ino = 0;
+	struct stat st;
+	int i;
+
+	for (i = 0; i < 400000; ++i) {
+		if (lstat(DMEVENTD_PIDFILE, &st) == 0) {
+			if (!st_ino)
+				st_ino = st.st_ino;
+			else if (st_ino != st.st_ino)
+				break; /* different pidfile */
+		} else if (errno == ENOENT)
+			break; /* pidfile is removed */
+		usleep(100);
+	}
 }
 
 /*
@@ -1404,7 +1441,8 @@ static int _open_fifo(const char *path)
 	} else if (!S_ISFIFO(st.st_mode) || st.st_uid ||
 		   (st.st_mode & (S_IEXEC | S_IRWXG | S_IRWXO))) {
 		log_warn("WARNING: %s has wrong attributes: Replacing.", path);
-		if (unlink(path)) {
+		/* coverity[toctou]  don't care, path is going to be recreated */
+		if (unlink(path) && (errno != ENOENT)) {
 			log_sys_error("unlink", path);
 			return -1;
 		}
@@ -1412,6 +1450,7 @@ static int _open_fifo(const char *path)
 
 	/* Create fifo. */
 	(void) dm_prepare_selinux_context(path, S_IFIFO);
+	/* coverity[toctou]  revalidating things again */
 	if ((mkfifo(path, 0600) == -1) && errno != EEXIST) {
 		log_sys_error("mkfifo", path);
 		(void) dm_prepare_selinux_context(NULL, 0);
@@ -1640,7 +1679,7 @@ static int _do_process_request(struct dm_event_daemon_message *msg)
 	} else
 		ret = _handle_request(msg, &message_data);
 
-	msg->cmd = ret;
+	msg->cmd = (uint32_t)ret;
 	if (!msg->data)
 		msg->size = dm_asprintf(&(msg->data), "%s %s", message_data.id, strerror(-ret));
 
@@ -1677,9 +1716,9 @@ static void _process_request(struct dm_event_fifos *fifos)
 	free(msg.data);
 
 	if (cmd == DM_EVENT_CMD_DIE) {
-		if (unlink(DMEVENTD_PIDFILE))
-			log_sys_error("unlink", DMEVENTD_PIDFILE);
-		_exit(0);
+		_unregister_all_threads();
+		_exit_now = DM_SCHEDULED_EXIT;
+		log_info("dmeventd exiting for restart.");
 	}
 }
 
@@ -1726,7 +1765,7 @@ static void _cleanup_unused_threads(void)
 		DEBUGLOG("Destroying Thr %x.", (int)thread->thread);
 
 		if (pthread_join(thread->thread, NULL))
-			log_sys_error("pthread_join", "");
+			log_sys_debug("pthread_join", "");
 
 		_free_thread_status(thread);
 		_lock_mutex();
@@ -1757,7 +1796,7 @@ static void _init_thread_signals(void)
 	sigdelset(&my_sigset, SIGQUIT);
 
 	if (pthread_sigmask(SIG_BLOCK, &my_sigset, NULL))
-		log_sys_error("pthread_sigmask", "SIG_BLOCK");
+		log_sys_debug("pthread_sigmask", "SIG_BLOCK");
 }
 
 /*
@@ -1769,7 +1808,8 @@ static void _init_thread_signals(void)
  */
 static void _exit_handler(int sig __attribute__((unused)))
 {
-	_exit_now = DM_SIGNALED_EXIT;
+	if (!_exit_now)
+		_exit_now = DM_SIGNALED_EXIT;
 }
 
 #ifdef __linux__
@@ -1785,7 +1825,7 @@ static int _set_oom_adj(const char *oom_adj_path, int val)
 	fprintf(fp, "%i", val);
 
 	if (dm_fclose(fp))
-		log_sys_error("fclose", oom_adj_path);
+		log_sys_debug("fclose", oom_adj_path);
 
 	return 1;
 }
@@ -1799,11 +1839,11 @@ static int _protect_against_oom_killer(void)
 
 	if (stat(OOM_ADJ_FILE, &st) == -1) {
 		if (errno != ENOENT)
-			log_sys_error("stat", OOM_ADJ_FILE);
+			log_sys_debug("stat", OOM_ADJ_FILE);
 
 		/* Try old oom_adj interface as a fallback */
 		if (stat(OOM_ADJ_FILE_OLD, &st) == -1) {
-			log_sys_error("stat", OOM_ADJ_FILE_OLD);
+			log_sys_debug("stat", OOM_ADJ_FILE_OLD);
 			return 1;
 		}
 
@@ -1891,26 +1931,30 @@ out:
 
 static void _remove_files_on_exit(void)
 {
-	if (unlink(DMEVENTD_PIDFILE))
-		log_sys_error("unlink", DMEVENTD_PIDFILE);
+	if (unlink(DMEVENTD_PIDFILE) && (errno != ENOENT))
+		log_sys_debug("unlink", DMEVENTD_PIDFILE);
 
 	if (!_systemd_activation) {
-		if (unlink(DM_EVENT_FIFO_CLIENT))
-			log_sys_error("unlink", DM_EVENT_FIFO_CLIENT);
+		if (unlink(DM_EVENT_FIFO_CLIENT) && (errno != ENOENT))
+			log_sys_debug("unlink", DM_EVENT_FIFO_CLIENT);
 
-		if (unlink(DM_EVENT_FIFO_SERVER))
-			log_sys_error("unlink", DM_EVENT_FIFO_SERVER);
+		if (unlink(DM_EVENT_FIFO_SERVER) && (errno != ENOENT))
+			log_sys_debug("unlink", DM_EVENT_FIFO_SERVER);
 	}
 }
 
 static void _daemonize(void)
 {
-	int child_status;
-	int fd;
+	int child_status, null_fd;
 	pid_t pid;
-	struct rlimit rlim;
 	struct timeval tval;
 	sigset_t my_sigset;
+	struct custom_fds custom_fds = {
+		/* Do not close fds preloaded by systemd! */
+		.out = (_systemd_activation) ? SD_FD_FIFO_SERVER : -1,
+		.err = -1,
+		.report = (_systemd_activation) ? SD_FD_FIFO_CLIENT : -1,
+	};
 
 	sigemptyset(&my_sigset);
 	if (sigprocmask(SIG_SETMASK, &my_sigset, NULL) < 0) {
@@ -1954,33 +1998,28 @@ static void _daemonize(void)
 	if (chdir("/"))
 		exit(EXIT_CHDIR_FAILURE);
 
-	if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
-		fd = 256;	/* just have to guess */
-	else
-		fd = rlim.rlim_cur;
+	daemon_close_stray_fds("dmeventd", 0, -1, &custom_fds);
 
-	for (--fd; fd >= 0; fd--) {
-#ifdef __linux__
-		/* Do not close fds preloaded by systemd! */
-		if (_systemd_activation &&
-		    (fd == SD_FD_FIFO_SERVER || fd == SD_FD_FIFO_CLIENT))
-			continue;
-#endif
-		(void) close(fd);
-	}
-
-	if ((open("/dev/null", O_RDONLY) < 0) ||
-	    (open("/dev/null", O_WRONLY) < 0) ||
-	    (open("/dev/null", O_WRONLY) < 0))
+	if ((null_fd = open("/dev/null", O_RDWR)) < 0)
 		exit(EXIT_DESC_OPEN_FAILURE);
 
+	if ((dup2(null_fd, STDIN_FILENO) == -1) ||
+	    (dup2(null_fd, STDOUT_FILENO) == -1) ||
+	    (dup2(null_fd, STDERR_FILENO) == -1))
+		exit(EXIT_DESC_OPEN_FAILURE);
+
+	if ((null_fd > STDERR_FILENO) && close(null_fd))
+		exit(EXIT_DESC_CLOSE_FAILURE);
+
 	setsid();
+
+	/* coverity[leaked_handle] 'null_fd' handle is not leaking */
 }
 
 static int _reinstate_registrations(struct dm_event_fifos *fifos)
 {
 	static const char _failed_parsing_msg[] = "Failed to parse existing event registration.\n";
-	static const char *_delim = " ";
+	static const char _delim[] = " ";
 	struct dm_event_daemon_message msg = { 0 };
 	char *endp, *dso_name, *dev_name, *mask, *timeout;
 	unsigned long mask_value, timeout_value;
@@ -2030,28 +2069,94 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
 	return 1;
 }
 
-static void _restart_dmeventd(void)
+static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
 {
-	struct dm_event_fifos fifos = {
-		.client = -1,
-		.server = -1,
-		/* FIXME Make these either configurable or depend directly on dmeventd_path */
-		.client_path = DM_EVENT_FIFO_CLIENT,
-		.server_path = DM_EVENT_FIFO_SERVER
-	};
+	struct dm_event_daemon_message msg = { 0 };
+	int i, count = 0;
+	char *line;
+	int version;
+	int ret = 0;
+
+	if (!dm_daemon_is_running(DMEVENTD_PIDFILE)) {
+		fprintf(stderr, "No running dmeventd instance for status query.\n");
+		return 0;
+	}
+
+	/* Get the list of registrations from the running daemon. */
+	if (!init_fifos(fifos)) {
+		fprintf(stderr, "Could not initiate communication with existing dmeventd.\n");
+		return 0;
+	}
+
+	if (!dm_event_get_version(fifos, &version)) {
+		fprintf(stderr, "Could not communicate with existing dmeventd.\n");
+		goto out;
+	}
+
+	if (version < 1) {
+		fprintf(stderr, "The running dmeventd instance is too old.\n"
+			"Protocol version %d (required: 1). Action cancelled.\n", version);
+		goto out;
+	}
+
+	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0)) {
+		fprintf(stderr, "Failed to acquire status from existing dmeventd.\n");
+		goto out;
+	}
+
+	line = strchr(msg.data, ' ') + 1;
+	for (i = 0; msg.data[i]; ++i)
+		if (msg.data[i] == ';') {
+			msg.data[i] = 0;
+			if (!count)
+				printf("%s is monitoring:\n", name);
+			printf("%s\n", line);
+			line = msg.data + i + 1;
+			++count;
+		}
+
+	free(msg.data);
+
+	if (!count)
+		printf("%s does not monitor any device.\n", name);
+
+	if (version >= 2) {
+		if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
+			fprintf(stderr, "Failed to acquire parameters from existing dmeventd.\n");
+			goto out;
+		}
+		printf("%s internal status: %s\n", name, msg.data);
+		free(msg.data);
+	}
+
+	ret = 1;
+out:
+	fini_fifos(fifos);
+
+	return ret;
+}
+
+/* Return   0 - fail, 1 - success, 2 - continue */
+static int _restart_dmeventd(struct dm_event_fifos *fifos)
+{
 	struct dm_event_daemon_message msg = { 0 };
 	int i, count = 0;
 	char *message;
 	int version;
 	const char *e;
 
-	/* Get the list of registrations from the running daemon. */
-	if (!init_fifos(&fifos)) {
-		fprintf(stderr, "WARNING: Could not initiate communication with existing dmeventd.\n");
-		exit(EXIT_FAILURE);
+	if (!dm_daemon_is_running(DMEVENTD_PIDFILE)) {
+		fprintf(stderr, "WARNING: Could not find running dmeventd associated with pid file %s.\n", DMEVENTD_PIDFILE);
+		return 0;
 	}
 
-	if (!dm_event_get_version(&fifos, &version)) {
+	/* Get the list of registrations from the running daemon. */
+	if (!init_fifos(fifos)) {
+		fprintf(stderr, "WARNING: Could not initiate communication with existing dmeventd.\n");
+		return 0;
+	}
+
+	if (!dm_event_get_version(fifos, &version)) {
 		fprintf(stderr, "WARNING: Could not communicate with existing dmeventd.\n");
 		goto bad;
 	}
@@ -2063,7 +2168,7 @@ static void _restart_dmeventd(void)
 		goto bad;
 	}
 
-	if (daemon_talk(&fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
+	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
 		goto bad;
 
 	message = strchr(msg.data, ' ') + 1;
@@ -2087,7 +2192,7 @@ static void _restart_dmeventd(void)
 	}
 
 	if (version >= 2) {
-		if (daemon_talk(&fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
+		if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
 			fprintf(stderr, "Failed to acquire parameters from old dmeventd.\n");
 			goto bad;
 		}
@@ -2107,7 +2212,7 @@ static void _restart_dmeventd(void)
 	}
 #endif
 
-	if (daemon_talk(&fifos, &msg, DM_EVENT_CMD_DIE, "-", "-", 0, 0)) {
+	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_DIE, "-", "-", 0, 0)) {
 		fprintf(stderr, "Old dmeventd refused to die.\n");
 		goto bad;
 	}
@@ -2116,43 +2221,41 @@ static void _restart_dmeventd(void)
 	    ((e = getenv(SD_ACTIVATION_ENV_VAR_NAME)) && strcmp(e, "1")))
 		_systemd_activation = 1;
 
-	for (i = 0; i < 10; ++i) {
-		if ((access(DMEVENTD_PIDFILE, F_OK) == -1) && (errno == ENOENT))
-			break;
-		usleep(10);
-	}
+	fini_fifos(fifos);
 
-	if (!_systemd_activation) {
-		fini_fifos(&fifos);
-		return;
-	}
+	/* Give a few seconds dmeventd to finish */
+	_wait_for_new_pid();
+
+	if (!_systemd_activation)
+		return 2; // continue with dmeventd start up
 
 	/* Reopen fifos. */
-	fini_fifos(&fifos);
-	if (!init_fifos(&fifos)) {
+	if (!init_fifos(fifos)) {
 		fprintf(stderr, "Could not initiate communication with new instance of dmeventd.\n");
-		exit(EXIT_FAILURE);
+		return 0;
 	}
 
-	if (!_reinstate_registrations(&fifos)) {
+	if (!_reinstate_registrations(fifos)) {
 		fprintf(stderr, "Failed to reinstate monitoring with new instance of dmeventd.\n");
 		goto bad;
 	}
 
-	fini_fifos(&fifos);
-	exit(EXIT_SUCCESS);
+	fini_fifos(fifos);
+	return 1;
 bad:
-	fini_fifos(&fifos);
-	exit(EXIT_FAILURE);
+	fini_fifos(fifos);
+	return 0;
 }
 
 static void _usage(char *prog, FILE *file)
 {
 	fprintf(file, "Usage:\n"
-		"%s [-d [-d [-d]]] [-f] [-h] [-l] [-R] [-V] [-?]\n\n"
+		"%s [-d [-d [-d]]] [-e path] [-f] [-h] [i] [-l] [-R] [-V] [-?]\n\n"
 		"   -d       Log debug messages to syslog (-d, -dd, -ddd)\n"
+		"   -e       Select a file path checked on exit\n"
 		"   -f       Don't fork, run in the foreground\n"
 		"   -h       Show this help information\n"
+		"   -i       Query running instance of dmeventd for info\n"
 		"   -l       Log to stdout,stderr instead of syslog\n"
 		"   -?       Show this help information on stderr\n"
 		"   -R       Restart dmeventd\n"
@@ -2162,6 +2265,10 @@ static void _usage(char *prog, FILE *file)
 int main(int argc, char *argv[])
 {
 	signed char opt;
+	int debug_level = 0;
+	int info = 0;
+	int restart = 0;
+	int use_syslog = 1;
 	struct dm_event_fifos fifos = {
 		.client = -1,
 		.server = -1,
@@ -2169,39 +2276,58 @@ int main(int argc, char *argv[])
 		.server_path = DM_EVENT_FIFO_SERVER
 	};
 	time_t now, idle_exit_timeout = DMEVENTD_IDLE_EXIT_TIMEOUT;
-	opterr = 0;
-	optind = 0;
 
-	while ((opt = getopt(argc, argv, "?fhVdlR")) != EOF) {
+	optopt = optind = opterr = 0;
+	optarg = (char*) "";
+	while ((opt = getopt(argc, argv, ":?e:fhiVdlR")) != EOF) {
 		switch (opt) {
 		case 'h':
 			_usage(argv[0], stdout);
-			exit(EXIT_SUCCESS);
+			return EXIT_SUCCESS;
 		case '?':
 			_usage(argv[0], stderr);
-			exit(EXIT_SUCCESS);
+			return EXIT_SUCCESS;
+		case 'i':
+			info++;
+			break;
 		case 'R':
-			_restart++;
+			restart++;
+			break;
+		case 'e':
+			if (strchr(optarg, '"')) {
+				fprintf(stderr, "dmeventd: option -e does not accept path \"%s\" with '\"' character.\n", optarg);
+				return EXIT_FAILURE;
+			}
+			_exit_on=optarg;
 			break;
 		case 'f':
 			_foreground++;
 			break;
 		case 'd':
-			_debug_level++;
+			debug_level++;
 			break;
 		case 'l':
-			_use_syslog = 0;
+			use_syslog = 0;
 			break;
 		case 'V':
 			printf("dmeventd version: %s\n", DM_LIB_VERSION);
-			exit(EXIT_SUCCESS);
+			return EXIT_SUCCESS;
+		case ':':
+			fprintf(stderr, "dmeventd: option -%c requires an argument.\n", optopt);
+			return EXIT_FAILURE;
 		}
 	}
 
-	if (!_foreground && !_use_syslog) {
-		printf("WARNING: Ignoring logging to stdout, needs options -f\n");
-		_use_syslog = 1;
+	if (info) {
+		_foreground = 1;
+		use_syslog = 0;
 	}
+
+	if (!_foreground && !use_syslog) {
+		printf("WARNING: Ignoring logging to stdout, needs options -f\n");
+		use_syslog = 1;
+	}
+
 	/*
 	 * Switch to C locale to avoid reading large locale-archive file
 	 * used by some glibc (on some distributions it takes over 100MB).
@@ -2210,21 +2336,29 @@ int main(int argc, char *argv[])
 	if (setenv("LC_ALL", "C", 1))
 		perror("Cannot set LC_ALL to C");
 
-	if (_restart)
-		_restart_dmeventd();
+	if (info)
+		return _info_dmeventd(argv[0], &fifos) ? EXIT_SUCCESS : EXIT_FAILURE;
 
 #ifdef __linux__
 	_systemd_activation = _systemd_handover(&fifos);
 #endif
 
+	dm_log_with_errno_init(_libdm_log);
+
+	if (restart) {
+		dm_event_log_set(debug_level, 0);
+
+		if ((restart = _restart_dmeventd(&fifos)) < 2)
+			return restart ? EXIT_SUCCESS : EXIT_FAILURE;
+	}
+
 	if (!_foreground)
 		_daemonize();
 
-	if (_use_syslog)
+	if (use_syslog)
 		openlog("dmeventd", LOG_PID, LOG_DAEMON);
 
-	dm_event_log_set(_debug_level, _use_syslog);
-	dm_log_with_errno_init(_libdm_log);
+	dm_event_log_set(debug_level, use_syslog);
 
 	(void) dm_prepare_selinux_context(DMEVENTD_PIDFILE, S_IFREG);
 	if (dm_create_lockfile(DMEVENTD_PIDFILE) == 0)
@@ -2285,15 +2419,28 @@ int main(int argc, char *argv[])
 					break;
 				}
 			}
-		} else if (_exit_now == DM_SIGNALED_EXIT) {
-			_exit_now = DM_SCHEDULED_EXIT;
-			/*
-			 * When '_exit_now' is set, signal has been received,
-			 * but can not simply exit unless all
-			 * threads are done processing.
-			 */
-			log_info("dmeventd received break, scheduling exit.");
-		}
+		} else
+			switch (_exit_now) {
+			case DM_SIGNALED_EXIT:
+				_exit_now = DM_SCHEDULED_EXIT;
+				/*
+				 * When '_exit_now' is set, signal has been received,
+				 * but can not simply exit unless all
+				 * threads are done processing.
+				 */
+				log_info("dmeventd received break, scheduling exit.");
+				/* fall through */
+			case DM_SCHEDULED_EXIT:
+				/* While exit is scheduled, check for exit_on file */
+				DEBUGLOG("Checking exit on file \"%s\".", _exit_on);
+				if (_exit_on[0] && (access(_exit_on, F_OK) == 0)) {
+					log_info("dmeventd detected exit on file %s, unregistering all monitored devices.",
+						 _exit_on);
+					_unregister_all_threads();
+				}
+				break;
+			}
+
 		_process_request(&fifos);
 		_cleanup_unused_threads();
 	}
@@ -2303,11 +2450,11 @@ int main(int argc, char *argv[])
 	log_notice("dmeventd shutting down.");
 
 	if (fifos.client >= 0 && close(fifos.client))
-		log_sys_error("client close", fifos.client_path);
+		log_sys_debug("client close", fifos.client_path);
 	if (fifos.server >= 0 && close(fifos.server))
-		log_sys_error("server close", fifos.server_path);
+		log_sys_debug("server close", fifos.server_path);
 
-	if (_use_syslog)
+	if (use_syslog)
 		closelog();
 
 	_exit_dm_lib();

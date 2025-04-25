@@ -227,7 +227,7 @@ devmapper (2:1.00.19-4) unstable; urgency=low
 
   * Cope with single/multiple spaces in "ls" output when checking device.
     Closes: #273273
-    
+
  -- Patrick Caulfield <patrick@debian.org>  Sun, 17 Oct 2004 11:01:00 +0100
 
 devmapper (2:1.00.19-3) unstable; urgency=low
@@ -236,8 +236,8 @@ devmapper (2:1.00.19-3) unstable; urgency=low
     Debian kernel.
     Closes: #262347, #272384
   * Remove XSI:ism (what ever that is) from init script.
-    Closes: #258853 
-  
+    Closes: #258853
+
  -- Patrick Caulfield <patrick@debian.org>  Mon, 20 Sep 2004 08:01:42 +0100
 
 devmapper (2:1.00.19-2) unstable; urgency=low

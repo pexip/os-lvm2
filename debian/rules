@@ -24,8 +24,8 @@ CFLAGS_OPT_UDEB = -Os
 endif
 
 define CONFARGS.deb
-	--libdir=/lib/$(DEB_HOST_MULTIARCH)
-	--sbindir=/sbin
+	--prefix=/usr
+	--exec-prefix=/usr
 	--with-usrlibdir=/usr/lib/$(DEB_HOST_MULTIARCH)
 	--with-optimisation="$(CFLAGS_OPT_DEB)"
 	--with-cache=internal
@@ -39,7 +39,6 @@ define CONFARGS.deb
 	--with-thin-check=/usr/sbin/thin_check
 	--with-thin-dump=/usr/sbin/thin_dump
 	--with-thin-repair=/usr/sbin/thin_repair
-	--with-udev-prefix=/
 	--enable-applib
 	--enable-blkid_wiping
 	--enable-cmdlib
@@ -52,20 +51,17 @@ define CONFARGS.deb
 	--enable-pkgconfig
 	--enable-udev_rules
 	--enable-udev_sync
+	--enable-write_install
 	--disable-readline
 endef
 
 define CONFARGS.deb_all
-	--sbindir=/sbin
 	--enable-dbus-service
 	--disable-readline
 	--disable-selinux
 endef
 
 define CONFARGS.udeb
-	--libdir=/lib
-	--sbindir=/sbin
-	--with-usrlibdir=/usr/lib
 	--with-optimisation="$(CFLAGS_OPT_UDEB)"
 	--with-lvm1=none
 	--with-pool=none
@@ -92,12 +88,12 @@ override_dh_auto_install:   $(patsubst %,dh_auto_install.%,$(BUILDS))
 
 dh_auto_configure.%:
 	mkdir -p debian/build/build_$*
-	cp -al $(filter-out debian, $(wildcard * .[^.]*)) debian/build/build_$*/
+	cp -al $(filter-out debian, $(wildcard *)) debian/build/build_$*/
 	dh_auto_configure --sourcedirectory=debian/build/build_$* -- $(strip $(CONFARGS.$*))
 
 dh_auto_build.%:
 	dh_auto_build --sourcedirectory=debian/build/build_$* -- \
-		LIB_VERSION_DM=$(DEVMAPPER_ABINAME)
+		LIB_VERSION_DM=$(DEVMAPPER_ABINAME) V=1
 
 dh_auto_install.%:
 	dh_auto_install --sourcedirectory=debian/build/build_$* \
@@ -146,7 +142,7 @@ override_dh_installinit:
 override_dh_makeshlibs:
 	dh_makeshlibs -plibdevmapper$(DEVMAPPER_ABINAME) \
 		--add-udeb 'libdevmapper$(DEVMAPPER_ABINAME)-udeb' \
-	       	"-Vlibdevmapper$(DEVMAPPER_ABINAME) (>= $(DEVMAPPER_VERSION))" \
+		"-Vlibdevmapper$(DEVMAPPER_ABINAME) (>= $(DEVMAPPER_VERSION))" \
 		-- "-v$(DEVMAPPER_VERSION_DEBIAN)" -c2
 	dh_makeshlibs -plibdevmapper-event$(DEVMAPPER_ABINAME) \
 		"-Vlibdevmapper-event$(DEVMAPPER_ABINAME) (>= $(DEVMAPPER_VERSION))" \

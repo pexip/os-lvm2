@@ -85,14 +85,14 @@ struct mda_header *raw_read_mda_header(const struct format_type *fmt,
 				       uint32_t *bad_fields);
 
 struct mda_lists {
-	struct metadata_area_ops *file_ops;
-	struct metadata_area_ops *raw_ops;
+	const struct metadata_area_ops *file_ops;
+	const struct metadata_area_ops *raw_ops;
 };
 
 struct mda_context {
 	struct device_area area;
 	uint64_t free_sectors;
-	struct raw_locn rlocn;	/* Store inbetween write and commit */
+	struct raw_locn rlocn;	/* Store in-between write and commit */
 };
 
 /* FIXME Convert this at runtime */

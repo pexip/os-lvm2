@@ -112,7 +112,7 @@ typedef union {
  * and whether it can be attached to VG/LV metadata at the same time
  * The CFG_PROFILABLE_METADATA flag incorporates CFG_PROFILABLE flag!!! */
 #define CFG_PROFILABLE_METADATA  0x0030
-/* whether the default value is undefned */
+/* whether the default value is undefined */
 #define CFG_DEFAULT_UNDEFINED    0x0040
 /* whether the default value is commented out on output */
 #define CFG_DEFAULT_COMMENTED    0x0080
@@ -134,14 +134,14 @@ typedef struct cfg_def_item {
 	int parent;							/* ID of parent item */
 	const char *name;						/* name of the item in configuration tree */
 	int type;							/* configuration item type (bits of cfg_def_type_t) */
-	cfg_def_value_t default_value;					/* default value (only for settings) */
 	uint16_t flags;							/* configuration item definition flags */
 	uint16_t since_version;						/* version this item appeared in */
-	cfg_def_unconfigured_value_t default_unconfigured_value;	/* default value in terms of @FOO@, pre-configured (only for settings) */
 	uint16_t deprecated_since_version;				/* version since this item is deprecated */
+	cfg_def_value_t default_value;					/* default value (only for settings) */
+	cfg_def_unconfigured_value_t default_unconfigured_value;	/* default value in terms of @FOO@, pre-configured (only for settings) */
 	const char *deprecation_comment;				/* comment about reasons for deprecation and settings that supersede this one */
 	const char *comment;						/* comment */
-	const char *file_premable;					/* comment text to use at the start of the file */
+	const char *file_preamble;					/* comment text to use at the start of the file */
 } cfg_def_item_t;
 
 /* configuration definition tree types */
@@ -176,6 +176,7 @@ struct config_def_tree_spec {
 	unsigned unconfigured:1;		/* use unconfigured path strings */
 	unsigned withgeneralpreamble:1;		/* include preamble for a general config file */
 	unsigned withlocalpreamble:1;		/* include preamble for a local config file */
+	unsigned valuesonly:1;                  /* print only values without keys */
 	uint8_t *check_status;			/* status of last tree check (currently needed for CFG_DEF_TREE_MISSING only) */
 };
 
@@ -217,7 +218,7 @@ struct cft_check_handle {
 	unsigned skip_if_checked:1;	/* skip the check if already done before - return last state */
 	unsigned suppress_messages:1;	/* suppress messages during the check if config item is found invalid */
 	unsigned check_diff:1;		/* check if the value used differs from default one */
-	unsigned ignoreadvanced:1;	/* do not include advnced configs */
+	unsigned ignoreadvanced:1;	/* do not include advanced configs */
 	unsigned ignoreunsupported:1;	/* do not include unsupported configs */
 	uint16_t disallowed_flags;	/* set of disallowed flags */
 	uint8_t status[CFG_COUNT];	/* flags for each configuration item - the result of the check */
@@ -242,8 +243,8 @@ struct dm_config_tree *config_open(config_source_t source, const char *filename,
 int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_reason_t reason,
 			off_t offset, size_t size, off_t offset2, size_t size2,
 			checksum_fn_t checksum_fn, uint32_t checksum,
-			int skip_parse, int no_dup_node_check);
-int config_file_read(struct dm_config_tree *cft);
+			int checksum_only, int no_dup_node_check, int only_pv_summary);
+int config_file_read_from_file(struct dm_config_tree *cft);
 struct dm_config_tree *config_file_open_and_read(const char *config_file, config_source_t source,
 						 struct cmd_context *cmd);
 int config_write(struct dm_config_tree *cft, struct config_def_tree_spec *tree_spec,
@@ -311,6 +312,8 @@ int get_default_allocation_cache_pool_chunk_size_CFG(struct cmd_context *cmd, st
 const char *get_default_allocation_cache_policy_CFG(struct cmd_context *cmd, struct profile *profile);
 #define get_default_unconfigured_allocation_cache_policy_CFG NULL
 uint64_t get_default_allocation_cache_pool_max_chunks_CFG(struct cmd_context *cmd, struct profile *profile);
+int get_default_allocation_vdo_use_metadata_hints_CFG(struct cmd_context *cmd, struct profile *profile);
+#define get_default_unconfigured_allocation_vdo_use_metadata_hints_CFG NULL
 int get_default_metadata_pvmetadatasize_CFG(struct cmd_context *cmd, struct profile *profile);
 #define get_default_unconfigured_metadata_pvmetadatasize_CFG NULL
 

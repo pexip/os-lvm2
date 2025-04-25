@@ -7,13 +7,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+import dbus
 import threading
 # noinspection PyUnresolvedReferences
 from gi.repository import GLib
 from .job import Job
 from . import cfg
-import traceback
-from .utils import log_error, mt_async_call
+from .utils import log_error, mt_async_call, extract_stack_trace
 
 
 class RequestEntry(object):
@@ -71,13 +71,23 @@ class RequestEntry(object):
 		try:
 			result = self.method(*self.arguments)
 			self.register_result(result)
+		except SystemExit as se:
+			self.register_error(-1, str(se), se)
+			raise se
+		except dbus.exceptions.DBusException as dbe:
+			# This is an expected error path when something goes awry that
+			# we handled
+			self.register_error(-1, str(dbe), dbe)
 		except Exception as e:
 			# Use the request entry to return the result as the client may
 			# have gotten a job by the time we hit an error
-			# Lets get the stacktrace and set that to the error message
-			st = traceback.format_exc()
-			cfg.blackbox.dump()
-			log_error("Exception returned to client: \n%s" % st)
+			# Lets set the exception text as the error message and log the
+			# exception in the journal for figuring out what went wrong.
+			cfg.debug.dump()
+			cfg.flightrecorder.dump()
+			tb = extract_stack_trace(e)
+			log_error("While processing %s: we encountered\n%s" % (str(self.method), tb))
+			log_error("Error returned to client: %s" % str(e))
 			self.register_error(-1, str(e), e)
 
 	def is_done(self):
@@ -131,7 +141,7 @@ class RequestEntry(object):
 
 						mt_async_call(self.cb_error, error_exception)
 			else:
-				# We have a job and it's complete, indicate that it's done.
+				# We have a job, and it's complete, indicate that it's done.
 				self._job.Complete = True
 				self._job = None
 

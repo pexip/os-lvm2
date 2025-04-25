@@ -11,7 +11,6 @@ lvs \(em Display information about logical volumes
     [ \fIoption_args\fP ]
 .br
     [ \fIposition_args\fP ]
-.br
 .
 .SH DESCRIPTION
 .
@@ -22,22 +21,18 @@ lvs produces formatted output about LVs.
 \fBlvs\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-H\fP|\fB--history\fP ]
+.br
+[ \fB-S\fP|\fB--select\fP \fIString\fP ]
 .br
 [ \fB-a\fP|\fB--all\fP ]
 .br
 [ \fB-o\fP|\fB--options\fP \fIString\fP ]
 .br
-[ \fB-S\fP|\fB--select\fP \fIString\fP ]
-.br
 [ \fB-O\fP|\fB--sort\fP \fIString\fP ]
 .br
 [    \fB--segments\fP ]
-.br
-[    \fB--aligned\fP ]
-.br
-[    \fB--binary\fP ]
 .br
 [    \fB--configreport\fP \fBlog\fP|\fBvg\fP|\fBlv\fP|\fBpv\fP|\fBpvseg\fP|\fBseg\fP ]
 .br
@@ -47,23 +42,11 @@ lvs produces formatted output about LVs.
 .br
 [    \fB--logonly\fP ]
 .br
-[    \fB--nameprefixes\fP ]
-.br
-[    \fB--noheadings\fP ]
-.br
-[    \fB--nosuffix\fP ]
-.br
 [    \fB--readonly\fP ]
 .br
-[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP ]
-.br
-[    \fB--rows\fP ]
-.br
-[    \fB--separator\fP \fIString\fP ]
+[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP ]
 .br
 [    \fB--shared\fP ]
-.br
-[    \fB--unbuffered\fP ]
 .br
 [    \fB--units\fP \c
 .nh
@@ -71,10 +54,28 @@ lvs produces formatted output about LVs.
 .hy
 ]
 .br
+[    \fB--aligned\fP ]
+.br
+[    \fB--binary\fP ]
+.br
+[    \fB--headings\fP \fBnone\fP|\fBabbrev\fP|\fBfull\fP|\fB0\fP|\fB1\fP|\fB2\fP ]
+.br
+[    \fB--nameprefixes\fP ]
+.br
+[    \fB--noheadings\fP ]
+.br
+[    \fB--nosuffix\fP ]
+.br
+[    \fB--rows\fP ]
+.br
+[    \fB--separator\fP \fIString\fP ]
+.br
+[    \fB--unbuffered\fP ]
+.br
 [    \fB--unquoted\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fILV\fP|\fITag\fP ... ]
@@ -83,7 +84,7 @@ lvs produces formatted output about LVs.
 Common options for lvm:
 .
 .RS 4
-.ad l
+.na
 [ \fB-d\fP|\fB--debug\fP ]
 .br
 [ \fB-h\fP|\fB--help\fP ]
@@ -119,7 +120,7 @@ Common options for lvm:
 [    \fB--profile\fP \fIString\fP ]
 .br
 [    \fB--version\fP ]
-.ad b
+.ad
 .RE
 .
 .SH OPTIONS
@@ -197,6 +198,14 @@ For testing and debugging.
 .br
 Report/display foreign VGs that would otherwise be skipped.
 See \fBlvmsystemid\fP(7) for more information about foreign VGs.
+.
+.HP
+\fB--headings\fP \fBnone\fP|\fBabbrev\fP|\fBfull\fP|\fB0\fP|\fB1\fP|\fB2\fP
+.br
+Type of headings to use in report output.
+\fBnone\fP or \fB0\fP: No headings.
+\fBabbrev\fP or \fB1\fP: Column name abbreviations.
+\fBfull\fP or \fB2\fP: Full column names.
 .
 .HP
 \fB-h\fP|\fB--help\fP
@@ -278,13 +287,14 @@ Suppress the suffix on output sizes. Use with --units
 \fB-o\fP|\fB--options\fP \fIString\fP
 .br
 Comma-separated, ordered list of fields to display in columns.
-String arg syntax is: [\fB+\fP|\fB-\fP|\fB#\fP]\fIField1\fP[\fB,\fP\fIField2\fP ...]
+String arg syntax is:
+[\fB+\fP|\fB-\fP|\fB#\fP]\fIField1\fP[\fB,\fP\fIField2\fP ...]
 The prefix \fB+\fP will append the specified fields to the default fields,
 \fB-\fP will remove the specified fields from the default fields, and
 \fB#\fP will compact specified fields (removing them when empty for all rows.)
 Use \fB-o help\fP to view the list of all available fields.
-Use separate lists of fields to add, remove or compact by repeating the -o option:
--o+field1,field2 -o-field3,field4 -o#field5.
+Use separate lists of fields to add, remove or compact by repeating
+the -o option: -o+field1,field2 -o-field3,field4 -o#field5.
 These lists are evaluated from left to right.
 Use field name \fBlv_all\fP to view all LV fields,
 \fBvg_all\fP all VG fields,
@@ -310,22 +320,20 @@ Repeat once to also suppress any prompts with answer 'no'.
 .HP
 \fB--readonly\fP
 .br
-Run the command in a special read-only mode which will read on-disk
-metadata without needing to take any locks. This can be used to peek
-inside metadata used by a virtual machine image while the virtual
-machine is running. No attempt will be made to communicate with the
-device-mapper kernel driver, so this option is unable to report whether
-or not LVs are actually in use.
+Prevent the command from making changes, including activation and
+metadata updates.  (See --permission r for read only LVs.)
 .
 .HP
-\fB--reportformat\fP \fBbasic\fP|\fBjson\fP
+\fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP
 .br
 Overrides current output format for reports which is defined globally by
 the report/output_format setting in \fBlvm.conf\fP(5).
 \fBbasic\fP is the original format with columns and rows.
 If there is more than one report per command, each report is prefixed
 with the report name for identification. \fBjson\fP produces report
-output in JSON format. See \fBlvmreport\fP(7) for more information.
+output in JSON format. \fBjson_std\fP produces report output in
+JSON format which is more compliant with JSON standard.
+See \fBlvmreport\fP(7) for more information.
 .
 .HP
 \fB--rows\fP
@@ -341,8 +349,10 @@ Use default columns that emphasize segment information.
 \fB-S\fP|\fB--select\fP \fIString\fP
 .br
 Select objects for processing and reporting based on specified criteria.
-The criteria syntax is described by \fB--select help\fP and \fBlvmreport\fP(7).
-For reporting commands, one row is displayed for each object matching the criteria.
+The criteria syntax is described by \fB--select help\fP
+and \fBlvmreport\fP(7).
+For reporting commands, one row is displayed
+for each object matching the criteria.
 See \fB--options help\fP for selectable object fields.
 Rows can be displayed with an additional "selected" field (-o selected)
 showing 1 if the row matches the selection and 0 otherwise.
@@ -382,12 +392,12 @@ back metadata it believes has changed but hasn't.
 Produce output immediately without sorting or aligning the columns properly.
 .
 .HP
-.ad l
+.ad
 \fB--units\fP \c
 .nh
 \%[\fINumber\fP]\fBr\fP|\:\fBR\fP|\:\fBh\fP|\:\fBH\fP|\:\fBb\fP|\:\fBB\fP|\:\fBs\fP|\:\fBS\fP|\:\fBk\fP|\:\fBK\fP|\:\fBm\fP|\:\fBM\fP|\:\fBg\fP|\:\fBG\fP|\:\fBt\fP|\:\fBT\fP|\:\fBp\fP|\:\fBP\fP|\:\fBe\fP|\:\fBE\fP
 .hy
-.ad b
+.ad
 .br
 All sizes are output in these units:
 human-(r)eadable with '<' rounding indicator,
@@ -459,10 +469,11 @@ is TiB,
 is PiB,
 .BR e | E
 is EiB.
-(This should not be confused with the output control --units, where
-capital letters mean multiple of 1000.)
+(This should not be confused with the output control --units,
+where capital letters mean multiple of 1000.)
 .
 .SH ENVIRONMENT VARIABLES
 .
 See \fBlvm\fP(8) for information about environment variables used by lvm.
-For example, LVM_VG_NAME can generally be substituted for a required VG parameter.
+For example, LVM_VG_NAME can generally be substituted
+for a required VG parameter.

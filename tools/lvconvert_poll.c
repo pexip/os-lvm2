@@ -43,15 +43,41 @@ int lvconvert_mirror_finish(struct cmd_context *cmd,
 int swap_lv_identifiers(struct cmd_context *cmd,
 			struct logical_volume *a, struct logical_volume *b)
 {
-	union lvid lvid;
+	struct logical_volume tlv = *a;
 	const char *aname = a->name, *bname = b->name;
 
-	lvid = a->lvid;
 	a->lvid = b->lvid;
-	b->lvid = lvid;
+	b->lvid = tlv.lvid;
+
+	a->alloc = b->alloc;
+	b->alloc = tlv.alloc;
+
+	a->read_ahead = b->read_ahead;
+	b->read_ahead = tlv.read_ahead;
+
+	a->profile = b->profile;
+	b->profile = tlv.profile;
+
+	a->major = b->major;
+	b->major = tlv.major;
+
+	a->minor = b->minor;
+	b->minor = tlv.minor;
+
+	a->timestamp = b->timestamp;
+	b->timestamp = tlv.timestamp;
+
+	a->hostname = b->hostname;
+	b->hostname = tlv.hostname;
+
+	/* swap tags */
+	dm_list_init(&tlv.tags);
+	dm_list_splice(&tlv.tags, &a->tags);
+	dm_list_splice(&a->tags, &b->tags);
+	dm_list_splice(&b->tags, &tlv.tags);
 
 	/* rename temporarily to 'unused' name */
-	if (!lv_rename_update(cmd, a, "pmove_tmeta", 0))
+	if (!lv_rename_update(cmd, a, "pvmove_tmeta", 0))
 		return_0;
 	/* name rename 'b' to unused name of 'a' */
 	if (!lv_rename_update(cmd, b, aname, 0))
@@ -63,26 +89,7 @@ int swap_lv_identifiers(struct cmd_context *cmd,
 	return 1;
 }
 
-static void _move_lv_attributes(struct logical_volume *to, struct logical_volume *from)
-{
-	/* Maybe move this code into thin_merge_finish() */
-	to->status = from->status; // FIXME maybe some masking ?
-	to->alloc = from->alloc;
-	to->profile = from->profile;
-	to->read_ahead = from->read_ahead;
-	to->major = from->major;
-	to->minor = from->minor;
-	to->timestamp = from->timestamp;
-	to->hostname = from->hostname;
-
-	/* Move tags */
-	dm_list_init(&to->tags);
-	dm_list_splice(&to->tags, &from->tags);
-
-	/* Anything else to preserve? */
-}
-
-/* Finalise merging of lv into merge_lv */
+/* Finalize merging of lv into merge_lv */
 int thin_merge_finish(struct cmd_context *cmd,
 		      struct logical_volume *merge_lv,
 		      struct logical_volume *lv)
@@ -93,8 +100,8 @@ int thin_merge_finish(struct cmd_context *cmd,
 		return 0;
 	}
 
-	/* Preserve origins' attributes */
-	_move_lv_attributes(lv, merge_lv);
+	/* Preserve status */
+	lv->status = merge_lv->status;
 
 	/* Removed LV has to be visible */
 	if (!lv_remove_single(cmd, merge_lv, DONT_PROMPT, 1))
@@ -197,5 +204,5 @@ progress_t poll_thin_merge_progress(struct cmd_context *cmd,
 		return PROGRESS_CHECK_FAILED;
 	}
 
-	return PROGRESS_FINISHED_ALL; /* Merging happend */
+	return PROGRESS_FINISHED_ALL; /* Merging happened */
 }

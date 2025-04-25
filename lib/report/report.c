@@ -23,11 +23,40 @@
 #include "lib/metadata/segtype.h"
 #include "lib/cache/lvmcache.h"
 #include "lib/device/device-types.h"
+#include "lib/device/device_id.h"
 #include "lib/datastruct/str_list.h"
+#include "lib/locking/lvmlockd.h"
 
 #include <stddef.h> /* offsetof() */
 #include <float.h> /* DBL_MAX */
 #include <time.h>
+
+/*
+ * !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ * IMPORTANT NOTE ABOUT ADDING A NEW VALUE FOR REPORTING
+ * !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ *
+ * When adding a new string value to report, try to keep it
+ * self-descriptive so when it's printed even without the header,
+ * we can still deduce what it is actually reporting.
+ *
+ * If you need more than one descriptive string to mean the same value,
+ * please define them as reserved values in values.h.
+ *
+ * The first reserved value is the one that is printed in reports (unless
+ * it's a binary value and we have report/binary_values_as_numeric=1 config
+ * option used OR --binary command line option is used OR we're using an
+ * output format which must always print binary values in numeric way,
+ * like json_std output format.
+ *
+ * All the other (2nd and further) listed reserved names are synonyms which
+ * may be also used in selection (-S|--select).
+ *
+ * Also, always use proper *_disp functions to display each type of value
+ * properly. For example, in case of binary values, you should use
+ * _binary_disp so that we can always switch between numerical (0/1/-1) and
+ * string representation while reporting the value.
+ */
 
 struct lvm_report_object {
 	struct volume_group *vg;
@@ -223,7 +252,7 @@ static const struct time_prop _time_props[] = {
 #define TIME_REG_PLURAL_S  0x00000001 /* also recognize plural form with "s" suffix */
 
 struct time_reg {
-	const char *name;
+	const char name[16];
 	const struct time_prop *prop;
 	uint32_t reg_flags;
 };
@@ -326,7 +355,6 @@ static const struct time_reg _time_reg[] = {
 	{"Nov",       TIME_PROP(TIME_MONTH_NOVEMBER),       0},
 	{"December",  TIME_PROP(TIME_MONTH_DECEMBER),       0},
 	{"Dec",       TIME_PROP(TIME_MONTH_DECEMBER),       0},
-	{NULL,        TIME_PROP(TIME_NULL),                 0},
 };
 
 struct time_item {
@@ -505,7 +533,7 @@ static int _preparse_fuzzy_time(const char *s, struct time_info *info)
 		 * If the string consists of -:+, digits or spaces,
 		 * it's not worth looking for fuzzy names here -
 		 * it's standard YYYY-MM-DD HH:MM:SS +-HH:MM format
-		 * and that is parseable by libdm directly.
+		 * and that is parsable by libdm directly.
 		 */
 		if (!(isdigit(c) || (c == '-') || (c == ':') || (c == '+')))
 			fuzzy = 1;
@@ -555,11 +583,11 @@ static int _match_time_str(struct dm_list *ti_list, struct time_item *ti)
 {
 	struct time_item *ti_context_p = (struct time_item *) dm_list_prev(ti_list, &ti->list);
 	size_t reg_len;
-	int i;
+	unsigned i;
 
 	ti->prop = TIME_PROP(TIME_NULL);
 
-	for (i = 0; _time_reg[i].name; i++) {
+	for (i = 0; i < DM_ARRAY_SIZE(_time_reg); ++i) {
 		reg_len = strlen(_time_reg[i].name);
 		if ((ti->len != reg_len) &&
 		    !((_time_reg[i].reg_flags & TIME_REG_PLURAL_S) &&
@@ -822,7 +850,7 @@ static void _adjust_time_for_granularity(struct time_info *info, struct tm *tm, 
 #define SECS_PER_HOUR   3600
 #define SECS_PER_DAY    ((time_t)86400)
 
-static int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+static const int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 static int _is_leap_year(long year)
 {
@@ -1155,11 +1183,11 @@ static int _lv_time_handler(struct dm_report *rh, struct dm_pool *mem,
 #define DYNAMIC DM_REPORT_FIELD_RESERVED_VALUE_DYNAMIC_VALUE
 
 #define TYPE_RESERVED_VALUE(type, flags, id, desc, value, ...) \
-	static const char *_reserved_ ## id ## _names[] = { __VA_ARGS__, NULL}; \
+	static const char * const _reserved_ ## id ## _names[] = { __VA_ARGS__, NULL}; \
 	static const type _reserved_ ## id = value;
 
 #define FIELD_RESERVED_VALUE(flags, field_id, id, desc, value, ...) \
-	static const char *_reserved_ ## id ## _names[] = { __VA_ARGS__ , NULL}; \
+	static const char * const _reserved_ ## id ## _names[] = { __VA_ARGS__ , NULL}; \
 	static const struct dm_report_field_reserved_value _reserved_ ## id = {field_ ## field_id, value};
 
 #define FIELD_RESERVED_BINARY_VALUE(field_id, id, desc, ...) \
@@ -1196,9 +1224,10 @@ static int _lv_time_handler(struct dm_report *rh, struct dm_pool *mem,
 #define FUZZY DM_REPORT_FIELD_RESERVED_VALUE_FUZZY_NAMES
 #define DYNAMIC DM_REPORT_FIELD_RESERVED_VALUE_DYNAMIC_VALUE
 
-#define TYPE_RESERVED_VALUE(type, flags, id, desc, value, ...) {type | flags, &_reserved_ ## id, _reserved_ ## id ## _names, desc},
+/* Declaration of dm_report_reserved_value should actually be using  const char * const * names */
+#define TYPE_RESERVED_VALUE(type, flags, id, desc, value, ...) {type | flags, &_reserved_ ## id, (const char**) _reserved_ ## id ## _names, desc},
 
-#define FIELD_RESERVED_VALUE(flags, field_id, id, desc, value, ...) {DM_REPORT_FIELD_TYPE_NONE | flags, &_reserved_ ## id, _reserved_ ## id ## _names, desc},
+#define FIELD_RESERVED_VALUE(flags, field_id, id, desc, value, ...) {DM_REPORT_FIELD_TYPE_NONE | flags, &_reserved_ ## id, (const char**)  _reserved_ ## id ## _names, desc},
 
 #define FIELD_RESERVED_BINARY_VALUE(field_id, id, desc, ...) \
 	FIELD_RESERVED_VALUE(NAMED, field_id, id ## _y, desc, &_one64, __VA_ARGS__) \
@@ -1256,7 +1285,7 @@ static int _binary_disp(struct dm_report *rh, struct dm_pool *mem __attribute__(
 {
 	const struct cmd_context *cmd = (const struct cmd_context *) private;
 
-	if (cmd->report_binary_values_as_numeric)
+	if (cmd->report_strict_type_mode || cmd->report_binary_values_as_numeric)
 		/* "0"/"1" */
 		return _field_set_value(field, bin_value ? _str_one : _str_zero, bin_value ? &_one64 : &_zero64);
 
@@ -1269,7 +1298,7 @@ static int _binary_undef_disp(struct dm_report *rh, struct dm_pool *mem __attrib
 {
 	const struct cmd_context *cmd = (const struct cmd_context *) private;
 
-	if (cmd->report_binary_values_as_numeric)
+	if (cmd->report_strict_type_mode || cmd->report_binary_values_as_numeric)
 		return _field_set_value(field, GET_FIRST_RESERVED_NAME(num_undef_64), &GET_TYPE_RESERVED_VALUE(num_undef_64));
 
 	return _field_set_value(field, _str_unknown, &GET_TYPE_RESERVED_VALUE(num_undef_64));
@@ -2008,7 +2037,7 @@ static int _find_ancestors(struct _str_list_append_baton *ancestors,
 	struct lv_segment *seg;
 	void *orig_p = glv.live;
 	const char *ancestor_str;
-	char buf[NAME_LEN + strlen(HISTORICAL_LV_PREFIX) + 1];
+	char buf[NAME_LEN + sizeof(HISTORICAL_LV_PREFIX)];
 
 	if (glv.is_historical) {
 		if (full && glv.historical->indirect_origin)
@@ -2533,7 +2562,7 @@ static int _segstartpe_disp(struct dm_report *rh,
 	return dm_report_field_uint32(rh, field, &seg->le);
 }
 
-/* Hepler: get used stripes = total stripes minux any to remove after reshape */
+/* Helper: get used stripes = total stripes minus any to remove after reshape */
 static int _get_seg_used_stripes(const struct lv_segment *seg)
 {
 	uint32_t s;
@@ -2593,13 +2622,12 @@ static struct logical_volume *_lv_for_raid_image_seg(const struct lv_segment *se
 				p = strchr(p + 5, '_');
 
 			if (p) {
-				struct lv_list *lvl;
+				struct logical_volume *lv;
 
 				*p = '\0';
-				if ((lvl = find_lv_in_vg(seg->lv->vg, lv_name)) &&
-				    seg_is_reshapable_raid(first_seg(lvl->lv)))
-					return lvl->lv;
-
+				if ((lv = find_lv(seg->lv->vg, lv_name)) &&
+				    seg_is_reshapable_raid(first_seg(lv)))
+					return lv;
 			}
 		}
 	}
@@ -2607,7 +2635,7 @@ static struct logical_volume *_lv_for_raid_image_seg(const struct lv_segment *se
 	return NULL;
 }
 
-/* Helper: return the top-level raid LV in case it is reshapale for @seg or @seg if it is */
+/* Helper: return the top-level raid LV in case it is reshapable for @seg or @seg if it is */
 static const struct lv_segment *_get_reshapable_seg(const struct lv_segment *seg, struct dm_pool *mem)
 {
 	return _lv_for_raid_image_seg(seg, mem) ? seg : NULL;
@@ -3041,10 +3069,11 @@ static int _vgmdacopies_disp(struct dm_report *rh, struct dm_pool *mem,
 				   struct dm_report_field *field,
 				   const void *data, void *private)
 {
+	struct cmd_context *cmd = (struct cmd_context *) private;
 	const struct volume_group *vg = (const struct volume_group *) data;
 	uint32_t count = vg_mda_copies(vg);
 
-	if (count == VGMETADATACOPIES_UNMANAGED)
+	if (count == VGMETADATACOPIES_UNMANAGED && !cmd->report_strict_type_mode)
 		return _field_set_value(field, GET_FIRST_RESERVED_NAME(vg_mda_copies_unmanaged),
 					GET_FIELD_RESERVED_VALUE(vg_mda_copies_unmanaged));
 
@@ -3346,6 +3375,31 @@ static int _integritymismatches_disp(struct dm_report *rh __attribute__((unused)
 	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
+static int _integrity_settings_disp(struct dm_report *rh, struct dm_pool *mem,
+				    struct dm_report_field *field,
+				    const void *data, void *private)
+{
+	const struct lv_segment *seg = (const struct lv_segment *) data;
+	struct dm_list *result;
+	struct dm_list dummy_list; /* dummy list to display "nothing" */
+
+	if (seg_is_integrity(seg)) {
+		if (!(result = str_list_create(mem)))
+			return_0;
+
+		if (!integrity_settings_to_str_list((struct integrity_settings *)&seg->integrity_settings, result, mem))
+			return_0;
+
+		return _field_set_string_list(rh, field, result, private, 0, NULL);
+	} else {
+		dm_list_init(&dummy_list);
+		return _field_set_string_list(rh, field, &dummy_list, private, 0, NULL);
+		/* TODO: once we have support for STR_LIST reserved values, replace with:
+		 * return _field_set_value(field,  GET_FIRST_RESERVED_NAME(integrity_settings_undef), GET_FIELD_RESERVED_VALUE(integrity_settings_undef));
+		 */
+	}
+}
+
 static int _writecache_block_size_disp(struct dm_report *rh __attribute__((unused)),
 				   struct dm_pool *mem,
 				   struct dm_report_field *field,
@@ -3542,6 +3596,9 @@ static int _pvdeviceid_disp(struct dm_report *rh, struct dm_pool *mem,
 	if (!pv->device_id)
 		return _field_set_value(field, "", NULL);
 
+	if (pv->dev && pv_device_id_is_stale(pv))
+		return _field_set_value(field, "invalid", NULL);
+
 	if (!(repstr = pv_deviceid_dup(mem, pv))) {
 		log_error("Failed to allocate buffer.");
 		return 0;
@@ -3559,6 +3616,9 @@ static int _pvdeviceidtype_disp(struct dm_report *rh, struct dm_pool *mem,
 
 	if (!pv->device_id_type)
 		return _field_set_value(field, "", NULL);
+
+	if (pv->dev && pv_device_id_is_stale(pv))
+		return _field_set_value(field, "invalid", NULL);
 
 	if (!(repstr = pv_deviceidtype_dup(mem, pv))) {
 		log_error("Failed to allocate buffer.");
@@ -3780,14 +3840,15 @@ static int _lvactive_disp(struct dm_report *rh, struct dm_pool *mem,
 			     struct dm_report_field *field,
 			     const void *data, void *private)
 {
-	char *repstr;
+	const struct logical_volume *lv = (const struct logical_volume *) data;
+	int active;
 
-	if (!(repstr = lv_active_dup(mem, (const struct logical_volume *) data))) {
-		log_error("Failed to allocate buffer for active.");
-		return 0;
-	}
+	if (!activation())
+		return _binary_undef_disp(rh, mem, field, private);
 
-	return _field_set_value(field, repstr, NULL);
+	active = lv_is_active(lv);
+
+	return _binary_disp(rh, mem, field, active, GET_FIRST_RESERVED_NAME(lv_active_y), private);
 }
 
 static int _lvactivelocally_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -3809,9 +3870,10 @@ static int _lvactiveremotely_disp(struct dm_report *rh, struct dm_pool *mem,
 				  struct dm_report_field *field,
 				  const void *data, void *private)
 {
+	const struct logical_volume *lv = (const struct logical_volume *) data;
 	int active_remotely;
 
-	if (!activation())
+	if (!activation() || vg_is_shared(lv->vg))
 		return _binary_undef_disp(rh, mem, field, private);
 
 	active_remotely = 0;
@@ -3824,14 +3886,20 @@ static int _lvactiveexclusively_disp(struct dm_report *rh, struct dm_pool *mem,
 				     const void *data, void *private)
 {
 	const struct logical_volume *lv = (const struct logical_volume *) data;
-	int active_exclusively;
+	int ex = 0, sh = 0;
 
 	if (!activation())
 		return _binary_undef_disp(rh, mem, field, private);
 
-	active_exclusively = lv_is_active(lv);
+	ex = lv_is_active(lv);
 
-	return _binary_disp(rh, mem, field, active_exclusively, GET_FIRST_RESERVED_NAME(lv_active_exclusively_y), private);
+	if (ex && vg_is_shared(lv->vg)) {
+		ex = 0;
+		if (!lockd_query_lv(lv->vg->cmd, (struct logical_volume *)lv, &ex, &sh))
+			return _binary_undef_disp(rh, mem, field, private);
+	}
+
+	return _binary_disp(rh, mem, field, ex, GET_FIRST_RESERVED_NAME(lv_active_exclusively_y), private);
 }
 
 static int _lvmergefailed_disp(struct dm_report *rh, struct dm_pool *mem,
@@ -4384,11 +4452,28 @@ static const struct dm_report_field_type _log_fields[] = {
 #undef SNUM
 #undef FIELD
 
+report_headings_t report_headings_str_to_type(const char *str)
+{
+	if (!str || !*str)
+		return REPORT_HEADINGS_UNKNOWN;
+
+	if (!strcmp(str, "none") || !strcmp(str, "0"))
+		return REPORT_HEADINGS_NONE;
+
+	if (!strcmp(str, "abbrev") || !strcmp(str, "1"))
+		return REPORT_HEADINGS_ABBREV;
+
+	if (!strcmp(str, "full") || !strcmp(str, "2"))
+		return REPORT_HEADINGS_FULL;
+
+	return REPORT_HEADINGS_UNKNOWN;
+}
+
 void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
-		  report_type_t *report_type, const char *separator,
-		  int aligned, int buffered, int headings, int field_prefixes,
-		  int quoted, int columns_as_rows, const char *selection,
-		  int multiple_output)
+		  unsigned *report_type, const char *separator,
+		  int aligned, int buffered, report_headings_t headings,
+		  int field_prefixes, int quoted, int columns_as_rows,
+		  const char *selection, int multiple_output)
 {
 	uint32_t report_flags = 0;
 	const struct dm_report_object_type *types;
@@ -4402,8 +4487,12 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 	if (buffered)
 		report_flags |= DM_REPORT_OUTPUT_BUFFERED;
 
-	if (headings)
+	if (headings) {
+		/* any out of bound headings type value maps to REPORT_HEADINGS_ABBREV */
 		report_flags |= DM_REPORT_OUTPUT_HEADINGS;
+		if (headings == REPORT_HEADINGS_FULL)
+			report_flags |= DM_REPORT_OUTPUT_FIELD_IDS_IN_HEADINGS;
+	}
 
 	if (field_prefixes)
 		report_flags |= DM_REPORT_OUTPUT_FIELD_NAME_PREFIX;
@@ -4442,7 +4531,7 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 }
 
 void *report_init_for_selection(struct cmd_context *cmd,
-				report_type_t *report_type,
+				unsigned *report_type,
 				const char *selection_criteria)
 {
 	return dm_report_init_with_selection(report_type, _report_types, _fields,
@@ -4453,7 +4542,7 @@ void *report_init_for_selection(struct cmd_context *cmd,
 					     cmd);
 }
 
-int report_get_prefix_and_desc(report_type_t report_type_id,
+int report_get_prefix_and_desc(unsigned report_type_id,
 			       const char **report_prefix,
 			       const char **report_desc)
 {
@@ -4547,14 +4636,25 @@ int report_devtypes(void *handle)
 
 int report_cmdlog(void *handle, const char *type, const char *context,
 		  const char *object_type_name, const char *object_name,
-		  const char *object_id, const char *object_group,
-		  const char *object_group_id, const char *msg,
+		  const struct id *object_id, const char *object_group,
+		  const struct id *object_group_id, const char *msg,
 		  int current_errno, int ret_code)
 {
+	char object_uuid[64] __attribute__((aligned(8))) = { 0 };
+	char object_group_uuid[64] __attribute__((aligned(8))) = { 0 };
+
 	struct cmd_log_item log_item = {_log_seqnum++, type, context, object_type_name,
-					object_name ? : "", object_id ? : "",
-					object_group ? : "", object_group_id ? : "",
+					object_name ? : "", object_uuid,
+					object_group ? : "", object_group_uuid,
 					msg ? : "", current_errno, ret_code};
+
+	if (object_id &&
+	    !id_write_format(object_id, object_uuid, sizeof(object_uuid)))
+		stack;
+
+	if (object_group_id &&
+	    !id_write_format(object_group_id, object_group_uuid, sizeof(object_group_uuid)))
+		stack;
 
 	if (handle)
 		return dm_report_object(handle, &log_item);

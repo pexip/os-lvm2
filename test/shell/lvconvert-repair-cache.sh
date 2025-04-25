@@ -67,17 +67,17 @@ lvchange -an $vg/$lv1
 lvconvert --repair $vg/$lv1
 
 lvs -a $vg
-check lv_exists $vg ${lv1}_meta0
+check lv_exists $vg cpool_cpool_meta0
 
-eval $(lvs -S 'name=~_pmspare' -a --config 'report/mark_hidden_devices=0' -o name --noheading --nameprefixes $vg)
+eval "$(lvs -S 'name=~_pmspare' -a --config 'report/mark_hidden_devices=0' -o name --noheading --nameprefixes $vg)"
 lvremove -f --yes "$vg/$LVM2_LV_NAME"
 
 # check --repair without creation of _pmspare device
 lvconvert --repair --poolmetadataspare n $vg/$lv1
-check lv_exists $vg ${lv1}_meta1
+check lv_exists $vg cpool_cpool_meta1
 
 # check no _pmspare has been created in previous --repair
-test "0" = $(lvs -S 'name=~_pmspare' -a -o name --noheading --nameprefixes $vg | wc -l)
+test "0" = "$(lvs -S 'name=~_pmspare' -a -o name --noheading --nameprefixes $vg | wc -l)"
 
 
 aux disable_dev "$dev2"
@@ -129,7 +129,7 @@ grep "Cwi-a-C-F-" out || {
 	# while on older unfixed we just notice needs_check
 	grep "Cwi-c-C---" out
 	sleep .1
-	# And now cache is finaly Failed
+	# And now cache is finally Failed
 	check lv_attr_bit health $vg/$lv1 "F"
 }
 check lv_field $vg/$lv1 lv_health_status "failed"
@@ -138,7 +138,7 @@ aux disable_dev "$dev1"
 
 # Check it is prompting for confirmation
 not lvconvert --uncache $vg/$lv1
-# Check --yes is not enought to drop writethrough caching
+# Check --yes is not enough to drop writethrough caching
 not lvconvert --yes --uncache $vg/$lv1
 # --force needs --yes to drop when Check its prompting
 not lvconvert --force --uncache $vg/$lv1

@@ -73,8 +73,7 @@ static int _mirrored_text_import_area_count(const struct dm_config_node *sn, uin
 	return 1;
 }
 
-static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
-			struct dm_hash_table *pv_hash)
+static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_node *sn)
 {
 	const struct dm_config_value *cv;
 	const char *logname = NULL;
@@ -109,6 +108,7 @@ static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_
 			return 0;
 		}
 		seg->log_lv->status |= MIRROR_LOG;
+		seg->log_lv->vg->fixup_imported_mirrors = 1;
 	}
 
 	if (logname && !seg->region_size) {
@@ -125,7 +125,7 @@ static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_
 		return 0;
 	}
 
-	return text_import_areas(seg, sn, cv, pv_hash, MIRROR_IMAGE);
+	return text_import_areas(seg, sn, cv, MIRROR_IMAGE);
 }
 
 static int _mirrored_text_export(const struct lv_segment *seg, struct formatter *f)
@@ -303,7 +303,7 @@ static int _add_log(struct dm_pool *mem, struct lv_segment *seg,
 			log_warn_suppress(seg->lv->vg->cmd->mirror_warn_printed,
 					  "WARNING: Mirror %s without monitoring will not react on failures.",
 					  display_lvname(seg->lv));
-			seg->lv->vg->cmd->mirror_warn_printed = 1; /* Do not print this more then once */
+			seg->lv->vg->cmd->mirror_warn_printed = 1; /* Do not print this more than once */
 		} else
 			log_flags |= DM_BLOCK_ON_ERROR;
 	}
@@ -423,8 +423,7 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 		 */
 		/* FIXME Move this into libdevmapper */
 
-		if (target_version(TARGET_NAME_MIRROR, &maj, &min, &patchlevel) &&
-		    maj == 1 &&
+		if (maj == 1 &&
 		    ((min >= 1) ||
 		     (min == 0 && driver_version(vsn, sizeof(vsn)) &&
 		      sscanf(vsn, "%u.%u.%u", &maj2, &min2, &patchlevel2) == 3 &&
@@ -433,7 +432,7 @@ static int _mirrored_target_present(struct cmd_context *cmd,
 	}
 
 	/*
-	 * Check only for modules if atttributes requested and no previous check.
+	 * Check only for modules if attributes requested and no previous check.
 	 */
 	if (attributes)
 		*attributes = _mirror_attributes;
@@ -491,7 +490,7 @@ static void _mirrored_destroy(struct segment_type *segtype)
 	free(segtype);
 }
 
-static struct segtype_handler _mirrored_ops = {
+static const struct segtype_handler _mirrored_ops = {
 	.display = _mirrored_display,
 	.text_import_area_count = _mirrored_text_import_area_count,
 	.text_import = _mirrored_text_import,

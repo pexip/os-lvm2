@@ -322,6 +322,11 @@ int lv_vdo_pool_percent(const struct logical_volume *lv, dm_percent_t *percent)
 {
 	return 0;
 }
+int lv_vdo_pool_size_config(const struct logical_volume *lv,
+			    struct vdo_pool_size_config *cfg)
+{
+	return 0;
+}
 int lvs_in_vg_activated(const struct volume_group *vg)
 {
 	return 0;
@@ -413,7 +418,7 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 {
         return 0;
 }
-int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
+int dm_device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
 {
         return 0;
 }
@@ -497,7 +502,7 @@ int driver_version(char *version, size_t size)
 	    !dm_driver_version(_vsn, sizeof(_vsn)))
 		return_0;
 
-	(void) dm_strncpy(version, _vsn, size);
+	dm_strncpy(version, _vsn, size);
 
 	return 1;
 }
@@ -558,12 +563,50 @@ int lvm_dm_prefix_check(int major, int minor, const char *prefix)
 	return dev_manager_check_prefix_dm_major_minor(major, minor, prefix);
 }
 
+/* Search modules.builtin file for built-in kernel module */
+static int _check_modules_builtin(struct cmd_context *cmd, const char *target)
+{
+	FILE *fp;
+	char *line = NULL;
+	size_t len;
+	int r = 0;
+	char path[PATH_MAX];
+
+	if (dm_snprintf(path, sizeof(path), "%s/%s/modules.builtin",
+			MODULES_PATH, cmd->kernel_vsn) < 0) {
+		log_debug_activation("Modules path %s/%s/modules.builtin is too long.",
+			  MODULES_PATH, cmd->kernel_vsn);
+		return 0;
+	}
+
+	if (!(fp = fopen(path, "r"))) {
+		if (errno != ENOENT)
+			log_sys_debug("fopen", path);
+		return 0;
+	}
+
+	while (getline(&line, &len, fp) > 0)
+		if (strstr(line, target)) {
+			log_debug_activation("Found %s as built-in kernel module.", target);
+			r = 1;
+			break;
+		}
+
+	free(line);
+
+	if (fclose(fp))
+		log_sys_debug("fclose", path);
+
+	return r;
+}
+
 int module_present(struct cmd_context *cmd, const char *target_name)
 {
 	int ret = 0;
 #ifdef MODPROBE_CMD
 	char module[128];
 	const char *argv[] = { MODPROBE_CMD, module, NULL };
+	unsigned maj, min;
 #endif
 	struct stat st;
 	char path[PATH_MAX];
@@ -579,11 +622,16 @@ int module_present(struct cmd_context *cmd, const char *target_name)
 			log_debug_activation("Module directory %s exists.", path);
 			return 1;
 		}
+
+		if (path[i] == '/' && _check_modules_builtin(cmd, path + i + 1))
+			return 1;
 	}
 
 #ifdef MODPROBE_CMD
-	if (strcmp(target_name, TARGET_NAME_VDO) == 0)
-		argv[1] = MODULE_NAME_VDO; /* ATM kvdo is without dm- prefix */
+	if ((strcmp(target_name, TARGET_NAME_VDO) == 0) &&
+	    (sscanf(cmd->kernel_vsn, "%u.%u", &maj, &min) == 2) &&
+	    ((maj < 6) || ((maj == 6) && (min < 9))))
+		argv[1] = MODULE_NAME_VDO; /* Kernels < 6.9 -> "kvdo" without dm- prefix */
 	else if (dm_snprintf(module, sizeof(module), "dm-%s", target_name) < 0) {
 		log_error("module_present module name too long: %s",
 			  target_name);
@@ -624,13 +672,13 @@ int target_present(struct cmd_context *cmd, const char *target_name,
 				      &maj, &min, &patchlevel);
 }
 
-int get_device_list(const struct volume_group *vg, struct dm_list **devs,
-		    unsigned *devs_features)
+int get_dm_active_devices(const struct volume_group *vg, struct dm_list **devs,
+			  unsigned *devs_features)
 {
 	if (!activation())
 		return 0;
 
-	return dev_manager_get_device_list(NULL, devs, devs_features);
+	return dev_manager_get_dm_active_devices(NULL, devs, devs_features);
 }
 
 /*
@@ -807,7 +855,7 @@ int lv_info_with_seg_status(struct cmd_context *cmd,
 
 			/* Merge not yet started, still a snapshot... */
 		}
-		/* Hadle fictional lvm2 snapshot and query snapshotX volume */
+		/* Handle fictional lvm2 snapshot and query snapshotX volume */
 		lv_seg = find_snapshot(lv);
 	}
 
@@ -888,7 +936,7 @@ int lv_check_not_in_use(const struct logical_volume *lv, int error_if_used)
 		log_debug_activation("Retrying open_count check for %s.",
 				     display_lvname(lv));
 		if (!lv_info(lv->vg->cmd, lv, 0, &info, 1, 0) || !info.exists) {
-			stack; /* device dissappeared? */
+			stack; /* device disappeared? */
 			return 1;
 		} else if (!info.open_count)
 			return 1;
@@ -958,7 +1006,7 @@ int lv_mirror_percent(struct cmd_context *cmd, const struct logical_volume *lv,
 	int r;
 	struct dev_manager *dm;
 
-	/* If mirrored LV is temporarily shrinked to 1 area (= linear),
+	/* If mirrored LV is temporarily shrunk to 1 area (= linear),
 	 * it should be considered in-sync. */
 	if (dm_list_size(&lv->segments) == 1 && first_seg(lv)->area_count == 1) {
 		*percent = DM_PERCENT_100;
@@ -1363,14 +1411,40 @@ int lv_vdo_pool_percent(const struct logical_volume *lv, dm_percent_t *percent)
 	return 1;
 }
 
+/*
+ * lv_vdo_pool_size_config obtains size configuration from active VDO table line
+ *
+ * If the 'params' string has been already retrieved, use it.
+ * If the mempool already exists, use it.
+ *
+ */
+int lv_vdo_pool_size_config(const struct logical_volume *lv,
+			    struct vdo_pool_size_config *cfg)
+{
+	struct dev_manager *dm;
+	int r;
+
+	if (!lv_info(lv->vg->cmd, lv, 1, NULL, 0, 0))
+		return 1;  /* Inactive VDO pool -> no runtime config */
+
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, !lv_is_pvmove(lv))))
+		return_0;
+
+	r = dev_manager_vdo_pool_size_config(dm, lv, cfg);
+
+	dev_manager_destroy(dm);
+
+	return r;
+}
+
 static int _lv_active(struct cmd_context *cmd, const struct logical_volume *lv)
 {
 	struct lvinfo info;
 
 	if (!lv_info(cmd, lv, 0, &info, 0, 0)) {
-		log_debug("Cannot determine activation status of %s%s.",
-			  display_lvname(lv),
-			  activation() ? "" : " (no device driver)");
+		log_debug_activation("Cannot determine activation status of %s%s.",
+				     display_lvname(lv),
+				     activation() ? "" : " (no device driver)");
 		return 0;
 	}
 
@@ -1575,18 +1649,7 @@ char *get_monitor_dso_path(struct cmd_context *cmd, int id)
 
 static char *_build_target_uuid(struct cmd_context *cmd, const struct logical_volume *lv)
 {
-	const char *layer;
-
-	if (lv_is_thin_pool(lv))
-		layer = "tpool"; /* Monitor "tpool" for the "thin pool". */
-	else if (lv_is_vdo_pool(lv))
-		layer = "vpool"; /* Monitor "vpool" for the "VDO pool". */
-	else if (lv_is_origin(lv) || lv_is_external_origin(lv))
-		layer = "real"; /* Monitor "real" for "snapshot-origin". */
-	else
-		layer = NULL;
-
-	return build_dm_uuid(cmd->mem, lv, layer);
+	return build_dm_uuid(cmd->mem, lv, lv_layer(lv));
 }
 
 static int _device_registered_with_dmeventd(struct cmd_context *cmd,
@@ -1729,7 +1792,7 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	struct lv_segment *log_seg;
 	int (*monitor_fn) (struct lv_segment *s, int e);
 	uint32_t s;
-	static const struct lv_activate_opts zlaopts = { 0 };
+	const struct lv_activate_opts zlaopts = { 0 };
 	struct lv_activate_opts mirr_laopts = { .origin_only = 1 };
 	struct lvinfo info;
 	const char *dso = NULL;
@@ -1749,6 +1812,9 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	 */
 	if (monitor && !dmeventd_monitor_mode())
 		return 1;
+
+	if (sigint_caught())
+		return_0;
 
 	/*
 	 * Activation of unused cache-pool activates metadata device as
@@ -1807,8 +1873,10 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	 * each of its respective snapshots.  The origin itself may
 	 * also need to be monitored if it is a mirror, for example,
 	 * so fall through to process it afterwards.
+	 * Before monitoring snapshots verify origin is active as with
+	 * external origin only read-only -real device can be active.
 	 */
-	if (!laopts->origin_only && lv_is_origin(lv))
+	if (!laopts->origin_only && lv_is_origin(lv) && lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
 		dm_list_iterate_safe(snh, snht, &lv->snapshot_segs)
 			if (!monitor_dev_for_events(cmd, dm_list_struct_base(snh,
 				struct lv_segment, origin_list)->cow, NULL, monitor)) {
@@ -1829,6 +1897,12 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 		}
 
 	dm_list_iterate_items(seg, &lv->segments) {
+		if (sigint_caught()) {
+			stack;
+			r = 0;
+			break;
+		}
+
 		/* Recurse for AREA_LV */
 		for (s = 0; s < seg->area_count; s++) {
 			if (seg_type(seg, s) != AREA_LV)
@@ -1960,7 +2034,11 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 				break;
 			log_very_verbose("%s %smonitoring still pending: waiting...",
 					 display_lvname(lv), monitor ? "" : "un");
-			usleep(10000 * i);
+			if (interruptible_usleep(10000 * i)) {
+				stack;
+				r = 0;
+				break;
+			}
 		}
 
 		if (r)
@@ -1977,7 +2055,7 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 }
 
 struct detached_lv_data {
-	const struct logical_volume *lv_pre;
+	const struct volume_group *vg_pre;
 	struct lv_activate_opts *laopts;
 	int *flush_required;
 };
@@ -1987,37 +2065,14 @@ static int _preload_detached_lv(struct logical_volume *lv, void *data)
 	struct detached_lv_data *detached = data;
 	struct logical_volume *lv_pre;
 
-	/* Check and preload removed raid image leg or metadata */
-	if (lv_is_raid_image(lv)) {
-		if ((lv_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
-		    !lv_is_raid_image(lv_pre) && lv_is_active(lv) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	} else if (lv_is_raid_metadata(lv)) {
-		if ((lv_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
-		    !lv_is_raid_metadata(lv_pre) && lv_is_active(lv) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	} else if (lv_is_mirror_image(lv)) {
-		if ((lv_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
-		    !lv_is_mirror_image(lv_pre) && lv_is_active(lv) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	}
-
-	if (!lv_is_visible(lv) && (lv_pre = find_lv(detached->lv_pre->vg, lv->name)) &&
+	/* Check if the LV was 'hidden' (non-toplevel) in committed metadata
+	 * and becomes 'visible' (toplevel) in precommitted metadata */
+	if (!lv_is_visible(lv) &&
+	    (lv_pre = find_lv_in_vg_by_lvid(detached->vg_pre, &lv->lvid)) &&
 	    lv_is_visible(lv_pre)) {
+		log_debug_activation("Preloading detached hidden volume %s as visible volume %s.",
+				     display_lvname(lv), display_lvname(lv_pre));
 		if (!_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	}
-
-	/* FIXME: condition here should be far more limiting to really
-	 *        detect detached LVs */
-	if ((lv_pre = find_lv(detached->lv_pre->vg, lv->name))) {
-		if (lv_is_visible(lv_pre) && lv_is_active(lv) &&
-		    !lv_is_pool(lv) &&
-		    (!lv_is_cow(lv) || !lv_is_cow(lv_pre)) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
 			return_0;
 	}
 
@@ -2066,9 +2121,13 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 
 	/* Ignore origin_only unless LV is origin in both old and new metadata */
 	/* or LV is thin or thin pool volume */
-	if (!lv_is_thin_volume(lv) && !lv_is_thin_pool(lv) &&
-	    !(lv_is_origin(lv) && lv_is_origin(lv_pre)))
+	if (laopts->origin_only &&
+	    !lv_is_thin_volume(lv) && !lv_is_thin_pool(lv) &&
+	    !(lv_is_origin(lv) && lv_is_origin(lv_pre))) {
+		log_debug_activation("Not using origin only for suspend of %s.",
+				     display_lvname(lv));
 		laopts->origin_only = 0;
+	}
 
 	/*
 	 * Preload devices for the LV.
@@ -2111,7 +2170,7 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 		/*
 		 * Search for existing LVs that have become detached and preload them.
 		 */
-		detached.lv_pre = lv_pre;
+		detached.vg_pre = lv_pre->vg;
 		detached.laopts = laopts;
 		detached.flush_required = &flush_required;
 
@@ -2141,8 +2200,12 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 	 * TODO: Relax this limiting condition further */
 	if (!flush_required &&
 	    (lv_is_pvmove(lv) || pvmove_lv ||
-	     (!lv_is_mirror(lv) && !lv_is_thin_pool(lv) && !lv_is_thin_volume(lv)))) {
-		log_debug("Requiring flush for LV %s.", display_lvname(lv));
+	     (!lv_is_mirror(lv) &&
+	      !lv_is_thin_volume(lv) &&
+	      !lv_is_thin_pool(lv) &&
+	      !lv_is_vdo(lv) &&
+	      !lv_is_vdo_pool(lv)))) {
+		log_debug_activation("Requiring flush for LV %s.", display_lvname(lv));
 		flush_required = 1;
 	}
 
@@ -2150,22 +2213,29 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 		/* FIXME Consider aborting here */
 		stack;
 
-	if (!laopts->origin_only &&
-	    (lv_is_origin(lv_pre) || lv_is_cow(lv_pre)))
-		lockfs = 1;
-
-	/* Converting non-thin LV to thin external origin ? */
-	if (!lv_is_thin_volume(lv) && lv_is_thin_volume(lv_pre))
-		lockfs = 1; /* Sync before conversion */
-
+	/* Require fs synchronization when taking a thin snapshot */
 	if (laopts->origin_only && lv_is_thin_volume(lv) && lv_is_thin_volume(lv_pre))
+		lockfs = 1;
+	/* Require fs synchronization when taking a thick snapshot */
+	else if (!laopts->origin_only &&
+		 (lv_is_origin(lv_pre) || lv_is_cow(lv_pre)))
+		lockfs = 1;
+	/* Require fs synchronization when converting a non-thin LV to a thin LV or
+	 * a non/thin LV with/out external origin to a thin LV with external origin LV. */
+	else if (!laopts->origin_only &&
+		 lv_is_thin_volume(lv_pre) &&		/* new LV is a Thin */
+		 (!lv_is_thin_volume(lv) ||		/* and either the existing LV is NOT a Thin */
+		  (first_seg(lv_pre)->external_lv &&	/* or the existing LV IS Thin and the new LV is Thin with the external origin */
+		   (!first_seg(lv)->external_lv ||	/* and check if existing Thin is either without the external origin */
+		    memcmp(&first_seg(lv_pre)->external_lv->lvid.id[1], /* or it uses a different external origin */
+			   &first_seg(lv)->external_lv->lvid.id[1], ID_LEN) != 0))))
 		lockfs = 1;
 
 	if (!lv_is_locked(lv) && lv_is_locked(lv_pre) &&
 	    (pvmove_lv = find_pvmove_lv_in_lv(lv_pre))) {
 		/*
 		 * When starting PVMOVE, suspend participating LVs first
-		 * with committed metadata by looking at precommited pvmove list.
+		 * with committed metadata by looking at precommitted pvmove list.
 		 * In committed metadata these LVs are not connected in any way.
 		 *
 		 * TODO: prepare list of LVs needed to be suspended and pass them
@@ -2194,7 +2264,7 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 				log_error("lv_list alloc failed.");
 				goto out;
 			}
-			/* Look for precommitted LV name in commmitted VG */
+			/* Look for precommitted LV name in committed VG */
 			if (!(lvl->lv = find_lv(lv->vg, lv_tmp->name))) {
 				log_error(INTERNAL_ERROR "LV %s missing from preload metadata.",
 					  display_lvname(lv_tmp));
@@ -2250,12 +2320,12 @@ static int _check_suspended_lv(struct logical_volume *lv, void *data)
 	struct lvinfo info;
 
 	if (lv_info(lv->vg->cmd, lv, 0, &info, 0, 0) && info.exists && info.suspended) {
-		log_debug("Found suspended LV %s in critical section().", display_lvname(lv));
+		log_debug_activation("Found suspended LV %s in critical section().", display_lvname(lv));
 		return 0; /* There is suspended subLV in the tree */
 	}
 
 	if (lv_layer(lv) && lv_info(lv->vg->cmd, lv, 1, &info, 0, 0) && info.exists && info.suspended) {
-		log_debug("Found suspended layered LV %s in critical section().", display_lvname(lv));
+		log_debug_activation("Found suspended layered LV %s in critical section().", display_lvname(lv));
 		return 0; /* There is suspended subLV in the tree */
 	}
 
@@ -2388,10 +2458,9 @@ static int _lv_has_open_snapshots(const struct logical_volume *lv)
 int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logical_volume *lv)
 {
 	struct lvinfo info;
-	static const struct lv_activate_opts laopts = { .skip_in_use = 1 };
+	const struct lv_activate_opts laopts = { .skip_in_use = 1 };
 	struct dm_list *snh;
 	int r = 0;
-	unsigned tmp_state;
 
 	if (!activation())
 		return 1;
@@ -2455,7 +2524,7 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 
 	/*
 	 * Remove any transiently activated error
-	 * devices which arean't used any more.
+	 * devices which aren't used any more.
 	 */
 	if (r && lv_is_raid(lv) && !lv_deactivate_any_missing_subdevs(lv)) {
 		log_error("Failed to remove temporary SubLVs from %s",
@@ -2464,9 +2533,6 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 	}
 	critical_section_dec(cmd, "deactivated");
 
-	tmp_state = cmd->disable_dm_devs;
-	cmd->disable_dm_devs = 1;
-
 	if (!lv_info(cmd, lv, 0, &info, 0, 0) || info.exists) {
 		/* Turn into log_error, but we do not log error */
 		log_debug_activation("Deactivated volume is still %s present.",
@@ -2474,7 +2540,6 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 		r = 0;
 	}
 
-	cmd->disable_dm_devs = tmp_state;
 out:
 
 	return r;
@@ -2520,7 +2585,7 @@ static int _lv_activate(struct cmd_context *cmd, const char *lvid_s,
 	    lv_is_partial(lv) && lv_is_raid(lv) && lv_raid_has_integrity((struct logical_volume *)lv)) {
 		cmd->partial_activation = 0;
 		cmd->degraded_activation = 0;
-		log_print("No degraded or partial activation for raid with integrity.");
+		log_print_unless_silent("No degraded or partial activation for raid with integrity.");
 	}
 
 	if ((!lv->vg->cmd->partial_activation) && lv_is_partial(lv)) {
@@ -2569,6 +2634,8 @@ static int _lv_activate(struct cmd_context *cmd, const char *lvid_s,
 	/* TODO: should not apply for LVs in maintenance mode */
 	if (!lv_is_visible(lv) && lv_is_component(lv)) {
 		laopts->read_only = 1;
+		laopts->component_lv = lv;
+	} else if (lv_is_pool_metadata_spare(lv)) {
 		laopts->component_lv = lv;
 	} else if (filter)
 		laopts->read_only = _passes_readonly_filter(cmd, lv);
@@ -2686,16 +2753,16 @@ static int _remove_dm_dev_by_name(const char *name)
 /* Work all segments of @lv removing any existing, closed "*-missing_N_0" sub devices. */
 static int _lv_remove_any_missing_subdevs(struct logical_volume *lv)
 {
-	if (lv) {
-		uint32_t seg_no = 0;
-		char name[257];
-		struct lv_segment *seg;
+	char name[NAME_LEN];
+	struct lv_segment *seg;
+	uint32_t seg_no = 0;
 
+	if (lv) {
 		dm_list_iterate_items(seg, &lv->segments) {
 			if (dm_snprintf(name, sizeof(name), "%s-%s-missing_%u_0", seg->lv->vg->name, seg->lv->name, seg_no) < 0)
 				return_0;
 			if (!_remove_dm_dev_by_name(name))
-				return 0;
+				return_0;
 
 			seg_no++;
 		}
@@ -2704,7 +2771,7 @@ static int _lv_remove_any_missing_subdevs(struct logical_volume *lv)
 	return 1;
 }
 
-/* Remove any "*-missing_*" sub devices added by the activation layer for an rmate/rimage missing PV mapping */
+/* Remove any "*-missing_*" sub devices added by the activation layer for an rmeta/rimage missing PV mapping */
 int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv)
 {
 	uint32_t s;
@@ -2713,10 +2780,10 @@ int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv)
 	for (s = 0; s < seg->area_count; s++) {
 		if (seg_type(seg, s) == AREA_LV &&
 		    !_lv_remove_any_missing_subdevs(seg_lv(seg, s)))
-			return 0;
+			return_0;
 		if (seg->meta_areas && seg_metatype(seg, s) == AREA_LV &&
 		    !_lv_remove_any_missing_subdevs(seg_metalv(seg, s)))
-			return 0;
+			return_0;
 	}
 
 	return 1;
@@ -2760,7 +2827,7 @@ static int _component_cb(struct logical_volume *lv, void *data)
 
 	if (lv_is_locked(lv) || lv_is_pvmove(lv) ||/* ignoring */
 	    /* thin-pool is special and it's using layered device */
-	    (lv_is_thin_pool(lv) && pool_is_active(lv)))
+	    (lv_is_thin_pool(lv) && thin_pool_is_active(lv)))
 		return -1;
 
 	/* External origin is activated through thinLV and uses -real suffix.
@@ -2782,7 +2849,7 @@ static int _component_cb(struct logical_volume *lv, void *data)
  * Finds out for any LV if any of its component LVs are active.
  * Function first checks if an existing LV is visible and active eventually
  * it's lock holding LV is already active. In such case sub LV cannot be
- * actived alone and no further checking is needed.
+ * activated alone and no further checking is needed.
  *
  * Returns active component LV if there is such.
  */
@@ -2845,7 +2912,7 @@ static int _deactivate_sub_lv_cb(struct logical_volume *lv, void *data)
 }
 
 /*
- * Deactivates LV toghether with explicit deactivation call made also for all its component LVs.
+ * Deactivates LV together with explicit deactivation call made also for all its component LVs.
  */
 int deactivate_lv_with_sub_lv(const struct logical_volume *lv)
 {

@@ -5,7 +5,6 @@ set -e
 case "$1" in
     configure)
         vgcfgbackup >/dev/null 2>&1 || :
-        dpkg-trigger --no-await update-initramfs
         if dpkg --compare-versions "$2" lt "2.02.133~"; then
             deb-systemd-helper purge lvm2-activation-early.service lvm2-activation.service >/dev/null
             deb-systemd-helper unmask lvm2-activation-early.service lvm2-activation.service >/dev/null

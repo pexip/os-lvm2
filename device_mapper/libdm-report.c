@@ -153,7 +153,7 @@ struct op_def {
  * shorter one if one is a prefix of another!
  * (e.g. =~ comes before =)
 */
-static struct op_def _op_cmp[] = {
+static const struct op_def _op_cmp[] = {
 	{ "=~", FLD_CMP_REGEX, "Matching regular expression. [regex]" },
 	{ "!~", FLD_CMP_REGEX|FLD_CMP_NOT, "Not matching regular expression. [regex]" },
 	{ "=", FLD_CMP_EQUAL, "Equal to. [number, size, percent, string, string list, time]" },
@@ -187,7 +187,7 @@ static struct op_def _op_cmp[] = {
 #define SEL_LIST_SUBSET_LS	0x00040000
 #define SEL_LIST_SUBSET_LE	0x00080000
 
-static struct op_def _op_log[] = {
+static const struct op_def _op_log[] = {
 	{ "&&", SEL_AND, "All fields must match" },
 	{ ",", SEL_AND, "All fields must match" },
 	{ "||", SEL_OR, "At least one field must match" },
@@ -384,172 +384,247 @@ int dm_report_field_percent(struct dm_report *rh,
 	return 1;
 }
 
-struct str_list_sort_value_item {
+struct pos_len {
 	unsigned pos;
 	size_t len;
 };
 
+struct str_pos_len {
+	const char *str;
+	struct pos_len item;
+};
+
 struct str_list_sort_value {
 	const char *value;
-	struct str_list_sort_value_item *items;
+	struct pos_len *items;
 };
 
-struct str_list_sort_item {
-	const char *str;
-	struct str_list_sort_value_item item;
-};
-
-static int _str_list_sort_item_cmp(const void *a, const void *b)
+static int _str_sort_cmp(const void *a, const void *b)
 {
-	const struct str_list_sort_item *slsi_a = (const struct str_list_sort_item *) a;
-	const struct str_list_sort_item *slsi_b = (const struct str_list_sort_item *) b;
-
-	return strcmp(slsi_a->str, slsi_b->str);
+	return strcmp(((const struct str_pos_len *) a)->str, ((const struct str_pos_len *) b)->str);
 }
+
+#define FIELD_STRING_LIST_DEFAULT_DELIMITER ","
 
 static int _report_field_string_list(struct dm_report *rh,
 				     struct dm_report_field *field,
 				     const struct dm_list *data,
 				     const char *delimiter,
-				     int sort)
+				     int sort_repstr)
 {
-	static const char _string_list_grow_object_failed_msg[] = "dm_report_field_string_list: dm_pool_grow_object_failed";
-	struct str_list_sort_value *sort_value = NULL;
-	unsigned int list_size, pos, i;
-	struct str_list_sort_item *arr = NULL;
+	static const char _error_msg_prefix[] = "_report_field_string_list: ";
+	unsigned int list_size, i, pos;
+	struct str_pos_len *arr = NULL;
 	struct dm_str_list *sl;
-	size_t delimiter_len, len;
-	void *object;
+	size_t delimiter_len, repstr_str_len, repstr_size;
+	char *repstr = NULL;
+	struct pos_len *repstr_extra;
+	struct str_list_sort_value *sortval = NULL;
 	int r = 0;
 
-	if (!(sort_value = dm_pool_zalloc(rh->mem, sizeof(struct str_list_sort_value)))) {
-		log_error("dm_report_field_string_list: dm_pool_zalloc failed for sort_value");
-		return 0;
-	}
+	/*
+	 * The 'field->report_string' has 2 parts:
+	 *
+	 *    - string representing the whole string list
+	 *      (terminated by '\0' at its end as usual)
+	 *
+	 *    - extra info beyond the end of the string representing
+	 *      position and length of each list item within the
+	 *      field->report_string (array of 'struct pos_len')
+	 *
+	 * We can use the extra info to unambiguously identify list items,
+	 * the delimiter is not enough here as it's not assured it won't appear
+	 * in list item itself. We will make use of this extra info in case
+	 * we need to apply further formatting to the list in dm_report_output
+	 * where the pure field->report_string is not enough for printout.
+	 *
+	 *
+	 * The 'field->sort_value' contains a value of type 'struct
+	 * str_list_sort_value' ('sortval'). This one has a pointer to the
+	 * 'field->report_string' string ('sortval->value') and info
+	 * about position and length of each list item within the string
+	 * (array of 'struct pos_len').
+	 *
+	 *
+	 * The 'field->report_string' is either in sorted or unsorted form,
+	 * depending on 'sort_repstr' arg.
+	 *
+	 * The 'field->sort_value.items' is always in sorted form because
+	 * we need that for effective sorting and selection.
+	 *
+	 * If 'field->report_string' is sorted, then field->report_string
+	 * and field->sort_value.items share the same array of
+	 * 'struct pos_len' (because they're both sorted the same way),
+	 * otherwise, each one has its own array.
+	 *
+	 * The very first item in the array of 'struct pos_len' is always
+	 * a pair denoting '[list_size,strlen(field->report_string)]'. The
+	 * rest of items denote start and length of each item in the list.
+         *
+	 *
+	 * For example, if we have a list with "abc", "xy", "defgh"
+	 * as input and delimiter is ",", we end up with either:
+	 *
+	 *  A) if we don't want the report string sorted ('sort_repstr == 0'):
+	 *
+	 *    - field->report_string = repstr
+	 *
+	 *       repstr      repstr_extra
+	 *         |             |
+	 *         V             V
+	 *         abc,xy,defgh\0{[3,12],[0,3],[4,2],[7,5]}
+	 *         |____________||________________________|
+	 *             string     array of struct pos_len
+	 *                        |____||________________|
+	 *                        #items      items
+	 *
+	 *    - field->sort_value = sortval
+	 *
+	 *       sortval->value = repstr
+	 *       sortval->items = {[3,12],[0,3],[7,5],[4,2]}
+	 *                         (that is 'abc,defgh,xy')
+	 *
+	 *
+	 *  B) if we want the report string sorted ('sort_repstr == 1'):
+	 *
+	 *    - field->report_string = repstr
+	 *
+	 *       repstr     repstr_extra
+	 *         |             |
+	 *         V             V
+	 *         abc,defgh,xy\0{[3,12],[0,3],[4,5],[10,2]}
+	 *         |____________||________________________|
+	 *             string     array of struct pos_len
+	 *                        |____||________________|
+	 *                        #items      items
+	 *
+	 *     - field->sort_value = sortval
+	 *
+	 *       sortval->value = repstr
+	 *       sortval->items = repstr_extra
+	 *                       (that is 'abc,defgh,xy')
+	 */
 
+	if (!delimiter)
+		delimiter = FIELD_STRING_LIST_DEFAULT_DELIMITER;
+	delimiter_len = strlen(delimiter);
 	list_size = dm_list_size(data);
 
-	/*
-	 * Sort value stores the pointer to the report_string and then
-	 * position and length for each list element withing the report_string.
-	 * The first element stores number of elements in 'len' (therefore
-	 * list_size + 1 is used below for the extra element).
-	 * For example, with this input:
-	 *   sort = 0;  (we don't want to report sorted)
-	 *   report_string = "abc,xy,defgh";  (this is reported)
-	 *
-	 * ...we end up with:
-	 *   sort_value->value = report_string; (we'll use the original report_string for indices)
-	 *   sort_value->items[0] = {0,3};  (we have 3 items)
-	 *   sort_value->items[1] = {0,3};  ("abc")
-	 *   sort_value->items[2] = {7,5};  ("defgh")
-	 *   sort_value->items[3] = {4,2};  ("xy")
-	 *
-	 *   The items alone are always sorted while in report_string they can be
-	 *   sorted or not (based on "sort" arg) - it depends on how we prefer to
-	 *   display the list. Having items sorted internally helps with searching
-	 *   through them.
-	 */
-	if (!(sort_value->items = dm_pool_zalloc(rh->mem, (list_size + 1) * sizeof(struct str_list_sort_value_item)))) {
-		log_error("dm_report_fiel_string_list: dm_pool_zalloc failed for sort value items");
+	if (!(sortval = dm_pool_alloc(rh->mem, sizeof(struct str_list_sort_value)))) {
+		log_error("%s failed to allocate sort value structure", _error_msg_prefix);
 		goto out;
 	}
-	sort_value->items[0].len = list_size;
 
 	/* zero items */
-	if (!list_size) {
-		sort_value->value = field->report_string = "";
-		field->sort_value = sort_value;
+	if (list_size == 0) {
+		field->report_string = sortval->value = "";
+		sortval->items = NULL;
+		field->sort_value = sortval;
 		return 1;
 	}
 
 	/* one item */
 	if (list_size == 1) {
 		sl = (struct dm_str_list *) dm_list_first(data);
-		if (!sl ||
-		    !(sort_value->value = field->report_string = dm_pool_strdup(rh->mem, sl->str))) {
-			log_error("dm_report_field_string_list: dm_pool_strdup failed");
+
+		repstr_str_len = strlen(sl->str);
+		repstr_size = repstr_str_len + 1 + (2 * sizeof(struct pos_len));
+
+		if (!(repstr = dm_pool_alloc(rh->mem, repstr_size))) {
+			log_error("%s failed to allocate report string structure", _error_msg_prefix);
 			goto out;
 		}
-		sort_value->items[1].pos = 0;
-		sort_value->items[1].len = strlen(sl->str);
-		field->sort_value = sort_value;
+		repstr_extra = (struct pos_len *) (repstr + repstr_str_len + 1);
+
+		memcpy(repstr, sl->str, repstr_str_len + 1);
+		memcpy(repstr_extra, &((struct pos_len) {.pos = 1, .len = repstr_str_len}), sizeof(struct pos_len));
+		memcpy(repstr_extra + 1, &((struct pos_len) {.pos = 0, .len = repstr_str_len}), sizeof(struct pos_len));
+
+		sortval->value = field->report_string = repstr;
+		sortval->items = repstr_extra;
+		field->sort_value = sortval;
 		return 1;
 	}
 
-	/* more than one item - sort the list */
-	if (!(arr = malloc(sizeof(struct str_list_sort_item) * list_size))) {
-		log_error("dm_report_field_string_list: malloc failed");
+	/* more than one item - allocate temporary array for string list items for further processing */
+	if (!(arr = zalloc(list_size * sizeof(struct str_pos_len)))) {
+		log_error("%s failed to allocate temporary array for processing", _error_msg_prefix);
 		goto out;
 	}
 
-	if (!(dm_pool_begin_object(rh->mem, 256))) {
-		log_error(_string_list_grow_object_failed_msg);
-		goto out;
-	}
-
-	if (!delimiter)
-		delimiter = ",";
-	delimiter_len = strlen(delimiter);
-
-	i = pos = 0;
+	i = 0;
+	repstr_size = 0;
 	dm_list_iterate_items(sl, data) {
 		arr[i].str = sl->str;
-		if (!sort) {
-			/* sorted outpud not required - report the list as it is */
-			len = strlen(sl->str);
-			if (!dm_pool_grow_object(rh->mem, arr[i].str, len) ||
-			    (i+1 != list_size && !dm_pool_grow_object(rh->mem, delimiter, delimiter_len))) {
-				log_error(_string_list_grow_object_failed_msg);
-				goto out;
-			}
-			arr[i].item.pos = pos;
-			arr[i].item.len = len;
-			pos = i+1 == list_size ? pos+len : pos+len+delimiter_len;
-		}
+		repstr_size += (arr[i].item.len = strlen(sl->str));
 		i++;
 	}
 
-	qsort(arr, i, sizeof(struct str_list_sort_item), _str_list_sort_item_cmp);
+	/*
+	 * At this point, repstr_size contains sum of lengths of all string list items.
+	 * Now, add these to the repstr_size:
+	 *
+	 * 	--> sum of character count used by all delimiters: + ((list_size - 1) * delimiter_len)
+	 *
+	 * 	--> '\0' used at the end of the string list: + 1
+	 *
+	 * 	--> sum of structures used to keep info about pos and length of each string list item:
+	 * 	    [0, <list_size>] [<pos1>,<size1>] [<pos2>,<size2>] ...
+	 * 	    That is: + ((list_size + 1) * sizeof(struct pos_len))
+	 */
+	repstr_size += ((list_size - 1) * delimiter_len);
+	repstr_str_len = repstr_size;
+	repstr_size += 1 + ((list_size + 1) * sizeof(struct pos_len));
 
-	for (i = 0, pos = 0; i < list_size; i++) {
-		if (sort) {
-			/* sorted output required - report the list as sorted */
-			len = strlen(arr[i].str);
-			if (!dm_pool_grow_object(rh->mem, arr[i].str, len) ||
-			    (i+1 != list_size && !dm_pool_grow_object(rh->mem, delimiter, delimiter_len))) {
-				log_error(_string_list_grow_object_failed_msg);
-				goto out;
-			}
-			/*
-			 * Save position and length of the string
-			 * element in report_string for sort_value.
-			 * Use i+1 here since items[0] stores list size!!!
-			 */
-			sort_value->items[i+1].pos = pos;
-			sort_value->items[i+1].len = len;
-			pos = i+1 == list_size ? pos+len : pos+len+delimiter_len;
-		} else {
-			sort_value->items[i+1].pos = arr[i].item.pos;
-			sort_value->items[i+1].len = arr[i].item.len;
-		}
-	}
+	if (sort_repstr)
+		qsort(arr, list_size, sizeof(struct str_pos_len), _str_sort_cmp);
 
-	if (!dm_pool_grow_object(rh->mem, "\0", 1)) {
-		log_error(_string_list_grow_object_failed_msg);
+	if (!(repstr = dm_pool_alloc(rh->mem, repstr_size))) {
+		log_error("%s failed to allocate report string structure", _error_msg_prefix);
 		goto out;
 	}
+	repstr_extra = (struct pos_len *) (repstr + repstr_str_len + 1);
 
-	object = dm_pool_end_object(rh->mem);
-	sort_value->value = object;
-	field->sort_value = sort_value;
-	field->report_string = object;
+	memcpy(repstr_extra, &(struct pos_len) {.pos = list_size, .len = repstr_str_len}, sizeof(struct pos_len));
+	for (i = 0, pos = 0; i < list_size; i++) {
+		arr[i].item.pos = pos;
+
+		if (arr[i].str)
+			memcpy(repstr + pos, arr[i].str, arr[i].item.len);
+		memcpy(repstr_extra + i + 1, &arr[i].item, sizeof(struct pos_len));
+
+		pos += arr[i].item.len;
+		if (i + 1 < list_size) {
+			memcpy(repstr + pos, delimiter, delimiter_len);
+			pos += delimiter_len;
+		}
+	}
+	*(repstr + pos) = '\0';
+
+	sortval->value = repstr;
+	if (sort_repstr)
+		sortval->items = repstr_extra;
+	else {
+		if (!(sortval->items = dm_pool_alloc(rh->mem, (list_size + 1) * sizeof(struct pos_len)))) {
+			log_error("%s failed to allocate array of items inside sort value structure",
+				  _error_msg_prefix);
+			goto out;
+		}
+
+		qsort(arr, list_size, sizeof(struct str_pos_len), _str_sort_cmp);
+
+		sortval->items[0] = (struct pos_len) {.pos = list_size, .len = repstr_str_len};
+		for (i = 0; i < list_size; i++)
+			sortval->items[i+1] = arr[i].item;
+	}
+
+	field->report_string = repstr;
+	field->sort_value = sortval;
 	r = 1;
 out:
-	if (!r && sort_value)
-		dm_pool_free(rh->mem, sort_value);
+	if (!r && sortval)
+		dm_pool_free(rh->mem, sortval);
 	free(arr);
-
 	return r;
 }
 
@@ -722,11 +797,11 @@ static const char *_get_field_type_name(unsigned field_type)
 static size_t _get_longest_field_id_len(const struct dm_report_field_type *fields)
 {
 	uint32_t f;
-	size_t id_len = 0;
+	size_t l, id_len = 0;
 
 	for (f = 0; fields[f].report_fn; f++)
-		if (strlen(fields[f].id) > id_len)
-			id_len = strlen(fields[f].id);
+		if ((l = strlen(fields[f].id)) > id_len)
+			id_len = l;
 
 	return id_len;
 }
@@ -737,16 +812,17 @@ static void _display_fields_more(struct dm_report *rh,
 				 int display_field_types)
 {
 	uint32_t f;
+	size_t l;
 	const struct dm_report_object_type *type;
 	const char *desc, *last_desc = "";
 
 	for (f = 0; fields[f].report_fn; f++)
-		if (strlen(fields[f].id) > id_len)
-			id_len = strlen(fields[f].id);
+		if ((l = strlen(fields[f].id)) > id_len)
+			id_len = l;
 
 	for (type = rh->types; type->data_fn; type++)
-		if (strlen(type->prefix) + 3 > id_len)
-			id_len = strlen(type->prefix) + 3;
+		if ((l = strlen(type->prefix) + 3) > id_len)
+			id_len = l;
 
 	for (f = 0; fields[f].report_fn; f++) {
 		if (!(type = _find_type(rh, fields[f].type))) {
@@ -890,16 +966,13 @@ static int _get_canonical_field_name(const char *field,
  * Both names are always null-terminated.
  */
 static int _is_same_field(const char *canonical_name1, const char *canonical_name2,
-			  const char *prefix)
+			  const char *prefix, size_t prefix_len)
 {
-	size_t prefix_len;
-
 	/* Exact match? */
 	if (!strcasecmp(canonical_name1, canonical_name2))
 		return 1;
 
 	/* Match including prefix? */
-	prefix_len = strlen(prefix) - 1;
 	if (!strncasecmp(prefix, canonical_name1, prefix_len) &&
 	    !strcasecmp(canonical_name1 + prefix_len, canonical_name2))
 		return 1;
@@ -975,6 +1048,7 @@ static int _get_field(struct dm_report *rh, const char *field, size_t flen,
 {
 	char field_canon[DM_REPORT_FIELD_TYPE_ID_LEN];
 	uint32_t f;
+	size_t prefix_len;
 
 	if (!flen)
 		return 0;
@@ -982,8 +1056,9 @@ static int _get_field(struct dm_report *rh, const char *field, size_t flen,
 	if (!_get_canonical_field_name(field, flen, field_canon, sizeof(field_canon), NULL))
 		return_0;
 
+	prefix_len = strlen(rh->field_prefix) - 1;
 	for (f = 0; _implicit_report_fields[f].report_fn; f++) {
-		if (_is_same_field(_implicit_report_fields[f].id, field_canon, rh->field_prefix)) {
+		if (_is_same_field(_implicit_report_fields[f].id, field_canon, rh->field_prefix, prefix_len)) {
 			*f_ret = f;
 			*implicit = 1;
 			return 1;
@@ -991,7 +1066,7 @@ static int _get_field(struct dm_report *rh, const char *field, size_t flen,
 	}
 
 	for (f = 0; rh->fields[f].report_fn; f++) {
-		if (_is_same_field(rh->canonical_field_ids[f], field_canon, rh->field_prefix)) {
+		if (_is_same_field(rh->canonical_field_ids[f], field_canon, rh->field_prefix, prefix_len)) {
 			*f_ret = f;
 			*implicit = 0;
 			return 1;
@@ -1072,7 +1147,7 @@ static int _add_sort_key(struct dm_report *rh, uint32_t field_num, int implicit,
 static int _key_match(struct dm_report *rh, const char *key, size_t len,
 		      unsigned report_type_only)
 {
-	char key_canon[DM_REPORT_FIELD_TYPE_ID_LEN];
+	int implicit;
 	uint32_t f;
 	uint32_t flags;
 
@@ -1095,16 +1170,8 @@ static int _key_match(struct dm_report *rh, const char *key, size_t len,
 		return 0;
 	}
 
-	if (!_get_canonical_field_name(key, len, key_canon, sizeof(key_canon), NULL))
-		return_0;
-
-	for (f = 0; _implicit_report_fields[f].report_fn; f++)
-		if (_is_same_field(_implicit_report_fields[f].id, key_canon, rh->field_prefix))
-			return _add_sort_key(rh, f, 1, flags, report_type_only);
-
-	for (f = 0; rh->fields[f].report_fn; f++)
-		if (_is_same_field(rh->canonical_field_ids[f], key_canon, rh->field_prefix))
-			return _add_sort_key(rh, f, 0, flags, report_type_only);
+	if (_get_field(rh, key, len, &f, &implicit))
+		return _add_sort_key(rh, f, implicit, flags, report_type_only);
 
 	return 0;
 }
@@ -1330,7 +1397,7 @@ struct dm_report *dm_report_init(uint32_t *report_types,
 	}
 
 	/*
-	 * Return updated types value for further compatility check by caller.
+	 * Return updated types value for further compatibility check by caller.
 	 */
 	_dm_report_init_update_types(rh, report_types);
 
@@ -1387,9 +1454,14 @@ static void *_report_get_field_data(struct dm_report *rh,
 	const struct dm_report_field_type *fields = fp->implicit ? _implicit_report_fields
 								 : rh->fields;
 
-	char *ret = fp->type->data_fn(object);
+	char *ret;
 
-	if (!ret)
+	if (!object) {
+		log_error(INTERNAL_ERROR "_report_get_field_data: missing object.");
+		return NULL;
+	}
+
+	if (!(ret = fp->type->data_fn(object)))
 		return NULL;
 
 	return (void *)(ret + fields[fp->field_num].offset);
@@ -1688,7 +1760,7 @@ static int _cmp_field_string_list_strict_all(const struct str_list_sort_value *v
 	struct dm_str_list *sel_item;
 	unsigned int i = 1;
 
-	if (!val->items[0].len) {
+	if (!val->items) {
 		if (sel_list_size == 1) {
 			/* match blank string list with selection defined as blank string only */
 			sel_item = dm_list_item(dm_list_first(&sel->str_list.list), struct dm_str_list);
@@ -1698,7 +1770,7 @@ static int _cmp_field_string_list_strict_all(const struct str_list_sort_value *v
 	}
 
 	/* if item count differs, it's clear the lists do not match */
-	if (val->items[0].len != sel_list_size)
+	if (val->items[0].pos != sel_list_size)
 		return 0;
 
 	/* both lists are sorted so they either match 1:1 or not */
@@ -1721,7 +1793,7 @@ static int _cmp_field_string_list_subset_all(const struct str_list_sort_value *v
 	unsigned int i, last_found = 1;
 	int r = 0;
 
-	if (!val->items[0].len) {
+	if (!val->items) {
 		if (sel_list_size == 1) {
 			/* match blank string list with selection defined as blank string only */
 			sel_item = dm_list_item(dm_list_first(&sel->str_list.list), struct dm_str_list);
@@ -1733,7 +1805,7 @@ static int _cmp_field_string_list_subset_all(const struct str_list_sort_value *v
 	/* check selection is a subset of the value */
 	dm_list_iterate_items(sel_item, &sel->str_list.list) {
 		r = 0;
-		for (i = last_found; i <= val->items[0].len; i++) {
+		for (i = last_found; i <= val->items[0].pos; i++) {
 			if ((strlen(sel_item->str) == val->items[i].len) &&
 			    !strncmp(sel_item->str, val->value + val->items[i].pos, val->items[i].len)) {
 				last_found = i;
@@ -1755,7 +1827,7 @@ static int _cmp_field_string_list_any(const struct str_list_sort_value *val,
 	unsigned int i;
 
 	/* match blank string list with selection that contains blank string */
-	if (!val->items[0].len) {
+	if (!val->items) {
 		dm_list_iterate_items(sel_item, &sel->str_list.list) {
 			if (!strcmp(sel_item->str, ""))
 				return 1;
@@ -1768,7 +1840,7 @@ static int _cmp_field_string_list_any(const struct str_list_sort_value *val,
 		 * TODO: Optimize this so we don't need to compare the whole lists' content.
 		 *       Make use of the fact that the lists are sorted!
 		 */
-		for (i = 1; i <= val->items[0].len; i++) {
+		for (i = 1; i <= val->items[0].pos; i++) {
 			if ((strlen(sel_item->str) == val->items[i].len) &&
 			    !strncmp(sel_item->str, val->value + val->items[i].pos, val->items[i].len))
 				return 1;
@@ -2190,7 +2262,7 @@ static const char * _skip_space(const char *s)
 	return s;
 }
 
-static int _tok_op(struct op_def *t, const char *s, const char **end,
+static int _tok_op(const struct op_def *t, const char *s, const char **end,
 		   uint32_t expect)
 {
 	size_t len;
@@ -2359,7 +2431,7 @@ static const char *_reserved_name(struct dm_report *rh,
 					  (reserved->type & DM_REPORT_FIELD_TYPE_MASK) ? "type-specific" : "field-specific",
 					   rh->fields[field_num].id);
 			else
-				log_error("Error occured while processing %s reserved value handler for field %s",
+				log_error("Error occurred while processing %s reserved value handler for field %s",
 					  (reserved->type & DM_REPORT_FIELD_TYPE_MASK) ? "type-specific" : "field-specific",
 					   rh->fields[field_num].id);
 		}
@@ -2431,7 +2503,7 @@ float dm_percent_to_float(dm_percent_t percent)
 
 float dm_percent_to_round_float(dm_percent_t percent, unsigned digits)
 {
-	static const float power10[] = {
+	const float power10[] = {
 		1.f, .1f, .01f, .001f, .0001f, .00001f, .000001f,
 		.0000001f, .00000001f, .000000001f,
 		.0000000001f
@@ -2497,12 +2569,12 @@ static int _check_reserved_values_supported(const struct dm_report_field_type fi
 	const struct dm_report_reserved_value *iter;
 	const struct dm_report_field_reserved_value *field_res;
 	const struct dm_report_field_type *field;
-	static uint32_t supported_reserved_types = DM_REPORT_FIELD_TYPE_NUMBER |
+	const uint32_t supported_reserved_types =  DM_REPORT_FIELD_TYPE_NUMBER |
 						   DM_REPORT_FIELD_TYPE_SIZE |
 						   DM_REPORT_FIELD_TYPE_PERCENT |
 						   DM_REPORT_FIELD_TYPE_STRING |
 						   DM_REPORT_FIELD_TYPE_TIME;
-	static uint32_t supported_reserved_types_with_range = DM_REPORT_FIELD_RESERVED_VALUE_RANGE |
+	const uint32_t supported_reserved_types_with_range =  DM_REPORT_FIELD_RESERVED_VALUE_RANGE |
 							      DM_REPORT_FIELD_TYPE_NUMBER |
 							      DM_REPORT_FIELD_TYPE_SIZE |
 							      DM_REPORT_FIELD_TYPE_PERCENT |
@@ -2518,7 +2590,8 @@ static int _check_reserved_values_supported(const struct dm_report_field_type fi
 		if (iter->type & DM_REPORT_FIELD_TYPE_MASK) {
 			if (!(iter->type & supported_reserved_types) ||
 			    ((iter->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE) &&
-			     !(iter->type & supported_reserved_types_with_range))) {
+			     !(iter->type & (supported_reserved_types_with_range &
+					     ~DM_REPORT_FIELD_RESERVED_VALUE_RANGE)))) {
 				log_error(INTERNAL_ERROR "_check_reserved_values_supported: "
 					  "global reserved value for type 0x%x not supported",
 					   iter->type);
@@ -2528,8 +2601,9 @@ static int _check_reserved_values_supported(const struct dm_report_field_type fi
 			field_res = (const struct dm_report_field_reserved_value *) iter->value;
 			field = &fields[field_res->field_num];
 			if (!(field->flags & supported_reserved_types) ||
-			    ((iter->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE) &&
-			     !(iter->type & supported_reserved_types_with_range))) {
+			    ((field->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE) &&
+			     !(field->type & (supported_reserved_types_with_range &
+					     ~DM_REPORT_FIELD_RESERVED_VALUE_RANGE)))) {
 				log_error(INTERNAL_ERROR "_check_reserved_values_supported: "
 					  "field-specific reserved value of type 0x%x for "
 					  "field %s not supported",
@@ -2769,7 +2843,7 @@ struct time_value {
 	time_t t2;
 };
 
-static const char *_out_of_range_msg = "Field selection value %s out of supported range for field %s.";
+static const char _out_of_range_msg[] = "Field selection value %s out of supported range for field %s.";
 
 /*
  * Standard formatted date and time - ISO8601.
@@ -2794,7 +2868,7 @@ static const char *_out_of_range_msg = "Field selection value %s out of supporte
 #define DELIM_DATE '-'
 #define DELIM_TIME ':'
 
-static int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+static const int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 static int _is_leap_year(long year)
 {
@@ -2819,7 +2893,6 @@ typedef enum {
 
 static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 {
-	static const char incorrect_date_format_msg[] = "Incorrect date format.";
 	time_range_t tmp_range = RANGE_NONE;
 	long n1, n2 = -1, n3 = -1;
 	char *s = str, *end;
@@ -2865,19 +2938,15 @@ static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 				n3 = n1 % 100;
 				n2 = (n1 / 100) % 100;
 				n1 = n1 / 10000;
-			} else {
-				log_error(incorrect_date_format_msg);
-				return NULL;
-			}
+			} else
+                                goto_bad;
 		} else {
 			if (len == 7) {
 				tmp_range = RANGE_MONTH;
 				/* YYYY-MM */
 				n3 = 1;
-			} else {
-				log_error(incorrect_date_format_msg);
-				return NULL;
-			}
+			} else
+				goto_bad;
 		}
 	}
 
@@ -2900,11 +2969,15 @@ static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 	*range = tmp_range;
 
 	return (char *) _skip_space(end);
+
+bad:
+	log_error("Incorrect date format.");
+
+	return NULL;
 }
 
 static char *_get_time(char *str, struct tm *tm, time_range_t *range)
 {
-	static const char incorrect_time_format_msg[] = "Incorrect time format.";
 	time_range_t tmp_range = RANGE_NONE;
 	long n1, n2 = -1, n3 = -1;
 	char *s = str, *end;
@@ -2952,19 +3025,15 @@ static char *_get_time(char *str, struct tm *tm, time_range_t *range)
 				n3 = n1 % 100;
 				n2 = (n1 / 100) % 100;
 				n1 = n1 / 10000;
-			} else {
-				log_error(incorrect_time_format_msg);
-				return NULL;
-			}
+			} else
+				goto_bad;
 		} else {
 			if (len == 5) {
 				/* HH:MM */
 				tmp_range = RANGE_MINUTE;
 				n3 = 0;
-			} else {
-				log_error(incorrect_time_format_msg);
-				return NULL;
-			}
+			} else
+				goto_bad;
 		}
 	}
 
@@ -2995,6 +3064,11 @@ static char *_get_time(char *str, struct tm *tm, time_range_t *range)
 	*range = tmp_range;
 
 	return (char *) _skip_space(end);
+
+bad:
+	log_error("Incorrect time format.");
+
+	return NULL;
 }
 
 /* The offset is always an absolute offset against GMT! */
@@ -3423,7 +3497,7 @@ static int _get_reserved_value(struct dm_report *rh, uint32_t field_num,
 					  (rvw->reserved->type) & DM_REPORT_FIELD_TYPE_MASK ? "type-specific" : "field-specific",
 					  rh->fields[field_num].id);
 			else
-				log_error("Error occured while processing %s reserved value handler for field %s",
+				log_error("Error occurred while processing %s reserved value handler for field %s",
 					  (rvw->reserved->type) & DM_REPORT_FIELD_TYPE_MASK ? "type-specific" : "field-specific",
 					  rh->fields[field_num].id);
 			return 0;
@@ -3443,7 +3517,6 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 						       struct reserved_value_wrapper *rvw,
 						       void *custom)
 {
-	static const char *_field_selection_value_alloc_failed_msg = "dm_report: struct field_selection_value allocation failed for selection field %s";
 	const struct dm_report_field_type *fields = implicit ? _implicit_report_fields
 							     : rh->fields;
 	struct field_properties *fp, *found = NULL;
@@ -3452,6 +3525,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	struct time_value *tval;
 	uint64_t factor;
 	char *s;
+	const char *s_array[2] = { 0 };
 
 	dm_list_iterate_items(fp, &rh->field_props) {
 		if ((fp->implicit == implicit) && (fp->field_num == field_num)) {
@@ -3491,8 +3565,8 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	}
 
 	if (!(fs->value = dm_pool_zalloc(rh->selection->mem, sizeof(struct field_selection_value)))) {
-		log_error(_field_selection_value_alloc_failed_msg, field_id);
-		goto error;
+		stack;
+		goto error_field_id;
 	}
 
 	if (((rvw->reserved && (rvw->reserved->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE)) ||
@@ -3500,8 +3574,8 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	      custom && ((struct time_value *) custom)->range))
 		 &&
 	    !(fs->value->next = dm_pool_zalloc(rh->selection->mem, sizeof(struct field_selection_value)))) {
-		log_error(_field_selection_value_alloc_failed_msg, field_id);
-		goto error;
+		stack;
+		goto error_field_id;
 	}
 
 	fs->fp = found;
@@ -3523,8 +3597,9 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 		}
 		memcpy(s, v, len);
 		s[len] = '\0';
+		s_array[0] = s;
 
-		fs->value->v.r = dm_regex_create(rh->selection->mem, (const char * const *) &s, 1);
+		fs->value->v.r = dm_regex_create(rh->selection->mem, s_array, 1);
 		free(s);
 		if (!fs->value->v.r) {
 			log_error("dm_report: failed to create regex "
@@ -3650,8 +3725,12 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	}
 
 	return fs;
+error_field_id:
+	log_error("dm_report: struct field_selection_value allocation failed for selection field %s",
+		  field_id);
+	goto error;
 bad:
-	log_error(INTERNAL_ERROR "Forbiden NULL custom detected.");
+	log_error(INTERNAL_ERROR "Forbidden NULL custom detected.");
 error:
 	dm_pool_free(rh->selection->mem, fs);
 
@@ -3678,7 +3757,7 @@ static struct selection_node *_alloc_selection_node(struct dm_pool *mem, uint32_
 static void _display_selection_help(struct dm_report *rh)
 {
 	static const char _grow_object_failed_msg[] = "_display_selection_help: dm_pool_grow_object failed";
-	struct op_def *t;
+	const struct op_def *t;
 	const struct dm_report_reserved_value *rv;
 	size_t len_all, len_final = 0;
 	const char **rvs;
@@ -3949,7 +4028,7 @@ error:
 	return NULL;
 }
 
-/* AND_EXPRESSION := EX (AND_OP AND_EXPRSSION) */
+/* AND_EXPRESSION := EX (AND_OP AND_EXPRESSION) */
 static struct selection_node *_parse_and_ex(struct dm_report *rh,
 					    const char *s,
 					    const char **next,
@@ -4031,7 +4110,7 @@ static int _alloc_rh_selection(struct dm_report *rh)
 static int _report_set_selection(struct dm_report *rh, const char *selection, int add_new_fields)
 {
 	struct selection_node *root = NULL;
-	const char *fin, *next;
+	const char *fin = NULL, *next;
 
 	if (rh->selection) {
 		if (rh->selection->selection_root)
@@ -4051,7 +4130,7 @@ static int _report_set_selection(struct dm_report *rh, const char *selection, in
 	if (!(root = _alloc_selection_node(rh->selection->mem, SEL_OR)))
 		return 0;
 
-	if (!_parse_or_ex(rh, selection, &fin, root))
+	if (!_parse_or_ex(rh, selection, &fin, root) || !fin)
 		goto_bad;
 
 	next = _skip_space(fin);
@@ -4189,7 +4268,9 @@ static int _report_headings(struct dm_report *rh)
 
 		fields = fp->implicit ? _implicit_report_fields : rh->fields;
 
-		heading = fields[fp->field_num].heading;
+		heading = rh->flags & DM_REPORT_OUTPUT_FIELD_IDS_IN_HEADINGS ?
+				fields[fp->field_num].id : fields[fp->field_num].heading;
+
 		if (rh->flags & DM_REPORT_OUTPUT_ALIGNED) {
 			if (dm_snprintf(buf, buf_size, "%-*.*s",
 					 fp->width, fp->width, heading) < 0) {
@@ -4241,6 +4322,7 @@ static void _recalculate_fields(struct dm_report *rh)
 	struct row *row;
 	struct dm_report_field *field;
 	int len;
+	int id_len;
 
 	dm_list_iterate_items(row, &rh->rows) {
 		dm_list_iterate_items(field, &row->fields) {
@@ -4254,6 +4336,12 @@ static void _recalculate_fields(struct dm_report *rh)
 				if ((len > field->props->width))
 					field->props->width = len;
 
+			}
+
+			if (rh->flags & DM_REPORT_OUTPUT_FIELD_IDS_IN_HEADINGS) {
+				id_len = (int) strlen(rh->fields[field->props->field_num].id);
+				if (field->props->width < id_len)
+					field->props->width = id_len;
 			}
 		}
 	}
@@ -4286,9 +4374,10 @@ static int _row_compare(const void *a, const void *b)
 	for (cnt = 0; cnt < rowa->rh->keys_count; cnt++) {
 		sfa = (*rowa->sort_fields)[cnt];
 		sfb = (*rowb->sort_fields)[cnt];
-		if ((sfa->props->flags & DM_REPORT_FIELD_TYPE_NUMBER) ||
-		    (sfa->props->flags & DM_REPORT_FIELD_TYPE_SIZE) ||
-		    (sfa->props->flags & DM_REPORT_FIELD_TYPE_TIME)) {
+		if (sfa->props->flags &
+		    ((DM_REPORT_FIELD_TYPE_NUMBER) |
+		     (DM_REPORT_FIELD_TYPE_SIZE) |
+		     (DM_REPORT_FIELD_TYPE_TIME))) {
 			const uint64_t numa =
 			    *(const uint64_t *) sfa->sort_value;
 			const uint64_t numb =
@@ -4341,8 +4430,9 @@ static int _sort_rows(struct dm_report *rh)
 	qsort(rows, count, sizeof(**rows), _row_compare);
 
 	dm_list_init(&rh->rows);
-	while (count--)
-		dm_list_add_h(&rh->rows, &(*rows)[count]->list);
+
+	while (count > 0)
+		dm_list_add_h(&rh->rows, &(*rows)[--count]->list);
 
 	return 1;
 }
@@ -4360,6 +4450,7 @@ static int _sort_rows(struct dm_report *rh)
 #define JSON_ARRAY_START       "["
 #define JSON_ARRAY_END         "]"
 #define JSON_ESCAPE_CHAR       "\\"
+#define JSON_NULL              "null"
 
 #define UNABLE_TO_EXTEND_OUTPUT_LINE_MSG "dm_report: Unable to extend output line"
 
@@ -4369,55 +4460,61 @@ static int _is_basic_report(struct dm_report *rh)
 	       (rh->group_item->group->type == DM_REPORT_GROUP_BASIC);
 }
 
+static int _is_json_std_report(struct dm_report *rh)
+{
+	return rh->group_item &&
+	       rh->group_item->group->type == DM_REPORT_GROUP_JSON_STD;
+}
+
 static int _is_json_report(struct dm_report *rh)
 {
 	return rh->group_item &&
-	       (rh->group_item->group->type == DM_REPORT_GROUP_JSON);
+	       (rh->group_item->group->type == DM_REPORT_GROUP_JSON ||
+		rh->group_item->group->type == DM_REPORT_GROUP_JSON_STD);
 }
 
-/*
- * Produce report output
- */
-static int _output_field(struct dm_report *rh, struct dm_report_field *field)
+static int _is_pure_numeric_field(struct dm_report_field *field)
+{
+	return field->props->flags & (DM_REPORT_FIELD_TYPE_NUMBER | DM_REPORT_FIELD_TYPE_PERCENT);
+}
+
+static const char *_get_field_id(struct dm_report *rh, struct dm_report_field *field)
 {
 	const struct dm_report_field_type *fields = field->props->implicit ? _implicit_report_fields
 									   : rh->fields;
+
+	return fields[field->props->field_num].id;
+}
+
+static int _output_field_basic_fmt(struct dm_report *rh, struct dm_report_field *field)
+{
+	char buf_local[8192];
 	char *field_id;
 	int32_t width;
 	uint32_t align;
-	const char *repstr;
-	const char *p1_repstr, *p2_repstr;
 	char *buf = NULL;
 	size_t buf_size = 0;
 
-	if (_is_json_report(rh)) {
-		if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1) ||
-		    !dm_pool_grow_object(rh->mem, fields[field->props->field_num].id, 0) ||
-		    !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1) ||
-		    !dm_pool_grow_object(rh->mem, JSON_PAIR, 1) ||
-		    !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
-			log_error("dm_report: Unable to extend output line");
-			return 0;
-		}
-	} else if (rh->flags & DM_REPORT_OUTPUT_FIELD_NAME_PREFIX) {
-		if (!(field_id = strdup(fields[field->props->field_num].id))) {
-			log_error("dm_report: Failed to copy field name");
+	if (rh->flags & DM_REPORT_OUTPUT_FIELD_NAME_PREFIX) {
+		buf_size = strlen(_get_field_id(rh, field)) + 1;
+		if (buf_size >= sizeof(buf_local)) {
+			/* for field names our buf_local should be enough */
+			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
 			return 0;
 		}
 
+		field_id = buf_local;
+		memcpy(field_id, _get_field_id(rh, field), buf_size);
+
 		if (!dm_pool_grow_object(rh->mem, rh->output_field_name_prefix, 0)) {
 			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-			free(field_id);
 			return 0;
 		}
 
 		if (!dm_pool_grow_object(rh->mem, _toupperstr(field_id), 0)) {
 			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-			free(field_id);
 			return 0;
 		}
-
-		free(field_id);
 
 		if (!dm_pool_grow_object(rh->mem, STANDARD_PAIR, 1)) {
 			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
@@ -4431,53 +4528,27 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 		}
 	}
 
-	repstr = field->report_string;
-	width = field->props->width;
-	if (!(rh->flags & DM_REPORT_OUTPUT_ALIGNED)) {
-		if (_is_json_report(rh)) {
-			/* Escape any JSON_QUOTE that may appear in reported string. */
-			p1_repstr = repstr;
-			while ((p2_repstr = strstr(p1_repstr, JSON_QUOTE))) {
-				if (p2_repstr > p1_repstr) {
-					if (!dm_pool_grow_object(rh->mem, p1_repstr, p2_repstr - p1_repstr)) {
-						log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-						return 0;
-					}
-				}
-				if (!dm_pool_grow_object(rh->mem, JSON_ESCAPE_CHAR, 1) ||
-				    !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
-					log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-					return 0;
-				}
-				p1_repstr = p2_repstr + 1;
-			}
-
-			if (!dm_pool_grow_object(rh->mem, p1_repstr, 0)) {
-				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-				return 0;
-			}
-		} else {
-			if (!dm_pool_grow_object(rh->mem, repstr, 0)) {
-				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-				return 0;
-			}
-		}
-	} else {
+	if (rh->flags & DM_REPORT_OUTPUT_ALIGNED) {
 		if (!(align = field->props->flags & DM_REPORT_FIELD_ALIGN_MASK))
 			align = ((field->props->flags & DM_REPORT_FIELD_TYPE_NUMBER) ||
-				 (field->props->flags & DM_REPORT_FIELD_TYPE_SIZE)) ? 
+				 (field->props->flags & DM_REPORT_FIELD_TYPE_SIZE)) ?
 				DM_REPORT_FIELD_ALIGN_RIGHT : DM_REPORT_FIELD_ALIGN_LEFT;
+
+		width = field->props->width;
 
 		/* Including trailing '\0'! */
 		buf_size = width + 1;
-		if (!(buf = malloc(buf_size))) {
+		if (buf_size < sizeof(buf_local))
+			/* Use local buffer on stack for smaller strings */
+			buf = buf_local;
+		else if (!(buf = malloc(buf_size))) {
 			log_error("dm_report: Could not allocate memory for output line buffer.");
 			return 0;
 		}
 
 		if (align & DM_REPORT_FIELD_ALIGN_LEFT) {
 			if (dm_snprintf(buf, buf_size, "%-*.*s",
-					 width, width, repstr) < 0) {
+					 width, width, field->report_string) < 0) {
 				log_error("dm_report: left-aligned snprintf() failed");
 				goto bad;
 			}
@@ -4487,7 +4558,7 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 			}
 		} else if (align & DM_REPORT_FIELD_ALIGN_RIGHT) {
 			if (dm_snprintf(buf, buf_size, "%*.*s",
-					 width, width, repstr) < 0) {
+					 width, width, field->report_string) < 0) {
 				log_error("dm_report: right-aligned snprintf() failed");
 				goto bad;
 			}
@@ -4495,6 +4566,11 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
 				goto bad;
 			}
+		}
+	} else {
+		if (!dm_pool_grow_object(rh->mem, field->report_string, 0)) {
+			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+			return 0;
 		}
 	}
 
@@ -4505,19 +4581,164 @@ static int _output_field(struct dm_report *rh, struct dm_report_field *field)
 				goto bad;
 			}
 		}
-	} else if (_is_json_report(rh)) {
+	}
+
+	if (buf != buf_local)
+		free(buf);
+	return 1;
+bad:
+	if (buf != buf_local)
+		free(buf);
+	return 0;
+}
+
+static int _safe_repstr_output(struct dm_report *rh, const char *repstr, size_t len)
+{
+	const char *p_repstr;
+	const char *repstr_end = len ? repstr + len : repstr + strlen(repstr);
+
+	/* Escape any JSON_QUOTE that may appear in reported string. */
+	while (1) {
+		if (!(p_repstr = memchr(repstr, JSON_QUOTE[0], repstr_end - repstr)))
+			break;
+
+		if (p_repstr > repstr) {
+			if (!dm_pool_grow_object(rh->mem, repstr, p_repstr - repstr)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				return 0;
+			}
+		}
+		if (!dm_pool_grow_object(rh->mem, JSON_ESCAPE_CHAR, 1) ||
+		    !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+			return 0;
+		}
+		repstr = p_repstr + 1;
+	}
+
+	if (!dm_pool_grow_object(rh->mem, repstr, repstr_end - repstr)) {
+		log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+		return 0;
+	}
+
+	return 1;
+}
+
+static int _output_field_json_fmt(struct dm_report *rh, struct dm_report_field *field)
+{
+	const char *repstr;
+	size_t list_size, i;
+	struct pos_len *pos_len;
+
+	if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1) ||
+	    !dm_pool_grow_object(rh->mem, _get_field_id(rh, field),  0) ||
+	    !dm_pool_grow_object(rh->mem, JSON_QUOTE, 1) ||
+	    !dm_pool_grow_object(rh->mem, JSON_PAIR, 1)) {
+		log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+		return 0;
+	}
+
+	if (field->props->flags & DM_REPORT_FIELD_TYPE_STRING_LIST) {
+		if (!_is_json_std_report(rh)) {
+
+			/* string list in JSON - report whole list as simple string in quotes */
+
+			if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				return 0;
+			}
+
+			if (!_safe_repstr_output(rh, field->report_string, 0))
+				return_0;
+
+			if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				return 0;
+			}
+
+			return 1;
+		}
+
+		/* string list in JSON_STD - report list as proper JSON array */
+
+		if (!dm_pool_grow_object(rh->mem, JSON_ARRAY_START, 1)) {
+			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+			return 0;
+		}
+
+		if (*field->report_string != 0) {
+			pos_len = (struct pos_len *) (field->report_string +
+				  ((struct str_list_sort_value *) field->sort_value)->items[0].len + 1);
+			list_size = pos_len->pos;
+		} else
+			list_size = 0;
+
+		for (i = 0; i < list_size; i++) {
+			pos_len++;
+
+			if (i != 0) {
+				if (!dm_pool_grow_object(rh->mem, JSON_SEPARATOR, 1)) {
+					log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+					return 0;
+				}
+			}
+
+			if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				return 0;
+			}
+
+			if (!_safe_repstr_output(rh, field->report_string + pos_len->pos, pos_len->len))
+				return_0;
+
+			if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+				return 0;
+			}
+		}
+
+		if (!dm_pool_grow_object(rh->mem, JSON_ARRAY_END, 1)) {
+			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+			return 0;
+		}
+
+		return 1;
+	}
+
+	/* all other types than string list - handle both JSON and JSON_STD */
+
+	if (!(_is_json_std_report(rh) && _is_pure_numeric_field(field))) {
 		if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
 			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
-			goto bad;
+			return 0;
 		}
 	}
 
-	free(buf);
-	return 1;
+	if (_is_json_std_report(rh) && _is_pure_numeric_field(field) && !*field->report_string)
+		repstr = JSON_NULL;
+	else
+		repstr = field->report_string;
 
-bad:
-	free(buf);
-	return 0;
+	if (!_safe_repstr_output(rh, repstr, 0))
+		return_0;
+
+	if (!(_is_json_std_report(rh) && _is_pure_numeric_field(field))) {
+		if (!dm_pool_grow_object(rh->mem, JSON_QUOTE, 1)) {
+			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+/*
+ * Produce report output
+ */
+static int _output_field(struct dm_report *rh, struct dm_report_field *field)
+{
+	return _is_json_report(rh) ? _output_field_json_fmt(rh, field)
+				   : _output_field_basic_fmt(rh, field);
 }
 
 static void _destroy_rows(struct dm_report *rh)
@@ -4542,10 +4763,13 @@ static int _output_as_rows(struct dm_report *rh)
 	struct field_properties *fp;
 	struct dm_report_field *field;
 	struct row *row;
+	const char *heading;
 
 	dm_list_iterate_items(fp, &rh->field_props) {
 		if (fp->flags & FLD_HIDDEN) {
 			dm_list_iterate_items(row, &rh->rows) {
+				if (dm_list_empty(&row->fields))
+					continue;
 				field = dm_list_item(dm_list_first(&row->fields), struct dm_report_field);
 				dm_list_del(&field->list);
 			}
@@ -4560,7 +4784,10 @@ static int _output_as_rows(struct dm_report *rh)
 		}
 
 		if ((rh->flags & DM_REPORT_OUTPUT_HEADINGS)) {
-			if (!dm_pool_grow_object(rh->mem, fields[fp->field_num].heading, 0)) {
+			heading = rh->flags & DM_REPORT_OUTPUT_FIELD_IDS_IN_HEADINGS ?
+				fields[fp->field_num].id : fields[fp->field_num].heading;
+
+			if (!dm_pool_grow_object(rh->mem, heading, 0)) {
 				log_error("dm_report: Failed to extend row for field name");
 				goto bad;
 			}
@@ -4600,13 +4827,38 @@ static int _output_as_rows(struct dm_report *rh)
 	return 0;
 }
 
+static struct dm_list *_get_last_displayed_rowh(struct dm_report *rh)
+{
+	struct dm_list *rowh;
+	struct row *row;
+
+	/*
+	 * We need to find 'last displayed row', not just 'last row'.
+	 *
+	 * This is because the report may be marked with
+	 * DM_REPORT_OUTPUT_MULTIPLE_TIMES flag. In that case, the report
+	 * may be used more than once and with different selection
+	 * criteria each time. Therefore, such report may also contain
+	 * rows which we do not display on output with current selection
+	 * criteria.
+	 */
+	for (rowh = dm_list_last(&rh->rows); rowh; rowh = dm_list_prev(&rh->rows, rowh)) {
+		row = dm_list_item(rowh, struct row);
+		if (_should_display_row(row))
+			return rowh;
+	}
+
+	return NULL;
+}
+
 static int _output_as_columns(struct dm_report *rh)
 {
 	struct dm_list *fh, *rowh, *ftmp, *rtmp;
 	struct row *row = NULL;
 	struct dm_report_field *field;
-	struct dm_list *last_row;
+	struct dm_list *last_rowh;
 	int do_field_delim;
+	int is_json_report = _is_json_report(rh);
 	char *line;
 
 	/* If headings not printed yet, calculate field widths and print them */
@@ -4614,7 +4866,7 @@ static int _output_as_columns(struct dm_report *rh)
 		_report_headings(rh);
 
 	/* Print and clear buffer */
-	last_row = dm_list_last(&rh->rows);
+	last_rowh = _get_last_displayed_rowh(rh);
 	dm_list_iterate_safe(rowh, rtmp, &rh->rows) {
 		row = dm_list_item(rowh, struct row);
 
@@ -4626,7 +4878,7 @@ static int _output_as_columns(struct dm_report *rh)
 			return 0;
 		}
 
-		if (_is_json_report(rh)) {
+		if (is_json_report) {
 			if (!dm_pool_grow_object(rh->mem, JSON_OBJECT_START, 0)) {
 				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
 				goto bad;
@@ -4641,7 +4893,7 @@ static int _output_as_columns(struct dm_report *rh)
 				continue;
 
 			if (do_field_delim) {
-				if (_is_json_report(rh)) {
+				if (is_json_report) {
 					if (!dm_pool_grow_object(rh->mem, JSON_SEPARATOR, 0) ||
 					    !dm_pool_grow_object(rh->mem, JSON_SPACE, 0)) {
 						log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
@@ -4663,12 +4915,12 @@ static int _output_as_columns(struct dm_report *rh)
 				dm_list_del(&field->list);
 		}
 
-		if (_is_json_report(rh)) {
+		if (is_json_report) {
 			if (!dm_pool_grow_object(rh->mem, JSON_OBJECT_END, 0)) {
 				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
 				goto bad;
 			}
-			if (rowh != last_row &&
+			if (rowh != last_rowh &&
 			    !dm_pool_grow_object(rh->mem, JSON_SEPARATOR, 0)) {
 				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
 				goto bad;
@@ -4865,7 +5117,7 @@ struct dm_report_group *dm_report_group_create(dm_report_group_type_t type, void
 	dm_list_init(&group->items);
 
 	if (!(item = dm_pool_zalloc(mem, sizeof(*item)))) {
-		log_error("dm_report: faile to allocate root report group item");
+		log_error("dm_report: failed to allocate root report group item");
 		goto bad;
 	}
 
@@ -4983,6 +5235,7 @@ int dm_report_group_push(struct dm_report_group *group, struct dm_report *report
 				goto_bad;
 			break;
 		case DM_REPORT_GROUP_JSON:
+		case DM_REPORT_GROUP_JSON_STD:
 			if (!_report_group_push_json(item, data))
 				goto_bad;
 			break;
@@ -5046,6 +5299,7 @@ int dm_report_group_pop(struct dm_report_group *group)
 				return_0;
 			break;
 		case DM_REPORT_GROUP_JSON:
+		case DM_REPORT_GROUP_JSON_STD:
 			if (!_report_group_pop_json(item))
 				return_0;
 			break;
@@ -5082,7 +5336,7 @@ int dm_report_group_output_and_pop_all(struct dm_report_group *group)
 			return_0;
 	}
 
-	if (group->type == DM_REPORT_GROUP_JSON) {
+	if (group->type == DM_REPORT_GROUP_JSON || group->type == DM_REPORT_GROUP_JSON_STD) {
 		_json_output_start(group);
 		log_print(JSON_OBJECT_END);
 		group->indent -= JSON_INDENT_UNIT;

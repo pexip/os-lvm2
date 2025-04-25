@@ -428,7 +428,7 @@ static struct volume_group *_vg_read_raw_area(struct cmd_context *cmd,
 				rlocn->checksum,
 				&when, &desc);
 
-	if (!vg && !*use_previous_vg) {
+	if (!vg && (!use_previous_vg || !*use_previous_vg)) {
 		log_warn("WARNING: Failed to read metadata text at %llu off %llu size %llu VG %s on %s",
 			 (unsigned long long)(area->start + rlocn->offset),
 			 (unsigned long long)rlocn->offset,
@@ -642,7 +642,7 @@ static int _vg_write_raw(struct format_instance *fid, struct volume_group *vg,
 		fidtc->write_buf_size = write_buf_size;
 		fidtc->new_metadata_size = new_size;
 
-		/* Immediatelly reuse existing buffer for parsing metadata back.
+		/* Immediately reuse existing buffer for parsing metadata back.
 		 * Such VG is then used for as precommitted VG and later committed VG.
 		 *
 		 * 'Lazy' creation of such VG might improve performance, but we
@@ -1305,8 +1305,8 @@ static int _vg_write_file(struct format_instance *fid __attribute__((unused)),
 	if (slash == 0)
 		strcpy(temp_dir, ".");
 	else if (slash - tc->path_edit < PATH_MAX) {
-		(void) dm_strncpy(temp_dir, tc->path_edit,
-				  (size_t) (slash - tc->path_edit + 1));
+		dm_strncpy(temp_dir, tc->path_edit,
+			   (size_t) (slash - tc->path_edit + 1));
 	} else {
 		log_error("Text format failed to determine directory.");
 		return 0;
@@ -1389,7 +1389,7 @@ static int _vg_commit_file(struct format_instance *fid, struct volume_group *vg,
 	struct text_context *tc = (struct text_context *) mda->metadata_locn;
 	const char *slash;
 	char new_name[PATH_MAX];
-	size_t len;
+	size_t len, vglen;
 
 	if (!_vg_commit_file_backup(fid, vg, mda))
 		return 0;
@@ -1401,14 +1401,15 @@ static int _vg_commit_file(struct format_instance *fid, struct volume_group *vg,
 		slash = tc->path_live;
 
 	if (strcmp(slash, vg->name)) {
+		vglen = strlen(vg->name) + 1;
 		len = slash - tc->path_live;
-		if ((len + strlen(vg->name)) > (sizeof(new_name) - 1)) {
+		if ((len + vglen) > (sizeof(new_name) - 1)) {
 			log_error("Renaming path %s is too long for VG %s.",
 				  tc->path_live, vg->name);
 			return 0;
 		}
 		strncpy(new_name, tc->path_live, len);
-		strcpy(new_name + len, vg->name);
+		memcpy(new_name + len, vg->name, vglen);
 		log_debug_metadata("Renaming %s to %s", tc->path_live, new_name);
 		if (test_mode())
 			log_verbose("Test mode: Skipping rename");
@@ -1933,7 +1934,7 @@ static int _text_pv_initialise(const struct format_type *fmt,
 		return 0;
 	}
 
-	if (pva->label_sector != -1)
+	if (pva->label_sector != UINT64_C(-1))
                 pv->label_sector = pva->label_sector;
 
 	return 1;
@@ -1957,7 +1958,7 @@ static void _text_destroy(struct format_type *fmt)
 	free(fmt);
 }
 
-static struct metadata_area_ops _metadata_text_file_ops = {
+static const struct metadata_area_ops _metadata_text_file_ops = {
 	.vg_read = _vg_read_file,
 	.vg_read_precommit = _vg_read_precommit_file,
 	.vg_write = _vg_write_file,
@@ -1965,14 +1966,14 @@ static struct metadata_area_ops _metadata_text_file_ops = {
 	.vg_commit = _vg_commit_file
 };
 
-static struct metadata_area_ops _metadata_text_file_backup_ops = {
+static const struct metadata_area_ops _metadata_text_file_backup_ops = {
 	.vg_read = _vg_read_file,
 	.vg_write = _vg_write_file,
 	.vg_remove = _vg_remove_file,
 	.vg_commit = _vg_commit_file_backup
 };
 
-static struct metadata_area_ops _metadata_text_raw_ops = {
+static const struct metadata_area_ops _metadata_text_raw_ops = {
 	.vg_read = _vg_read_raw,
 	.vg_read_precommit = _vg_read_precommit_raw,
 	.vg_write = _vg_write_raw,
@@ -2265,7 +2266,7 @@ static int _text_pv_add_metadata_area(const struct format_type *fmt,
 
 	if (fid_get_mda_indexed(fid, pvid, ID_LEN, mda_index)) {
 		if (!_text_pv_remove_metadata_area(fmt, pv, mda_index)) {
-			log_error(INTERNAL_ERROR "metadata area with index %u already "
+			log_error(INTERNAL_ERROR "Metadata area with index %u already "
 				  "exists on PV %s and removal failed.",
 				  mda_index, pv_dev_name(pv));
 			return 0;
@@ -2482,7 +2483,7 @@ static int _remove_metadata_area_from_pv(struct physical_volume *pv,
 	if (mda_index >= FMT_TEXT_MAX_MDAS_PER_PV) {
 		log_error(INTERNAL_ERROR "can't remove metadata area with "
 					 "index %u from PV %s. Metadata "
-					 "layou not supported by %s format.",
+					 "layout not supported by %s format.",
 					  mda_index, dev_name(pv->dev),
 					  pv->fmt->name);
 		return 0;
@@ -2570,7 +2571,7 @@ static struct format_instance *_text_create_text_instance(const struct format_ty
 	return fid;
 }
 
-static struct format_handler _text_handler = {
+static const struct format_handler _text_handler = {
 	.pv_initialise = _text_pv_initialise,
 	.pv_setup = _text_pv_setup,
 	.pv_add_metadata_area = _text_pv_add_metadata_area,
@@ -2592,7 +2593,7 @@ struct format_type *create_text_format(struct cmd_context *cmd)
 	struct format_type *fmt;
 	struct mda_lists *mda_lists;
 
-	if (!(fmt = malloc(sizeof(*fmt)))) {
+	if (!(fmt = zalloc(sizeof(*fmt)))) {
 		log_error("Failed to allocate text format type structure.");
 		return NULL;
 	}
@@ -2616,9 +2617,6 @@ struct format_type *create_text_format(struct cmd_context *cmd)
 	mda_lists->file_ops = &_metadata_text_file_ops;
 	mda_lists->raw_ops = &_metadata_text_raw_ops;
 	fmt->private = (void *) mda_lists;
-
-	dm_list_init(&fmt->mda_ops);
-	dm_list_add(&fmt->mda_ops, &_metadata_text_raw_ops.list);
 
 	if (!(fmt->labeller = text_labeller_create(fmt))) {
 		log_error("Couldn't create text label handler.");

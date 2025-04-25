@@ -73,14 +73,14 @@ check lv_first_seg_field $vg/$lv1 stripes 16
 # Reload table during reshape to test for data corruption
 case "$(uname -r)" in
   5.[89]*|5.1[012].*|3.10.0-862*|4.18.0-*.el8*)
-	should not echo "Skipping table reload test on on unfixed kernel!!!" ;;
+	echo "Skipping table reload test on on unfixed kernel!!!" ;;
   *)
 for i in {0..5}
 do
 	dmsetup table $vg-$lv1|dmsetup load $vg-$lv1
 	dmsetup suspend --noflush $vg-$lv1
 	dmsetup resume $vg-$lv1
-	sleep 0.3
+	sleep .5
 done
 
 esac

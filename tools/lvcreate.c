@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2014 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2023 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -107,7 +107,7 @@ static int _lvcreate_name_params(struct cmd_context *cmd,
 				} else {
 					/*
 					 * Gambling here, could be cache pool or cache origin,
-					 * detection is possible after openning vg,
+					 * detection is possible after opening vg,
 					 * yet we need to parse pool args
 					 */
 					lp->pool_name = lp->origin_name;
@@ -252,7 +252,8 @@ static int _update_extents_params(struct volume_group *vg,
 	uint32_t size_rest;
 	uint32_t stripesize_extents;
 	uint32_t extents;
-	uint32_t base_calc_extents;
+	uint32_t base_calc_extents = 0;
+	uint32_t vdo_pool_max_extents;
 
 	if (lcp->size &&
 	    !(lp->extents = extents_from_size(vg->cmd, lcp->size,
@@ -320,6 +321,23 @@ static int _update_extents_params(struct volume_group *vg,
 		default:
 			log_error(INTERNAL_ERROR "Unsupported percent type %u.", lcp->percent);
 			return 0;
+	}
+
+	if (seg_is_vdo(lp)) {
+		vdo_pool_max_extents = get_vdo_pool_max_extents(&lp->vcp.vdo_params, vg->extent_size);
+		if (extents > vdo_pool_max_extents) {
+			if (lcp->percent == PERCENT_NONE) {
+				log_error("Can't use %s size. Maximal supported VDO POOL volume size with slab size %s is %s.",
+					  display_size(vg->cmd, (uint64_t)vg->extent_size * extents),
+					  display_size(vg->cmd, (uint64_t)lp->vcp.vdo_params.slab_size_mb << (20 - SECTOR_SHIFT)),
+					  display_size(vg->cmd, (uint64_t)vg->extent_size * vdo_pool_max_extents));
+				return 0;
+			}
+			extents = vdo_pool_max_extents;
+			log_verbose("Using maximal supported VDO POOL volume size %s (with slab size %s).",
+				    display_size(vg->cmd, (uint64_t)vg->extent_size * extents),
+				    display_size(vg->cmd, (uint64_t)lp->vcp.vdo_params.slab_size_mb << (20 - SECTOR_SHIFT)));
+		}
 	}
 
 	if (lcp->percent != PERCENT_NONE) {
@@ -521,7 +539,7 @@ static int _read_raid_params(struct cmd_context *cmd,
 			}
 
 			/*
-			 * FIXME: _check_raid_parameters devides by 2, which
+			 * FIXME: _check_raid_parameters divides by 2, which
 			 *	  needs to change if we start supporting
 			 *	  odd numbers of stripes with raid10
 			 */
@@ -577,8 +595,8 @@ static int _read_raid_params(struct cmd_context *cmd,
 		lp->max_recovery_rate = arg_uint_value(cmd, maxrecoveryrate_ARG, 0) / 2;
 
 		if (lp->min_recovery_rate > lp->max_recovery_rate) {
-			log_error("Minimum recovery rate cannot be higher than maximum.");
-			return 0;
+			log_print_unless_silent("Minimum recovery rate cannot be higher than maximum, adjusting.");
+			lp->max_recovery_rate = lp->min_recovery_rate;
 		}
 
 		if (lp->region_size < lp->stripe_size) {
@@ -586,6 +604,20 @@ static int _read_raid_params(struct cmd_context *cmd,
 						lp->segtype->name, display_size(cmd, (uint64_t)lp->region_size),
 						display_size(cmd, (uint64_t)lp->stripe_size));
 			lp->region_size = lp->stripe_size;
+		}
+	}
+
+	if (arg_int_value(cmd, raidintegrity_ARG, 0)) {
+		lp->raidintegrity = 1;
+		if (arg_is_set(cmd, raidintegrityblocksize_ARG))
+			lp->integrity_settings.block_size = arg_int_value(cmd, raidintegrityblocksize_ARG, 0);
+		if (arg_is_set(cmd, raidintegritymode_ARG)) {
+			if (!integrity_mode_set(arg_str_value(cmd, raidintegritymode_ARG, NULL), &lp->integrity_settings))
+				return_0;
+		}
+		if (arg_is_set(cmd, integritysettings_ARG)) {
+			if (!get_integrity_settings(cmd, &lp->integrity_settings))
+				return_0;
 		}
 	}
 
@@ -642,7 +674,7 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 		/* Default to 2 mirrored areas if '--type mirror|raid1|raid10' */
 		lp->mirrors = seg_is_mirrored(lp) ? 2 : 1;
 
-	/* FIMXE: raid10 check has to change once we support data copies and odd numbers of stripes */
+	/* FIXME: raid10 check has to change once we support data copies and odd numbers of stripes */
 	if (seg_is_raid10(lp) && lp->mirrors * lp->stripes > max_images) {
 		log_error("Only up to %u stripes in %s supported currently.",
 			  max_images / lp->mirrors, lp->segtype->name);
@@ -699,17 +731,35 @@ static int _read_cache_params(struct cmd_context *cmd,
 }
 
 static int _read_vdo_params(struct cmd_context *cmd,
-			    struct lvcreate_params *lp)
+			    struct lvcreate_params *lp,
+			    struct lvcreate_cmdline_params *lcp)
 {
-	if (!seg_is_vdo(lp))
+	if (!seg_is_vdo(lp) &&
+	    !lp->pool_data_vdo)
 		return 1;
 
-	// prefiling settings here
-	if (!fill_vdo_target_params(cmd, &lp->vdo_params,  &lp->vdo_pool_header_size, NULL))
+	// prefilling settings here
+	if (!fill_vdo_target_params(cmd, &lp->vcp.vdo_params, &lp->vdo_pool_header_size, NULL))
 		return_0;
 
+	if (lp->pool_data_vdo) {
+		lp->vcp.activate = CHANGE_AN;
+		lp->vcp.do_zero = 1;
+		lp->vcp.do_wipe_signatures = lp->wipe_signatures;
+		lp->vcp.force = lp->force;
+		lp->vcp.yes = lp->yes;
+		cmd->lvcreate_vcp = &lp->vcp;
+	}
+
+	if ((lcp->virtual_size <= DM_VDO_LOGICAL_SIZE_MAXIMUM) &&
+	    ((lcp->virtual_size + lp->vdo_pool_header_size) > DM_VDO_LOGICAL_SIZE_MAXIMUM)) {
+		log_verbose("Dropping VDO pool header size to 0 to support maximal size %s.",
+			    display_size(cmd, DM_VDO_LOGICAL_SIZE_MAXIMUM));
+		lp->vdo_pool_header_size = 0;
+	}
+
 	// override with optional vdo settings
-	if (!get_vdo_settings(cmd, &lp->vdo_params, NULL))
+	if (!get_vdo_settings(cmd, &lp->vcp.vdo_params, NULL))
 		return_0;
 
 	return 1;
@@ -730,7 +780,7 @@ static int _read_activation_params(struct cmd_context *cmd,
 	} else
 		lp->error_when_full =
 			seg_can_error_when_full(lp) &&
-			find_config_tree_bool(cmd, activation_error_when_full_CFG, NULL);
+			find_config_tree_bool(cmd, activation_error_when_full_CFG, vg->profile);
 
 	/* Read ahead */
 	lp->read_ahead = arg_uint_value(cmd, readahead_ARG,
@@ -847,6 +897,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 	ignoreactivationskip_ARG,\
 	ignoremonitoring_ARG,\
 	journal_ARG,\
+	lockopt_ARG,\
 	metadataprofile_ARG,\
 	monitor_ARG,\
 	mirrors_ARG,\
@@ -890,7 +941,8 @@ static int _lvcreate_params(struct cmd_context *cmd,
 	raidminrecoveryrate_ARG, \
 	raidintegrity_ARG, \
 	raidintegritymode_ARG, \
-	raidintegrityblocksize_ARG
+	raidintegrityblocksize_ARG, \
+	integritysettings_ARG
 
 #define SIZE_ARGS \
 	extents_ARG,\
@@ -900,6 +952,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 
 #define THIN_POOL_ARGS \
 	discards_ARG,\
+	pooldatavdo_ARG,\
 	thinpool_ARG
 
 #define VDO_POOL_ARGS \
@@ -1029,6 +1082,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 					    POOL_ARGS,
 					    SIZE_ARGS,
 					    THIN_POOL_ARGS,
+					    VDO_POOL_ARGS,
 					    chunksize_ARG,
 					    errorwhenfull_ARG,
 					    snapshot_ARG,
@@ -1199,11 +1253,11 @@ static int _lvcreate_params(struct cmd_context *cmd,
 	    !_read_size_params(cmd, lp, lcp) ||
 	    !get_stripe_params(cmd, lp->segtype, &lp->stripes, &lp->stripe_size, &lp->stripes_supplied, &lp->stripe_size_supplied) ||
 	    (lp->create_pool &&
-	     !get_pool_params(cmd, lp->segtype,
+	     !get_pool_params(cmd, lp->segtype, &lp->pool_data_vdo,
 			      &lp->pool_metadata_size, &lp->pool_metadata_spare,
 			      &lp->chunk_size, &lp->discards, &lp->zero_new_blocks)) ||
 	    !_read_cache_params(cmd, lp) ||
-	    !_read_vdo_params(cmd, lp) ||
+	    !_read_vdo_params(cmd, lp, lcp) ||
 	    !_read_mirror_and_raid_params(cmd, lp))
 		return_0;
 
@@ -1245,16 +1299,6 @@ static int _lvcreate_params(struct cmd_context *cmd,
 		if (!str_list_add(cmd->mem, &lp->tags, tag)) {
 			log_error("Unable to allocate memory for tag %s.", tag);
 			return 0;
-		}
-	}
-
-	if (seg_is_raid(lp) && arg_int_value(cmd, raidintegrity_ARG, 0)) {
-		lp->raidintegrity = 1;
-		if (arg_is_set(cmd, raidintegrityblocksize_ARG))
-			lp->integrity_settings.block_size = arg_int_value(cmd, raidintegrityblocksize_ARG, 0);
-		if (arg_is_set(cmd, raidintegritymode_ARG)) {
-			if (!integrity_mode_set(arg_str_value(cmd, raidintegritymode_ARG, NULL), &lp->integrity_settings))
-				return_0;
 		}
 	}
 
@@ -1389,6 +1433,9 @@ static int _determine_snapshot_type(struct volume_group *vg,
 				  display_lvname(pool_lv));
 			return 0;
 		}
+
+		if (!validate_thin_external_origin(origin_lv, pool_lv))
+			return_0;
 	} else {
 		if (!lv_is_thin_volume(origin_lv)) {
 			if (!seg_is_thin(lp))
@@ -1532,7 +1579,7 @@ static int _check_pool_parameters(struct cmd_context *cmd,
 		if (lp->pool_name) {
 			if (!seg_is_cache(lp) && !apply_lvname_restrictions(lp->pool_name))
 				return_0;
-			/* We could check existance only when we have vg */
+			/* We could check existence only when we have vg */
 			if (vg && find_lv(vg, lp->pool_name)) {
 				log_error("Logical volume %s already exists in Volume group %s.",
 					  lp->pool_name, vg->name);
@@ -1550,7 +1597,7 @@ static int _check_pool_parameters(struct cmd_context *cmd,
 		} else if (vg) {
 			/* FIXME: what better to do with --readahead and pools? */
 			if (arg_is_set(cmd, readahead_ARG)) {
-				log_error("Ambigous --readahead parameter specified. Please use either with pool or volume.");
+				log_error("Ambiguous --readahead parameter specified. Please use either with pool or volume.");
 				return 0;
 			}
 		}
@@ -1589,10 +1636,16 @@ static int _check_pool_parameters(struct cmd_context *cmd,
 }
 
 static int _check_vdo_parameters(struct volume_group *vg, struct lvcreate_params *lp,
-				  struct lvcreate_cmdline_params *lcp)
+				 struct lvcreate_cmdline_params *lcp)
 {
-	if (seg_is_vdo(lp) && lp->snapshot) {
+	if (lp->snapshot) {
 		log_error("Please either create VDO or snapshot.");
+		return 0;
+	}
+
+	if (lcp->virtual_size > DM_VDO_LOGICAL_SIZE_MAXIMUM) {
+		log_error("Maximal supported VDO virtual size is %s.",
+			  display_size(vg->cmd, DM_VDO_LOGICAL_SIZE_MAXIMUM));
 		return 0;
 	}
 
@@ -1717,17 +1770,25 @@ static int _lvcreate_single(struct cmd_context *cmd, const char *vg_name,
 	if (seg_is_thin(lp) && !_check_thin_parameters(vg, lp, lcp))
 		goto_out;
 
+	if (seg_is_vdo(lp) && !_check_vdo_parameters(vg, lp, lcp))
+		goto_out;
+
 	if (!_check_pool_parameters(cmd, vg, lp, lcp))
 		goto_out;
 
-	if (seg_is_vdo(lp) && !_check_vdo_parameters(vg, lp, lcp))
-		return_0;
-
 	/* All types are checked */
 	if (!_check_zero_parameters(cmd, lp))
-		return_0;
+		goto_out;
 
 	if (!_update_extents_params(vg, lp, lcp))
+		goto_out;
+
+	if (seg_is_vdo(lp) &&
+	    !check_vdo_constrains(cmd, &(struct vdo_pool_size_config) {
+				  .physical_size = (uint64_t)lp->extents * vg->extent_size,
+				  .virtual_size = lcp->virtual_size,
+				  .block_map_cache_size_mb = lp->vcp.vdo_params.block_map_cache_size_mb,
+				  .index_memory_size_mb = lp->vcp.vdo_params.index_memory_size_mb }))
 		goto_out;
 
 	if (seg_is_thin(lp) && !_validate_internal_thin_processing(lp))
@@ -1743,13 +1804,6 @@ static int _lvcreate_single(struct cmd_context *cmd, const char *vg_name,
 			    lp->pool_name ? : "with generated name", lp->vg_name, lp->segtype->name);
 	}
 
-	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock")) {
-		if (!handle_sanlock_lv(cmd, vg)) {
-			log_error("No space for sanlock lock, extend the internal lvmlock LV.");
-			goto out;
-		}
-	}
-
 	if (seg_is_thin_volume(lp))
 		log_verbose("Making thin LV %s in pool %s in VG %s%s%s using segtype %s.",
 			    lp->lv_name ? : "with generated name",
@@ -1757,14 +1811,8 @@ static int _lvcreate_single(struct cmd_context *cmd, const char *vg_name,
 			    lp->snapshot ? " as snapshot of " : "",
 			    lp->snapshot ? lp->origin_name : "", lp->segtype->name);
 
-	if (vg_is_shared(vg)) {
-		if (cmd->command->command_enum == lvcreate_thin_vol_with_thinpool_or_sparse_snapshot_CMD) {
-			log_error("Use lvconvert to create thin pools and cache pools in a shared VG.");
-			goto out;
-		}
-
-		lp->needs_lockd_init = 1;
-	}
+	if (!lockd_lvcreate_prepare(cmd, vg, lp))
+		goto_out;
 
 	if (!(lv = lv_create_single(vg, lp)))
 		goto_out;
@@ -1779,6 +1827,8 @@ out:
 		if (!lvremove_single(cmd, vg->pool_metadata_spare_lv, NULL))
 			log_error("Removal of created spare volume failed. "
 				  "Manual intervention required.");
+
+	lockd_lvcreate_done(cmd, vg, lp);
 
 	return ret;
 }
@@ -1840,6 +1890,7 @@ static int _lvcreate_and_attach_writecache_single(struct cmd_context *cmd,
 		return ECMD_FAILED;
 	}
 
+	/* coverity[format_string_injection] lv name is already validated */
 	ret = lvconvert_writecache_attach_single(cmd, lv, handle);
 
 	if (ret == ECMD_FAILED) {
@@ -1870,8 +1921,8 @@ int lvcreate_and_attach_writecache_cmd(struct cmd_context *cmd, int argc, char *
 	};
 	struct lvcreate_cmdline_params lcp = { 0 };
 	struct processing_params pp = {
-	    .lp = &lp,
-	    .lcp = &lcp,
+		.lp = &lp,
+		.lcp = &lcp,
 	};
 	int ret;
 	if (!_lvcreate_params(cmd, argc, argv, &lp, &lcp)) {
@@ -1912,6 +1963,7 @@ static int _lvcreate_and_attach_cache_single(struct cmd_context *cmd,
 		return ECMD_FAILED;
 	}
 
+	/* coverity[format_string_injection] lv name is already validated */
 	ret = lvconvert_cachevol_attach_single(cmd, lv, handle);
 
 	if (ret == ECMD_FAILED) {
@@ -1942,8 +1994,8 @@ int lvcreate_and_attach_cache_cmd(struct cmd_context *cmd, int argc, char **argv
 	};
 	struct lvcreate_cmdline_params lcp = { 0 };
 	struct processing_params pp = {
-	    .lp = &lp,
-	    .lcp = &lcp,
+		.lp = &lp,
+		.lcp = &lcp,
 	};
 	int ret;
 

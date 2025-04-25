@@ -6,3 +6,4 @@
 /*.substvars
 /*/
 !/bin/
+!/pipeline/

@@ -352,7 +352,7 @@ static int _daemon_write(struct dm_event_fifos *fifos,
 int daemon_talk(struct dm_event_fifos *fifos,
 		struct dm_event_daemon_message *msg, int cmd,
 		const char *dso_name, const char *dev_name,
-		enum dm_event_mask evmask, uint32_t timeout)
+		unsigned evmask, uint32_t timeout)
 {
 	int msg_size;
 	memset(msg, 0, sizeof(*msg));
@@ -400,25 +400,16 @@ int daemon_talk(struct dm_event_fifos *fifos,
 	return (int32_t) msg->cmd;
 }
 
+
 /*
- * start_daemon
+ * Check for usable client fifo file
  *
- * This function forks off a process (dmeventd) that will handle
- * the events.  I am currently test opening one of the fifos to
- * ensure that the daemon is running and listening...  I thought
- * this would be less expensive than fork/exec'ing every time.
- * Perhaps there is an even quicker/better way (no, checking the
- * lock file is _not_ a better way).
- *
- * Returns: 1 on success, 0 otherwise
+ * Returns: 2 client path does not exists, dmeventd should be restarted
+ *          1 on success, 0 otherwise
  */
-static int _start_daemon(char *dmeventd_path, struct dm_event_fifos *fifos)
+static int _check_for_usable_fifos(char *dmeventd_path, struct dm_event_fifos *fifos)
 {
-	int pid, ret = 0;
-	int status;
 	struct stat statbuf;
-	char default_dmeventd_path[] = DMEVENTD_PATH;
-	char *args[] = { dmeventd_path ? : default_dmeventd_path, NULL };
 
 	/*
 	 * FIXME Explicitly verify the code's requirement that client_path is secure:
@@ -429,7 +420,7 @@ static int _start_daemon(char *dmeventd_path, struct dm_event_fifos *fifos)
 	if ((lstat(fifos->client_path, &statbuf) < 0)) {
 		if (errno == ENOENT)
 			/* Jump ahead if fifo does not already exist. */
-			goto start_server;
+			return 2;
 		else {
 			log_sys_error("stat", fifos->client_path);
 			return 0;
@@ -455,12 +446,14 @@ static int _start_daemon(char *dmeventd_path, struct dm_event_fifos *fifos)
 			log_error("%s is no longer a secure root-owned fifo with mode 0600.", fifos->client_path);
 			if (close(fifos->client))
 				log_sys_debug("close", fifos->client_path);
+			fifos->client = -1;
 			return 0;
 		}
 
 		/* server is running and listening */
 		if (close(fifos->client))
 			log_sys_debug("close", fifos->client_path);
+		fifos->client = -1;
 		return 1;
 	}
 	if (errno != ENXIO && errno != ENOENT)  {
@@ -469,9 +462,36 @@ static int _start_daemon(char *dmeventd_path, struct dm_event_fifos *fifos)
 		return 0;
 	}
 
-start_server:
-	/* server is not running */
+	return 2;
+}
 
+
+/*
+ * start_daemon
+ *
+ * This function forks off a process (dmeventd) that will handle
+ * the events.  I am currently test opening one of the fifos to
+ * ensure that the daemon is running and listening...  I thought
+ * this would be less expensive than fork/exec'ing every time.
+ * Perhaps there is an even quicker/better way (no, checking the
+ * lock file is _not_ a better way).
+ *
+ * Returns: 1 on success, 0 otherwise
+ */
+static int _start_daemon(char *dmeventd_path, struct dm_event_fifos *fifos)
+{
+	struct stat statbuf;
+	char default_dmeventd_path[] = DMEVENTD_PATH;
+	char *args[] = { dmeventd_path ? : default_dmeventd_path, NULL };
+	int pid, ret = 0;
+	int status;
+
+	switch (_check_for_usable_fifos(dmeventd_path, fifos)) {
+	case 0: return_0;
+	case 1: return 1; /* Already running dmeventd */
+	}
+
+	/* server is not running */
 	if ((args[0][0] == '/') && stat(args[0], &statbuf)) {
 		log_sys_error("stat", args[0]);
 		return 0;
@@ -492,8 +512,17 @@ start_server:
 				  strerror(errno));
 		else if (WEXITSTATUS(status))
 			log_error("Unable to start dmeventd.");
-		else
-			ret = 1;
+		else {
+			/* Loop here till forked dmeventd is serving fifos */
+			for (ret = 100; ret > 0; --ret)
+				switch (_check_for_usable_fifos(dmeventd_path, fifos)) {
+				case 0: return_0;
+				case 1: return 1;
+				case 2: usleep(1000); break;
+				}
+			/* ret == 0 */
+			log_error("Dmeventd is not serving fifos.");
+		}
 	}
 
 	return ret;
@@ -513,7 +542,7 @@ int init_fifos(struct dm_event_fifos *fifos)
 	/* Lock out anyone else trying to do communication with the daemon. */
 	if (flock(fifos->server, LOCK_EX) < 0) {
 		log_sys_error("flock", fifos->server_path);
-		goto bad;
+		goto bad_no_unlock;
 	}
 
 /*	if ((fifos->client = open(fifos->client_path, O_WRONLY | O_NONBLOCK)) < 0) {*/
@@ -524,6 +553,9 @@ int init_fifos(struct dm_event_fifos *fifos)
 
 	return 1;
 bad:
+	if (flock(fifos->server, LOCK_UN))
+		log_sys_debug("flock unlock", fifos->server_path);
+bad_no_unlock:
 	if (close(fifos->server))
 		log_sys_debug("close", fifos->server_path);
 	fifos->server = -1;
@@ -552,6 +584,8 @@ void fini_fifos(struct dm_event_fifos *fifos)
 		if (close(fifos->server))
 			log_sys_debug("close", fifos->server_path);
 	}
+
+	fifos->client = fifos->server = -1;
 }
 
 /* Get uuid of a device */
@@ -720,7 +754,7 @@ static char *_fetch_string(char **src, const int delimiter)
 
 /* Parse a device message from the daemon. */
 static int _parse_message(struct dm_event_daemon_message *msg, char **dso_name,
-			 char **uuid, enum dm_event_mask *evmask)
+			 char **uuid, unsigned *evmask)
 {
 	char *id;
 	char *p = msg->data;
@@ -745,7 +779,7 @@ int dm_event_get_registered_device(struct dm_event_handler *dmevh, int next)
 	int ret = 0;
 	const char *uuid = NULL;
 	char *reply_dso = NULL, *reply_uuid = NULL;
-	enum dm_event_mask reply_mask = 0;
+	unsigned reply_mask = 0;
 	struct dm_task *dmt = NULL;
 	struct dm_event_daemon_message msg = { 0 };
 	struct dm_info info;
@@ -844,6 +878,7 @@ int dm_event_get_registered_device(struct dm_event_handler *dmevh, int next)
 int dm_event_get_version(struct dm_event_fifos *fifos, int *version) {
 	char *p;
 	struct dm_event_daemon_message msg = { 0 };
+	int ret = 0;
 
 	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_HELLO, NULL, NULL, 0, 0))
 		return 0;
@@ -851,13 +886,17 @@ int dm_event_get_version(struct dm_event_fifos *fifos, int *version) {
 	*version = 0;
 
 	if (!p || !(p = strchr(p, ' '))) /* Message ID */
-		return 0;
+		goto out;
 	if (!(p = strchr(p + 1, ' '))) /* HELLO */
-		return 0;
+		goto out;
 	if ((p = strchr(p + 1, ' '))) /* HELLO, once more */
 		*version = atoi(p);
 
-	return 1;
+	ret = 1;
+out:
+	free(msg.data);
+
+	return ret;
 }
 
 void dm_event_log_set(int debug_log_level, int use_syslog)
@@ -872,11 +911,11 @@ void dm_event_log(const char *subsys, int level, const char *file,
 {
 	static int _abort_on_internal_errors = -1;
 	static pthread_mutex_t _log_mutex = PTHREAD_MUTEX_INITIALIZER;
-	static time_t start = 0;
+	static long long _start = 0;
 	const char *indent = "";
 	FILE *stream = log_stderr(level) ? stderr : stdout;
 	int prio;
-	time_t now;
+	long long now, now_nsec;
 	int log_with_debug = 0;
 
 	if (subsys[0] == '#') {
@@ -923,17 +962,28 @@ void dm_event_log(const char *subsys, int level, const char *file,
 	if (_use_syslog) {
 		vsyslog(prio, format, ap);
 	} else {
-		now = time(NULL);
-		if (!start)
-			start = now;
-		now -= start;
-		if (_debug_level)
-			fprintf(stream, "[%2d:%02d] %8x:%-6s%s",
-				(int)now / 60, (int)now % 60,
+		if (_debug_level) {
+#define _NSEC_PER_SEC (1000000000LL)
+#ifdef HAVE_REALTIME
+			struct timespec mono_time = { 0 };
+			if (clock_gettime(CLOCK_MONOTONIC, &mono_time) == 0)
+				now = mono_time.tv_sec * _NSEC_PER_SEC + mono_time.tv_nsec;
+			else
+#endif
+				now = time(NULL) * _NSEC_PER_SEC;
+
+			if (!_start)
+				_start = now;
+			now -= _start;
+			now_nsec = now %_NSEC_PER_SEC;
+			now /= _NSEC_PER_SEC;
+			fprintf(stream, "[%2lld:%02lld.%06lld] %8x:%-6s%s",
+				now / 60, now % 60, now_nsec / 1000,
 				// TODO: Maybe use shorter ID
 				// ((int)(pthread_self()) >> 6) & 0xffff,
 				(int)pthread_self(), subsys,
 				(_debug_level > 3) ? "" : indent);
+		}
 		if (_debug_level > 3)
 			fprintf(stream, "%28s:%4d %s", file, line, indent);
 		vfprintf(stream, _(format), ap);
@@ -957,7 +1007,7 @@ void dm_event_log(const char *subsys, int level, const char *file,
 
 static char *_skip_string(char *src, const int delimiter)
 {
-	src = srtchr(src, delimiter);
+	src = strchr(src, delimiter);
 	if (src && *(src + 1))
 		return src + 1;
 	return NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2019 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2018-2022 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -23,6 +23,7 @@
 #include "lib/metadata/metadata.h"
 #include "lib/metadata/lv_alloc.h"
 #include "lib/metadata/segtype.h"
+#include "lib/mm/memlock.h"
 #include "base/memory/zalloc.h"
 
 static const char _vdo_module[] = MODULE_NAME_VDO;
@@ -73,8 +74,7 @@ static void _vdo_display(const struct lv_segment *seg)
 }
 
 static int _vdo_text_import(struct lv_segment *seg,
-			    const struct dm_config_node *n,
-			    struct dm_hash_table *pv_hash __attribute__((unused)))
+			    const struct dm_config_node *n)
 {
 	struct logical_volume *vdo_pool_lv;
 	const char *str;
@@ -166,13 +166,14 @@ static void _vdo_pool_display(const struct lv_segment *seg)
 
 	_print_yes_no("Compression\t", vtp->use_compression);
 	_print_yes_no("Deduplication", vtp->use_deduplication);
-	_print_yes_no("Metadata hints", vtp->use_metadata_hints);
+	if (vtp->use_metadata_hints)
+		_print_yes_no("Metadata hints", vtp->use_metadata_hints);
 
 	log_print("  Minimum IO size\t%s",
 		  display_size(cmd, vtp->minimum_io_size));
 	log_print("  Block map cache sz\t%s",
 		  display_size(cmd, vtp->block_map_cache_size_mb * UINT64_C(2 * 1024)));
-	log_print("  Block map era length\t%u", vtp->block_map_era_length);
+	log_print("  Block map era length %u", vtp->block_map_era_length);
 
 	_print_yes_no("Sparse index", vtp->use_sparse_index);
 
@@ -189,8 +190,9 @@ static void _vdo_pool_display(const struct lv_segment *seg)
 	log_print("  # Hash zone threads\t%u", (unsigned) vtp->hash_zone_threads);
 	log_print("  # Logical threads\t%u", (unsigned) vtp->logical_threads);
 	log_print("  # Physical threads\t%u", (unsigned) vtp->physical_threads);
-	log_print("  Max discard\t%u", (unsigned) vtp->max_discard);
-	log_print("  Write policy\t%s", get_vdo_write_policy_name(vtp->write_policy));
+	log_print("  Max discard\t\t%u", (unsigned) vtp->max_discard);
+	if (vtp->write_policy != DM_VDO_WRITE_POLICY_AUTO)
+		log_print("  Write policy\t%s", get_vdo_write_policy_name(vtp->write_policy));
 }
 
 /* reused as _vdo_text_import_area_count */
@@ -203,8 +205,7 @@ static int _vdo_pool_text_import_area_count(const struct dm_config_node *sn __at
 }
 
 static int _vdo_pool_text_import(struct lv_segment *seg,
-				 const struct dm_config_node *n,
-				 struct dm_hash_table *pv_hash __attribute__((unused)))
+				 const struct dm_config_node *n)
 {
 	struct dm_vdo_target_params *vtp = &seg->vdo_params;
 	struct logical_volume *data_lv;
@@ -354,9 +355,30 @@ static int _vdo_pool_target_status_compatible(const char *type)
 	return (strcmp(type, TARGET_NAME_VDO) == 0);
 }
 
+static int _vdo_check(struct cmd_context *cmd, const struct lv_segment *seg)
+{
+
+	struct vdo_pool_size_config cfg = { 0 };
+
+	if (!lv_vdo_pool_size_config(seg->lv, &cfg))
+		return_0;
+
+	/* Check if we are just adding more size to the already running vdo pool */
+	if (seg->lv->size >= cfg.physical_size)
+		cfg.physical_size = seg->lv->size - cfg.physical_size;
+	if (get_vdo_pool_virtual_size(seg) >= cfg.virtual_size)
+		cfg.virtual_size = get_vdo_pool_virtual_size(seg) - cfg.virtual_size;
+	if (seg->vdo_params.block_map_cache_size_mb >= cfg.block_map_cache_size_mb)
+		cfg.block_map_cache_size_mb = seg->vdo_params.block_map_cache_size_mb - cfg.block_map_cache_size_mb;
+	if (seg->vdo_params.index_memory_size_mb >= cfg.index_memory_size_mb)
+		cfg.index_memory_size_mb = seg->vdo_params.index_memory_size_mb - cfg.index_memory_size_mb;
+
+	return check_vdo_constrains(cmd, &cfg);
+}
+
 static int _vdo_pool_add_target_line(struct dev_manager *dm,
-				     struct dm_pool *mem __attribute__((unused)),
-				     struct cmd_context *cmd __attribute__((unused)),
+				     struct dm_pool *mem,
+				     struct cmd_context *cmd,
 				     void **target_state __attribute__((unused)),
 				     struct lv_segment *seg,
 				     const struct lv_activate_opts *laopts __attribute__((unused)),
@@ -364,11 +386,19 @@ static int _vdo_pool_add_target_line(struct dev_manager *dm,
 				     uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
 	char *vdo_pool_name, *data_uuid;
+	unsigned attrs = 0;
+
+	if (seg->segtype->ops->target_present)
+		seg->segtype->ops->target_present(cmd, NULL, &attrs);
 
 	if (!seg_is_vdo_pool(seg)) {
 		log_error(INTERNAL_ERROR "Passed segment is not VDO pool.");
 		return 0;
 	}
+
+	if (!critical_section() && !_vdo_check(cmd, seg))
+		return_0;
+
 	if (!(vdo_pool_name = dm_build_dm_name(mem, seg->lv->vg->name, seg->lv->name, lv_layer(seg->lv))))
 		return_0;
 
@@ -377,6 +407,7 @@ static int _vdo_pool_add_target_line(struct dev_manager *dm,
 
 	/* VDO uses virtual size instead of its physical size */
 	if (!dm_tree_node_add_vdo_target(node, get_vdo_pool_virtual_size(seg),
+					 !(attrs & VDO_FEATURE_VERSION4) ? 2 : 4,
 					 vdo_pool_name, data_uuid, seg_lv(seg, 0)->size,
 					 &seg->vdo_params))
 		return_0;
@@ -386,17 +417,18 @@ static int _vdo_pool_add_target_line(struct dev_manager *dm,
 
 static int _vdo_target_present(struct cmd_context *cmd,
 			       const struct lv_segment *seg __attribute__((unused)),
-			       unsigned *attributes __attribute__((unused)))
+			       unsigned *attributes)
 {
 	/* List of features with their kernel target version */
 	static const struct feature {
-		uint32_t maj;
-		uint32_t min;
-		uint32_t patchlevel;
-		unsigned vdo_feature;
-		const char *feature;
+		uint16_t maj;
+		uint16_t min;
+		uint16_t patchlevel;
+		uint16_t vdo_feature;
+		const char feature[24];
 	} _features[] = {
 		{ 6, 2, 3, VDO_FEATURE_ONLINE_RENAME, "online_rename" },
+		{ 8, 2, 0, VDO_FEATURE_VERSION4, "version4" },
 	};
 	static const char _lvmconf[] = "global/vdo_disabled_features";
 	static int _vdo_checked = 0;
@@ -427,7 +459,7 @@ static int _vdo_target_present(struct cmd_context *cmd,
 		/* If stripe target was already detected, reuse its result */
 		if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_STRIPED)) ||
 		    !segtype->ops->target_present || !segtype->ops->target_present(cmd, NULL, NULL)) {
-			/* Linear/Stripe targer is for mapping LVs on top of single VDO volume. */
+			/* Linear/Stripe target is for mapping LVs on top of single VDO volume. */
 			if (!target_present(cmd, TARGET_NAME_LINEAR, 0) ||
 			    !target_present(cmd, TARGET_NAME_STRIPED, 0))
 				return 0;
@@ -530,7 +562,7 @@ static void _vdo_pool_destroy(struct segment_type *segtype)
 	free((void *)segtype);
 }
 
-static struct segtype_handler _vdo_ops = {
+static const struct segtype_handler _vdo_ops = {
 	.name = _vdo_name,
 	.display = _vdo_display,
 	.text_import = _vdo_text_import,
@@ -546,7 +578,7 @@ static struct segtype_handler _vdo_ops = {
 	.destroy = _vdo_pool_destroy,
 };
 
-static struct segtype_handler _vdo_pool_ops = {
+static const struct segtype_handler _vdo_pool_ops = {
 	.name = _vdo_pool_name,
 	.display = _vdo_pool_display,
 	.text_import = _vdo_pool_text_import,

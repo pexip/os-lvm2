@@ -41,7 +41,8 @@ lvcreate --type vdo -L4G -n $lv1 $vg/$lv2 >out 2>&1
 # new vdoformat prints some more info
 if grep "data slabs" out ; then
 	# check we have match vdo_slab_size_mb == 128MB (aux.sh)
-	grep "each 128 MB" out
+	# accept new & old vdoformat line (128.00 MB & 128 MB)
+	grep -E "each 128.*MB" out
 fi
 
 check lv_field $vg/$lv1 size "<1.24g"
@@ -87,5 +88,16 @@ lvcreate --type vdo --vdosettings 'ack_threads=4' -L10G -V1T -ky -n $lv1 $vg
 check lv_field $vg/$lv1 vdo_ack_threads "4"
 lvs -a $vg
 lvremove -ff $vg
+
+lvcreate --type vdo --vdosettings 'minimum_io_size=512' -L10G -V1T -ky -n $lv1 $vg
+check lv_field $vg/$lv1 vdo_minimum_io_size "512b"
+lvremove -ff $vg
+
+lvcreate --type vdo --vdosettings 'minimum_io_size=4096' -L10G -V1T -ky -n $lv1 $vg
+check lv_field $vg/$lv1 vdo_minimum_io_size "4.00k"
+lvremove -ff $vg
+
+# only 512 or 4096 are valid values  (and eventually 1 or 8 sectors)
+not lvcreate --type vdo --vdosettings 'minimum_io_size=8000' -L10G -V1T -ky -n $lv1 $vg
 
 vgremove -ff $vg

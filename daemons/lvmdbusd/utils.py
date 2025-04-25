@@ -10,11 +10,14 @@
 import xml.etree.ElementTree as Et
 import sys
 import inspect
-import ctypes
+import collections
+import errno
+import fcntl
 import os
+import stat
 import string
 import datetime
-from fcntl import fcntl, F_GETFL, F_SETFL
+import tempfile
 
 import dbus
 from lvmdbusd import cfg
@@ -86,7 +89,7 @@ def init_class_from_arguments(
 			nt = k
 
 			# If the current attribute has a value, but the incoming does
-			# not, don't overwrite it.  Otherwise the default values on the
+			# not, don't overwrite it.  Otherwise, the default values on the
 			# property decorator don't work as expected.
 			cur = getattr(obj_instance, nt, v)
 
@@ -106,7 +109,7 @@ def init_class_from_arguments(
 
 def get_properties(f):
 	"""
-	Walks through an object instance or it's parent class(es) and determines
+	Walks through an object instance, or it's parent class(es) and determines
 	which attributes are properties and if they were created to be used for
 	dbus.
 	:param f:   Object to inspect
@@ -190,7 +193,7 @@ def add_properties(xml, interface, props):
 				interface_element = c
 				break
 
-		# Interface is not present, lets create it so we have something to
+		# Interface is not present, lets create it, so we have something to
 		# attach the properties too
 		if interface_element is None:
 			interface_element = Et.Element("interface", name=interface)
@@ -280,25 +283,64 @@ def parse_tags(tags):
 	return dbus.Array([], signature='s')
 
 
-def _common_log(msg, *attributes):
-	cfg.stdout_lock.acquire()
-	tid = ctypes.CDLL('libc.so.6').syscall(186)
+class DebugMessages(object):
 
-	if STDOUT_TTY:
+	def __init__(self, size=5000):
+		self.queue = collections.deque(maxlen=size)
+		self.lock = threading.RLock()
+
+	def add(self, message):
+		with self.lock:
+			self.queue.append(message)
+
+	def dump(self):
+		if cfg.args and not cfg.args.debug:
+			with self.lock:
+				if len(self.queue):
+					log_error("LVM dbus debug messages START last (%d max) messages" % self.queue.maxlen)
+					for m in self.queue:
+						print(m)
+					log_error("LVM dbus debug messages END")
+					self.queue.clear()
+
+
+def _get_tid():
+	try:
+		# Only 3.8 and later have this
+		return threading.get_native_id()
+	except:
+		return -1
+
+
+def _format_log_entry(msg):
+	tid = _get_tid()
+
+	if not cfg.systemd and STDOUT_TTY:
 		msg = "%s: %d:%d - %s" % \
 			(datetime.datetime.now().strftime("%b %d %H:%M:%S.%f"),
 			os.getpid(), tid, msg)
 
 	else:
-		msg = "%d:%d - %s" % (os.getpid(), tid, msg)
+		if cfg.systemd:
+			# Systemd already puts the daemon pid in the log, we'll just add the tid
+			msg = "[%d]: %s" % (tid, msg)
+		else:
+			msg = "[%d:%d]: %s" % (os.getpid(), tid, msg)
+	return msg
+
+
+def _common_log(msg, *attributes):
+	msg = _format_log_entry(msg)
+
+	cfg.stdout_lock.acquire()
 
 	if STDOUT_TTY and attributes:
 		print(color(msg, *attributes))
 	else:
 		print(msg)
 
-	cfg.stdout_lock.release()
 	sys.stdout.flush()
+	cfg.stdout_lock.release()
 
 
 # Serializes access to stdout to prevent interleaved output
@@ -307,9 +349,16 @@ def _common_log(msg, *attributes):
 def log_debug(msg, *attributes):
 	if cfg.args and cfg.args.debug:
 		_common_log(msg, *attributes)
+	else:
+		if cfg.debug:
+			cfg.debug.add(_format_log_entry(msg))
 
 
 def log_error(msg, *attributes):
+	_common_log(msg, *attributes)
+
+
+def log_msg(msg, *attributes):
 	_common_log(msg, *attributes)
 
 
@@ -340,15 +389,32 @@ def dump_threads_stackframe():
 # noinspection PyUnusedLocal
 def handler(signum):
 	try:
+		# signal 10
 		if signum == signal.SIGUSR1:
+			cfg.debug.dump()
 			dump_threads_stackframe()
+		# signal 12
+		elif signum == signal.SIGUSR2:
+			cfg.debug.dump()
+			cfg.flightrecorder.dump()
 		else:
+			# If we are getting a SIGTERM, and we sent one to the lvm shell we
+			# will ignore this and keep running.
+			if signum == signal.SIGTERM and cfg.ignore_sigterm:
+				# Clear the flag, so we will exit on SIGTERM if we didn't
+				# send it.
+				cfg.ignore_sigterm = False
+				return True
+
+			# If lvm shell is in use, tell it to exit
+			if cfg.SHELL_IN_USE is not None:
+				cfg.SHELL_IN_USE.exit_shell()
 			cfg.run.value = 0
-			log_debug('Exiting daemon with signal %d' % signum)
+			log_error('Exiting daemon with signal %d' % signum)
 			if cfg.loop is not None:
 				cfg.loop.quit()
-	except:
-		st = traceback.format_exc()
+	except BaseException as be:
+		st = extract_stack_trace(be)
 		log_error("signal handler: exception (logged, not reported!) \n %s" % st)
 
 	# It's important we report that we handled the exception for the exception
@@ -477,7 +543,7 @@ def round_size(size_bytes):
 	return size_bytes + bs - remainder
 
 
-_ALLOWABLE_CH = string.ascii_letters + string.digits + '#+-.:=@_\/%'
+_ALLOWABLE_CH = string.ascii_letters + string.digits + '#+-.:=@_/%'
 _ALLOWABLE_CH_SET = set(_ALLOWABLE_CH)
 
 _ALLOWABLE_VG_LV_CH = string.ascii_letters + string.digits + '.-_+'
@@ -572,6 +638,23 @@ def validate_tag(interface, tag):
 			% (tag, _ALLOWABLE_TAG_CH))
 
 
+def add_config_option(cmdline, key, value):
+	if 'help' in cmdline:
+		return cmdline
+
+	if key in cmdline:
+		for i, arg in enumerate(cmdline):
+			if arg == key:
+				if len(cmdline) <= i + 1:
+					raise dbus.exceptions.DBusException("Missing value for --config option.")
+				cmdline[i + 1] += " %s" % value
+				break
+	else:
+		cmdline.extend([key, value])
+
+	return cmdline
+
+
 def add_no_notify(cmdline):
 	"""
 	Given a command line to execute we will see if `--config` is present, if it
@@ -583,27 +666,18 @@ def add_no_notify(cmdline):
 	:rtype: list
 	"""
 
-	# Only after we have seen an external event will be disable lvm from sending
+	# Only after we have seen an external event will we disable lvm from sending
 	# us one when we call lvm
+	rv = cmdline
 	if cfg.got_external_event:
-		if 'help' in cmdline:
-			return cmdline
+		rv = add_config_option(rv, "--config", "global/notify_dbus=0")
 
-		if '--config' in cmdline:
-			for i, arg in enumerate(cmdline):
-				if arg == '--config':
-					if len(cmdline) <= i+1:
-						raise dbus.exceptions.DBusException("Missing value for --config option.")
-					cmdline[i+1] += " global/notify_dbus=0"
-					break
-		else:
-			cmdline.extend(['--config', 'global/notify_dbus=0'])
-	return cmdline
+	return rv
 
 
 # The methods below which start with mt_* are used to execute the desired code
-# on the the main thread of execution to alleviate any issues the dbus-python
-# library with regards to multi-threaded access.  Essentially, we are trying to
+# on the main thread of execution to alleviate any issues the dbus-python
+# library with regard to multithreaded access.  Essentially, we are trying to
 # ensure all dbus library interaction is done from the same thread!
 
 
@@ -617,9 +691,8 @@ def _async_handler(call_back, parameters):
 			call_back(*parameters)
 		else:
 			call_back()
-	except:
-		st = traceback.format_exc()
-		log_error("mt_async_call: exception (logged, not reported!) \n %s" % st)
+	except BaseException as be:
+		log_error("mt_async_call: exception (logged, not reported!) \n %s" % extract_stack_trace(be))
 
 
 # Execute the function on the main thread with the provided parameters, do
@@ -669,9 +742,6 @@ class MThreadRunner(object):
 				self.rc = self.f()
 		except BaseException as be:
 			self.exception = be
-			st = traceback.format_exc()
-			log_error("MThreadRunner: exception \n %s" % st)
-			log_error("Exception will be raised in calling thread!")
 
 
 def _remove_objects(dbus_objects_rm):
@@ -686,8 +756,8 @@ def mt_remove_dbus_objects(objs):
 
 # Make stream non-blocking
 def make_non_block(stream):
-	flags = fcntl(stream, F_GETFL)
-	fcntl(stream, F_SETFL, flags | os.O_NONBLOCK)
+	flags = fcntl.fcntl(stream, fcntl.F_GETFL)
+	fcntl.fcntl(stream, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
 
 def read_decoded(stream):
@@ -695,3 +765,128 @@ def read_decoded(stream):
 	if tmp:
 		return tmp.decode("utf-8")
 	return ''
+
+
+class LockFile(object):
+	"""
+	Simple lock file class
+	Based on Pg.1144 "The Linux Programming Interface" by Michael Kerrisk
+	"""
+	def __init__(self, lock_file):
+		self.fd = 0
+		self.lock_file = lock_file
+
+	def __enter__(self):
+		try:
+			os.makedirs(os.path.dirname(self.lock_file), exist_ok=True)
+			self.fd = os.open(self.lock_file, os.O_CREAT | os.O_RDWR, stat.S_IRUSR | stat.S_IWUSR)
+
+			# Get and set the close on exec and lock the file
+			flags = fcntl.fcntl(self.fd, fcntl.F_GETFD)
+			flags |= fcntl.FD_CLOEXEC
+			fcntl.fcntl(self.fd, fcntl.F_SETFL, flags)
+			fcntl.lockf(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+		except OSError as e:
+			if e.errno == errno.EAGAIN:
+				log_error("Daemon already running, exiting!")
+			else:
+				log_error("Error during creation of lock file(%s): errno(%d), exiting!" % (self.lock_file, e.errno))
+			sys.exit(114)
+
+	def __exit__(self, _type, _value, _traceback):
+		os.close(self.fd)
+
+
+def extract_stack_trace(exception):
+	return ''.join(traceback.format_exception(None, exception, exception.__traceback__))
+
+
+def lvm_column_key(key):
+	# Check LV
+	if key.startswith("lv_") or key.startswith("vg_") or key.startswith("pool_") or \
+			key.endswith("_percent") or key.startswith("move_") or key.startswith("vdo_") or \
+			key in ["origin_uuid", "segtype", "origin", "data_lv", "metadata_lv"]:
+		return True
+	# Check VG
+	if key.startswith("vg_") or key.startswith("lv_") or key.startswith("pv_") or \
+			key in ["max_lv", "max_pv", "snap_count"]:
+		return True
+	# Check PV
+	if key.startswith("pv") or key.startswith("vg") or (key in ['dev_size', 'pe_start']):
+		return True
+	return False
+
+class LvmBug(RuntimeError):
+	"""
+	Things that are clearly a bug with lvm itself.
+	"""
+	def __init__(self, msg):
+		super().__init__(msg)
+
+	def __str__(self):
+		return "lvm bug encountered: %s" % ' '.join(self.args)
+
+
+class LvmDebugData:
+	def __init__(self, do_collection):
+		self.fd = -1
+		self.fn = None
+		self.collect = do_collection
+		if self.collect:
+			log_msg("Collecting lvm debug data!")
+
+	def _remove_file(self):
+		if self.fn is not None:
+			os.unlink(self.fn)
+			self.fn = None
+
+	def _close_fd(self):
+		if self.fd != -1:
+			os.close(self.fd)
+			self.fd = -1
+
+	def setup(self):
+		# Create a secure filename
+		if self.collect:
+			self.fd, self.fn = tempfile.mkstemp(suffix=".log", prefix="lvmdbusd.lvm.debug.")
+			return self.fn
+		return None
+
+	def lvm_complete(self):
+		# Remove the file ASAP, so we decrease our odds of leaving it
+		# around if the daemon gets killed by a signal -9
+		self._remove_file()
+
+	def dump(self):
+		# Read the file and log it to log_err
+		if self.fd != -1:
+			# How big could the verbose debug get?
+			debug = os.read(self.fd, 1024*1024*5)
+			debug_txt = debug.decode("utf-8")
+			for line in debug_txt.split("\n"):
+				log_error("lvm debug >>> %s" % line)
+			self._close_fd()
+		# In case lvm_complete doesn't get called.
+		self._remove_file()
+
+	def complete(self):
+		self._close_fd()
+		# In case lvm_complete doesn't get called.
+		self._remove_file()
+
+
+def get_error_msg(report_json):
+	# Get the error message from the returned JSON
+	if 'log' in report_json:
+		error_msg = ""
+		# Walk the entire log array and build an error string
+		for log_entry in report_json['log']:
+			if log_entry['log_type'] == "error":
+				if error_msg:
+					error_msg += ', ' + log_entry['log_message']
+				else:
+					error_msg = log_entry['log_message']
+
+		return error_msg
+
+	return None

@@ -62,7 +62,7 @@ static void _lvmpolld_connect_or_warn(void)
 	if (!_lvmpolld_connected && !_lvmpolld.error) {
 		_lvmpolld = _lvmpolld_open(_lvmpolld_socket);
 		if ( _lvmpolld.socket_fd >= 0 && !_lvmpolld.error) {
-			log_debug_lvmpolld("Sucessfully connected to lvmpolld on fd %d.", _lvmpolld.socket_fd);
+			log_debug_lvmpolld("Successfully connected to lvmpolld on fd %d.", _lvmpolld.socket_fd);
 			_lvmpolld_connected = 1;
 		} else {
 			log_warn("WARNING: Failed to connect to lvmpolld. Proceeding with polling without using lvmpolld.");
@@ -284,17 +284,17 @@ int lvmpolld_poll_init(const struct cmd_context *cmd, const struct poll_operatio
 	int r = 0;
 
 	if (!id->uuid) {
-		log_error(INTERNAL_ERROR "Use of lvmpolld requires uuid set");
+		log_error(INTERNAL_ERROR "Use of lvmpolld requires uuid set.");
 		return 0;
 	}
 
 	if (!id->vg_name) {
-		log_error(INTERNAL_ERROR "Use of lvmpolld requires vgname set");
+		log_error(INTERNAL_ERROR "Use of lvmpolld requires vgname set.");
 		return 0;
 	}
 
 	if (!id->lv_name) {
-		log_error(INTERNAL_ERROR "Use of lvmpolld requires lvname set");
+		log_error(INTERNAL_ERROR "Use of lvmpolld requires lvname set.");
 		return 0;
 	}
 
@@ -321,7 +321,7 @@ int lvmpolld_poll_init(const struct cmd_context *cmd, const struct poll_operatio
 			log_error(INTERNAL_ERROR "Unsupported poll operation.");
 		}
 	} else
-		log_error(INTERNAL_ERROR "Unsupported poll operation");
+		log_error(INTERNAL_ERROR "Unsupported poll operation.");
 
 	return r;
 }
@@ -334,7 +334,7 @@ int lvmpolld_request_info(const struct poll_operation_id *id, const struct daemo
 	*finished = 1;
 
 	if (!id->uuid) {
-		log_error(INTERNAL_ERROR "use of lvmpolld requires uuid being set");
+		log_error(INTERNAL_ERROR "Use of lvmpolld requires uuid being set.");
 		return 0;
 	}
 

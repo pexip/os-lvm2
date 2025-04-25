@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2024 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -52,6 +52,9 @@ arg(deldev_ARG, '\0', "deldev", string_VAL, 0, 0,
     "When used alone, --deldev specifies a device name.\n"
     "When used with --deviceidtype, --deldev specifies a device id.\n")
 
+arg(delnotfound_ARG, '\0', "delnotfound", 0, 0, 0,
+    "Remove devices file entries with no matching device.\n")
+
 arg(addpvid_ARG, '\0', "addpvid", string_VAL, 0, 0,
     "Find a device with the PVID and add the device to the devices file.\n")
 arg(delpvid_ARG, '\0', "delpvid", string_VAL, 0, 0,
@@ -91,6 +94,14 @@ arg(atversion_ARG, '\0', "atversion", string_VAL, 0, 0,
     "which does not contain any newer settings for which LVM would\n"
     "issue a warning message when checking the configuration.\n")
 
+arg(auto_ARG, '\0', "auto", 0, 0, 0,
+    "This option is used when automatically importing devices for the root VG.\n"
+    "The auto import is intended to be done once, on first boot, to create an\n"
+    "initial system.devices file for the root VG.\n"
+    "When this option is used, the vgimportdevices --rootvg command does nothing\n"
+    "if system.devices exists, or the file auto-import-rootvg does not exist\n"
+    "(both in the \\fI#DEFAULT_SYS_DIR#/devices/\\fP directory.)\n")
+
 arg(autoactivation_ARG, '\0', "autoactivation", string_VAL, 0, 0,
     "Specify if autoactivation is being used from an event.\n"
     "This allows the command to apply settings that are specific\n"
@@ -126,7 +137,7 @@ arg(bootloaderareasize_ARG, '\0', "bootloaderareasize", sizemb_VAL, 0, 0,
     "To see the bootloader area start and size of\n"
     "an existing PV use pvs -o +pv_ba_start,pv_ba_size.\n")
 
-arg(cache_long_ARG, '\0', "cache", 0, 0, 0,
+arg(cache_long_ARG, '\0', "cache", 0, ARG_LONG_OPT, 0,
     "#pvscan\n"
     "Scan one or more devices and record that they are online.\n"
     "#vgscan\n"
@@ -290,7 +301,7 @@ arg(errorwhenfull_ARG, '\0', "errorwhenfull", bool_VAL, 0, 0,
     "(Also see dm-thin-pool kernel module option no_space_timeout.)\n"
     "See \\fBlvmthin\\fP(7) for more information.\n")
 
-arg(force_long_ARG, '\0', "force", 0, ARG_COUNTABLE, 0,
+arg(force_long_ARG, '\0', "force", 0, ARG_COUNTABLE | ARG_LONG_OPT, 0,
     "Force metadata restore even with thin pool LVs.\n"
     "Use with extreme caution. Most changes to thin metadata\n"
     "cannot be reverted.\n"
@@ -301,9 +312,41 @@ arg(foreign_ARG, '\0', "foreign", 0, 0, 0,
     "Report/display foreign VGs that would otherwise be skipped.\n"
     "See \\fBlvmsystemid\\fP(7) for more information about foreign VGs.\n")
 
+arg(fs_ARG, '\0', "fs", string_VAL, 0, 0,
+    "Control file system resizing when resizing an LV.\n"
+    "\\fBchecksize\\fP: Check the fs size and reduce the LV if the fs is not\n"
+    "using the reduced space (fs reduce is not needed.) If the reduced space\n"
+    "is used by the fs, then do not resize the fs or LV, and return an error.\n"
+    "(checksize only applies when reducing, and does nothing for extend.)\n"
+    "\\fBresize\\fP: Resize the fs by calling the fs-specific resize command.\n"
+    "This may also include mounting, unmounting, or running fsck. See --fsmode to\n"
+    "control mounting behavior, and --nofsck to disable fsck.\n"
+    "\\fBresize_fsadm\\fP: Use the old method of calling fsadm to handle the fs\n"
+    "(deprecated.) Warning: this option does not prevent lvreduce from destroying\n"
+    "file systems that are unmounted (or mounted if prompts are skipped.)\n"
+    "\\fBignore\\fP: Resize the LV without checking for or handling a file system.\n"
+    "Warning: using ignore when reducing the LV size may destroy the file system.\n")
+
+arg(fsmode_ARG, '\0', "fsmode", string_VAL, 0, 0,
+    "Control file system mounting behavior for fs resize.\n"
+    "\\fBmanage\\fP: Mount or unmount the fs as needed to resize the fs,\n"
+    "and attempt to restore the original mount state at the end.\n"
+    "\\fBnochange\\fP: Do not mount or unmount the fs. If mounting or unmounting\n"
+    "is required to resize the fs, then do not resize the fs or the LV and fail\n"
+    "the command.\n"
+    "\\fBoffline\\fP: Unmount the fs if it is mounted, and resize the fs while it\n"
+    "is unmounted. If mounting is required to resize the fs, then do not resize\n"
+    "the fs or the LV and fail the command.\n")
+
 arg(handlemissingpvs_ARG, '\0', "handlemissingpvs", 0, 0, 0,
     "Allows a polling operation to continue when PVs are missing,\n"
     "e.g. for repairs due to faulty devices.\n")
+
+arg(headings_ARG, '\0', "headings", headings_VAL, 0, 0,
+    "Type of headings to use in report output.\n"
+    "\\fBnone\\fP or \\fB0\\fP: No headings.\n"
+    "\\fBabbrev\\fP or \\fB1\\fP: Column name abbreviations.\n"
+    "\\fBfull\\fP or \\fB2\\fP: Full column names.\n")
 
 arg(ignoreadvanced_ARG, '\0', "ignoreadvanced", 0, 0, 0,
     "Exclude advanced configuration settings from the output.\n")
@@ -389,6 +432,10 @@ arg(logonly_ARG, '\0', "logonly", 0, 0, 0,
 
 arg(longhelp_ARG, '\0', "longhelp", 0, 0, 0,
     "Display long help text.\n")
+
+arg(majoritypvs_ARG, '\0', "majoritypvs", 0, 0, 0,
+    "Change the VG system ID if the majority of PVs in the VG\n"
+    "are present (one more than half).\n")
 
 arg(maxrecoveryrate_ARG, '\0', "maxrecoveryrate", sizekb_VAL, 0, 0,
     "Sets the maximum recovery rate for a RAID LV.  The rate value\n"
@@ -476,12 +523,13 @@ arg(mirrorsonly_ARG, '\0', "mirrorsonly", 0, 0, 0,
 
 arg(mknodes_ARG, '\0', "mknodes", 0, 0, 0,
     "Also checks the LVM special files in /dev that are needed for active\n"
-    "LVs and creates any missing ones and removes unused ones.\n")
+    "LVs and creates any missing ones and removes unused ones.\n"
+    "See also additional --refresh option for use in udev environment.\n")
 
 arg(monitor_ARG, '\0', "monitor", bool_VAL, 0, 0,
     "Start (yes) or stop (no) monitoring an LV with dmeventd.\n"
     "dmeventd monitors kernel events for an LV, and performs\n"
-    "automated maintenance for the LV in reponse to specific events.\n"
+    "automated maintenance for the LV in response to specific events.\n"
     "See \\fBdmeventd\\fP(8) for more information.\n")
 
 arg(nameprefixes_ARG, '\0', "nameprefixes", 0, 0, 0,
@@ -535,7 +583,7 @@ arg(notifydbus_ARG, '\0', "notifydbus", 0, 0, 0,
     "notify_dbus config setting is disabled.\n")
 
 arg(noudevsync_ARG, '\0', "noudevsync", 0, 0, 0,
-    "Disables udev synchronisation. The process will not wait for notification\n"
+    "Disables udev synchronization. The process will not wait for notification\n"
     "from udev. It will continue irrespective of any possible udev processing\n"
     "in the background. Only use this if udev is not running or has rules that\n"
     "ignore the devices LVM creates.\n")
@@ -568,6 +616,9 @@ arg(polloperation_ARG, '\0', "polloperation", polloperation_VAL, 0, 0,
 
 /* Not used. */
 arg(pooldatasize_ARG, '\0', "pooldatasize", sizemb_VAL, 0, 0, NULL)
+
+arg(pooldatavdo_ARG, '\0', "pooldatavdo", bool_VAL, 0, 0,
+    "Use VDO type volume for pool data volume.\n")
 
 arg(poolmetadata_ARG, '\0', "poolmetadata", lv_VAL, 0, 0,
     "The name of a an LV to use for storing pool metadata.\n")
@@ -613,26 +664,40 @@ arg(raidintegrityblocksize_ARG, '\0', "raidintegrityblocksize", number_VAL, 0, 0
 
 arg(raidintegritymode_ARG, '\0', "raidintegritymode", string_VAL, 0, 0,
     "Use a journal (default) or bitmap for keeping integrity checksums consistent\n"
-    "in case of a crash. The bitmap areas are recalculated after a crash, so corruption\n"
-    "in those areas would not be detected. A journal does not have this problem.\n"
+    "in case of a crash. The bitmap areas are recalculated after a crash,\n"
+    "so corruption in those areas would not be detected.\n"
+    "A journal does not have this problem.\n"
     "The journal mode doubles writes to storage, but can improve performance for\n"
     "scattered writes packed into a single journal write.\n"
     "bitmap mode can in theory achieve full write throughput of the device,\n"
     "but would not benefit from the potential scattered write optimization.\n")
 
 arg(readonly_ARG, '\0', "readonly", 0, 0, 0,
-    "Run the command in a special read-only mode which will read on-disk\n"
-    "metadata without needing to take any locks. This can be used to peek\n"
-    "inside metadata used by a virtual machine image while the virtual\n"
-    "machine is running. No attempt will be made to communicate with the\n"
-    "device-mapper kernel driver, so this option is unable to report whether\n"
-    "or not LVs are actually in use.\n")
+    "Prevent the command from making changes, including activation and\n"
+    "metadata updates.  (See --permission r for read only LVs.)\n")
 
 arg(refresh_ARG, '\0', "refresh", 0, 0, 0,
+    "#lvmdevices\n"
+    "Search for missing PVs on new devices, and update the devices file\n"
+    "with new device IDs for the PVs if they are found on new devices.\n"
+    "This is useful if PVs have been moved to new devices with new WWIDs,\n"
+    "for example. The device ID type and name may both change for a PV.\n"
+    "WARNING: if a PV is detached from the system, but a device containing a\n"
+    "clone or snapshot of that PV is present, then refresh would replace the\n"
+    "correct device ID with the clone/snapshot device ID, and lvm would begin\n"
+    "using the wrong device for the PV. Use deldev/adddev to safely change\n"
+    "a PV device ID in this scenario.\n"
+    "#vgchange\n"
+    "#lvchange\n"
+    "#vgmknodes\n"
+    "#vgscan\n"
     "If the LV is active, reload its metadata.\n"
-    "This is not necessary in normal operation, but may be useful\n"
-    "if something has gone wrong, or if some form of manual LV\n"
-    "sharing is being used.\n")
+    "In an environment where udev is used to manage the /dev content,\n"
+    "usage of this option is highly recommended. This is because refresh\n"
+    "also regenerates udev events for an LV based on which existing udev\n"
+    "rules are applied to set the /dev content and permissions.\n"
+    "Also, this operation may be useful if something has gone wrong,\n"
+    "or if some form of manual LV sharing is being used.\n")
 
 arg(removemissing_ARG, '\0', "removemissing", 0, 0, 0,
     "Removes all missing PVs from the VG, if there are no LVs allocated\n"
@@ -671,13 +736,15 @@ arg(replace_ARG, '\0', "replace", pv_VAL, ARG_GROUPABLE, 0,
     "Multiple PVs can be replaced by repeating this option.\n"
     "See \\fBlvmraid\\fP(7) for more information.\n")
 
-arg(reportformat_ARG, '\0', "reportformat", reportformat_VAL, 0, 0,
+arg(reportformat_ARG, '\0', "reportformat", reportformat_VAL, ARG_NONINTERACTIVE, 0,
     "Overrides current output format for reports which is defined globally by\n"
     "the report/output_format setting in \\fBlvm.conf\\fP(5).\n"
     "\\fBbasic\\fP is the original format with columns and rows.\n"
     "If there is more than one report per command, each report is prefixed\n"
     "with the report name for identification. \\fBjson\\fP produces report\n"
-    "output in JSON format. See \\fBlvmreport\\fP(7) for more information.\n")
+    "output in JSON format. \\fBjson_std\\fP produces report output in\n"
+    "JSON format which is more compliant with JSON standard.\n"
+    "See \\fBlvmreport\\fP(7) for more information.\n")
 
 arg(restorefile_ARG, '\0', "restorefile", string_VAL, 0, 0,
     "In conjunction with --uuid, this reads the file (produced by\n"
@@ -700,6 +767,9 @@ arg(resync_ARG, '\0', "resync", 0, 0, 0,
     "and copied to the others. This can take considerable time, during\n"
     "which the LV is without a complete redundant copy of the data.\n"
     "See \\fBlvmraid\\fP(7) for more information.\n")
+
+arg(rootvg_ARG, '\0', "rootvg", 0, 0, 0,
+    "Import devices used for the root VG.\n")
 
 arg(rows_ARG, '\0', "rows", 0, 0, 0,
     "Output columns as rows.\n")
@@ -773,7 +843,7 @@ arg(showunsupported_ARG, '\0', "showunsupported", 0, 0, 0,
 arg(startpoll_ARG, '\0', "startpoll", 0, 0, 0,
     "Start polling an LV to continue processing a conversion.\n")
 
-arg(stripes_long_ARG, '\0', "stripes", number_VAL, 0, 0,
+arg(stripes_long_ARG, '\0', "stripes", number_VAL, ARG_LONG_OPT, 0,
     "Specifies the number of stripes in a striped LV. This is the number of\n"
     "PVs (devices) that a striped LV is spread across. Data that\n"
     "appears sequential in the LV is spread across multiple devices in units of\n"
@@ -795,10 +865,13 @@ arg(syncaction_ARG, '\0', "syncaction", syncaction_VAL, 0, 0,
     "(mismatches between mirrors or incorrect parity values).\n"
     "\\fBcheck\\fP will count but not correct discrepancies.\n"
     "\\fBrepair\\fP will correct discrepancies.\n"
+    "Mind that these synchronization actions are transient and have to be restarted\n"
+    "after a system failure/reboot or a configuration change to the RaidLV.\n"
     "See \\fBlvs\\fP(8) for reporting discrepancies found or repaired.\n")
     
 arg(sysinit_ARG, '\0', "sysinit", 0, 0, 0,
-    "Indicates that vgchange/lvchange is being invoked from early system initialisation\n"
+    "Indicates that vgchange/lvchange is being invoked\n"
+    "from early system initialisation\n"
     "scripts (e.g. rc.sysinit or an initrd), before writable filesystems are\n"
     "available. As such, some functionality needs to be disabled and this option\n"
     "acts as a shortcut which selects an appropriate set of options. Currently,\n"
@@ -816,7 +889,7 @@ arg(systemid_ARG, '\0', "systemid", string_VAL, 0, 0,
     "the command, leaving the VG inaccessible to the host.\n"
     "See \\fBlvmsystemid\\fP(7) for more information.\n"
     "#vgchange\n"
-    "Changes the system ID of the VG.  Using this option requires caution\n"
+    "Changes the system ID of the VG. Using this option requires caution\n"
     "because the VG may become foreign to the host running the command,\n"
     "leaving the host unable to access it.\n"
     "See \\fBlvmsystemid\\fP(7) for more information.\n")
@@ -840,14 +913,17 @@ arg(trustcache_ARG, '\0', "trustcache", 0, 0, 0,
 arg(type_ARG, '\0', "type", segtype_VAL, 0, 0,
     "The LV type, also known as \"segment type\" or \"segtype\".\n"
     "See usage descriptions for the specific ways to use these types.\n"
-    "For more information about redundancy and performance (\\fBraid\\fP<N>, \\fBmirror\\fP, \\fBstriped\\fP, \\fBlinear\\fP) see \\fBlvmraid\\fP(7).\n"
+    "For more information about redundancy and performance\n"
+    "(\\fBraid\\fP<N>, \\fBmirror\\fP, \\fBstriped\\fP, \\fBlinear\\fP)\n"
+    "see \\fBlvmraid\\fP(7).\n"
     "For thin provisioning (\\fBthin\\fP, \\fBthin-pool\\fP) see \\fBlvmthin\\fP(7).\n"
     "For performance caching (\\fBcache\\fP, \\fBcache-pool\\fP) see \\fBlvmcache\\fP(7).\n"
     "For copy-on-write snapshots (\\fBsnapshot\\fP) see usage definitions.\n"
     "For VDO (\\fBvdo\\fP) see \\fBlvmvdo\\fP(7).\n"
     "Several commands omit an explicit type option because the type\n"
     "is inferred from other options or shortcuts\n"
-    "(e.g. --stripes, --mirrors, --snapshot, --virtualsize, --thin, --cache, --vdo).\n"
+    "(e.g. --stripes, --mirrors, --snapshot, --virtualsize,\n"
+    "--thin, --cache, --vdo).\n"
     "Use inferred types with care because it can lead to unexpected results.\n")
 
 arg(udevoutput_ARG, '\0', "udevoutput", 0, 0, 0,
@@ -901,7 +977,11 @@ arg(validate_ARG, '\0', "validate", 0, 0, 0,
     "return code. The validation is done only for the configuration\n"
     "at the front of the \"config cascade\". To validate the whole\n"
     "merged configuration tree, also use --mergedconfig.\n"
-    "The validation is done even if \\fBlvm.conf\\fP(5) \\fBconfig/checks\\fP is disabled.\n")
+    "The validation is done even if \\fBlvm.conf\\fP(5) \\fBconfig/checks\\fP\n"
+    "is disabled.\n")
+
+arg(valuesonly_ARG, '\0', "valuesonly", 0, 0, 0,
+    "When printing config settings, print only values without keys.\n")
 
 arg(vdo_ARG, '\0', "vdo", 0, 0, 0,
     "Specifies the command is handling VDO LV.\n"
@@ -1027,13 +1107,14 @@ arg(activate_ARG, 'a', "activate", activation_VAL, 0, 0,
     "\\fBn\\fP makes LVs inactive, or unavailable.\n"
     "The block device for the LV is added or removed from the system\n"
     "using device-mapper in the kernel.\n"
-    "A symbolic link /dev/VGName/LVName pointing to the device node is also added/removed.\n"
+    "A symbolic link /dev/VGName/LVName pointing to the device node\n"
+    "is also added/removed.\n"
     "All software and scripts should access the device through the symbolic\n"
     "link and present this as the name of the device.\n"
     "The location and name of the underlying device node may depend on\n"
     "the distribution, configuration (e.g. udev), or release version.\n"
     "\\fBay\\fP specifies autoactivation, which is used by system-generated\n"
-    "activation commands.  By default, LVs are autoactivated.\n"
+    "activation commands. By default, LVs are autoactivated.\n"
     "An autoactivation property can be set on a VG or LV to disable autoactivation,\n"
     "see --setautoactivation y|n in vgchange, lvchange, vgcreate, and lvcreate.\n"
     "Display the property with vgs or lvs \"-o autoactivation\".\n"
@@ -1043,7 +1124,8 @@ arg(activate_ARG, 'a', "activate", activation_VAL, 0, 0,
     "If auto_activation_volume_list is defined and empty, no LVs are autoactivated.\n"
     "Items included by auto_activation_volume_list will not be autoactivated if\n"
     "the autoactivation property has been disabled.\n"
-    "See \\fBlvmlockd\\fP(8) for more information about activation options \\fBey\\fP and \\fBsy\\fP for shared VGs.\n"
+    "See \\fBlvmlockd\\fP(8) for more information about activation options\n"
+    "\\fBey\\fP and \\fBsy\\fP for shared VGs.\n"
     "#lvcreate\n"
     "Controls the active state of the new LV.\n"
     "\\fBy\\fP makes the LV active, or available.\n"
@@ -1054,9 +1136,11 @@ arg(activate_ARG, 'a', "activate", activation_VAL, 0, 0,
     "be created in the active state (this does not apply to thin snapshots).\n"
     "The --zero option normally requires the LV to be active.\n"
     "If autoactivation \\fBay\\fP is used, the LV is only activated\n"
-    "if it matches an item in \\fBlvm.conf\\fP(5) \\fBactivation/auto_activation_volume_list\\fP.\n"
+    "if it matches an item in \\fBlvm.conf\\fP(5)\n"
+    "\\fBactivation/auto_activation_volume_list\\fP.\n"
     "\\fBay\\fP implies --zero n and --wipesignatures n.\n"
-    "See \\fBlvmlockd\\fP(8) for more information about activation options for shared VGs.\n")
+    "See \\fBlvmlockd\\fP(8) for more information about activation options\n"
+    "for shared VGs.\n")
 
 arg(all_ARG, 'a', "all", 0, 0, 0,
     "#vgreduce\n"
@@ -1072,6 +1156,7 @@ arg(all_ARG, 'a', "all", 0, 0, 0,
     "These are components of normal LVs, such as mirrors,\n"
     "which are not independently accessible, e.g. not mountable.\n"
     "#vgs\n"
+    "#vgdisplay\n"
     "List all VGs. Equivalent to not specifying any VGs.\n"
     "#pvs\n"
     "#pvdisplay\n"
@@ -1080,11 +1165,20 @@ arg(all_ARG, 'a', "all", 0, 0, 0,
 
 arg(autobackup_ARG, 'A', "autobackup", bool_VAL, 0, 0,
     "Specifies if metadata should be backed up automatically after a change.\n"
-    "Enabling this is strongly advised! See \\fBvgcfgbackup\\fP(8) for more information.\n")
+    "Enabling this is strongly advised!\n"
+    "See \\fBvgcfgbackup\\fP(8) for more information.\n")
 
 arg(activevolumegroups_ARG, 'A', "activevolumegroups", 0, 0, 0,
     "Only select active VGs. The VG is considered active\n"
     "if at least one of its LVs is active.\n")
+
+arg(allpvs_ARG, 'A', "allpvs", 0, 0, 0,
+    "#pvs\n"
+    "Show information about PVs outside the devices file.\n"
+    "Combine with -a|--all to include devices that are not PVs.\n"
+    "#pvscan\n"
+    "Show information about PVs outside the devices file.\n"
+    "Displays the device ID for PVs included in the devices file.\n")
 
 arg(background_ARG, 'b', "background", 0, 0, 0,
     "If the operation requires polling, this option causes the command to\n"
@@ -1103,14 +1197,14 @@ arg(blockdevice_ARG, 'b', "blockdevice", 0, 0, 0,
 
 arg(chunksize_ARG, 'c', "chunksize", sizekb_VAL, 0, 0,
     "The size of chunks in a snapshot, cache pool or thin pool.\n"
-    "For snapshots, the value must be a power of 2 between 4KiB and 512KiB\n"
+    "For snapshots, the value must be a power of 2 between 4 KiB and 512 KiB\n"
     "and the default value is 4.\n"
-    "For a cache pool the value must be between 32KiB and 1GiB\n"
+    "For a cache pool the value must be between 32 KiB and 1 GiB\n"
     "and the default value is 64.\n"
-    "For a thin pool the value must be between 64KiB and 1GiB\n"
+    "For a thin pool the value must be between 64 KiB and 1 GiB\n"
     "and the default value starts with 64 and scales up to fit the\n"
-    "pool metadata size within 128MiB, if the pool metadata size is not specified.\n"
-    "The value must be a multiple of 64KiB.\n"
+    "pool metadata size within 128 MiB, if the pool metadata size is not specified.\n"
+    "The value must be a multiple of 64 KiB.\n"
     "See \\fBlvmthin\\fP(7) and \\fBlvmcache\\fP(7) for more information.\n")
 
 arg(clustered_ARG, 'c', "clustered", bool_VAL, 0, 0,
@@ -1119,11 +1213,68 @@ arg(clustered_ARG, 'c', "clustered", bool_VAL, 0, 0,
 
 arg(colon_ARG, 'c', "colon", 0, 0, 0,
     "Generate colon separated output for easier parsing in scripts or programs.\n"
-    "Also see \\fBvgs\\fP(8) which provides considerably more control over the output.\n")
+    "#lvdisplay\n"
+    "Also see \\fBlvs\\fP(8) which provides considerably more control over the output.\n"
+    "The values are:\n"
+    ".br\n  \\[bu] logical volume name\n"
+    ".br\n  \\[bu] volume group name\n"
+    ".br\n  \\[bu] logical volume access\n"
+    ".br\n  \\[bu] logical volume status\n"
+    ".br\n  \\[bu] internal logical volume number\n"
+    ".br\n  \\[bu] open count of logical volume\n"
+    ".br\n  \\[bu] logical volume size in sectors\n"
+    ".br\n  \\[bu] current logical extents associated to logical volume\n"
+    ".br\n  \\[bu] allocated logical extents of logical volume\n"
+    ".br\n  \\[bu] allocation policy of logical volume\n"
+    ".br\n  \\[bu] read ahead sectors of logical volume\n"
+    ".br\n  \\[bu] major device number of logical volume\n"
+    ".br\n  \\[bu] minor device number of logical volume\n"
+    "#vgdisplay\n"
+    "Also see \\fBvgs\\fP(8) which provides considerably more control over the output.\n"
+    "The values are:\n"
+    ".br\n  \\[bu] volume group name\n"
+    ".br\n  \\[bu] volume group access\n"
+    ".br\n  \\[bu] volume group status\n"
+    ".br\n  \\[bu] internal volume group number\n"
+    ".br\n  \\[bu] maximum number of logical volumes\n"
+    ".br\n  \\[bu] current number of logical volumes\n"
+    ".br\n  \\[bu] open count of all logical volumes in this volume group\n"
+    ".br\n  \\[bu] maximum logical volume size\n"
+    ".br\n  \\[bu] maximum number of physical volumes\n"
+    ".br\n  \\[bu] current number of physical volumes\n"
+    ".br\n  \\[bu] actual number of physical volumes\n"
+    ".br\n  \\[bu] size of volume group in kilobytes\n"
+    ".br\n  \\[bu] physical extent size\n"
+    ".br\n  \\[bu] total number of physical extents for this volume group\n"
+    ".br\n  \\[bu] allocated number of physical extents for this volume group\n"
+    ".br\n  \\[bu] free number of physical extents for this volume group\n"
+    ".br\n  \\[bu] uuid of volume group\n"
+    "#pvdisplay\n"
+    "Also see \\fBpvs\\fP(8) which provides considerably more control over the output.\n"
+    "The values are:\n"
+    ".br\n  \\[bu] physical volume device name\n"
+    ".br\n  \\[bu] volume group name\n"
+    ".br\n  \\[bu] physical volume size in sectors\n"
+    ".br\n  \\[bu] internal physical volume number (obsolete)\n"
+    ".br\n  \\[bu] physical volume status\n"
+    ".br\n  \\[bu] physical volume (not) allocatable\n"
+    ".br\n  \\[bu] current number of logical volumes on this physical volume\n"
+    ".br\n  \\[bu] physical extent size in kilobytes\n"
+    ".br\n  \\[bu] total number of physical extents\n"
+    ".br\n  \\[bu] free number of physical extents\n"
+    ".br\n  \\[bu] allocated number of physical extents\n")
 
 arg(columns_ARG, 'C', "columns", 0, 0, 0,
-    "Display output in columns, the equivalent of \\fBvgs\\fP(8).\n"
-    "Options listed are the same as options given in \\fBvgs\\fP(8).\n")
+    "Display output in columns.\n"
+    "#lvdisplay\n"
+    "The equivalent of \\fBlvs\\fP(8).\n"
+    "Options listed are the same as options given in \\fBlvs\\fP(8).\n"
+    "#vgdisplay\n"
+    "The equivalent of \\fBvgs\\fP(8).\n"
+    "Options listed are the same as options given in \\fBvgs\\fP(8).\n"
+    "#pvdisplay\n"
+    "The equivalent of \\fBpvs\\fP(8).\n"
+    "Options listed are the same as options given in \\fBpvs\\fP(8).\n")
 
 arg(contiguous_ARG, 'C', "contiguous", bool_VAL, 0, 0,
     "Sets or resets the contiguous allocation policy for LVs.\n"
@@ -1317,6 +1468,10 @@ arg(ignoreactivationskip_ARG, 'K', "ignoreactivationskip", 0, 0, 0,
     "Ignore the \"activation skip\" LV flag during activation\n"
     "to allow LVs with the flag set to be activated.\n")
 
+arg(integritysettings_ARG, '\0', "integritysettings", string_VAL, ARG_GROUPABLE, 0,
+    "Specifies tunable kernel options for dm-integrity.\n"
+    "See \\fBlvmraid\\fP(7) for more information.\n")
+
 arg(maps_ARG, 'm', "maps", 0, 0, 0,
     "#lvdisplay\n"
     "Display the mapping of logical extents to PVs and physical extents.\n"
@@ -1379,9 +1534,7 @@ arg(name_ARG, 'n', "name", string_VAL, 0, 0,
     "Move only PVs used by the named LV.\n")
 
 arg(nofsck_ARG, 'n', "nofsck", 0, 0, 0,
-    "Do not perform fsck before resizing filesystem when filesystem\n"
-    "requires it. You may need to use --force to proceed with\n"
-    "this option.\n")
+    "Do not perform fsck when resizing the file system with --resizefs.\n")
 
 arg(novolumegroup_ARG, 'n', "novolumegroup", 0, 0, 0,
     "Only show PVs not belonging to any VG.\n")
@@ -1397,13 +1550,14 @@ arg(oldpath_ARG, 'n', "oldpath", 0, 0, 0, NULL)
 
 arg(options_ARG, 'o', "options", string_VAL, ARG_GROUPABLE, 0,
     "Comma-separated, ordered list of fields to display in columns.\n"
-    "String arg syntax is: [\\fB+\\fP|\\fB-\\fP|\\fB#\\fP]\\fIField1\\fP[\\fB,\\fP\\fIField2\\fP ...]\n"
+    "String arg syntax is:\n"
+    "[\\fB+\\fP|\\fB-\\fP|\\fB#\\fP]\\fIField1\\fP[\\fB,\\fP\\fIField2\\fP ...]\n"
     "The prefix \\fB+\\fP will append the specified fields to the default fields,\n"
     "\\fB-\\fP will remove the specified fields from the default fields, and\n"
     "\\fB#\\fP will compact specified fields (removing them when empty for all rows.)\n"
     "Use \\fB-o help\\fP to view the list of all available fields.\n"
-    "Use separate lists of fields to add, remove or compact by repeating the -o option:\n"
-    "-o+field1,field2 -o-field3,field4 -o#field5.\n"
+    "Use separate lists of fields to add, remove or compact by repeating\n"
+    "the -o option: -o+field1,field2 -o-field3,field4 -o#field5.\n"
     "These lists are evaluated from left to right.\n"
     "Use field name \\fBlv_all\\fP to view all LV fields,\n"
     "\\fBvg_all\\fP all VG fields,\n"
@@ -1447,7 +1601,10 @@ arg(readahead_ARG, 'r', "readahead", readahead_VAL, 0, 0,
     "\\fBnone\\fP is equivalent to zero.\n")
 
 arg(resizefs_ARG, 'r', "resizefs", 0, 0, 0,
-    "Resize underlying filesystem together with the LV using \\fBfsadm\\fP(8).\n")
+    "Resize the fs using the fs-specific resize command.\n"
+    "May include mounting, unmounting, or running fsck. See --fsmode to control\n"
+    "mounting behavior, and --nofsck to disable fsck. See --fs for more options\n"
+    "(--resizefs is equivalent to --fs resize.)\n")
 
 /* Not used */
 arg(reset_ARG, 'R', "reset", 0, 0, 0, NULL)
@@ -1462,19 +1619,20 @@ arg(physicalextentsize_ARG, 's', "physicalextentsize", sizemb_VAL, 0, 0,
     "Sets the physical extent size of PVs in the VG.\n"
     "The value must be either a power of 2 of at least 1 sector\n"
     "(where the sector size is the largest sector size of the PVs\n"
-    "currently used in the VG), or at least 128KiB.\n"
+    "currently used in the VG), or at least 128 KiB.\n"
     "Once this value has been set, it is difficult to change\n"
     "without recreating the VG, unless no extents need moving.\n"
     "#vgchange\n"
     "Sets the physical extent size of PVs in the VG.\n"
     "The value must be either a power of 2 of at least 1 sector\n"
     "(where the sector size is the largest sector size of the PVs\n"
-    "currently used in the VG), or at least 128KiB.\n"
+    "currently used in the VG), or at least 128 KiB.\n"
     "Once this value has been set, it is difficult to change\n"
     "without recreating the VG, unless no extents need moving.\n"
     "Before increasing the physical extent size, you might need to use lvresize,\n"
     "pvresize and/or pvmove so that everything fits. For example, every\n"
-    "contiguous range of extents used in a LV must start and end on an extent boundary.\n")
+    "contiguous range of extents used in a LV must start\n"
+    "and end on an extent boundary.\n")
 
 arg(snapshot_ARG, 's', "snapshot", 0, 0, 0,
     "#lvcreate\n"
@@ -1520,8 +1678,10 @@ arg(stdin_ARG, 's', "stdin", 0, 0, 0, NULL)
 
 arg(select_ARG, 'S', "select", string_VAL, ARG_GROUPABLE, 0,
     "Select objects for processing and reporting based on specified criteria.\n"
-    "The criteria syntax is described by \\fB--select help\\fP and \\fBlvmreport\\fP(7).\n"
-    "For reporting commands, one row is displayed for each object matching the criteria.\n"
+    "The criteria syntax is described by \\fB--select help\\fP\n"
+    "and \\fBlvmreport\\fP(7).\n"
+    "For reporting commands, one row is displayed\n"
+    "for each object matching the criteria.\n"
     "See \\fB--options help\\fP for selectable object fields.\n"
     "Rows can be displayed with an additional \"selected\" field (-o selected)\n"
     "showing 1 if the row matches the selection and 0 otherwise.\n"
@@ -1626,12 +1786,12 @@ arg(zero_ARG, 'Z', "zero", bool_VAL, 0, 0,
     "Set zeroing mode for thin pool. Note: already provisioned blocks from pool\n"
     "in non-zero mode are not cleared in unwritten parts when setting --zero y.\n"
     "#lvconvert\n"
-    "For snapshots, this controls zeroing of the first 4KiB of data in the\n"
+    "For snapshots, this controls zeroing of the first 4 KiB of data in the\n"
     "snapshot. If the LV is read-only, the snapshot will not be zeroed.\n"
     "For thin pools, this controls zeroing of provisioned blocks.\n"
     "Provisioning of large zeroed chunks negatively impacts performance.\n"
     "#lvcreate\n"
-    "Controls zeroing of the first 4KiB of data in the new LV.\n"
+    "Controls zeroing of the first 4 KiB of data in the new LV.\n"
     "Default is \\fBy\\fP.\n"
     "Snapshot COW volumes are always zeroed.\n"
     "For thin pools, this controls zeroing of provisioned blocks.\n"

@@ -52,20 +52,30 @@ def filter_event(action, device):
 	# when appropriate.
 	refresh = False
 
+	# Ignore everything but change
+	if action != 'change':
+		return
+
 	if 'ID_FS_TYPE' in device:
 		fs_type_new = device['ID_FS_TYPE']
-
 		if 'LVM' in fs_type_new:
-			refresh = True
+			# If we get a lvm related udev event for a block device
+			# we don't know about, it's either a pvcreate which we
+			# would handle with the dbus notification or something
+			# copied a pv signature onto a block device, this is
+			# required to catch the latter.
+			if not cfg.om.get_object_by_lvm_id(device['DEVNAME']):
+				refresh = True
 		elif fs_type_new == '':
 			# Check to see if the device was one we knew about
 			if 'DEVNAME' in device:
-				found = cfg.om.get_object_by_lvm_id(device['DEVNAME'])
-				if found:
+				if cfg.om.get_object_by_lvm_id(device['DEVNAME']):
 					refresh = True
-
-	if 'DM_LV_NAME' in device:
-		refresh = True
+	else:
+		# This handles the wipefs -a path
+		if not refresh and 'DEVNAME' in device:
+			if cfg.om.get_object_by_lvm_id(device['DEVNAME']):
+				refresh = True
 
 	if refresh:
 		udev_add()

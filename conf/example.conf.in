@@ -36,6 +36,19 @@ config {
 	# This configuration option has an automatic default value.
 	# checks = 1
 
+	# Configuration option config/validate_metadata.
+	# Allows to select the level of validation after metadata transformation.
+	# Validation takes extra CPU time to verify internal consistency.
+	# Accepted values:
+	#   full
+	#     Do a full metadata validation before disk write.
+	#   none
+	#     Skip any checks (unrecommended, slightly faster).
+	#
+	# This configuration option is advanced.
+	# This configuration option has an automatic default value.
+	# validate_metadata = "full"
+
 	# Configuration option config/abort_on_errors.
 	# Abort the LVM process if a configuration mismatch is found.
 	# This configuration option has an automatic default value.
@@ -122,11 +135,11 @@ devices {
 	# Configuration option devices/use_devicesfile.
 	# Enable or disable the use of a devices file.
 	# When enabled, lvm will only use devices that
-	# are lised in the devices file. A devices file will
+	# are listed in the devices file. A devices file will
 	# be used, regardless of this setting, when the --devicesfile
 	# option is set to a specific file name.
 	# This configuration option has an automatic default value.
-	# use_devicesfile = 0
+	# use_devicesfile = @DEFAULT_USE_DEVICES_FILE@
 
 	# Configuration option devices/devicesfile.
 	# The name of the system devices file, listing devices that LVM should use.
@@ -134,6 +147,16 @@ devices {
 	# The --devicesfile option is intended for alternative devices files.
 	# This configuration option has an automatic default value.
 	# devicesfile = "system.devices"
+
+	# Configuration option devices/devicesfile_backup_limit.
+	# The max number of backup files to keep in /etc/lvm/devices/backup.
+	# LVM creates a backup of the devices file each time a new
+	# version is created, or each time a modification is detected.
+	# When the max number of backups is reached, the oldest are
+	# removed to remain at the limit. Set to 0 to disable backups.
+	# Only the system devices file is backed up.
+	# This configuration option has an automatic default value.
+	# devicesfile_backup_limit = 50
 
 	# Configuration option devices/search_for_devnames.
 	# Look outside of the devices file for missing devname entries.
@@ -149,7 +172,27 @@ devices {
 	# at other devices, but only those that are likely to have the PV.
 	# If "all", lvm will look at all devices on the system.
 	# This configuration option has an automatic default value.
-	# search_for_devnames = "auto"
+	# search_for_devnames = "all"
+
+	# Configuration option devices/device_ids_refresh.
+	# Find PVs on new devices and update the device IDs in the devices file.
+	# If PVs are restored or moved to a new system with new devices, but
+	# an old system.devices remains with old device IDs, then search for
+	# the PVIDs on new devices and update the device IDs in system.devices.
+	# The original device IDs must also not be found on the new system.
+	# See device_ids_refresh_check for conditions that trigger the refresh.
+	# This configuration option has an automatic default value.
+	# device_ids_refresh = 1
+
+	# Configuration option devices/device_ids_refresh_checks.
+	# Conditions that trigger device_ids_refresh to locate PVIDs on new devices.
+	# product_uuid: refresh if /sys/devices/virtual/dmi/id/product_uuid does not
+	# match the value saved in system.devices.
+	# hostname: refresh if hostname does not match the value saved in system.devices.
+	# (hostname is used if product_uuid is not available.)
+	# Remove values from this list to prevent lvm from using them.
+	# This configuration option has an automatic default value.
+	# device_ids_refresh_checks = [ "product_uuid", "hostname" ]
 
 	# Configuration option devices/filter.
 	# Limit the block devices that are used by LVM commands.
@@ -211,17 +254,12 @@ devices {
 	# sysfs_scan = 1
 
 	# Configuration option devices/scan_lvs.
-	# Scan LVM LVs for layered PVs, allowing LVs to be used as PVs.
-	# When 1, LVM will detect PVs layered on LVs, and caution must be
-	# taken to avoid a host accessing a layered VG that may not belong
-	# to it, e.g. from a guest image. This generally requires excluding
-	# the LVs with device filters. Also, when this setting is enabled,
-	# every LVM command will scan every active LV on the system (unless
-	# filtered), which can cause performance problems on systems with
-	# many active LVs. When this setting is 0, LVM will not detect or
-	# use PVs that exist on LVs, and will not allow a PV to be created on
-	# an LV. The LVs are ignored using a built in device filter that
-	# identifies and excludes LVs.
+	# Allow LVM LVs to be used as PVs. When enabled, LVM commands will
+	# scan active LVs to look for other PVs. Caution is required to
+	# avoid using PVs that belong to guest images stored on LVs.
+	# When enabled, the LVs scanned should be restricted using the
+	# devices file or the filter. This option does not enable autoactivation
+	# of layered VGs, which requires editing LVM udev rules (see LVM_PVSCAN_ON_LVS.)
 	# This configuration option has an automatic default value.
 	# scan_lvs = 0
 
@@ -537,7 +575,7 @@ allocation {
 
 	# Configuration option allocation/cache_pool_max_chunks.
 	# The maximum number of chunks in a cache pool.
-	# For cache target v1.9 the recommended maximumm is 1000000 chunks.
+	# For cache target v1.9 the recommended maximum is 1000000 chunks.
 	# Using cache pool with more chunks may degrade cache performance.
 	# This configuration option does not have a default value defined.
 
@@ -548,7 +586,7 @@ allocation {
 
 	# Configuration option allocation/thin_pool_crop_metadata.
 	# Older version of lvm2 cropped pool's metadata size to 15.81 GiB.
-	# This is slightly less then the actual maximum 15.88 GiB.
+	# This is slightly less than the actual maximum 15.88 GiB.
 	# For compatibility with older version and use of cropped size set to 1.
 	# This configuration option has an automatic default value.
 	# thin_pool_crop_metadata = 0
@@ -621,17 +659,9 @@ allocation {
 	# This configuration option has an automatic default value.
 	# vdo_use_deduplication = 1
 
-	# Configuration option allocation/vdo_use_metadata_hints.
-	# Enables or disables whether VDO volume should tag its latency-critical
-	# writes with the REQ_SYNC flag. Some device mapper targets such as dm-raid5
-	# process writes with this flag at a higher priority.
-	# Default is enabled.
-	# This configuration option has an automatic default value.
-	# vdo_use_metadata_hints = 1
-
 	# Configuration option allocation/vdo_minimum_io_size.
 	# The minimum IO size for VDO volume to accept, in bytes.
-	# Valid values are 512 or 4096. The recommended and default value is 4096.
+	# Valid values are 512 or 4096. The recommended value is 4096.
 	# This configuration option has an automatic default value.
 	# vdo_minimum_io_size = 4096
 
@@ -650,11 +680,6 @@ allocation {
 	# The maximum and recommended value is 16380; the minimum value is 1.
 	# This configuration option has an automatic default value.
 	# vdo_block_map_period = 16380
-
-	# Configuration option allocation/vdo_check_point_frequency.
-	# The default check point frequency for VDO volume.
-	# This configuration option has an automatic default value.
-	# vdo_check_point_frequency = 0
 
 	# Configuration option allocation/vdo_use_sparse_index.
 	# Enables sparse indexing for VDO volume.
@@ -684,7 +709,7 @@ allocation {
 	# Configuration option allocation/vdo_bio_threads.
 	# Specifies the number of threads to use for submitting I/O
 	# operations to the storage device of VDO volume.
-	# The value must be in range [1..100]
+	# The value must be in range [1..100].
 	# Each additional thread after the first will use an additional 18MiB of RAM,
 	# plus 1.12 MiB of RAM per megabyte of configured read cache size.
 	# This configuration option has an automatic default value.
@@ -698,7 +723,7 @@ allocation {
 
 	# Configuration option allocation/vdo_cpu_threads.
 	# Specifies the number of threads to use for CPU-intensive work such as
-	# hashing or compression for VDO volume. The value must be in range [1..100]
+	# hashing or compression for VDO volume. The value must be in range [1..100].
 	# This configuration option has an automatic default value.
 	# vdo_cpu_threads = 2
 
@@ -716,7 +741,7 @@ allocation {
 	# processing based on the hash value computed from the block data.
 	# A logical thread count of 9 or more will require explicitly specifying
 	# a sufficiently large block map cache size, as well.
-	# The value must be in range [0..100].
+	# The value must be in range [0..60].
 	# vdo_hash_zone_threads, vdo_logical_threads and vdo_physical_threads must be
 	# either all zero or all non-zero.
 	# This configuration option has an automatic default value.
@@ -732,19 +757,6 @@ allocation {
 	# This configuration option has an automatic default value.
 	# vdo_physical_threads = 1
 
-	# Configuration option allocation/vdo_write_policy.
-	# Specifies the write policy:
-	# auto  - VDO will check the storage device and determine whether it supports flushes.
-	#         If it does, VDO will run in async mode, otherwise it will run in sync mode.
-	# sync  - Writes are acknowledged only after data is stably written.
-	#         This policy is not supported if the underlying storage is not also synchronous.
-	# async - Writes are acknowledged after data has been cached for writing to stable storage.
-	#         Data which has not been flushed is not guaranteed to persist in this mode.
-	# async-unsafe - Writes are handled like 'async' but there is no guarantee of the atomicity async provides.
-	#         This mode should only be used for better performance when atomicity is not required.
-	# This configuration option has an automatic default value.
-	# vdo_write_policy = "auto"
-
 	# Configuration option allocation/vdo_max_discard.
 	# Specified the maximum size of discard bio accepted, in 4096 byte blocks.
 	# I/O requests to a VDO volume are normally split into 4096-byte blocks,
@@ -758,7 +770,7 @@ allocation {
 	# vdo_max_discard = 1
 
 	# Configuration option allocation/vdo_pool_header_size.
-	# Specified the emptry header size in KiB at the front and end of vdo pool device.
+	# Specified the empty header size in KiB at the front and end of vdo pool device.
 	# This configuration option has an automatic default value.
 	# vdo_pool_header_size = 512
 }
@@ -782,6 +794,9 @@ log {
 	# to define fields to display and sort fields for the log report.
 	# You can also use log/command_log_selection to define selection
 	# criteria used each time the log is reported.
+	# Note that if report/output_format (or --reportformat command line
+	# option) is set to json or json_std, then log/report_command_log=1
+	# is default.
 	# This configuration option has an automatic default value.
 	# report_command_log = 0
 
@@ -811,8 +826,9 @@ log {
 	# define selection criteria for log report on command line directly
 	# using <lvm command> --configreport log -S <selection criteria>
 	# which has precedence over log/command_log_selection setting.
-	# For more information about selection criteria in general, see
-	# lvm(8) man page.
+	# To make all the command log lines visible, use "all" value
+	# for the command log selection. For more information about selection
+	# criteria in general, see lvmreport(7) man page.
 	# This configuration option has an automatic default value.
 	# command_log_selection = "!(log_type=status && message=success)"
 
@@ -937,7 +953,7 @@ backup {
 	# archive = 1
 
 	# Configuration option backup/archive_dir.
-	# Location of the metdata archive files.
+	# Location of the metadata archive files.
 	# Remember to back up this directory regularly!
 	# This configuration option has an automatic default value.
 	# archive_dir = "@DEFAULT_SYS_DIR@/@DEFAULT_ARCHIVE_SUBDIR@"
@@ -1013,7 +1029,7 @@ global {
 	# Location of proc filesystem.
 	# This configuration option is advanced.
 	# This configuration option has an automatic default value.
-	# proc = "/proc"
+	# proc = "@DEFAULT_PROC_DIR@"
 
 	# Configuration option global/etc.
 	# Location of /etc system configuration directory.
@@ -1157,7 +1173,7 @@ global {
 	# services (via the lvm2-activation-generator), but the autoactivation
 	# services and generator have been removed.
 	# This configuration option has an automatic default value.
-	# event_activation = 1
+	# event_activation = @DEFAULT_EVENT_ACTIVATION@
 
 	# Configuration option global/use_aio.
 	# Use async I/O when reading and writing devices.
@@ -1189,6 +1205,16 @@ global {
 	# This configuration option has an automatic default value.
 	# sanlock_lv_extend = 256
 
+	# Configuration option global/sanlock_align_size.
+	# The sanlock lease size in MiB to use on disks with a 4K sector size.
+	# Possible values are 1,2,4,8.  The default is 8, which supports up to
+	# 2000 hosts (and max host_id 2000.)  Smaller values support smaller
+	# numbers of max hosts (and max host_ids): 250, 500, 1000, 2000 for
+	# lease sizes 1,2,4,8.  Disks with 512 byte sectors always use 1MiB
+	# leases and support 2000 hosts, and are not affected by this setting.
+	# This configuration option has an automatic default value.
+	# sanlock_align_size = 8
+
 	# Configuration option global/lvmlockctl_kill_command.
 	# The command that lvmlockctl --kill should use to force LVs offline.
 	# The lvmlockctl --kill command is run when a shared VG has lost
@@ -1202,7 +1228,7 @@ global {
 
 	# Configuration option global/thin_check_executable.
 	# The full path to the thin_check command.
-	# LVM uses this command to check that a thin metadata device is in a
+	# LVM uses this command to check that a thin pool metadata device is in a
 	# usable state. When a thin pool is activated and after it is
 	# deactivated, this command is run. Activation will only proceed if
 	# the command has an exit status of 0. Set to "" to skip this check.
@@ -1226,6 +1252,14 @@ global {
 	# This configuration option has an automatic default value.
 	# thin_repair_executable = "@THIN_REPAIR_CMD@"
 
+	# Configuration option global/thin_restore_executable.
+	# The full path to the thin_restore command.
+	# LVM uses this command to restore generated data for a thin pool metadata device.
+	# Also see thin_restore_options.
+	# (See package device-mapper-persistent-data or thin-provisioning-tools)
+	# This configuration option has an automatic default value.
+	# thin_restore_executable = "@THIN_RESTORE_CMD@"
+
 	# Configuration option global/thin_check_options.
 	# List of options passed to the thin_check command.
 	# With thin_check version 2.1 or newer you can add the option
@@ -1239,6 +1273,11 @@ global {
 	# List of options passed to the thin_repair command.
 	# This configuration option has an automatic default value.
 	# thin_repair_options = [ "" ]
+
+	# Configuration option global/thin_restore_options.
+	# List of options passed to the thin_restore command.
+	# This configuration option has an automatic default value.
+	# thin_restore_options = [ "" ]
 
 	# Configuration option global/thin_disabled_features.
 	# Features to not use in the thin driver.
@@ -1288,6 +1327,14 @@ global {
 	# This configuration option has an automatic default value.
 	# cache_repair_executable = "@CACHE_REPAIR_CMD@"
 
+	# Configuration option global/cache_restore_executable.
+	# The full path to the cache_restore command.
+	# LVM uses this command to restore generated data for a cache metadata device.
+	# Also see cache_restore_options.
+	# (See package device-mapper-persistent-data or thin-provisioning-tools)
+	# This configuration option has an automatic default value.
+	# cache_restore_executable = "@CACHE_RESTORE_CMD@"
+
 	# Configuration option global/cache_check_options.
 	# List of options passed to the cache_check command.
 	# With cache_check version 5.0 or newer you should include the option
@@ -1299,6 +1346,11 @@ global {
 	# List of options passed to the cache_repair command.
 	# This configuration option has an automatic default value.
 	# cache_repair_options = [ "" ]
+
+	# Configuration option global/cache_restore_options.
+	# List of options passed to the cache_restore command.
+	# This configuration option has an automatic default value.
+	# cache_restore_options = [ "" ]
 
 	# Configuration option global/vdo_format_executable.
 	# The full path to the vdoformat command.
@@ -1314,10 +1366,10 @@ global {
 	# Configuration option global/vdo_disabled_features.
 	# Features to not use in the vdo driver.
 	# This can be helpful for testing, or to avoid using a feature that is
-	# causing problems. Features include: online_rename
+	# causing problems. Features include: online_rename, version4
 	#
 	# Example
-	# vdo_disabled_features = [ "online_rename" ]
+	# vdo_disabled_features = [ "online_rename", "version4" ]
 	#
 	# This configuration option does not have a default value defined.
 
@@ -1347,8 +1399,9 @@ global {
 	#     Use an LVM-specific derivation of the local machine-id as the
 	#     system ID. See 'man machine-id'.
 	#   machineid
-	#     Use the contents of the machine-id file to set the system ID
-	#     (appmachineid is recommended.)
+	#     Use the contents of the machine-id file to set the system ID.
+	#     (appmachineid is recommended to avoid exposing the confidential
+	#     machine-id.)
 	#   file
 	#     Use the contents of another file (system_id_file) to set the
 	#     system ID.
@@ -1464,13 +1517,15 @@ activation {
 
 	# Configuration option activation/reserved_stack.
 	# Stack size in KiB to reserve for use while devices are suspended.
-	# Insufficent reserve risks I/O deadlock during device suspension.
+	# Insufficient reserve risks I/O deadlock during device suspension.
+	# Value 0 disables memory locking.
 	# This configuration option has an automatic default value.
 	# reserved_stack = 64
 
 	# Configuration option activation/reserved_memory.
 	# Memory size in KiB to reserve for use while devices are suspended.
-	# Insufficent reserve risks I/O deadlock during device suspension.
+	# Insufficient reserve risks I/O deadlock during device suspension.
+	# Value 0 disables memory locking.
 	# This configuration option has an automatic default value.
 	# reserved_memory = 8192
 
@@ -1605,7 +1660,7 @@ activation {
 	# This includes LVs that have the following segment types:
 	# raid1, raid4, raid5*, and raid6*.
 	# If a device in the LV fails, the policy determines the steps
-	# performed by dmeventd automatically, and the steps perfomed by the
+	# performed by dmeventd automatically, and the steps performed by the
 	# manual command lvconvert --repair --use-policies.
 	# Automatic handling requires dmeventd to be monitoring the LV.
 	#
@@ -1629,7 +1684,7 @@ activation {
 	# (copies) and a mirror log. A disk log ensures that a mirror LV does
 	# not need to be re-synced (all copies made the same) every time a
 	# machine reboots or crashes. If a device in the LV fails, this policy
-	# determines the steps perfomed by dmeventd automatically, and the steps
+	# determines the steps performed by dmeventd automatically, and the steps
 	# performed by the manual command lvconvert --repair --use-policies.
 	# Automatic handling requires dmeventd to be monitoring the LV.
 	#
@@ -1791,7 +1846,7 @@ activation {
 	# Configuration option activation/polling_interval.
 	# Check pvmove or lvconvert progress at this interval (seconds).
 	# When pvmove or lvconvert must wait for the kernel to finish
-	# synchronising or merging data, they check and report progress at
+	# synchronizing or merging data, they check and report progress at
 	# intervals of this number of seconds. If this is set to 0 and there
 	# is only one thing to wait for, there are no progress reports, but
 	# the process is awoken immediately once the operation is complete.
@@ -1819,7 +1874,7 @@ activation {
 	#     uses are present. Other PVs in the Volume Group may be missing.
 	#   degraded
 	#     Like complete, but additionally RAID LVs of segment type raid1,
-	#     raid4, raid5, radid6 and raid10 will be activated if there is no
+	#     raid4, raid5, raid6 and raid10 will be activated if there is no
 	#     data loss, i.e. they have sufficient redundancy to present the
 	#     entire addressable range of the Logical Volume.
 	#   partial
@@ -1936,15 +1991,14 @@ activation {
 
 # Configuration section report.
 # LVM report command output formatting.
-# This configuration section has an automatic default value.
-# report {
+report {
 
 	# Configuration option report/output_format.
 	# Format of LVM command's report output.
 	# If there is more than one report per command, then the format
 	# is applied for all reports. You can also change output format
 	# directly on command line using --reportformat option which
-	# has precedence over log/output_format setting.
+	# has precedence over report/output_format setting.
 	# Accepted values:
 	#   basic
 	#     Original format with columns and rows. If there is more than
@@ -1952,6 +2006,13 @@ activation {
 	#     name for identification.
 	#   json
 	#     JSON format.
+	#   json_std
+	#     JSON format that is more compliant with JSON standard.
+	#     Compared to original "json" format:
+	#       - it does not use double quotes around numeric values,
+	#       - it uses 'null' for undefined numeric values,
+	#       - it prints string list as proper JSON array of strings instead of a single string.
+	# Note that if json or json_std output format is used, then log/command_log_report=1 is default.
 	# This configuration option has an automatic default value.
 	# output_format = "basic"
 
@@ -1991,7 +2052,11 @@ activation {
 	# buffered = 1
 
 	# Configuration option report/headings.
-	# Show headings for columns on report.
+	# Format of LVM command's report output headings.
+	# Accepted values:
+	#   0 no headings,
+	#   1 headings with column abbreviations,
+	#   2 headings with full column names.
 	# This configuration option has an automatic default value.
 	# headings = 1
 
@@ -2070,7 +2135,7 @@ activation {
 	#   %F
 	#     Equivalent to %Y-%m-%d (the ISO 8601 date format).
 	#   %G
-	#     The ISO 8601 week-based year with century as adecimal number.
+	#     The ISO 8601 week-based year with century as a decimal number.
 	#     The 4-digit year corresponding to the ISO week number (see %V).
 	#     This has the same format and value as %Y, except that if the
 	#     ISO week number belongs to the previous or next year, that year
@@ -2341,7 +2406,7 @@ activation {
 	# This is displayed when the device for a PV is not known.
 	# This configuration option has an automatic default value.
 	# two_word_unknown_device = 0
-# }
+}
 
 # Configuration section dmeventd.
 # Settings for the LVM event daemon.

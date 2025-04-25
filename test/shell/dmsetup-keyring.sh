@@ -53,7 +53,7 @@ test "$str" = ":32:logon:$KEY_NAME"
 # ...but it hides hexbyte representation of keys...
 str=$(dmsetup table --inactive "$PREFIX-crypt" | cut -d ' ' -f 5)
 test "$str" = "$HIDENKEY_32"
-#...unless --showkeys explictly requested
+#...unless --showkeys explicitly requested
 str=$(dmsetup table --showkeys --inactive "$PREFIX-crypt" | cut -d ' ' -f 5)
 test "$str" = "$HEXKEY_32"
 
@@ -71,5 +71,6 @@ test "$str" = "$HIDENKEY_32"
 str=$(dmsetup table --showkeys "$PREFIX-crypt" | cut -d ' ' -f 5)
 test "$str" = "$HEXKEY_32"
 
+aux udev_wait
 dmsetup remove "$PREFIX-crypt"
 dmsetup remove "$PREFIX-zero"

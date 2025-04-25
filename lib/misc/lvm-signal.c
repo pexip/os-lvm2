@@ -29,7 +29,7 @@ static volatile sig_atomic_t _handler_installed = 0;
 
 struct ar_sigs {
 	int sig;
-	const char *name;
+	const char name[8];
 	int oldmasked[MAX_SIGINTS];
 	struct sigaction oldhandler[MAX_SIGINTS];
 };
@@ -69,7 +69,7 @@ void sigint_clear(void)
 
 void sigint_allow(void)
 {
-	int i, mask = 0;
+	unsigned i, mask = 0;
 	struct sigaction handler;
 	sigset_t sigs;
 
@@ -110,7 +110,7 @@ void sigint_allow(void)
 
 void sigint_restore(void)
 {
-	int i, mask = 0;
+	unsigned i, mask = 0;
 	sigset_t sigs;
 
 	if (memlock_count_daemon())

@@ -1,6 +1,6 @@
 ###############################################################################
 ## Copyright (C) 2000-2004 Sistina Software, Inc. All rights reserved.
-## Copyright (C) 2004-2016 Red Hat, Inc. All rights reserved.
+## Copyright (C) 2004-2023 Red Hat, Inc. All rights reserved.
 ##
 ## This copyrighted material is made available to anyone wishing to use,
 ## modify, copy, or redistribute it subject to the terms and conditions
@@ -20,7 +20,7 @@ AC_CONFIG_SRCDIR([lib/device/dev-cache.h])
 AC_CONFIG_HEADERS([include/configure.h])
 
 ################################################################################
-dnl -- Setup the directory where autoconf has auxilary files
+dnl -- Setup the directory where autoconf has auxiliary files
 AC_CONFIG_AUX_DIR(autoconf)
 
 ################################################################################
@@ -28,41 +28,36 @@ dnl -- Get system type
 AC_CANONICAL_TARGET([])
 
 AS_IF([test -z "$CFLAGS"], [COPTIMISE_FLAG="-O2"])
-case "$host_os" in
-	linux*)
+AS_CASE(["$host_os"],
+	[linux*], [
 		# equivalent to -rdynamic
 		ELDFLAGS="-Wl,--export-dynamic"
+		STATIC_LDFLAGS="-Wl,--no-export-dynamic"
 		# FIXME Generate list and use --dynamic-list=.dlopen.sym
 		CLDWHOLEARCHIVE="-Wl,-whole-archive"
 		CLDNOWHOLEARCHIVE="-Wl,-no-whole-archive"
-		LIB_SUFFIX=so
-		DEVMAPPER=yes
-		BUILD_LVMPOLLD=no
-		ODIRECT=yes
-		DM_IOCTLS=yes
-		SELINUX=yes
-		FSADM=yes
-		LVMIMPORTVDO=yes
-		BLKDEACTIVATE=yes
-		;;
-	darwin*)
+		LIB_SUFFIX="so"
+		DEVMAPPER="yes"
+		ODIRECT="yes"
+		DM_IOCTLS="yes"
+		SELINUX="yes"
+		FSADM="yes"
+		LVMIMPORTVDO="yes"
+		BLKDEACTIVATE="yes"],
+	[darwin*], [
 		CFLAGS="$CFLAGS -no-cpp-precomp -fno-common"
 		ELDFLAGS=
 		CLDWHOLEARCHIVE="-all_load"
 		CLDNOWHOLEARCHIVE=
-		LIB_SUFFIX=dylib
-		DEVMAPPER=yes
-		ODIRECT=no
-		DM_IOCTLS=no
-		SELINUX=no
-		FSADM=no
-		LVMIMPORTVDO=no
-		BLKDEACTIVATE=no
-		;;
-	*)
-		CLDFLAGS="${CLDFLAGS-"$LDFLAGS"}"
-		;;
-esac
+		LIB_SUFFIX="dylib"
+		DEVMAPPER="yes"
+		ODIRECT="no"
+		DM_IOCTLS="no"
+		SELINUX="no"
+		FSADM="no"
+		LVMIMPORTVDO="no"
+		BLKDEACTIVATE="no"],
+	[])
 
 ################################################################################
 dnl -- Checks for programs.
@@ -80,9 +75,12 @@ dnl probably no longer needed in 2008, but...
 AC_PROG_GCC_TRADITIONAL
 AC_PROG_INSTALL
 AC_PROG_LN_S
+AC_PROG_GREP
+AC_PROG_EGREP
 AC_PROG_MAKE_SET
 AC_PROG_MKDIR_P
 AC_PROG_RANLIB
+AC_CHECK_TOOL([READELF], [readelf])
 AC_CHECK_TOOL(AR, ar)
 AC_PATH_TOOL(CFLOW_CMD, cflow)
 AC_PATH_TOOL(CSCOPE_CMD, cscope)
@@ -95,9 +93,6 @@ dnl -- Check for header files.
 AC_HEADER_DIRENT
 AC_HEADER_MAJOR
 AC_HEADER_STDBOOL
-AC_HEADER_STDC
-AC_HEADER_SYS_WAIT
-AC_HEADER_TIME
 
 AC_CHECK_HEADERS([assert.h ctype.h dirent.h errno.h fcntl.h float.h \
   getopt.h inttypes.h langinfo.h libgen.h limits.h locale.h paths.h \
@@ -108,12 +103,9 @@ AC_CHECK_HEADERS([assert.h ctype.h dirent.h errno.h fcntl.h float.h \
 
 AC_CHECK_HEADERS(termios.h sys/statvfs.h sys/timerfd.h sys/vfs.h linux/magic.h linux/fiemap.h)
 AC_CHECK_HEADERS(libaio.h,LVM_NEEDS_LIBAIO_WARN=,LVM_NEEDS_LIBAIO_WARN=y)
-case "$host_os" in
-	linux*)
-		AC_CHECK_HEADERS(asm/byteorder.h linux/fs.h malloc.h,,AC_MSG_ERROR(bailing out)) ;;
-	darwin*)
-		AC_CHECK_HEADERS(machine/endian.h sys/disk.h,,AC_MSG_ERROR(bailing out)) ;;
-esac
+AS_CASE(["$host_os"],
+	[linux*], [AC_CHECK_HEADERS([asm/byteorder.h linux/fs.h malloc.h], [], [AC_MSG_ERROR(bailing out)])],
+	[darwin*], [AC_CHECK_HEADERS([machine/endian.h sys/disk.h], [], [AC_MSG_ERROR(bailing out)])])
 
 ################################################################################
 dnl -- Check for typedefs, structures, and compiler characteristics.
@@ -125,7 +117,6 @@ AC_STRUCT_ST_BLOCKS
 AC_STRUCT_TM
 AC_TYPE_OFF_T
 AC_TYPE_PID_T
-AC_TYPE_SIGNAL
 AC_TYPE_SIZE_T
 AC_TYPE_MODE_T
 AC_TYPE_INT8_T
@@ -153,7 +144,7 @@ AC_CHECK_FUNCS([ftruncate gethostname getpagesize gettimeofday localtime_r \
   memchr memset mkdir mkfifo munmap nl_langinfo pselect realpath rmdir setenv \
   setlocale strcasecmp strchr strcspn strdup strerror strncasecmp strndup \
   strrchr strspn strstr strtol strtoul uname], , [AC_MSG_ERROR(bailing out)])
-AC_CHECK_FUNCS([ffs prlimit versionsort])
+AC_CHECK_FUNCS([ffs mallinfo2 prlimit versionsort])
 AC_FUNC_ALLOCA
 AC_FUNC_CLOSEDIR_VOID
 AC_FUNC_CHOWN
@@ -170,37 +161,45 @@ AC_FUNC_VPRINTF
 
 ################################################################################
 dnl -- Disable dependency tracking
-AC_MSG_CHECKING(whether to enable dependency tracking)
+AC_MSG_CHECKING([whether to enable dependency tracking])
 AC_ARG_ENABLE(dependency-tracking,
 	      AS_HELP_STRING([--disable-dependency-tracking],
 			     [speeds up one-time build.]),
-	      USE_TRACKING=$enableval, USE_TRACKING=yes)
-AC_MSG_RESULT($USE_TRACKING)
+	      USE_TRACKING=$enableval, USE_TRACKING="yes")
+AC_MSG_RESULT([$USE_TRACKING])
 
 ################################################################################
 dnl -- Disable silence rules
-AC_MSG_CHECKING(whether to build silently)
+AC_MSG_CHECKING([whether to build silently])
 AC_ARG_ENABLE(silent-rules,
 	      AS_HELP_STRING([--disable-silent-rules], [disable silent building]),
-	      SILENT_RULES=$enableval, SILENT_RULES=yes)
-AC_MSG_RESULT($SILENT_RULES)
+	      SILENT_RULES=$enableval, SILENT_RULES="yes")
+AC_MSG_RESULT([$SILENT_RULES])
 
 
 ################################################################################
 dnl -- Enables statically-linked tools
-AC_MSG_CHECKING(whether to use static linking)
+AC_MSG_CHECKING([whether to use static linking])
 AC_ARG_ENABLE(static_link,
 	      AS_HELP_STRING([--enable-static_link],
 			     [use this to link the tools to their libraries
 			      statically (default is dynamic linking]),
-	      STATIC_LINK=$enableval, STATIC_LINK=no)
-AC_MSG_RESULT($STATIC_LINK)
+	      STATIC_LINK=$enableval, STATIC_LINK="no")
+AC_MSG_RESULT([$STATIC_LINK])
+
+################################################################################
+dnl -- Disables shared linking
+AC_MSG_CHECKING([whether to use dynamic linking])
+AC_ARG_ENABLE(shared,
+	      AS_HELP_STRING([--disable-shared], [disable dynamic linking]),
+	      SHARED_LINK=$enableval, SHARED_LINK="yes")
+AC_MSG_RESULT([$SHARED_LINK])
 
 ################################################################################
 dnl -- Check if compiler/linker supports PIE and RELRO
 AC_TRY_CCFLAG([-pie], [HAVE_PIE], [], [])
 AC_SUBST(HAVE_PIE)
-AC_TRY_LDFLAGS([-Wl,-z,relro,-z,now], [HAVE_FULL_RELRO], [], [])
+AC_TRY_LDFLAGS([-Wl,-z,relro,-z,now,-z,pack-relative-relocs,--as-needed], [HAVE_FULL_RELRO], [], [])
 AC_SUBST(HAVE_FULL_RELRO)
 
 ################################################################################
@@ -209,137 +208,153 @@ AC_PREFIX_DEFAULT(/usr)
 
 ################################################################################
 dnl -- Clear default exec_prefix - install into /sbin rather than /usr/sbin
-test "$exec_prefix" = NONE -a "$prefix" = NONE && exec_prefix=""
+test "$exec_prefix" = "NONE" && test "$prefix" = "NONE" && exec_prefix=""
 
-test "x$prefix" = xNONE && prefix=$ac_default_prefix
+test "$prefix" = "NONE" && prefix=$ac_default_prefix
 # Let make expand exec_prefix.
-test "x$exec_prefix" = xNONE && exec_prefix='${prefix}'
+test "$exec_prefix" = "NONE" && exec_prefix='${prefix}'
+
+
+AC_ARG_WITH(blkid, [AS_HELP_STRING([--without-blkid], [do not build with blkid library])],
+	    [], with_blkid="yes")
+AC_ARG_WITH(libnvme, [AS_HELP_STRING([--without-libnvme], [do not build with libnvme library])],
+	    [], with_libnvme="yes")
+AC_ARG_WITH(systemd, [AS_HELP_STRING([--without-systemd], [do not build with systemd library])],
+	    [], with_systemd="yes")
+AC_ARG_WITH(udev, [AS_HELP_STRING([--without-udev], [do not build with udev library])],
+	    [], with_udev="yes")
 
 ################################################################################
 dnl -- Setup the ownership of the files
-AC_MSG_CHECKING(file owner)
+AC_MSG_CHECKING([file owner])
 AC_ARG_WITH(user,
 	    AS_HELP_STRING([--with-user=USER],
 			   [set the owner of installed files [USER=]]),
 	    OWNER=$withval)
-AC_MSG_RESULT($OWNER)
+AC_MSG_RESULT([$OWNER])
 test -n "$OWNER" && INSTALL="$INSTALL -o $OWNER"
 
 ################################################################################
 dnl -- Setup the group ownership of the files
-AC_MSG_CHECKING(group owner)
+AC_MSG_CHECKING([group owner])
 AC_ARG_WITH(group,
 	    AS_HELP_STRING([--with-group=GROUP],
 			   [set the group owner of installed files [GROUP=]]),
 	    GROUP=$withval)
-AC_MSG_RESULT($GROUP)
+AC_MSG_RESULT([$GROUP])
 test -n "$GROUP" && INSTALL="$INSTALL -g $GROUP"
 
 ################################################################################
 dnl -- Setup device node ownership
-AC_MSG_CHECKING(device node uid)
+AC_MSG_CHECKING([device node uid])
 
 AC_ARG_WITH(device-uid,
 	    AS_HELP_STRING([--with-device-uid=UID],
 			   [set the owner used for new device nodes [UID=0]]),
 	    DM_DEVICE_UID=$withval, DM_DEVICE_UID=0)
-AC_MSG_RESULT($DM_DEVICE_UID)
+AC_MSG_RESULT([$DM_DEVICE_UID])
 AC_DEFINE_UNQUOTED([DM_DEVICE_UID], [$DM_DEVICE_UID], [Define default owner for device node])
 
 ################################################################################
 dnl -- Setup device group ownership
-AC_MSG_CHECKING(device node gid)
+AC_MSG_CHECKING([device node gid])
 
 AC_ARG_WITH(device-gid,
 	    AS_HELP_STRING([--with-device-gid=GID],
 			   [set the group used for new device nodes [GID=0]]),
 	    DM_DEVICE_GID=$withval, DM_DEVICE_GID=0)
-AC_MSG_RESULT($DM_DEVICE_GID)
+AC_MSG_RESULT([$DM_DEVICE_GID])
 AC_DEFINE_UNQUOTED([DM_DEVICE_GID], [$DM_DEVICE_GID], [Define default group for device node])
 
 ################################################################################
 dnl -- Setup device mode
-AC_MSG_CHECKING(device node mode)
+AC_MSG_CHECKING([device node mode])
 
 AC_ARG_WITH(device-mode,
 	    AS_HELP_STRING([--with-device-mode=MODE],
 			   [set the mode used for new device nodes [MODE=0600]]),
 	    DM_DEVICE_MODE=$withval, DM_DEVICE_MODE=0600)
-AC_MSG_RESULT($DM_DEVICE_MODE)
+AC_MSG_RESULT([$DM_DEVICE_MODE])
 AC_DEFINE_UNQUOTED([DM_DEVICE_MODE], [$DM_DEVICE_MODE], [Define default mode for device node])
 
-AC_MSG_CHECKING(when to create device nodes)
+AC_MSG_CHECKING([when to create device nodes])
 AC_ARG_WITH(device-nodes-on,
 	    AS_HELP_STRING([--with-device-nodes-on=ON],
 			   [create nodes on resume or create [ON=resume]]),
 	    ADD_NODE=$withval, ADD_NODE=resume)
-case "$ADD_NODE" in
- resume) add_on=DM_ADD_NODE_ON_RESUME;;
- create) add_on=DM_ADD_NODE_ON_CREATE;;
- *) AC_MSG_ERROR([--with-device-nodes-on parameter invalid]);;
-esac
-AC_MSG_RESULT(on $ADD_NODE)
+AS_CASE(["$ADD_NODE"],
+	[resume], [add_on=DM_ADD_NODE_ON_RESUME],
+	[create], [add_on=DM_ADD_NODE_ON_CREATE],
+	[AC_MSG_ERROR([--with-device-nodes-on parameter invalid])])
+AC_MSG_RESULT([on $ADD_NODE])
 AC_DEFINE_UNQUOTED([DEFAULT_DM_ADD_NODE], $add_on, [Define default node creation behavior with dmsetup create])
 
 
 dnl -- Default settings for lvm.conf { devices/use_devicesfile }
-AC_MSG_CHECKING(default for use_devicesfile)
+AC_MSG_CHECKING([default for use_devicesfile])
 AC_ARG_WITH(default-use-devices-file,
-	      AS_HELP_STRING([--with-default-use-devices-file], [default for lvm.conf devices/use_devicesfile = [0]]),
+	      AS_HELP_STRING([--with-default-use-devices-file=ON], [default lvm.conf devices/use_devicesfile = [ON=0]]),
 	      DEFAULT_USE_DEVICES_FILE=$withval, DEFAULT_USE_DEVICES_FILE=0)
-case "$DEFAULT_USE_DEVICES_FILE" in
- 0|1);;
- *) AC_MSG_ERROR([--with-default-use-devices-file parameter invalid]);;
-esac
-AC_MSG_RESULT($DEFAULT_USE_DEVICES_FILE)
+AS_CASE(["$DEFAULT_USE_DEVICES_FILE"],
+	[0|1], [],
+	[AC_MSG_ERROR([--with-default-use-devices-file parameter invalid])])
+AC_MSG_RESULT([$DEFAULT_USE_DEVICES_FILE])
 AC_DEFINE_UNQUOTED(DEFAULT_USE_DEVICES_FILE, [$DEFAULT_USE_DEVICES_FILE],
-		   [Default for lvm.conf use_devicefile.])
+		   [Default for lvm.conf use_devicesfile.])
 
-AC_MSG_CHECKING(default name mangling)
+AC_MSG_CHECKING([default name mangling])
 AC_ARG_WITH(default-name-mangling,
 	    AS_HELP_STRING([--with-default-name-mangling=MANGLING],
 			   [default name mangling: auto/none/hex [auto]]),
 	    MANGLING=$withval, MANGLING=auto)
-case "$MANGLING" in
- auto) mangling=DM_STRING_MANGLING_AUTO;;
- no|none|disabled) mangling=DM_STRING_MANGLING_NONE;;
- hex) mangling=DM_STRING_MANGLING_HEX;;
- *) AC_MSG_ERROR([--with-default-name-mangling parameter invalid]);;
-esac
-AC_MSG_RESULT($MANGLING)
+AS_CASE(["$MANGLING"],
+	[auto], [mangling=DM_STRING_MANGLING_AUTO],
+	[no|none|disabled], [mangling=DM_STRING_MANGLING_NONE],
+	[hex], [mangling=DM_STRING_MANGLING_HEX],
+	[AC_MSG_ERROR([--with-default-name-mangling parameter invalid])])
+AC_MSG_RESULT([$MANGLING])
 AC_DEFINE_UNQUOTED([DEFAULT_DM_NAME_MANGLING], $mangling, [Define default name mangling behaviour])
+
+AC_MSG_CHECKING([default for event_activation])
+AC_ARG_WITH(default-event-activation,
+	      AS_HELP_STRING([--with-default-event-activation=ON], [default lvm.conf global/event_activation = [ON=1]]),
+	      DEFAULT_EVENT_ACTIVATION=$withval, DEFAULT_EVENT_ACTIVATION=1)
+AS_CASE(["$DEFAULT_EVENT_ACTIVATION"],
+	[0|1], [],
+	[AC_MSG_ERROR([--with-default-event-activation parameter invalid])])
+AC_MSG_RESULT([$DEFAULT_EVENT_ACTIVATION])
+AC_DEFINE_UNQUOTED(DEFAULT_EVENT_ACTIVATION, [$DEFAULT_EVENT_ACTIVATION],
+		   [Default for lvm.conf event_activation.])
 
 ################################################################################
 dnl -- snapshots inclusion type
-AC_MSG_CHECKING(whether to include snapshots)
+AC_MSG_CHECKING([whether to include snapshots])
 AC_ARG_WITH(snapshots,
 	    AS_HELP_STRING([--with-snapshots=TYPE],
 			   [snapshot support: internal/none [internal]]),
 	    SNAPSHOTS=$withval, SNAPSHOTS=internal)
-AC_MSG_RESULT($SNAPSHOTS)
+AC_MSG_RESULT([$SNAPSHOTS])
 
-case "$SNAPSHOTS" in
-  no|none|shared) ;;
-  internal) AC_DEFINE([SNAPSHOT_INTERNAL], 1,
-		      [Define to 1 to include built-in support for snapshots.]) ;;
-  *) AC_MSG_ERROR([--with-snapshots parameter invalid]) ;;
-esac
+AS_CASE(["$SNAPSHOTS"],
+	[no|none|shared], [],
+	[internal], [
+		AC_DEFINE([SNAPSHOT_INTERNAL], 1, [Define to 1 to include built-in support for snapshots.])],
+	[AC_MSG_ERROR([--with-snapshots parameter invalid])])
 
 ################################################################################
 dnl -- mirrors inclusion type
-AC_MSG_CHECKING(whether to include mirrors)
+AC_MSG_CHECKING([whether to include mirrors])
 AC_ARG_WITH(mirrors,
 	    AS_HELP_STRING([--with-mirrors=TYPE],
 			   [mirror support: internal/none [internal]]),
 	    MIRRORS=$withval, MIRRORS=internal)
-AC_MSG_RESULT($MIRRORS)
+AC_MSG_RESULT([$MIRRORS])
 
-case "$MIRRORS" in
-  no|none|shared) ;;
-  internal) AC_DEFINE([MIRRORED_INTERNAL], 1,
-		      [Define to 1 to include built-in support for mirrors.]) ;;
-  *) AC_MSG_ERROR([--with-mirrors parameter invalid]) ;;
-esac
+AS_CASE(["$MIRRORS"],
+	[no|none|shared], [],
+	[internal], [
+		AC_DEFINE([MIRRORED_INTERNAL], 1, [Define to 1 to include built-in support for mirrors.])],
+	[AC_MSG_ERROR([--with-mirrors parameter invalid])])
 
 ################################################################################
 dnl -- raid inclusion type
@@ -363,16 +378,15 @@ AC_DEFINE_UNQUOTED([DEFAULT_RAID10_SEGTYPE], ["$DEFAULT_RAID10_SEGTYPE"],
 
 ################################################################################
 AC_ARG_WITH(default-sparse-segtype,
-	    AS_HELP_STRING([--with-default-sparse-segtype=TYPE],
-			   [default sparse segtype: thin/snapshot [thin]]),
-			   [ case "$withval" in
-				thin|snapshot) DEFAULT_SPARSE_SEGTYPE=$withval ;;
-				*) AC_MSG_ERROR(--with-default-sparse-segtype parameter invalid) ;;
-			     esac], DEFAULT_SPARSE_SEGTYPE="thin")
+	AS_HELP_STRING([--with-default-sparse-segtype=TYPE], [default sparse segtype: thin/snapshot [thin]]), [
+		AS_CASE(["$withval"],
+			[thin|snapshot], [DEFAULT_SPARSE_SEGTYPE=$withval],
+			[AC_MSG_ERROR([--with-default-sparse-segtype parameter invalid])])
+		], [DEFAULT_SPARSE_SEGTYPE="thin"])
 
 ################################################################################
 dnl -- thin provisioning
-AC_MSG_CHECKING(whether to include thin provisioning)
+AC_MSG_CHECKING([whether to include thin provisioning])
 AC_ARG_WITH(thin,
 	    AS_HELP_STRING([--with-thin=TYPE],
 			   [thin provisioning support: internal/none [internal]]),
@@ -394,15 +408,14 @@ AC_ARG_WITH(thin-restore,
 			   [thin_restore tool: [autodetect]]),
 			   THIN_RESTORE_CMD=$withval, THIN_RESTORE_CMD="autodetect")
 
-AC_MSG_RESULT($THIN)
+AC_MSG_RESULT([$THIN])
 
-case "$THIN" in
-  no|none)  test "$DEFAULT_SPARSE_SEGTYPE" = "thin" && DEFAULT_SPARSE_SEGTYPE="snapshot" ;;
-  shared) ;;
-  internal) AC_DEFINE([THIN_INTERNAL], 1,
-		      [Define to 1 to include built-in support for thin provisioning.]) ;;
-  *) AC_MSG_ERROR([--with-thin parameter invalid ($THIN)]) ;;
-esac
+AS_CASE(["$THIN"],
+	[no|none], [test "$DEFAULT_SPARSE_SEGTYPE" = "thin" && DEFAULT_SPARSE_SEGTYPE="snapshot"],
+	[shared], [],
+	[internal], [
+		AC_DEFINE([THIN_INTERNAL], 1, [Define to 1 to include built-in support for thin provisioning.])],
+	[AC_MSG_ERROR([--with-thin parameter invalid ($THIN)])])
 
 AC_DEFINE_UNQUOTED([DEFAULT_SPARSE_SEGTYPE], ["$DEFAULT_SPARSE_SEGTYPE"],
 		   [Default segtype used for sparse volumes.])
@@ -411,71 +424,71 @@ dnl -- thin_check needs-check flag
 AC_ARG_ENABLE(thin_check_needs_check,
 	      AS_HELP_STRING([--disable-thin_check_needs_check],
 			     [required if thin_check version is < 0.3.0]),
-	      THIN_CHECK_NEEDS_CHECK=$enableval, THIN_CHECK_NEEDS_CHECK=yes)
+	      THIN_CHECK_NEEDS_CHECK=$enableval, THIN_CHECK_NEEDS_CHECK="yes")
 
 # Test if necessary thin tools are available
 # if not - use plain defaults and warn user
-case "$THIN" in
-  internal|shared)
+AS_CASE(["$THIN"],
+	[internal|shared], [
 	# Empty means a config way to ignore thin checking
-	if test "$THIN_CHECK_CMD" = "autodetect"; then
+	AS_IF([test "$THIN_CHECK_CMD" = "autodetect"], [
 		AC_PATH_TOOL(THIN_CHECK_CMD, thin_check, [], [$PATH_SBIN])
-		if test -z "$THIN_CHECK_CMD"; then
-			AC_MSG_WARN([thin_check not found in path $PATH])
-			THIN_CHECK_CMD=/usr/sbin/thin_check
-			THIN_CONFIGURE_WARN=y
-		fi
-	fi
-	if test "$THIN_CHECK_NEEDS_CHECK" = yes && test "$THIN_CONFIGURE_WARN" != y ; then
-		THIN_CHECK_VSN=`"$THIN_CHECK_CMD" -V 2>/dev/null`
-		THIN_CHECK_VSN_MAJOR=`echo "$THIN_CHECK_VSN" | $AWK -F '.' '{print $1}'`
-		THIN_CHECK_VSN_MINOR=`echo "$THIN_CHECK_VSN" | $AWK -F '.' '{print $2}'`
+		AS_IF([test -z "$THIN_CHECK_CMD"], [
+			AC_MSG_WARN([thin_check not found in path $PATH_SBIN])
+			THIN_CHECK_CMD="/usr/sbin/thin_check"
+			THIN_CONFIGURE_WARN="y"
+		])
+	])
+	AS_IF([test "$THIN_CHECK_NEEDS_CHECK" = "yes" && test "$THIN_CONFIGURE_WARN" != "y"], [
+		THIN_CHECK_VSN=$("$THIN_CHECK_CMD" -V 2>/dev/null)
+		THIN_CHECK_VSN=${THIN_CHECK_VSN##* }  # trim away all before the first space
+		THIN_CHECK_VSN_MAJOR=$(echo "$THIN_CHECK_VSN" | $AWK -F '.' '{print $1}')
+		THIN_CHECK_VSN_MINOR=$(echo "$THIN_CHECK_VSN" | $AWK -F '.' '{print $2}')
 
-		if test -z "$THIN_CHECK_VSN_MAJOR" -o -z "$THIN_CHECK_VSN_MINOR"; then
+		AS_IF([test -z "$THIN_CHECK_VSN_MAJOR" || test -z "$THIN_CHECK_VSN_MINOR"], [
 			AC_MSG_WARN([$THIN_CHECK_CMD: Bad version "$THIN_CHECK_VSN" found])
-			THIN_CHECK_VERSION_WARN=y
-			THIN_CHECK_NEEDS_CHECK=no
-		elif test "$THIN_CHECK_VSN_MAJOR" -eq 0 -a "$THIN_CHECK_VSN_MINOR" -lt 3; then
+			THIN_CHECK_VERSION_WARN="y"
+			THIN_CHECK_NEEDS_CHECK="no"
+		], [test "$THIN_CHECK_VSN_MAJOR" -eq 0 && test "$THIN_CHECK_VSN_MINOR" -lt 3], [
 			AC_MSG_WARN([$THIN_CHECK_CMD: Old version "$THIN_CHECK_VSN" found])
-			THIN_CHECK_VERSION_WARN=y
-			THIN_CHECK_NEEDS_CHECK=no
-		fi
-	fi
+			THIN_CHECK_VERSION_WARN="y"
+			THIN_CHECK_NEEDS_CHECK="no"
+		])
+	])
 	# Empty means a config way to ignore thin dumping
-	if test "$THIN_DUMP_CMD" = "autodetect"; then
+	AS_IF([test "$THIN_DUMP_CMD" = "autodetect"], [
 		AC_PATH_TOOL(THIN_DUMP_CMD, thin_dump, [], [$PATH_SBIN])
-		test -z "$THIN_DUMP_CMD" && {
-			AC_MSG_WARN(thin_dump not found in path $PATH)
-			THIN_DUMP_CMD=/usr/sbin/thin_dump
-			THIN_CONFIGURE_WARN=y
-		}
-	fi
+		AS_IF([test -z "$THIN_DUMP_CMD"], [
+			AC_MSG_WARN(["thin_dump not found in path $PATH_SBIN"])
+			THIN_DUMP_CMD="/usr/sbin/thin_dump"
+			THIN_CONFIGURE_WARN="y"
+		])
+	])
 	# Empty means a config way to ignore thin repairing
-	if test "$THIN_REPAIR_CMD" = "autodetect"; then
+	AS_IF([test "$THIN_REPAIR_CMD" = "autodetect"], [
 		AC_PATH_TOOL(THIN_REPAIR_CMD, thin_repair, [], [$PATH_SBIN])
-		test -z "$THIN_REPAIR_CMD" && {
-			AC_MSG_WARN(thin_repair not found in path $PATH)
-			THIN_REPAIR_CMD=/usr/sbin/thin_repair
-			THIN_CONFIGURE_WARN=y
-		}
-	fi
+		AS_IF([test -z "$THIN_REPAIR_CMD"], [
+			AC_MSG_WARN(["thin_repair not found in path $PATH_SBIN"])
+			THIN_REPAIR_CMD="/usr/sbin/thin_repair"
+			THIN_CONFIGURE_WARN="y"
+		])
+	])
 	# Empty means a config way to ignore thin restoring
-	if test "$THIN_RESTORE_CMD" = "autodetect"; then
+	AS_IF([test "$THIN_RESTORE_CMD" = "autodetect"], [
 		AC_PATH_TOOL(THIN_RESTORE_CMD, thin_restore, [], [$PATH_SBIN])
-		test -z "$THIN_RESTORE_CMD" && {
-			AC_MSG_WARN(thin_restore not found in path $PATH)
-			THIN_RESTORE_CMD=/usr/sbin/thin_restore
-			THIN_CONFIGURE_WARN=y
-		}
-	fi
+		AS_IF([test -z "$THIN_RESTORE_CMD"], [
+			AC_MSG_WARN(["thin_restore not found in path $PATH_SBIN"])
+			THIN_RESTORE_CMD="/usr/sbin/thin_restore"
+			THIN_CONFIGURE_WARN="y"
+		])
+	])
 
-	AC_MSG_CHECKING([whether thin_check supports the needs-check flag])
+	AC_MSG_CHECKING([whether $THIN_CHECK_CMD ($THIN_CHECK_VSN_MAJOR.$THIN_CHECK_VSN_MINOR) supports the needs-check flag])
 	AC_MSG_RESULT([$THIN_CHECK_NEEDS_CHECK])
-	if test "$THIN_CHECK_NEEDS_CHECK" = yes; then
+	AS_IF([test "$THIN_CHECK_NEEDS_CHECK" = "yes"], [
 		AC_DEFINE([THIN_CHECK_NEEDS_CHECK], 1, [Define to 1 if the external 'thin_check' tool requires the --clear-needs-check-flag option])
-	fi
-	;;
-esac
+	])
+])
 
 AC_DEFINE_UNQUOTED([THIN_CHECK_CMD], ["$THIN_CHECK_CMD"],
 		   [The path to 'thin_check', if available.])
@@ -491,7 +504,7 @@ AC_DEFINE_UNQUOTED([THIN_RESTORE_CMD], ["$THIN_RESTORE_CMD"],
 
 ################################################################################
 dnl -- cache inclusion type
-AC_MSG_CHECKING(whether to include cache)
+AC_MSG_CHECKING([whether to include cache])
 AC_ARG_WITH(cache,
 	    AS_HELP_STRING([--with-cache=TYPE],
 			   [cache support: internal/none [internal]]),
@@ -512,94 +525,94 @@ AC_ARG_WITH(cache-restore,
 	    AS_HELP_STRING([--with-cache-restore=PATH],
 			   [cache_restore tool: [autodetect]]),
 			   CACHE_RESTORE_CMD=$withval, CACHE_RESTORE_CMD="autodetect")
-AC_MSG_RESULT($CACHE)
+AC_MSG_RESULT([$CACHE])
 
-case "$CACHE" in
- no|none|shared) ;;
- internal) AC_DEFINE([CACHE_INTERNAL], 1, [Define to 1 to include built-in support for cache.]) ;;
- *) AC_MSG_ERROR([--with-cache parameter invalid]) ;;
-esac
+AS_CASE(["$CACHE"],
+	[no|none|shared], [],
+	[internal], [
+		AC_DEFINE([CACHE_INTERNAL], 1, [Define to 1 to include built-in support for cache.])],
+	[AC_MSG_ERROR([--with-cache parameter invalid])])
 
 dnl -- cache_check needs-check flag
 AC_ARG_ENABLE(cache_check_needs_check,
 	      AS_HELP_STRING([--disable-cache_check_needs_check],
 			     [required if cache_check version is < 0.5]),
-	      CACHE_CHECK_NEEDS_CHECK=$enableval, CACHE_CHECK_NEEDS_CHECK=yes)
+	      CACHE_CHECK_NEEDS_CHECK=$enableval, CACHE_CHECK_NEEDS_CHECK="yes")
 
 # Test if necessary cache tools are available
 # if not - use plain defaults and warn user
-case "$CACHE" in
-  internal|shared)
+AS_CASE(["$CACHE"],
+	[internal|shared], [
 	# Empty means a config way to ignore cache checking
-	if test "$CACHE_CHECK_CMD" = "autodetect"; then
+	AS_IF([test "$CACHE_CHECK_CMD" = "autodetect"], [
 		AC_PATH_TOOL(CACHE_CHECK_CMD, cache_check, [], [$PATH_SBIN])
-		if test -z "$CACHE_CHECK_CMD"; then
-			AC_MSG_WARN([cache_check not found in path $PATH])
-			CACHE_CHECK_CMD=/usr/sbin/cache_check
-			CACHE_CONFIGURE_WARN=y
-		fi
-	fi
-	if test "$CACHE_CHECK_NEEDS_CHECK" = yes && test "$CACHE_CONFIGURE_WARN" != y ; then
-		$CACHE_CHECK_CMD -V 2>/dev/null >conftest.tmp
+		AS_IF([test -z "$CACHE_CHECK_CMD"], [
+			AC_MSG_WARN([cache_check not found in path $PATH_SBIN])
+			CACHE_CHECK_CMD="/usr/sbin/cache_check"
+			CACHE_CONFIGURE_WARN="y"
+		])
+	])
+	AS_IF([test "$CACHE_CHECK_NEEDS_CHECK" = "yes" && test "$CACHE_CONFIGURE_WARN" != "y"], [
+		"$CACHE_CHECK_CMD" -V 2>/dev/null >conftest.tmp
 		read -r CACHE_CHECK_VSN < conftest.tmp
 		IFS=.- read -r CACHE_CHECK_VSN_MAJOR CACHE_CHECK_VSN_MINOR CACHE_CHECK_VSN_PATCH LEFTOVER < conftest.tmp
 		rm -f conftest.tmp
 
 		# Require version >= 0.5.4 for --clear-needs-check-flag
-		if test -z "$CACHE_CHECK_VSN_MAJOR" \
+		CACHE_CHECK_VSN_MAJOR=${CACHE_CHECK_VSN_MAJOR##* }
+		AS_IF([test -z "$CACHE_CHECK_VSN_MAJOR" \
 			|| test -z "$CACHE_CHECK_VSN_MINOR" \
-			|| test -z "$CACHE_CHECK_VSN_PATCH"; then
+			|| test -z "$CACHE_CHECK_VSN_PATCH"], [
 			AC_MSG_WARN([$CACHE_CHECK_CMD: Bad version "$CACHE_CHECK_VSN" found])
-			CACHE_CHECK_VERSION_WARN=y
-			CACHE_CHECK_NEEDS_CHECK=no
-		elif test "$CACHE_CHECK_VSN_MAJOR" -eq 0 ; then
-			if test "$CACHE_CHECK_VSN_MINOR" -lt 5 \
-				|| test "$CACHE_CHECK_VSN_MINOR" -eq 5 -a "$CACHE_CHECK_VSN_PATCH" -lt 4; then
+			CACHE_CHECK_VERSION_WARN="y"
+			CACHE_CHECK_NEEDS_CHECK="no"
+		], [test "$CACHE_CHECK_VSN_MAJOR" -eq 0], [
+			AS_IF([test "$CACHE_CHECK_VSN_MINOR" -lt 5 \
+				|| ( test "$CACHE_CHECK_VSN_MINOR" -eq 5 && test "$CACHE_CHECK_VSN_PATCH" -lt 4 )], [
 				AC_MSG_WARN([$CACHE_CHECK_CMD: Old version "$CACHE_CHECK_VSN" found])
-				CACHE_CHECK_VERSION_WARN=y
-				CACHE_CHECK_NEEDS_CHECK=no
-			fi
-			if test "$CACHE_CHECK_VSN_MINOR" -lt 7 ; then
+				CACHE_CHECK_VERSION_WARN="y"
+				CACHE_CHECK_NEEDS_CHECK="no"
+			])
+			AS_IF([test "$CACHE_CHECK_VSN_MINOR" -lt 7], [
 				AC_MSG_WARN([$CACHE_CHECK_CMD: Old version "$CACHE_CHECK_VSN" does not support new cache format V2])
 				CACHE_CHECK_VERSION_WARN=y
-			fi
-		fi
-	fi
+			])
+		])
+	])
 	# Empty means a config way to ignore cache dumping
-	if test "$CACHE_DUMP_CMD" = "autodetect"; then
+	AS_IF([test "$CACHE_DUMP_CMD" = "autodetect"], [
 		AC_PATH_TOOL(CACHE_DUMP_CMD, cache_dump, [], [$PATH_SBIN])
-		test -z "$CACHE_DUMP_CMD" && {
-			AC_MSG_WARN(cache_dump not found in path $PATH)
-			CACHE_DUMP_CMD=/usr/sbin/cache_dump
-			CACHE_CONFIGURE_WARN=y
-		}
-	fi
+		AS_IF([test -z "$CACHE_DUMP_CMD"], [
+			AC_MSG_WARN(["cache_dump not found in path $PATH_SBIN"])
+			CACHE_DUMP_CMD="/usr/sbin/cache_dump"
+			CACHE_CONFIGURE_WARN="y"
+		])
+	])
 	# Empty means a config way to ignore cache repairing
-	if test "$CACHE_REPAIR_CMD" = "autodetect"; then
+	AS_IF([test "$CACHE_REPAIR_CMD" = "autodetect"], [
 		AC_PATH_TOOL(CACHE_REPAIR_CMD, cache_repair, [], [$PATH_SBIN])
-		test -z "$CACHE_REPAIR_CMD" && {
-			AC_MSG_WARN(cache_repair not found in path $PATH)
-			CACHE_REPAIR_CMD=/usr/sbin/cache_repair
-			CACHE_CONFIGURE_WARN=y
-		}
-	fi
+		AS_IF([test -z "$CACHE_REPAIR_CMD"], [
+			AC_MSG_WARN(["cache_repair not found in path $PATH_SBIN"])
+			CACHE_REPAIR_CMD="/usr/sbin/cache_repair"
+			CACHE_CONFIGURE_WARN="y"
+		])
+	])
 	# Empty means a config way to ignore cache restoring
-	if test "$CACHE_RESTORE_CMD" = "autodetect"; then
+	AS_IF([test "$CACHE_RESTORE_CMD" = "autodetect"], [
 		AC_PATH_TOOL(CACHE_RESTORE_CMD, cache_restore, [], [$PATH_SBIN])
-		test -z "$CACHE_RESTORE_CMD" && {
-			AC_MSG_WARN(cache_restore not found in path $PATH)
-			CACHE_RESTORE_CMD=/usr/sbin/cache_restore
-			CACHE_CONFIGURE_WARN=y
-		}
-	fi
+		AS_IF([test -z "$CACHE_RESTORE_CMD"], [
+			AC_MSG_WARN(["cache_restore not found in path $PATH_SBIN"])
+			CACHE_RESTORE_CMD="/usr/sbin/cache_restore"
+			CACHE_CONFIGURE_WARN="y"
+		])
+	])
 
-	AC_MSG_CHECKING([whether cache_check supports the needs-check flag])
+	AC_MSG_CHECKING([whether $CACHE_CHECK_CMD ($CACHE_CHECK_VSN_MAJOR.$CACHE_CHECK_VSN_MINOR.$CACHE_CHECK_VSN_PATCH) supports the needs-check flag])
 	AC_MSG_RESULT([$CACHE_CHECK_NEEDS_CHECK])
-	if test "$CACHE_CHECK_NEEDS_CHECK" = yes; then
+	AS_IF([test "$CACHE_CHECK_NEEDS_CHECK" = "yes"], [
 		AC_DEFINE([CACHE_CHECK_NEEDS_CHECK], 1, [Define to 1 if the external 'cache_check' tool requires the --clear-needs-check-flag option])
-	fi
-	;;
-esac
+	])
+])
 
 AC_DEFINE_UNQUOTED([CACHE_CHECK_CMD], ["$CACHE_CHECK_CMD"],
 		   [The path to 'cache_check', if available.])
@@ -615,147 +628,120 @@ AC_DEFINE_UNQUOTED([CACHE_RESTORE_CMD], ["$CACHE_RESTORE_CMD"],
 
 ################################################################################
 dnl -- cache inclusion type
-AC_MSG_CHECKING(whether to include vdo)
+AC_MSG_CHECKING([whether to include vdo])
 AC_ARG_WITH(vdo,
 	    AS_HELP_STRING([--with-vdo=TYPE],
 			   [vdo support: internal/none [internal]]),
 			   VDO=$withval, VDO="internal")
 
-AC_MSG_RESULT($VDO)
+AC_MSG_RESULT([$VDO])
 
 AC_ARG_WITH(vdo-format,
 	    AS_HELP_STRING([--with-vdo-format=PATH],
 			   [vdoformat tool: [autodetect]]),
 			   VDO_FORMAT_CMD=$withval, VDO_FORMAT_CMD="autodetect")
-case "$VDO" in
- no|none) ;;
- internal)
-	AC_DEFINE([VDO_INTERNAL], 1, [Define to 1 to include built-in support for vdo.])
-	if test "$VDO_FORMAT_CMD" = "autodetect"; then
-		AC_PATH_TOOL(VDO_FORMAT_CMD, vdoformat, [], [$PATH])
-		if test -z "$VDO_FORMAT_CMD"; then
-			AC_MSG_WARN([vdoformat not found in path $PATH])
-			VDO_FORMAT_CMD=/usr/bin/vdoformat
-			VDO_CONFIGURE_WARN=y
-		fi
-	fi
-	;;
- *) AC_MSG_ERROR([--with-vdo parameter invalid]) ;;
-esac
+AS_CASE(["$VDO"],
+	[no|none], [],
+	[internal], [
+		AC_DEFINE([VDO_INTERNAL], 1, [Define to 1 to include built-in support for vdo.])
+		AS_IF([test "$VDO_FORMAT_CMD" = "autodetect"], [
+			AC_PATH_TOOL(VDO_FORMAT_CMD, vdoformat, [], [$PATH])
+			AS_IF([test -z "$VDO_FORMAT_CMD"], [
+				AC_MSG_WARN([vdoformat not found in path $PATH])
+				VDO_FORMAT_CMD="/usr/bin/vdoformat"
+				VDO_CONFIGURE_WARN=y
+			])
+		])],
+	[AC_MSG_ERROR([--with-vdo parameter invalid])])
 
 AC_DEFINE_UNQUOTED([VDO_FORMAT_CMD], ["$VDO_FORMAT_CMD"],
 		   [The path to 'vdoformat', if available.])
 #
 # Do we need to use the API??
-# Do we want to link lvm2 with a big library for vdoformating ?
+# Do we want to link lvm2 with a big library for VDO formatting ?
 #
 #AC_ARG_WITH(vdo-include,
 #	    AS_HELP_STRING([--with-vdo-include=PATH],
 #			   [vdo support: Path to utils headers: [/usr/include/vdo/utils]]),
 #			   VDO_INCLUDE=$withval, VDO_INCLUDE="/usr/include/vdo/utils")
-#AC_MSG_RESULT($VDO_INCLUDE)
+#AC_MSG_RESULT([$VDO_INCLUDE])
 #
 #AC_ARG_WITH(vdo-lib,
 #            AS_HELP_STRING([--with-vdo-lib=PATH],
 #                           [vdo support: Path to utils lib: [/usr/lib]]),
 #                           VDO_LIB=$withval, VDO_LIB="/usr/lib")
-#AC_MSG_RESULT($VDO_LIB)
+#AC_MSG_RESULT([$VDO_LIB])
 
 ################################################################################
 dnl -- writecache inclusion type
-AC_MSG_CHECKING(whether to include writecache)
+AC_MSG_CHECKING([whether to include writecache])
 AC_ARG_WITH(writecache,
 	    AS_HELP_STRING([--with-writecache=TYPE],
 			   [writecache support: internal/none [internal]]),
 			   WRITECACHE=$withval, WRITECACHE="internal")
 
-AC_MSG_RESULT($WRITECACHE)
+AC_MSG_RESULT([$WRITECACHE])
 
-case "$WRITECACHE" in
- no|none) ;;
- internal)
-	AC_DEFINE([WRITECACHE_INTERNAL], 1, [Define to 1 to include built-in support for writecache.])
-	;;
- *) AC_MSG_ERROR([--with-writecache parameter invalid]) ;;
-esac
+AS_CASE(["$WRITECACHE"],
+	[no|none], [],
+	[internal], [
+		AC_DEFINE([WRITECACHE_INTERNAL], 1, [Define to 1 to include built-in support for writecache.])],
+	[AC_MSG_ERROR([--with-writecache parameter invalid])])
 
 ################################################################################
 dnl -- integrity inclusion type
-AC_MSG_CHECKING(whether to include integrity)
+AC_MSG_CHECKING([whether to include integrity])
 AC_ARG_WITH(integrity,
 	    AS_HELP_STRING([--with-integrity=TYPE],
 			   [integrity support: internal/none [internal]]),
 			   INTEGRITY=$withval, INTEGRITY="internal")
 
-AC_MSG_RESULT($INTEGRITY)
+AC_MSG_RESULT([$INTEGRITY])
 
-case "$INTEGRITY" in
- no|none) ;;
- internal)
-	AC_DEFINE([INTEGRITY_INTERNAL], 1, [Define to 1 to include built-in support for integrity.])
-	;;
- *) AC_MSG_ERROR([--with-integrity parameter invalid]) ;;
-esac
-
-################################################################################
-# Allow users to override default location for libaio
-# there seems to be no pkg-config support available
-AIO_CFLAGS=
-AIO_LIBS=${AIO_LIBS:--laio}
-AC_ARG_VAR([AIO_CFLAGS], [C compiler flags for AIO])
-AC_ARG_VAR([AIO_LIBS], [linker flags for AIO])
+AS_CASE(["$INTEGRITY"],
+	[no|none], [],
+	[internal], [
+		AC_DEFINE([INTEGRITY_INTERNAL], 1, [Define to 1 to include built-in support for integrity.])],
+	[AC_MSG_ERROR([--with-integrity parameter invalid])])
 
 ################################################################################
 dnl -- Disable readline
 AC_ARG_ENABLE([readline],
 	      AS_HELP_STRING([--disable-readline], [disable readline support]),
-	      READLINE=$enableval, READLINE=maybe)
+	      READLINE=$enableval, READLINE="maybe")
 
 ################################################################################
 dnl -- Disable editline
 AC_ARG_ENABLE([editline],
 	      AS_HELP_STRING([--enable-editline], [enable editline support]),
-	      EDITLINE=$enableval, EDITLINE=no)
+	      EDITLINE=$enableval, EDITLINE="no")
 
 ################################################################################
 dnl -- Disable realtime clock support
-AC_MSG_CHECKING(whether to enable realtime support)
+AC_MSG_CHECKING([whether to enable realtime support])
 AC_ARG_ENABLE(realtime,
 	      AS_HELP_STRING([--disable-realtime], [disable realtime clock support]),
-	      REALTIME=$enableval, REALTIME=yes)
-AC_MSG_RESULT($REALTIME)
+	      REALTIME=$enableval, REALTIME="yes")
+AC_MSG_RESULT([$REALTIME])
 
 ################################################################################
 dnl -- disable OCF resource agents
-AC_MSG_CHECKING(whether to enable OCF resource agents)
+AC_MSG_CHECKING([whether to enable OCF resource agents])
 AC_ARG_ENABLE(ocf,
 	      AS_HELP_STRING([--enable-ocf],
 			     [enable Open Cluster Framework (OCF) compliant resource agents]),
-	      OCF=$enableval, OCF=no)
-AC_MSG_RESULT($OCF)
+	      OCF=$enableval, OCF="no")
+AC_MSG_RESULT([$OCF])
 AC_ARG_WITH(ocfdir,
 	    AS_HELP_STRING([--with-ocfdir=DIR],
 			   [install OCF files in [PREFIX/lib/ocf/resource.d/lvm2]]),
 	    OCFDIR=$withval, OCFDIR='${prefix}/lib/ocf/resource.d/lvm2')
 
 ################################################################################
-dnl -- Init pkg-config with dummy invokation:
-dnl -- this is required because PKG_CHECK_MODULES macro is expanded
-dnl -- to initialize the pkg-config environment only at the first invokation,
-dnl -- that would be conditional in this configure.in.
-pkg_config_init() {
-	if test "$PKGCONFIG_INIT" != 1; then
-		PKG_CHECK_MODULES(PKGCONFIGINIT, pkgconfiginit, [],
-				  [AC_MSG_RESULT([pkg-config initialized])])
-		PKGCONFIG_INIT=1
-	fi
-}
-
-################################################################################
-AC_MSG_CHECKING(for default run directory)
+AC_MSG_CHECKING([for default run directory])
 RUN_DIR="/run"
-test -d "/run" || RUN_DIR="/var/run"
-AC_MSG_RESULT($RUN_DIR)
+AS_IF([test ! -d "$RUN_DIR"], [RUN_DIR="/var/run"])
+AC_MSG_RESULT([$RUN_DIR])
 dnl -- Set up pidfile and run directory
 AH_TEMPLATE(DEFAULT_PID_DIR)
 AC_ARG_WITH(default-pid-dir,
@@ -783,18 +769,16 @@ AC_DEFINE_UNQUOTED(DEFAULT_RUN_DIR, ["$DEFAULT_RUN_DIR"],
 
 ################################################################################
 dnl -- Build cluster mirror log daemon
-AC_MSG_CHECKING(whether to build cluster mirror log daemon)
+AC_MSG_CHECKING([whether to build cluster mirror log daemon])
 AC_ARG_ENABLE(cmirrord,
 	      AS_HELP_STRING([--enable-cmirrord],
 			     [enable the cluster mirror log daemon]),
-	      CMIRRORD=$enableval, CMIRRORD=no)
-AC_MSG_RESULT($CMIRRORD)
-
-BUILD_CMIRRORD=$CMIRRORD
+	      BUILD_CMIRRORD=$enableval, BUILD_CMIRRORD="no")
+AC_MSG_RESULT([$BUILD_CMIRRORD])
 
 ################################################################################
 dnl -- cmirrord pidfile
-if test "$BUILD_CMIRRORD" = yes; then
+AS_IF([test "$BUILD_CMIRRORD" = "yes"], [
 	AC_ARG_WITH(cmirrord-pidfile,
 		    AS_HELP_STRING([--with-cmirrord-pidfile=PATH],
 				   [cmirrord pidfile [PID_DIR/cmirrord.pid]]),
@@ -802,31 +786,23 @@ if test "$BUILD_CMIRRORD" = yes; then
 		    CMIRRORD_PIDFILE="$DEFAULT_PID_DIR/cmirrord.pid")
 	AC_DEFINE_UNQUOTED(CMIRRORD_PIDFILE, ["$CMIRRORD_PIDFILE"],
 			   [Path to cmirrord pidfile.])
-fi
+])
 
 ################################################################################
 dnl -- Look for corosync libraries if required.
-if [[ "$BUILD_CMIRRORD" = yes ]]; then
-	pkg_config_init
-
-	if test "$HAVE_CPG" != yes; then
-		PKG_CHECK_MODULES(CPG, libcpg)
-	fi
-fi
+AS_IF([test "$BUILD_CMIRRORD" = "yes" && test "$HAVE_CPG" != "yes"], [
+	PKG_CHECK_MODULES([CPG], [libcpg])
+])
 
 ################################################################################
 dnl -- Enable debugging
-AC_MSG_CHECKING(whether to enable debugging)
+AC_MSG_CHECKING([whether to enable debugging])
 AC_ARG_ENABLE(debug, AS_HELP_STRING([--enable-debug], [enable debugging]),
-	      DEBUG=$enableval, DEBUG=no)
-AC_MSG_RESULT($DEBUG)
+	      DEBUG=$enableval, DEBUG="no")
+AC_MSG_RESULT([$DEBUG])
 
 dnl -- Normally turn off optimisation for debug builds
-if test "$DEBUG" = yes; then
-	COPTIMISE_FLAG=
-else
-	CSCOPE_CMD=
-fi
+AS_IF([test "$DEBUG" = "yes"], [COPTIMISE_FLAG=""], [CSCOPE_CMD=""])
 
 dnl -- Check if compiler supports -Wjump-misses-init
 AC_TRY_CCFLAG([-Wjump-misses-init], [HAVE_WJUMP], [], [])
@@ -838,63 +814,63 @@ AC_SUBST(HAVE_WSYNCNAND)
 
 ################################################################################
 dnl -- Override optimisation
-AC_MSG_CHECKING(for C optimisation flag)
+AC_MSG_CHECKING([for C optimisation flag])
 AC_ARG_WITH(optimisation,
 	    AS_HELP_STRING([--with-optimisation=OPT],
 			   [C optimisation flag [OPT=-O2]]),
 	    COPTIMISE_FLAG=$withval)
-AC_MSG_RESULT($COPTIMISE_FLAG)
+AC_MSG_RESULT([$COPTIMISE_FLAG])
 
 ################################################################################
 dnl -- Symbol versioning
-AC_MSG_CHECKING(whether to use symbol versioning)
+AC_MSG_CHECKING([whether to use symbol versioning])
 AC_ARG_WITH(symvers,
-	    AS_HELP_STRING([--with-symvers=STYLE],
-			   [use symbol versioning of the shared library [default=gnu]]),
-			   [ case "$withval" in
-				gnu|no) symvers=$withval ;;
-				*) AC_MSG_ERROR(--with-symvers parameter invalid) ;;
-			     esac], symvers=gnu)
-AC_MSG_RESULT($symvers)
+	AS_HELP_STRING([--with-symvers=STYLE],
+		       [use symbol versioning of the shared library [default=gnu]]), [
+			AS_CASE(["$withval"],
+				[gnu|no], [symvers=$withval],
+				[AC_MSG_ERROR(--with-symvers parameter invalid)])],
+		       [symvers="gnu"])
+AC_MSG_RESULT([$symvers])
 
-if test "$GCC" = "yes" && test "$symvers" = "gnu" ; then
+AS_IF([test "$GCC" = "yes" && test "$symvers" = "gnu"], [
 	AC_DEFINE(GNU_SYMVER, 1,
 		  [Define to use GNU versioning in the shared library.])
-		   case "$host_os" in
-			linux*)
-			CLDFLAGS="${CLDFLAGS-"$LDFLAGS"} -Wl,--version-script,.export.sym"
-			LDDEPS="$LDDEPS .export.sym"
-			;;
-		   esac
-fi
+	AS_CASE(["$host_os"],
+		[linux*], [
+			CLDFLAGS="-Wl,--version-script,.export.sym"
+			LDDEPS="$LDDEPS .export.sym"])
+])
 
 ################################################################################
 dnl -- Enable profiling
-AC_MSG_CHECKING(whether to gather gcov profiling data)
+AC_MSG_CHECKING([whether to gather gcov profiling data])
 AC_ARG_ENABLE(profiling,
 	      AS_HELP_STRING([--enable-profiling],
 			     [gather gcov profiling data]),
-	      PROFILING=$enableval, PROFILING=no)
-AC_MSG_RESULT($PROFILING)
+	      PROFILING=$enableval, PROFILING="no")
+AC_MSG_RESULT([$PROFILING])
 
-if test "$PROFILING" = yes; then
-  COPTIMISE_FLAG="$COPTIMISE_FLAG -fprofile-arcs -ftest-coverage"
+AS_IF([test "$PROFILING" = "yes"], [
+  COPTIMISE_FLAG="$COPTIMISE_FLAG -fprofile-arcs -fprofile-update=atomic -ftest-coverage"
   AC_PATH_TOOL(LCOV, lcov)
   AC_PATH_TOOL(GENHTML, genhtml)
-  test -z "$LCOV" -o -z "$GENHTML" && AC_MSG_ERROR([lcov and genhtml are required for profiling])
+  AS_IF([test -z "$LCOV" || test -z "$GENHTML"], [
+    AC_MSG_ERROR([lcov and genhtml are required for profiling])
+  ])
   AC_PATH_TOOL(GENPNG, genpng)
-  if test -n "$GENPNG"; then
+  AS_IF([test -n "$GENPNG"], [
     AC_MSG_CHECKING([whether $GENPNG has all required modules])
-    if "$GENPNG" --help > /dev/null 2>&1 ; then
-      AC_MSG_RESULT(ok)
+    AS_IF(["$GENPNG" --help > /dev/null 2>&1], [
+      AC_MSG_RESULT([ok])
       GENHTML="$GENHTML --frames"
-    else
+    ], [
       AC_MSG_RESULT([not supported])
       AC_MSG_WARN([GD.pm perl module is not installed])
       GENPNG=
-    fi
-  fi
-fi
+    ])
+  ])
+])
 
 ################################################################################
 dnl -- Set LVM2 testsuite data
@@ -904,140 +880,133 @@ AC_DEFINE_UNQUOTED(TESTSUITE_DATA, ["$(eval echo $(eval echo $TESTSUITE_DATA))"]
 
 ################################################################################
 dnl -- Enable valgrind awareness of memory pools
-AC_MSG_CHECKING(whether to enable valgrind awareness of pools)
+AC_MSG_CHECKING([whether to enable valgrind awareness of pools])
 AC_ARG_ENABLE(valgrind_pool,
 	      AS_HELP_STRING([--enable-valgrind-pool],
 			     [enable valgrind awareness of pools]),
-	      VALGRIND_POOL=$enableval, VALGRIND_POOL=no)
-AC_MSG_RESULT($VALGRIND_POOL)
+	      VALGRIND_POOL=$enableval, VALGRIND_POOL="no")
+AC_MSG_RESULT([$VALGRIND_POOL])
 
-pkg_config_init
-PKG_CHECK_MODULES(VALGRIND, valgrind, [HAVE_VALGRIND=yes], [if test x$VALGRIND_POOL = xyes; then AC_MSG_ERROR(bailing out); fi])
+PKG_CHECK_MODULES(VALGRIND, valgrind, [HAVE_VALGRIND="yes"], [
+  AS_IF([test "$VALGRIND_POOL" = "yes"], [AC_MSG_ERROR(bailing out)])
+])
 AC_SUBST(VALGRIND_CFLAGS)
 
-if test x$HAVE_VALGRIND = xyes; then
+AS_IF([test "$HAVE_VALGRIND" = "yes"], [
 	AC_DEFINE([HAVE_VALGRIND], 1, [valgrind.h found])
-fi
+])
 
-if test x$VALGRIND_POOL = xyes; then
+AS_IF([test "$VALGRIND_POOL" = "yes"], [
 	AC_DEFINE([VALGRIND_POOL], 1, [Enable a valgrind aware build of pool])
-fi
+])
 
 ################################################################################
 dnl -- Disable devmapper
-AC_MSG_CHECKING(whether to use device-mapper)
+AC_MSG_CHECKING([whether to use device-mapper])
 AC_ARG_ENABLE(devmapper,
 	      AS_HELP_STRING([--disable-devmapper],
 			     [disable LVM2 device-mapper interaction]),
 	      DEVMAPPER=$enableval)
-AC_MSG_RESULT($DEVMAPPER)
+AC_MSG_RESULT([$DEVMAPPER])
 
-if test "$DEVMAPPER" = yes; then
+AS_IF([test "$DEVMAPPER" = "yes"], [
 	AC_DEFINE([DEVMAPPER_SUPPORT], 1, [Define to 1 to enable LVM2 device-mapper interaction.])
-fi
+])
 
 ################################################################################
 dnl -- Build lvmpolld
-AC_MSG_CHECKING(whether to build lvmpolld)
+AC_MSG_CHECKING([whether to build lvmpolld])
 AC_ARG_ENABLE(lvmpolld,
 	      AS_HELP_STRING([--enable-lvmpolld],
 			     [enable the LVM Polling Daemon]),
-	      LVMPOLLD=$enableval, LVMPOLLD=no)
-test -n "$LVMPOLLD" && BUILD_LVMPOLLD=$LVMPOLLD
-AC_MSG_RESULT($BUILD_LVMPOLLD)
+	      BUILD_LVMPOLLD=$enableval, BUILD_LVMPOLLD="no")
+AC_MSG_RESULT([$BUILD_LVMPOLLD])
 
 ################################################################################
 BUILD_LVMLOCKD=no
 
 dnl -- Build lvmlockdsanlock
-AC_MSG_CHECKING(whether to build lvmlockdsanlock)
+AC_MSG_CHECKING([whether to build lvmlockdsanlock])
 AC_ARG_ENABLE(lvmlockd-sanlock,
 	      AS_HELP_STRING([--enable-lvmlockd-sanlock],
 			     [enable the LVM lock daemon using sanlock]),
-	      LOCKDSANLOCK=$enableval, LOCKDSANLOCK=no)
-AC_MSG_RESULT($LOCKDSANLOCK)
-
-BUILD_LOCKDSANLOCK=$LOCKDSANLOCK
+	      BUILD_LOCKDSANLOCK=$enableval, BUILD_LOCKDSANLOCK="no")
+AC_MSG_RESULT([$BUILD_LOCKDSANLOCK])
 
 dnl -- Look for sanlock libraries
-if test "$BUILD_LOCKDSANLOCK" = yes; then
-	PKG_CHECK_MODULES(LOCKD_SANLOCK, libsanlock_client >= 3.3.0, [HAVE_LOCKD_SANLOCK=yes], $bailout)
+AS_IF([test "$BUILD_LOCKDSANLOCK" = "yes"], [
+	PKG_CHECK_MODULES(LIBSANLOCKCLIENT, libsanlock_client >= 3.7.0, [BUILD_LVMLOCKD="yes"])
 	AC_DEFINE([LOCKDSANLOCK_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd sanlock option.])
-	BUILD_LVMLOCKD=yes
-fi
+])
 
 ################################################################################
 dnl -- Build lvmlockddlm
-AC_MSG_CHECKING(whether to build lvmlockddlm)
+AC_MSG_CHECKING([whether to build lvmlockddlm])
 AC_ARG_ENABLE(lvmlockd-dlm,
 	      AS_HELP_STRING([--enable-lvmlockd-dlm],
 			     [enable the LVM lock daemon using dlm]),
-	      LOCKDDLM=$enableval, LOCKDDLM=no)
-AC_MSG_RESULT($LOCKDDLM)
-
-BUILD_LOCKDDLM=$LOCKDDLM
+	      BUILD_LOCKDDLM=$enableval, BUILD_LOCKDDLM="no")
+AC_MSG_RESULT([$BUILD_LOCKDDLM])
 
 dnl -- Look for dlm libraries
-if test "$BUILD_LOCKDDLM" = yes; then
-	PKG_CHECK_MODULES(LOCKD_DLM, libdlm, [HAVE_LOCKD_DLM=yes], $bailout)
+AS_IF([test "$BUILD_LOCKDDLM" = "yes"], [
+	PKG_CHECK_MODULES(LIBDLM, libdlm_lt, [BUILD_LVMLOCKD="yes"])
 	AC_DEFINE([LOCKDDLM_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd dlm option.])
-	BUILD_LVMLOCKD=yes
-fi
+	AS_CASE(["$LIBDLM_LIBS"],
+		[*lpthread*], [
+			dnl -- pkg-config for libdlm_lt may give us libdlm with libpthread
+			AC_MSG_RESULT([replacing pkg-config --libs libdlm_lt "$LIBDLM_LIBS" with... -ldlm_lt])
+			LIBDLM_LIBS="${LIBDLM_LIBS%%ldlm*}ldlm_lt"])
+])
 
 ################################################################################
 dnl -- Build lvmlockddlmcontrol
-AC_MSG_CHECKING(whether to build lvmlockddlmcontrol)
+AC_MSG_CHECKING([whether to build lvmlockddlmcontrol])
 AC_ARG_ENABLE(lvmlockd-dlmcontrol,
 	      AS_HELP_STRING([--enable-lvmlockd-dlmcontrol],
 			     [enable lvmlockd remote refresh using libdlmcontrol]),
-	      LOCKDDLM_CONTROL=$enableval, LOCKDDLM_CONTROL=no)
-AC_MSG_RESULT($LOCKDDLM_CONTROL)
-
-BUILD_LOCKDDLM_CONTROL=$LOCKDDLM_CONTROL
+	      BUILD_LOCKDDLM_CONTROL=$enableval, BUILD_LOCKDDLM_CONTROL="no")
+AC_MSG_RESULT([$BUILD_LOCKDDLM_CONTROL])
 
 dnl -- Look for libdlmcontrol libraries
-if test "$BUILD_LOCKDDLM_CONTROL" = yes; then
-	PKG_CHECK_MODULES(LOCKD_DLM_CONTROL, libdlmcontrol >= 3.2, [HAVE_LOCKD_DLM_CONTROL=yes], $bailout)
+AS_IF([test "$BUILD_LOCKDDLM_CONTROL" = "yes"], [
+	PKG_CHECK_MODULES(LIBDLMCONTROL, [libdlmcontrol >= 3.2], [BUILD_LVMLOCKD="yes"])
 	AC_DEFINE([LOCKDDLM_CONTROL_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd dlm control option.])
-	BUILD_LVMLOCKD=yes
-fi
+])
 
 ################################################################################
 dnl -- Build lvmlockdidm
-AC_MSG_CHECKING(whether to build lvmlockdidm)
+AC_MSG_CHECKING([whether to build lvmlockdidm])
 AC_ARG_ENABLE(lvmlockd-idm,
 	      AS_HELP_STRING([--enable-lvmlockd-idm],
 			     [enable the LVM lock daemon using idm]),
-	      LOCKDIDM=$enableval, LOCKDIDM=no)
-AC_MSG_RESULT($LOCKDIDM)
-
-BUILD_LOCKDIDM=$LOCKDIDM
+	      BUILD_LOCKDIDM=$enableval, BUILD_LOCKDIDM="no")
+AC_MSG_RESULT([$BUILD_LOCKDIDM])
 
 dnl -- Look for Seagate IDM libraries
-if test "$BUILD_LOCKDIDM" = yes; then
-	PKG_CHECK_MODULES(LOCKD_IDM, libseagate_ilm >= 0.1.0, [HAVE_LOCKD_IDM=yes], $bailout)
-	PKG_CHECK_EXISTS(blkid >= 2.24, [HAVE_LOCKD_IDM=yes], $bailout)
-	AC_DEFINE([LOCKDIDM_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd IDM option.])
-	BUILD_LVMLOCKD=yes
-fi
+AS_IF([test "$BUILD_LOCKDIDM" = "yes"], [
+	PKG_CHECK_EXISTS(blkid >= 2.24, [
+		PKG_CHECK_MODULES(LIBSEAGATEILM, [libseagate_ilm >= 0.1.0], [BUILD_LVMLOCKD="yes"])
+		AC_DEFINE([LOCKDIDM_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd IDM option.])
+		AS_IF([test -z "$LIBSEAGATEILM_LIBS"], [LIBSEAGATEILM_LIBS="-lseagate_ilm"])
+	], $bailout)
+])
 
 ################################################################################
 dnl -- Build lvmlockd
-AC_MSG_CHECKING(whether to build lvmlockd)
-AC_MSG_RESULT($BUILD_LVMLOCKD)
+AC_MSG_CHECKING([whether to build lvmlockd])
+AC_MSG_RESULT([$BUILD_LVMLOCKD])
 
-if test "$BUILD_LVMLOCKD" = yes; then
-	AS_IF([test "$LVMPOLLD" = no], [AC_MSG_ERROR([cannot build lvmlockd with --disable-lvmpolld.])])
-	AS_IF([test "$BUILD_LVMPOLLD" = no], [BUILD_LVMPOLLD=yes; AC_MSG_WARN([Enabling lvmpolld - required by lvmlockd.])])
+DEFAULT_USE_LVMLOCKD=0
+AS_IF([test "$BUILD_LVMLOCKD" = "yes"], [
+	AS_IF([test "$LVMPOLLD" = "no"], [AC_MSG_ERROR([cannot build lvmlockd with --disable-lvmpolld.])])
+	AS_IF([test "$BUILD_LVMPOLLD" = "no"], [BUILD_LVMPOLLD=yes; AC_MSG_WARN([Enabling lvmpolld - required by lvmlockd.])])
 	AC_MSG_CHECKING([defaults for use_lvmlockd])
 	AC_ARG_ENABLE(use_lvmlockd,
-		      AS_HELP_STRING([--disable-use-lvmlockd],
-				     [disable usage of LVM lock daemon]),
-		      [case ${enableval} in
-		       yes) DEFAULT_USE_LVMLOCKD=1 ;;
-		       *) DEFAULT_USE_LVMLOCKD=0 ;;
-		       esac], DEFAULT_USE_LVMLOCKD=1)
-	AC_MSG_RESULT($DEFAULT_USE_LVMLOCKD)
+		      [AS_HELP_STRING([--disable-use-lvmlockd], [disable usage of LVM lock daemon])],
+		      [use_lvmlockd=$enableval],[use_lvmlockd="yes"])
+	AS_IF([test "$use_lvmlockd" = "yes"], [DEFAULT_USE_LVMLOCKD=1])
+	AC_MSG_RESULT([$DEFAULT_USE_LVMLOCKD])
 	AC_DEFINE([LVMLOCKD_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd.])
 
 	AC_ARG_WITH(lvmlockd-pidfile,
@@ -1047,24 +1016,20 @@ if test "$BUILD_LVMLOCKD" = yes; then
 		    LVMLOCKD_PIDFILE="$DEFAULT_PID_DIR/lvmlockd.pid")
 	AC_DEFINE_UNQUOTED(LVMLOCKD_PIDFILE, ["$LVMLOCKD_PIDFILE"],
 			   [Path to lvmlockd pidfile.])
-else
-	DEFAULT_USE_LVMLOCKD=0
-fi
+])
 AC_DEFINE_UNQUOTED(DEFAULT_USE_LVMLOCKD, [$DEFAULT_USE_LVMLOCKD],
 		   [Use lvmlockd by default.])
 
 ################################################################################
 dnl -- Check lvmpolld
-if test "$BUILD_LVMPOLLD" = yes; then
+DEFAULT_USE_LVMPOLLD=0
+AS_IF([test "$BUILD_LVMPOLLD" = "yes"], [
 	AC_MSG_CHECKING([defaults for use_lvmpolld])
 	AC_ARG_ENABLE(use_lvmpolld,
-		      AS_HELP_STRING([--disable-use-lvmpolld],
-				     [disable usage of LVM Poll Daemon]),
-		      [case ${enableval} in
-		       yes) DEFAULT_USE_LVMPOLLD=1 ;;
-		       *) DEFAULT_USE_LVMPOLLD=0 ;;
-		       esac], DEFAULT_USE_LVMPOLLD=1)
-	AC_MSG_RESULT($DEFAULT_USE_LVMPOLLD)
+		      [AS_HELP_STRING([--disable-use-lvmpolld], [disable usage of LVM Poll Daemon])],
+		      [use_lvmpolld=$enableval], [use_lvmpolld="yes"])
+	AS_IF([test "$use_lvmpolld" = "yes"], [DEFAULT_USE_LVMPOLLD=1])
+	AC_MSG_RESULT([$DEFAULT_USE_LVMPOLLD])
 	AC_DEFINE([LVMPOLLD_SUPPORT], 1, [Define to 1 to include code that uses lvmpolld.])
 
 	AC_ARG_WITH(lvmpolld-pidfile,
@@ -1074,178 +1039,204 @@ if test "$BUILD_LVMPOLLD" = yes; then
 		    LVMPOLLD_PIDFILE="$DEFAULT_PID_DIR/lvmpolld.pid")
 	AC_DEFINE_UNQUOTED(LVMPOLLD_PIDFILE, ["$LVMPOLLD_PIDFILE"],
 			   [Path to lvmpolld pidfile.])
-else
-	DEFAULT_USE_LVMPOLLD=0
-fi
+])
 AC_DEFINE_UNQUOTED(DEFAULT_USE_LVMPOLLD, [$DEFAULT_USE_LVMPOLLD],
 		   [Use lvmpolld by default.])
 
-################################################################################
-dnl -- Check dmfilemapd
-AC_MSG_CHECKING(whether to build dmfilemapd)
-AC_ARG_ENABLE(dmfilemapd, AS_HELP_STRING([--enable-dmfilemapd],
-					 [enable the dmstats filemap daemon]),
-	      BUILD_DMFILEMAPD=$enableval, BUILD_DMFILEMAPD=no)
-AC_MSG_RESULT($BUILD_DMFILEMAPD)
-AC_DEFINE([DMFILEMAPD], $BUILD_DMFILEMAPD, [Define to 1 to enable the device-mapper filemap daemon.])
-
-dnl -- dmfilemapd requires FIEMAP
-if test "$BUILD_DMFILEMAPD" = yes; then
-   AC_CHECK_HEADER([linux/fiemap.h], , [AC_MSG_ERROR(--enable-dmfilemapd requires fiemap.h)])
-fi
 
 SYSTEMD_MIN_VERSION=0
-pkg_config_init
-PKG_CHECK_EXISTS(systemd >= 205, [SYSTEMD_MIN_VERSION=205], [])
-
-################################################################################
-dnl -- Build notifydbus
-PKG_CHECK_EXISTS(systemd >= 221, [SYSTEMD_MIN_VERSION=221], [])
-AC_MSG_CHECKING(whether to build notifydbus)
-AC_ARG_ENABLE(notify-dbus,
-	      AS_HELP_STRING([--enable-notify-dbus],
-			     [enable LVM notification using dbus]),
-	      AS_IF([test "$enableval" = yes && test "$SYSTEMD_MIN_VERSION" -lt 221],
-		    AC_MSG_ERROR([Enabling notify-dbus requires systemd >= 221]))
-	      NOTIFYDBUS_SUPPORT=$enableval, NOTIFYDBUS_SUPPORT=no)
-AC_MSG_RESULT($NOTIFYDBUS_SUPPORT)
-
-AS_IF([test "$NOTIFYDBUS_SUPPORT" = yes],
-      AC_DEFINE([NOTIFYDBUS_SUPPORT], 1, [Define to 1 to include code that uses dbus notification.]))
+NOTIFYDBUS_SUPPORT="no"
+SYSTEMD_JOURNAL_SUPPORT="no"
+APP_MACHINEID_SUPPORT="no"
+SD_NOTIFY_SUPPORT="no"
+AS_IF([test "$with_systemd" = "yes"],
+      PKG_CHECK_EXISTS(systemd >= 218, [SYSTEMD_MIN_VERSION=218 SD_NOTIFY_SUPPORT="maybe"])
+      PKG_CHECK_EXISTS(systemd >= 221, [SYSTEMD_MIN_VERSION=221 NOTIFYDBUS_SUPPORT="maybe" SYSTEMD_JOURNAL_SUPPORT="maybe"])
+      PKG_CHECK_EXISTS(systemd >= 234, [SYSTEMD_MIN_VERSION=234 APP_MACHINEID_SUPPORT="maybe"]))
 
 ################################################################################
 dnl -- Build with systemd journaling when the header file is present
-AS_IF([test "$SYSTEMD_MIN_VERSION" -ge 221], [SYSTEMD_JOURNAL_SUPPORT=maybe], [SYSTEMD_JOURNAL_SUPPORT=no])
-AC_CHECK_HEADER([systemd/sd-journal.h],
-		[AS_IF([test "$SYSTEMD_JOURNAL_SUPPORT" != no], [SYSTEMD_JOURNAL_SUPPORT=yes])],
-                [SYSTEMD_JOURNAL_SUPPORT=no])
-AC_MSG_CHECKING(whether to log to systemd journal)
+AS_IF([test "$SYSTEMD_JOURNAL_SUPPORT" != "no"],
+      AC_CHECK_HEADER([systemd/sd-journal.h], [SYSTEMD_JOURNAL_SUPPORT="yes"], [SYSTEMD_JOURNAL_SUPPORT="no"]))
 AC_ARG_ENABLE(systemd-journal,
 	      AS_HELP_STRING([--disable-systemd-journal],
 			     [disable LVM systemd journaling]),
-	      AS_IF([test "$enableval" = yes && test "$SYSTEMD_JOURNAL_SUPPORT" = no],
-		    AC_MSG_ERROR([Enabling systemd journal requires systemd/sd-journal.h and systemd >= 221.]))
+	      AS_IF([test "$enableval" = "yes" && test "$SYSTEMD_JOURNAL_SUPPORT" = "no"],
+		    AC_MSG_ERROR([--enable-systemd-journal requires systemd/sd-journal.h and systemd >= 221. (--with-systemd=$with_systemd)]))
 	      SYSTEMD_JOURNAL_SUPPORT=$enableval, [])
-AC_MSG_RESULT($SYSTEMD_JOURNAL_SUPPORT)
+AC_MSG_CHECKING([whether to log to systemd journal])
+AC_MSG_RESULT([$SYSTEMD_JOURNAL_SUPPORT])
 
-AS_IF([test "$SYSTEMD_JOURNAL_SUPPORT" = yes],
+AS_IF([test "$SYSTEMD_JOURNAL_SUPPORT" = "yes"],
       AC_DEFINE([SYSTEMD_JOURNAL_SUPPORT], 1, [Define to 1 to include code that uses systemd journal.]))
 
 ################################################################################
 dnl -- Build appmachineid when header file sd-id128.h is present
-PKG_CHECK_EXISTS(systemd >= 234, [SYSTEMD_MIN_VERSION=234  APP_MACHINEID_SUPPORT=maybe], [APP_MACHINEID_SUPPORT=no])
-AC_CHECK_HEADER([systemd/sd-id128.h],
-		[AS_IF([test "$APP_MACHINEID_SUPPORT" != no], [APP_MACHINEID_SUPPORT=yes])],
-		[APP_MACHINEID_SUPPORT=no])
-AC_MSG_CHECKING(whether to support systemd appmachineid)
+AS_IF([test "$APP_MACHINEID_SUPPORT" != "no"],
+      [AC_CHECK_HEADER([systemd/sd-id128.h], [APP_MACHINEID_SUPPORT="yes"], [APP_MACHINEID_SUPPORT="no"])])
 AC_ARG_ENABLE(app-machineid,
-	      AC_HELP_STRING([--disable-app-machineid],
+	      AS_HELP_STRING([--disable-app-machineid],
 			     [disable LVM system ID using app-specific machine-id]),
-	      AS_IF([test "$enableval" = yes && test "$APP_MACHINEID_SUPPORT" = no],
-		    AC_MSG_ERROR([Enabling app machineid requires systemd/sd-id128.h and systemd >= 234.]))
+	      AS_IF([test "$enableval" = "yes" && test "$APP_MACHINEID_SUPPORT" = "no"],
+		    AC_MSG_ERROR([--enable-app-machineid requires systemd/sd-id128.h and systemd >= 234. (--with-systemd=$with_systemd)]))
 	      APP_MACHINEID_SUPPORT=$enableval, [])
-AC_MSG_RESULT($APP_MACHINEID_SUPPORT)
+AC_MSG_CHECKING([whether to support systemd appmachineid])
+AC_MSG_RESULT([$APP_MACHINEID_SUPPORT])
 
-AS_IF([test "$APP_MACHINEID_SUPPORT" = yes],
+AS_IF([test "$APP_MACHINEID_SUPPORT" = "yes"],
       AC_DEFINE([APP_MACHINEID_SUPPORT], 1, [Define to 1 to include code that uses libsystemd machine-id apis.]))
 
-dnl -- Look for libsystemd libraries if needed
-AS_IF([test "$NOTIFYDBUS_SUPPORT" = yes || test "$SYSTEMD_JOURNAL_SUPPORT" = yes || test "$APP_MACHINEID_SUPPORT" = yes ] ,[
-      pkg_config_init
-      PKG_CHECK_MODULES(SYSTEMD, [systemd], [SYSTEMD_LIBS="-lsystemd"], $bailout) ])
+################################################################################
+dnl -- Build with sd_notify when the header file sd-daemon.h is present
+AS_IF([test "$SD_NOTIFY_SUPPORT" != "no"],
+      AC_CHECK_HEADER([systemd/sd-daemon.h], [SD_NOTIFY_SUPPORT="yes"], [SD_NOTIFY_SUPPORT="no"]))
+AC_ARG_ENABLE(sd-notify,
+	      AS_HELP_STRING([--disable-sd-notify],
+			     [disable LVM sd_notify]),
+	      AS_IF([test "$enableval" = "yes" && test "$SD_NOTIFY_SUPPORT" = "no"],
+		    AC_MSG_ERROR([--enable-sd-notify requires systemd/sd-daemon.h. (--with-systemd=$with_systemd)]))
+	      SD_NOTIFY_SUPPORT=$enableval, [])
+AC_MSG_CHECKING([whether to enable to sd_notify])
+AC_MSG_RESULT([$SD_NOTIFY_SUPPORT])
+
+AS_IF([test "$SD_NOTIFY_SUPPORT" = "yes"],
+      AC_DEFINE([SD_NOTIFY_SUPPORT], 1, [Define to 1 to include code that uses sd_notify.]))
+
+################################################################################
+dnl -- Support override for systemd-run path if they need to (NixOS builds)
+AC_ARG_WITH(systemd-run,
+	    AS_HELP_STRING([--with-systemd-run=PATH],
+			   [systemd-run tool: [autodetect]]),
+			   SYSTEMD_RUN_CMD=$withval, SYSTEMD_RUN_CMD="autodetect")
+AS_IF([test "$SYSTEMD_RUN_CMD" = "autodetect"], [AC_PATH_TOOL(SYSTEMD_RUN_CMD, systemd-run)])
+AC_MSG_CHECKING([for app running udev background service])
+AS_IF([test -z "$SYSTEMD_RUN_CMD"], [SYSTEMD_RUN_CMD="/usr/bin/systemd-run"])
+AC_MSG_RESULT([$SYSTEMD_RUN_CMD])
 
 ################################################################################
 
 dnl -- Enable blkid wiping functionality
+# TODO: possibly detect right version of blkid with BLKID_SUBLKS_FSINFO support
+#       so lvresize can check detected flag here
+#
+DEFAULT_USE_BLKID_WIPING=0
 AC_ARG_ENABLE(blkid_wiping,
 	      AS_HELP_STRING([--disable-blkid_wiping],
 			     [disable libblkid detection of signatures when wiping and use native code instead]),
-	      BLKID_WIPING=$enableval, BLKID_WIPING=maybe)
+	      BLKID_WIPING=$enableval,
+	      [AS_IF([test "$with_blkid" = "yes"], [BLKID_WIPING="maybe"], [BLKID_WIPING="no"])])
 
-DEFAULT_USE_BLKID_WIPING=0
-if test "$BLKID_WIPING" != no; then
-	pkg_config_init
-	PKG_CHECK_MODULES(BLKID, blkid >= 2.24,
-			  [ BLKID_WIPING=yes
-			    BLKID_PC="blkid"
-			    DEFAULT_USE_BLKID_WIPING=1
-			    AC_DEFINE([BLKID_WIPING_SUPPORT], 1, [Define to 1 to use libblkid detection of signatures when wiping.])
-			  ], [if test "$BLKID_WIPING" = maybe; then
-				BLKID_WIPING=no
-			   else
-			        AC_MSG_ERROR([bailing out... blkid library >= 2.24 is required])
-			   fi])
-fi
+AS_IF([test "$BLKID_WIPING" != "no"], [
+	PKG_CHECK_MODULES([BLKID], [blkid >= 2.24], [
+		AC_CACHE_CHECK([for blkid.h defines BLKID_SUBLKS_FSINFO.],
+			[ac_cv_have_blkid_sublks_fsinfo],
+			[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <blkid/blkid.h>
+#ifndef BLKID_SUBLKS_FSINFO
+#error BLKID_SUBLKS_FSINFO is missing
+#endif
+			])], [ac_cv_have_blkid_sublks_fsinfo="yes"], [ac_cv_have_blkid_sublks_fsinfo="no"])])
+
+		AC_IF_YES(ac_cv_have_blkid_sublks_fsinfo,
+			  AC_DEFINE(HAVE_BLKID_SUBLKS_FSINFO, 1,
+				    [Define if blkid.h has BLKID_SUBLKS_FSINFO]))
+
+		AS_IF([test "$with_blkid" = "no"], [BLKID_WIPING="error"], [
+			BLKID_WIPING="yes"
+			BLKID_PC="blkid"
+			DEFAULT_USE_BLKID_WIPING=1
+			# pkg_config --static  does not really work ATM...
+			BLKID_STATIC_LIBS=$("$PKG_CONFIG" --static --libs blkid)
+			AC_DEFINE([BLKID_WIPING_SUPPORT], 1, [Define to 1 to use libblkid detection of signatures when wiping.])
+		      ])
+      ], [AS_IF([test "$BLKID_WIPING" = "yes"], [BLKID_WIPING="error"], [BLKID_WIPING="no"])])
+])
+
+AS_IF([test "$BLKID_WIPING" = "error"],
+	[AC_MSG_ERROR([--enable-blkid_wiping requires blkid library >= 2.24. (--with-blkid=$with_blkid)])])
+
 AC_MSG_CHECKING([whether to enable libblkid detection of signatures when wiping])
-AC_MSG_RESULT($BLKID_WIPING)
+AC_MSG_RESULT([$BLKID_WIPING])
 AC_DEFINE_UNQUOTED(DEFAULT_USE_BLKID_WIPING, [$DEFAULT_USE_BLKID_WIPING],
 		   [Use blkid wiping by default.])
 
 ################################################################################
-dnl -- Enable udev-systemd protocol to instantiate a service for background jobs
-dnl -- Requires systemd version 205 at least (including support for systemd-run)
-AC_ARG_ENABLE(udev-systemd-background-jobs,
-	      AS_HELP_STRING([--disable-udev-systemd-background-jobs],
-			     [disable udev-systemd protocol to instantiate a service for background job]),
-	      UDEV_SYSTEMD_BACKGROUND_JOBS=$enableval,
-	      UDEV_SYSTEMD_BACKGROUND_JOBS=maybe)
+dnl -- Enable nvme alternate WWID via libnvme
+AC_ARG_ENABLE(nvme-wwid,
+	      AS_HELP_STRING([--disable-nvme-wwid],
+			     [do not use libnvme to detect alternate WWIDs]),
+	      NVME_WWID=$enableval,
+	      [AS_IF([test "$with_libnvme" = "yes"], [NVME_WWID="maybe"], [NVME_WWID="no"])])
 
-if test "$UDEV_SYSTEMD_BACKGROUND_JOBS" != no; then
-	AS_IF([test "$SYSTEMD_MIN_VERSION" -ge 205],
-	      UDEV_SYSTEMD_BACKGROUND_JOBS=yes,
-	      AS_IF([test "$UDEV_SYSTEMD_BACKGROUND_JOBS" = maybe],
-		     [UDEV_SYSTEMD_BACKGROUND_JOBS=no],
-		     [AC_MSG_ERROR([bailing out... systemd >= 205 is required])]))
-fi
+# ATM NVME_WWID is the only user of libnvme, so skip checking for libnvme when disabled
+AS_IF([test "$NVME_WWID" = "no"], [with_libnvme="no"])
 
-AC_MSG_CHECKING(whether to use udev-systemd protocol for jobs in background)
-AC_MSG_RESULT($UDEV_SYSTEMD_BACKGROUND_JOBS)
+AS_IF([test "$with_libnvme" = "yes"], [
+      PKG_CHECK_MODULES([LIBNVME], [libnvme >= 1.4], [
+		AC_CACHE_CHECK([for NVME_NIDT_CSI in libnvme.h],
+			[ac_cv_have_libnvme_csi],
+			[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <libnvme.h>
+const int a = NVME_NIDT_CSI;
+			])], [ac_cv_have_libnvme_csi="yes"], [ac_cv_have_libnvme_csi="no"])])
+
+		AS_IF([test "$NVME_WWID" != "no"], [
+		      AC_IF_YES(ac_cv_have_libnvme_csi, [NVME_WWID="yes"
+				AC_DEFINE(NVME_SUPPORT, 1, [Use libnvme for WWID.])],
+				[NVME_WWID="error"])])
+      ], [AS_IF([test "$NVME_WWID" = "yes"], [NVME_WWID="error"], [NVME_WWID="no"])])
+], [AS_IF([test "$NVME_WWID" = "yes"], [NVME_WWID="error"])])
+
+AS_IF([test "$NVME_WWID" = "error"],
+	[AC_MSG_ERROR([--enable-nvme-wwid requires libnvme library >= 1.1. (--with-libnvme=$with_libnvme)])])
+
+AC_MSG_CHECKING([whether to use libnvme for alternate WWIDs])
+AC_MSG_RESULT([$NVME_WWID])
 
 ################################################################################
-dnl -- Enable udev synchronisation
-AC_MSG_CHECKING(whether to enable synchronisation with udev processing)
+dnl -- Enable udev synchronization
+AC_MSG_CHECKING([whether to enable synchronization with udev processing])
 AC_ARG_ENABLE(udev_sync,
 	      AS_HELP_STRING([--enable-udev_sync],
-			     [enable synchronisation with udev processing]),
-	      UDEV_SYNC=$enableval, UDEV_SYNC=no)
-AC_MSG_RESULT($UDEV_SYNC)
+			     [enable synchronization with udev processing]),
+	      UDEV_SYNC=$enableval, UDEV_SYNC="no")
+AC_MSG_RESULT([$UDEV_SYNC])
+AS_IF([test "$UDEV_SYNC" = "yes" && test "$with_udev" = "no"],
+	[AC_MSG_ERROR([--enable-udev_sync requires udev >= 143. (--with-udev=$with_udev)])])
 
-if test "$UDEV_SYNC" = yes; then
-	pkg_config_init
+AS_IF([test "$UDEV_SYNC" = "yes"], [
 	PKG_CHECK_MODULES(UDEV, libudev >= 143, [UDEV_PC="libudev"])
-	AC_DEFINE([UDEV_SYNC_SUPPORT], 1, [Define to 1 to enable synchronisation with udev processing.])
+	UDEV_STATIC_LIBS=$("$PKG_CONFIG" --static --libs libudev)
+	AC_DEFINE([UDEV_SYNC_SUPPORT], 1, [Define to 1 to enable synchronization with udev processing.])
 
 	AC_CHECK_LIB(udev, udev_device_get_is_initialized, AC_DEFINE([HAVE_LIBUDEV_UDEV_DEVICE_GET_IS_INITIALIZED], 1,
 	  [Define to 1 if udev_device_get_is_initialized is available.]))
 	LIBS=$ac_check_lib_save_LIBS
-fi
+])
 
 dnl -- Enable udev rules
-AC_MSG_CHECKING(whether to enable installation of udev rules required for synchronisation)
+AC_MSG_CHECKING([whether to enable installation of udev rules required for synchronization])
 AC_ARG_ENABLE(udev_rules,
 	      AS_HELP_STRING([--enable-udev_rules],
-			     [install rule files needed for udev synchronisation]),
+			     [install rule files needed for udev synchronization]),
 	      UDEV_RULES=$enableval, UDEV_RULES=$UDEV_SYNC)
-AC_MSG_RESULT($UDEV_RULES)
+AC_MSG_RESULT([$UDEV_RULES])
 
-AC_MSG_CHECKING(whether to enable executable path detection in udev rules)
+AC_MSG_CHECKING([whether to enable executable path detection in udev rules])
 AC_ARG_ENABLE(udev_rule_exec_detection,
 	      AS_HELP_STRING([--enable-udev-rule-exec-detection],
 			     [enable executable path detection in udev rules]),
-	      UDEV_RULE_EXEC_DETECTION=$enableval, UDEV_RULE_EXEC_DETECTION=no)
-AC_MSG_RESULT($UDEV_RULE_EXEC_DETECTION)
+	      UDEV_RULE_EXEC_DETECTION=$enableval, UDEV_RULE_EXEC_DETECTION="no")
+AC_MSG_RESULT([$UDEV_RULE_EXEC_DETECTION])
 
 dnl -- Check support for built-in blkid against target udev version
-if test "$UDEV_RULE" != no ; then
-	AC_MSG_CHECKING(whether udev supports built-in blkid)
-	pkg_config_init
-	if $("$PKG_CONFIG" --atleast-version=176 libudev); then
-		UDEV_HAS_BUILTIN_BLKID=yes
-	else
-		UDEV_HAS_BUILTIN_BLKID=no
-	fi
-	AC_MSG_RESULT($UDEV_HAS_BUILTIN_BLKID)
-fi
+AS_IF([test "$UDEV_RULE" != "no"], [
+	PKG_CHECK_EXISTS([libudev >= 176], [
+		UDEV_HAS_BUILTIN_BLKID="yes"
+	], [
+		UDEV_HAS_BUILTIN_BLKID="no"
+	])
+	AC_MSG_CHECKING([whether udev supports built-in blkid])
+	AC_MSG_RESULT([$UDEV_HAS_BUILTIN_BLKID])
+])
 
 ################################################################################
 dnl -- Compatible units suffix mode
@@ -1253,11 +1244,11 @@ AC_ARG_ENABLE(units-compat,
 	      AS_HELP_STRING([--enable-units-compat],
 			     [enable output compatibility with old versions that
 			      that do not use KiB-style unit suffixes]),
-	      UNITS_COMPAT=$enableval, UNITS_COMPAT=no)
+	      UNITS_COMPAT=$enableval, UNITS_COMPAT="no")
 
-if test "$UNITS_COMPAT" = yes; then
+AS_IF([test "$UNITS_COMPAT" = "yes"], [
 	AC_DEFINE([DEFAULT_SI_UNIT_CONSISTENCY], 0, [Define to 0 to reinstate the pre-2.02.54 handling of unit suffixes.])
-fi
+])
 
 ################################################################################
 dnl -- Disable ioctl
@@ -1265,128 +1256,166 @@ AC_ARG_ENABLE(ioctl,
 	      AS_HELP_STRING([--disable-ioctl],
 			     [disable ioctl calls to device-mapper in the kernel]),
 	      DM_IOCTLS=$enableval)
-AS_IF([test "$DM_IOCTLS" = yes],
+AS_IF([test "$DM_IOCTLS" = "yes"],
       [AC_DEFINE([DM_IOCTLS], 1, [Define to enable ioctls calls to kernel])])
 
 ################################################################################
 dnl -- Disable O_DIRECT
-AC_MSG_CHECKING(whether to enable O_DIRECT)
+AC_MSG_CHECKING([whether to enable O_DIRECT])
 AC_ARG_ENABLE(o_direct,
 	      AS_HELP_STRING([--disable-o_direct], [disable O_DIRECT]),
 	      ODIRECT=$enableval)
-AC_MSG_RESULT($ODIRECT)
+AC_MSG_RESULT([$ODIRECT])
 
-if test "$ODIRECT" = yes; then
+AS_IF([test "$ODIRECT" = "yes"], [
 	AC_DEFINE([O_DIRECT_SUPPORT], 1, [Define to 1 to enable O_DIRECT support.])
-fi
-
-################################################################################
-dnl -- Enable cmdlib
-AC_MSG_CHECKING(whether to compile liblvm2cmd.so)
-AC_ARG_ENABLE(cmdlib,
-	      AS_HELP_STRING([--enable-cmdlib], [build shared command library]),
-	      CMDLIB=$enableval, CMDLIB=no)
-AC_MSG_RESULT($CMDLIB)
-AC_SUBST([LVM2CMD_LIB])
-test "$CMDLIB" = yes \
-  && LVM2CMD_LIB=-llvm2cmd \
-  || LVM2CMD_LIB=
+])
 
 ################################################################################
 dnl -- Enable D-Bus service
-AC_MSG_CHECKING(whether to include Python D-Bus support)
+AC_MSG_CHECKING([whether to include Python D-Bus support])
 AC_ARG_ENABLE(dbus-service,
 	      AS_HELP_STRING([--enable-dbus-service], [install D-Bus support]),
-	      BUILD_LVMDBUSD=$enableval, BUILD_LVMDBUSD=no)
-AC_MSG_RESULT($BUILD_LVMDBUSD)
-AS_IF([test "$NOTIFYDBUS_SUPPORT" = yes && test "BUILD_LVMDBUSD" = yes],
-      [AC_MSG_WARN([Building D-Bus support without D-Bus notifications.])])
+	      BUILD_LVMDBUSD=$enableval, BUILD_LVMDBUSD="no")
+AC_MSG_RESULT([$BUILD_LVMDBUSD])
+
+################################################################################
+dnl -- Build notifydbus
+AC_ARG_ENABLE(notify-dbus,
+	      [AS_HELP_STRING([--enable-notify-dbus], [enable LVM notification using dbus])],
+	      [AS_IF([test "enableval" = "yes" && test "$NOTIFYDBUS_SUPPORT" = "no"],
+		     [AC_MSG_ERROR([--enable-notify-dbus requires systemd >= 221. (--with-systemd=$with_systemd)])])
+	       NOTIFYDBUS_SUPPORT=$enableval])
+
+AS_IF([test "$NOTIFYDBUS_SUPPORT" = "maybe"],
+      [AS_IF([test "$BUILD_LVMDBUSD" = "yes"],
+      [NOTIFYDBUS_SUPPORT="yes"], [NOTIFYDBUS_SUPPORT="no"])])
+
+AS_IF([test "$NOTIFYDBUS_SUPPORT" = "yes"],
+       AC_DEFINE([NOTIFYDBUS_SUPPORT], 1, [Define to 1 to include code that uses dbus notification.])])
+
+AC_MSG_CHECKING([whether to build notifydbus])
+AC_MSG_RESULT([$NOTIFYDBUS_SUPPORT])
+
+################################################################################
+dnl -- Look for libsystemd libraries if needed
+AS_IF([test "$NOTIFYDBUS_SUPPORT" = "yes" || test "$SYSTEMD_JOURNAL_SUPPORT" = "yes" ||
+       test "$APP_MACHINEID_SUPPORT" = "yes" || test "$SD_NOTIFY_SUPPORT" = "yes"],
+       [PKG_CHECK_MODULES(LIBSYSTEMD, [libsystemd])])
 
 ################################################################################
 dnl -- Enable Python dbus library
 
-if test "$BUILD_LVMDBUSD" = yes; then
+AS_IF([test "$BUILD_LVMDBUSD" = "yes"], [
 	unset am_cv_pathless_PYTHON ac_cv_path_PYTHON am_cv_python_platform
 	unset am_cv_python_pythondir am_cv_python_version am_cv_python_pyexecdir
 	unset ac_cv_path_PYTHON_CONFIG ac_cv_path_ac_pt_PYTHON_CONFIG
 	m4_define_default([_AM_PYTHON_INTERPRETER_LIST],[ python3 python2 python dnl
-	python3.9 python3.8 python3.7 python3.6 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0 dnl
+	python3.12 python3.11 python3.10 python3.9 python3.8 python3.7 python3.6 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0 dnl
 	python2.7 python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0 ])
 	AM_PATH_PYTHON([3])
 	PYTHON3=$PYTHON
-	test -z "$PYTHON3" && AC_MSG_ERROR([python3 is required for --enable-python3_bindings or --enable-dbus-service but cannot be found])
+	AS_IF([test -z "$PYTHON3"], [
+		AC_MSG_ERROR([python3 is required for --enable-python3_bindings or --enable-dbus-service but cannot be found])
+	])
 	AC_PATH_TOOL(PYTHON3_CONFIG, python3-config)
-	test -z "$PYTHON3_CONFIG" && AC_MSG_ERROR([python3 headers are required for --enable-python3_bindings or --enable-dbus-service but cannot be found])
-	PYTHON3_INCDIRS=`"$PYTHON3_CONFIG" --includes`
-	PYTHON3_LIBDIRS=`"$PYTHON3_CONFIG" --libs`
+	AS_IF([test -z "$PYTHON3_CONFIG"], [
+		AC_MSG_ERROR([python3 headers are required for --enable-python3_bindings or --enable-dbus-service but cannot be found])
+	])
 	PYTHON3DIR=$pythondir
-	test "$PYTHON3_BINDINGS" = yes && PYTHON_BINDINGS=yes
+	AS_IF([test "$PYTHON3_BINDINGS" = "yes"], [PYTHON_BINDINGS="yes"])
 
 	# To get this macro, install autoconf-archive package then run autoreconf
-	AC_PYTHON_MODULE([pyudev], [Required], python3)
-	AC_PYTHON_MODULE([dbus], [Required], python3)
-fi
+	AX_PYTHON_MODULE([pyudev], [Required], python3)
+	AX_PYTHON_MODULE([dbus], [Required], python3)
+])
 
 ################################################################################
 dnl -- Enable pkg-config
 AC_ARG_ENABLE(pkgconfig,
 	      AS_HELP_STRING([--enable-pkgconfig], [install pkgconfig support]),
-	      PKGCONFIG=$enableval, PKGCONFIG=no)
+	      PKGCONFIG=$enableval, PKGCONFIG="no")
 
 ################################################################################
 dnl -- Enable installation of writable files by user
 AC_ARG_ENABLE(write_install,
 	      AS_HELP_STRING([--enable-write_install],
 			     [install user writable files]),
-	      WRITE_INSTALL=$enableval, WRITE_INSTALL=no)
+	      WRITE_INSTALL=$enableval, WRITE_INSTALL="no")
 
 ################################################################################
 dnl -- Enable fsadm
-AC_MSG_CHECKING(whether to install fsadm)
+AC_MSG_CHECKING([whether to install fsadm])
 AC_ARG_ENABLE(fsadm, AS_HELP_STRING([--disable-fsadm], [disable fsadm]),
 	      FSADM=$enableval)
-AC_MSG_RESULT($FSADM)
+AC_MSG_RESULT([$FSADM])
 
 
 ################################################################################
 dnl -- Enable lvm_import_vdo
-AC_MSG_CHECKING(whether to install lvm_import_vdo)
+AC_MSG_CHECKING([whether to install lvm_import_vdo])
 AC_ARG_ENABLE(lvmimportvdo, AS_HELP_STRING([--disable-lvmimportvdo], [disable lvm_import_vdo]),
 	      LVMIMPORTVDO=$enableval)
-AC_MSG_RESULT($LVMIMPORTVDO)
+AC_MSG_RESULT([$LVMIMPORTVDO])
 
 ################################################################################
 dnl -- Enable blkdeactivate
-AC_MSG_CHECKING(whether to install blkdeactivate)
+AC_MSG_CHECKING([whether to install blkdeactivate])
 AC_ARG_ENABLE(blkdeactivate, AS_HELP_STRING([--disable-blkdeactivate], [disable blkdeactivate]),
 	      BLKDEACTIVATE=$enableval)
-AC_MSG_RESULT($BLKDEACTIVATE)
+AC_MSG_RESULT([$BLKDEACTIVATE])
 
 ################################################################################
 dnl -- enable dmeventd handling
-AC_MSG_CHECKING(whether to use dmeventd)
+AC_MSG_CHECKING([whether to use dmeventd])
 AC_ARG_ENABLE(dmeventd, AS_HELP_STRING([--enable-dmeventd],
 				       [enable the device-mapper event daemon]),
-	      BUILD_DMEVENTD=$enableval, BUILD_DMEVENTD=no)
-AC_MSG_RESULT($BUILD_DMEVENTD)
+	      BUILD_DMEVENTD=$enableval, BUILD_DMEVENTD="no")
+AC_MSG_RESULT([$BUILD_DMEVENTD])
 
 dnl -- dmeventd currently requires internal mirror support
-if test "$BUILD_DMEVENTD" = yes; then
-   if test "$MIRRORS" != internal; then
-      AC_MSG_ERROR([--enable-dmeventd currently requires --with-mirrors=internal])
-   fi
-   if test "$CMDLIB" = no; then
-      AC_MSG_ERROR([--enable-dmeventd requires --enable-cmdlib to be used as well])
-   fi
+AS_IF([test "$BUILD_DMEVENTD" = "yes"], [
+      AS_IF([test "$MIRRORS" != "internal"],
+	    [AC_MSG_ERROR([--enable-dmeventd currently requires --with-mirrors=internal])])
+      AC_DEFINE([DMEVENTD], 1, [Define to 1 to enable the device-mapper event daemon.])])
 
-   AC_DEFINE([DMEVENTD], 1, [Define to 1 to enable the device-mapper event daemon.])
-fi
+################################################################################
+dnl -- Enable cmdlib
+AC_ARG_ENABLE(cmdlib, [AS_HELP_STRING([--enable-cmdlib], [build shared command library])],
+	      CMDLIB=$enableval, CMDLIB="maybe")
+
+AS_IF([test "$BUILD_DMEVENTD" = "yes"],
+      [AS_IF([test "$CMDLIB" = "no"],
+             [AC_MSG_ERROR([--enable-dmeventd requires --enable-cmdlib to be used as well])],
+             [CMDLIB="yes"])])
+
+AS_IF([test "$CMDLIB" != "yes"], [CMDLIB="no" LVM2CMD_LIB=], [LVM2CMD_LIB="-llvm2cmd"])
+
+AC_MSG_CHECKING([whether to compile liblvm2cmd.so])
+AC_MSG_RESULT([$CMDLIB])
+
+AS_IF([test "$CMDLIB" == "yes" && test "$SHARED_LINK" = "no"],
+      [AC_MSG_ERROR([--enable-cmdlib requires dynamic linking.])])
+
+
+################################################################################
+dnl -- Check dmfilemapd
+AC_MSG_CHECKING([whether to build dmfilemapd])
+AC_ARG_ENABLE(dmfilemapd, AS_HELP_STRING([--enable-dmfilemapd],
+					 [enable the dmstats filemap daemon]),
+	      BUILD_DMFILEMAPD=$enableval, BUILD_DMFILEMAPD="no")
+AC_MSG_RESULT([$BUILD_DMFILEMAPD])
+
+dnl -- dmfilemapd requires FIEMAP
+AS_IF([test "$BUILD_DMFILEMAPD" = "yes"],
+      [AC_CHECK_HEADER([linux/fiemap.h], [], [AC_MSG_ERROR(--enable-dmfilemapd requires fiemap.h)])
+       AC_DEFINE([DMFILEMAPD], 1, [Define to 1 to enable the device-mapper filemap daemon.])])
 
 ################################################################################
 dnl -- getline included in recent libc
 
-AC_CHECK_LIB(c, getline, AC_DEFINE([HAVE_GETLINE], 1,
-  [Define to 1 if getline is available.]))
+AC_CHECK_LIB(c, getline,
+	     [AC_DEFINE([HAVE_GETLINE], 1, [Define to 1 if getline is available.])])
 
 ################################################################################
 dnl -- canonicalize_file_name included in recent libc
@@ -1400,16 +1429,15 @@ dnl -- Check for dlopen
 AC_CHECK_LIB(dl, dlopen,
 	     [AC_DEFINE([HAVE_LIBDL], 1, [Define to 1 if dynamic libraries are available.])
 	      DL_LIBS="-ldl"
-	      HAVE_LIBDL=yes],
+	      HAVE_LIBDL="yes"],
 	     [DL_LIBS=
-	      HAVE_LIBDL=no ])
+	      HAVE_LIBDL="no" ])
 
 ################################################################################
 dnl -- Check for shared/static conflicts
-if [[ \( "$LVM1" = shared -o "$POOL" = shared \
-      \) -a "$STATIC_LINK" = yes ]]; then
+AS_IF([( test "$LVM1" = "shared" || test "$POOL" = "shared" ) && test "$STATIC_LINK" = "yes"], [
 	AC_MSG_ERROR([Features cannot be 'shared' when building statically])
-fi
+])
 
 ################################################################################
 AC_CHECK_LIB(m, log10,
@@ -1421,31 +1449,37 @@ AC_CHECK_LIB([pthread], [pthread_mutex_lock],
 
 ################################################################################
 dnl -- Disable selinux
-AC_MSG_CHECKING(whether to enable selinux support)
+AC_MSG_CHECKING([whether to enable selinux support])
 AC_ARG_ENABLE(selinux,
 	      AS_HELP_STRING([--disable-selinux], [disable selinux support]),
 	      SELINUX=$enableval)
-AC_MSG_RESULT($SELINUX)
+AC_MSG_RESULT([$SELINUX])
 
 ################################################################################
 dnl -- Check for selinux
-if test "$SELINUX" = yes; then
+AS_IF([test "$SELINUX" = "yes"], [
 	AC_CHECK_LIB([sepol], [sepol_check_context], [
 		AC_DEFINE([HAVE_SEPOL], 1, [Define to 1 if sepol_check_context is available.])
-		SELINUX_LIBS="-lsepol"])
+		SEPOL_LIBS="-lsepol"])
+
+	PKG_CHECK_EXISTS([libselinux],
+			 [PKG_CHECK_MODULES([SELINUX], [libselinux],
+					    [SELINUX_STATIC_LIBS=$("$PKG_CONFIG" --static --libs libselinux)])])
 
 	AC_CHECK_LIB([selinux], [is_selinux_enabled], [
 		AC_CHECK_HEADERS([selinux/selinux.h],, hard_bailout)
 		AC_CHECK_HEADERS([selinux/label.h])
 		AC_DEFINE([HAVE_SELINUX], 1, [Define to 1 to include support for selinux.])
-		SELINUX_LIBS="-lselinux $SELINUX_LIBS"
+		SELINUX_LIBS=${SELINUX_LIBS:--lselinux}
+		SELINUX_STATIC_LIBS=${SELINUX_STATIC_LIBS:-$SELINUX_LIBS $SEPOL_LIBS}
 		SELINUX_PC="libselinux"
 		HAVE_SELINUX=yes ], [
 		AC_MSG_WARN(Disabling selinux)
 		SELINUX_LIBS=
+		SELINUX_STATIC_LIBS=
 		SELINUX_PC=
 		HAVE_SELINUX=no ])
-fi
+])
 
 ################################################################################
 dnl -- Check BLKZEROOUT support
@@ -1456,40 +1490,40 @@ AC_CACHE_CHECK([for BLKZEROOUT in sys/ioctl.h.],
 [#include <sys/ioctl.h>
 #include <linux/fs.h>
 int bar(void) { return ioctl(0, BLKZEROOUT, 0); }]
-	 )], [ac_cv_have_blkzeroout=yes], [ac_cv_have_blkzeroout=no])])
+	 )], [ac_cv_have_blkzeroout="yes"], [ac_cv_have_blkzeroout="no"])])
 
 
 AC_ARG_ENABLE(blkzeroout,
 	      AS_HELP_STRING([--disable-blkzeroout],
 			     [do not use BLKZEROOUT for device zeroing]),
-	      BLKZEROOUT=$enableval, BLKZEROOUT=yes)
+	      BLKZEROOUT=$enableval, BLKZEROOUT="yes")
 
-AC_MSG_CHECKING(whether to use BLKZEROOUT for device zeroing)
-if test "$BLKZEROOUT" = yes; then
+AC_MSG_CHECKING([whether to use BLKZEROOUT for device zeroing])
+AS_IF([test "$BLKZEROOUT" = "yes"], [
 	AC_IF_YES(ac_cv_have_blkzeroout,
 		  AC_DEFINE(HAVE_BLKZEROOUT, 1,
 			    [Define if ioctl BLKZEROOUT can be used for device zeroing.]),
-		  BLKZEROOUT=no)
-fi
-AC_MSG_RESULT($BLKZEROOUT)
+		  BLKZEROOUT="no")
+])
+AC_MSG_RESULT([$BLKZEROOUT])
 
 
 ################################################################################
 dnl -- Check for realtime clock support
 RT_LIBS=
 HAVE_REALTIME=no
-if test "$REALTIME" = yes; then
+AS_IF([test "$REALTIME" = "yes"], [
 	AC_CHECK_FUNCS([clock_gettime], HAVE_REALTIME=yes)
 
-	AS_IF([test "$HAVE_REALTIME" != yes], [ # try again with -lrt
+	AS_IF([test "$HAVE_REALTIME" != "yes"], [ # try again with -lrt
 	      AC_CHECK_LIB([rt], [clock_gettime], RT_LIBS="-lrt"; HAVE_REALTIME=yes)])
 
-	if test "$HAVE_REALTIME" = yes; then
+	AS_IF([test "$HAVE_REALTIME" = "yes"], [
 		AC_DEFINE([HAVE_REALTIME], 1, [Define to 1 to include support for realtime clock.])
-	else
+	], [
 		AC_MSG_WARN(Disabling realtime clock)
-	fi
-fi
+	])
+])
 
 dnl Check if the system has struct stat st_ctim.
 AC_CACHE_CHECK([for struct stat has st_ctim.],
@@ -1509,21 +1543,21 @@ AC_CHECK_HEADERS(getopt.h, AC_DEFINE([HAVE_GETOPTLONG], 1, [Define to 1 if getop
 
 ################################################################################
 dnl -- Check for editline
-if test "$EDITLINE" == yes; then
+AS_IF([test "$EDITLINE" = "yes"], [
 	PKG_CHECK_MODULES([EDITLINE], [libedit], [
 		AC_DEFINE([EDITLINE_SUPPORT], 1,
 			[Define to 1 to include the LVM editline shell.])], AC_MSG_ERROR(
 [libedit could not be found which is required for the --enable-editline option.])
 	)
-fi
+])
 
 ################################################################################
 dnl -- Check for readline (Shamelessly copied from parted 1.4.17)
-if test "$READLINE" != no; then
+AS_IF([test "$READLINE" != "no"], [
 	lvm_saved_libs=$LIBS
 	AC_SEARCH_LIBS([tgetent], [tinfo ncurses curses termcap termlib],
 		READLINE_LIBS=$ac_cv_search_tgetent, [
-		if test "$READLINE" = yes; then
+		AS_IF([test "$READLINE" = "yes"], [
 			AC_MSG_ERROR(
 [termcap could not be found which is required for the
 --enable-readline option (which is enabled by default).  Either disable readline
@@ -1533,13 +1567,14 @@ Note: if you are using precompiled packages you will also need the development
   package as well (which may be called termcap-devel or something similar).
 Note: (n)curses also seems to work as a substitute for termcap.  This was
   not found either - but you could try installing that as well.])
-		fi])
+		])
+	])
 	dnl -- Old systems may need extra termcap dependency explicitly in LIBS
 	AC_CHECK_LIB([readline], [readline], [
 		AC_DEFINE([READLINE_SUPPORT], 1,
 			[Define to 1 to include the LVM readline shell.])
 		dnl -- Try only with -lreadline and check for different symbol
-		READLINE=yes
+		READLINE="yes"
 		LIBS=$lvm_saved_libs
 		AC_CHECK_LIB([readline], [rl_line_buffer],
 			[ READLINE_LIBS="-lreadline" ], [
@@ -1547,7 +1582,7 @@ Note: (n)curses also seems to work as a substitute for termcap.  This was
 			  READLINE_LIBS="-lreadline $READLINE_LIBS"
 			]) ], [
 		READLINE_LIBS=
-		if test "$READLINE" = yes; then
+		AS_IF([test "$READLINE" = "yes"], [
 			AC_MSG_ERROR(
 [GNU Readline could not be found which is required for the
 --enable-readline option (which is enabled by default).  Either disable readline
@@ -1555,21 +1590,22 @@ support with --disable-readline or download and install readline from:
 	ftp.gnu.org/gnu/readline
 Note: if you are using precompiled packages you will also need the development
 package as well (which may be called readline-devel or something similar).])
-		fi ])
+		])
+	])
 	LIBS="$READLINE_LIBS $lvm_saved_libs"
 	AC_CHECK_FUNCS([rl_completion_matches])
 	LIBS=$lvm_saved_libs
-fi
+])
 
 ################################################################################
 dnl -- Internationalisation stuff
-AC_MSG_CHECKING(whether to enable internationalisation)
+AC_MSG_CHECKING([whether to enable internationalisation])
 AC_ARG_ENABLE(nls,
 	      AS_HELP_STRING([--enable-nls], [enable Native Language Support]),
-	      INTL=$enableval, INTL=no)
-AC_MSG_RESULT($INTL)
+	      INTL=$enableval, INTL="no")
+AC_MSG_RESULT([$INTL])
 
-if test "$INTL" = yes; then
+AS_IF([test "$INTL" = "yes"], [
 # FIXME - Move this - can be device-mapper too
 	INTL_PACKAGE="lvm2"
 	AC_PATH_TOOL(MSGFMT, msgfmt)
@@ -1583,7 +1619,7 @@ if test "$INTL" = yes; then
 	AC_DEFINE_UNQUOTED([INTL_PACKAGE], ["$INTL_PACKAGE"], [Internalization package])
 	# double eval needed ${datarootdir} -> ${prefix}/share -> real path
 	AC_DEFINE_UNQUOTED([LOCALEDIR], ["$(eval echo $(eval echo $localedir))"], [Locale-dependent data])
-fi
+])
 
 ################################################################################
 dnl -- FIXME: need to switch to regular option here  --sysconfdir
@@ -1609,6 +1645,11 @@ AC_ARG_WITH(usrsbindir,
 			   [usrsbin executables in DIR [PREFIX/sbin]]),
 	    usrsbindir=$withval, usrsbindir='${prefix}/sbin')
 
+AC_ARG_WITH(libexecdir,
+	    AS_HELP_STRING([--with-libexecdir=DIR],
+			   [libexec executables in DIR [PREFIX/libexec]]),
+	    libexecdir=$withval, libexecdir='${prefix}/libexec')
+
 ################################################################################
 AC_ARG_WITH(udev_prefix,
 	    AS_HELP_STRING([--with-udev-prefix=UPREFIX],
@@ -1625,76 +1666,87 @@ dnl -- Get the systemd system unit dir value from pkg_config automatically if va
 dnl -- This follows the recommendation for systemd integration best practices mentioned in daemon(7) manpage.
 AC_ARG_WITH(systemdsystemunitdir,
 	    AS_HELP_STRING([--with-systemdsystemunitdir=DIR],
-			   [systemd service files in DIR]),
-	    systemdsystemunitdir=$withval,
-	    pkg_config_init
-	    pkg_systemdsystemunitdir=$("$PKG_CONFIG" --variable=systemdsystemunitdir systemd))
+			   [systemd service files in DIR]))
 
-test -n "$pkg_systemdsystemunitdir" && systemdsystemunitdir=$pkg_systemdsystemunitdir
-test -z "$systemdsystemunitdir" && systemdsystemunitdir='${exec_prefix}/lib/systemd/system';
+AS_IF([test -z "$with_systemdsystemunitdir"],
+      [PKG_CHECK_VAR([systemdsystemunitdir], [systemd], [systemdsystemunitdir], [],
+		     [systemdsystemunitdir='${exec_prefix}/lib/systemd/system'])],
+      [systemdsystemunitdir="$with_systemdsystemunitdir"])
 
-systemdutildir=$("$PKG_CONFIG" --variable=systemdutildir systemd)
-test -z "$systemdutildir" && systemdutildir='${exec_prefix}/lib/systemd';
+PKG_CHECK_VAR([systemdutildir], [systemd], [systemdutildir], [],
+	      [systemdutildir='${exec_prefix}/lib/systemd'])
 
 ################################################################################
 AC_ARG_WITH(tmpfilesdir,
 	    AS_HELP_STRING([--with-tmpfilesdir=DIR],
 			   [install configuration files for management of volatile files and directories in DIR [PREFIX/lib/tmpfiles.d]]),
 			   tmpfilesdir=$withval, tmpfilesdir='${prefix}/lib/tmpfiles.d')
+
+################################################################################
+dnl - Where to look for modules.builtin file for a kernel - most typically in /lib/modules/
+AC_MSG_CHECKING([for kernel modules directory])
+AC_ARG_WITH(modulesdir,
+	    AS_HELP_STRING([--with-modulesdir=DIR],
+			   [Dir to look for file `uname -r`/modules.builtin [/lib/modules]]),
+			   [modulesdir=$withval], [modulesdir="/lib/modules"])
+AC_DEFINE_UNQUOTED(MODULES_PATH, ["$modulesdir"], [The path to kernel modules.])
+AC_MSG_RESULT([$modulesdir])
+
 ################################################################################
 dnl -- Ensure additional headers required
-if test "$READLINE" = yes; then
+AS_IF([test "$READLINE" = "yes"], [
 	AC_CHECK_HEADERS(readline/readline.h readline/history.h,,hard_bailout)
-fi
-AC_MSG_CHECKING(whether to enable readline)
-AC_MSG_RESULT($READLINE)
+])
+AC_MSG_CHECKING([whether to enable readline])
+AC_MSG_RESULT([$READLINE])
 
-if test "$EDITLINE" = yes; then
+AS_IF([test "$EDITLINE" = "yes"], [
 	AC_CHECK_HEADERS(editline/readline.h,,hard_bailout)
-fi
-AC_MSG_CHECKING(whether to enable editline)
-AC_MSG_RESULT($EDITLINE)
+])
+AC_MSG_CHECKING([whether to enable editline])
+AC_MSG_RESULT([$EDITLINE])
 
-if test "$BUILD_CMIRRORD" = yes; then
+AS_IF([test "$BUILD_CMIRRORD" = "yes"], [
 	AC_CHECK_FUNCS(atexit,,hard_bailout)
-fi
+])
 
-if test "$BUILD_LVMLOCKD" = yes; then
-	AS_IF([test "$HAVE_REALTIME" != yes], [AC_MSG_ERROR([Realtime clock support is mandatory for lvmlockd.])])
+AS_IF([test "$BUILD_LVMLOCKD" = "yes"], [
+	AS_IF([test "$HAVE_REALTIME" != "yes"], [
+		AC_MSG_ERROR([Realtime clock support is mandatory for lvmlockd.])])
 	AC_CHECK_FUNCS(strtoull,,hard_bailout)
-fi
+])
 
-if test "$BUILD_LVMPOLLD" = yes; then
+AS_IF([test "$BUILD_LVMPOLLD" = "yes"], [
 	AC_CHECK_FUNCS(strpbrk,,hard_bailout)
 	AC_FUNC_STRERROR_R
-fi
+])
 
-if test "$BUILD_DMEVENTD" = yes; then
+AS_IF([test "$BUILD_DMEVENTD" = "yes"], [
 	AC_CHECK_HEADERS(arpa/inet.h,,hard_bailout)
-fi
+])
 
-if test "$HAVE_LIBDL" = yes; then
+AS_IF([test "$HAVE_LIBDL" = "yes"], [
 	AC_CHECK_HEADERS(dlfcn.h,,hard_bailout)
-fi
+])
 
-if test "$INTL" = yes; then
+AS_IF([test "$INTL" = "yes"], [
 	AC_CHECK_HEADERS(libintl.h,,hard_bailout)
-fi
+])
 
-if test "$UDEV_SYNC" = yes; then
+AS_IF([test "$UDEV_SYNC" = "yes"], [
 	AC_CHECK_HEADERS(sys/ipc.h sys/sem.h,,hard_bailout)
-fi
+])
 
-if test "$BUILD_DMFILEMAPD" = yes; then
+AS_IF([test "$BUILD_DMFILEMAPD" = "yes"], [
 	AC_CHECK_HEADERS([sys/inotify.h],,hard_bailout)
-fi
+])
 
 ################################################################################
 AC_PATH_TOOL(MODPROBE_CMD, modprobe, [], [$PATH_SBIN])
 
-if test -n "$MODPROBE_CMD"; then
+AS_IF([test -n "$MODPROBE_CMD"], [
 	AC_DEFINE_UNQUOTED([MODPROBE_CMD], ["$MODPROBE_CMD"], [The path to 'modprobe', if available.])
-fi
+])
 
 SYSCONFDIR="$(eval echo $(eval echo $sysconfdir))"
 
@@ -1713,27 +1765,37 @@ AC_DEFINE_UNQUOTED(FSADM_PATH, ["$FSADM_PATH"], [Path to fsadm binary.])
 LVMIMPORTVDO_PATH="$SBINDIR/lvm_import_vdo"
 AC_DEFINE_UNQUOTED(LVMIMPORTVDO_PATH, ["$LVMIMPORTVDO_PATH"], [Path to lvm_import_vdo script.])
 
+LIBEXECDIR="$(eval echo $(eval echo $libexecdir))"
+
+LVRESIZE_FS_HELPER_PATH="$LIBEXECDIR/lvresize_fs_helper"
+AC_DEFINE_UNQUOTED(LVRESIZE_FS_HELPER_PATH, ["$LVRESIZE_FS_HELPER_PATH"], [Path to lvresize_fs_helper script.])
+
 ################################################################################
 dnl -- dmeventd pidfile and executable path
-if test "$BUILD_DMEVENTD" = yes; then
-	AC_ARG_WITH(dmeventd-pidfile,
-		    AS_HELP_STRING([--with-dmeventd-pidfile=PATH],
-				   [dmeventd pidfile [PID_DIR/dmeventd.pid]]),
-		    DMEVENTD_PIDFILE=$withval,
-		    DMEVENTD_PIDFILE="$DEFAULT_PID_DIR/dmeventd.pid")
+AC_ARG_WITH(dmeventd-pidfile,
+	    AS_HELP_STRING([--with-dmeventd-pidfile=PATH],
+			   [dmeventd pidfile [PID_DIR/dmeventd.pid]]),
+	    DMEVENTD_PIDFILE=$withval,
+	    DMEVENTD_PIDFILE="$DEFAULT_PID_DIR/dmeventd.pid")
+AC_ARG_WITH(dmeventd-path,
+	    AS_HELP_STRING([--with-dmeventd-path=PATH],
+			   [dmeventd path [EPREFIX/sbin/dmeventd]]),
+	    DMEVENTD_PATH=$withval,
+	    DMEVENTD_PATH="$SBINDIR/dmeventd")
+AC_ARG_WITH(dmeventd-exit-on-path,
+	    AS_HELP_STRING([--with-dmeventd-exit-on-path=PATH],
+			   [Default path to exit-on file in dmeventd [/run/nologin]]),
+	    DEFAULT_DMEVENTD_EXIT_ON_PATH=$withval,
+	    DEFAULT_DMEVENTD_EXIT_ON_PATH="/run/nologin")
+
+AS_IF([test "$BUILD_DMEVENTD" = "yes"], [
 	AC_DEFINE_UNQUOTED(DMEVENTD_PIDFILE, ["$DMEVENTD_PIDFILE"],
 			   [Path to dmeventd pidfile.])
-fi
-
-if test "$BUILD_DMEVENTD" = yes; then
-	AC_ARG_WITH(dmeventd-path,
-		    AS_HELP_STRING([--with-dmeventd-path=PATH],
-				   [dmeventd path [EPREFIX/sbin/dmeventd]]),
-		    DMEVENTD_PATH=$withval,
-		    DMEVENTD_PATH="$SBINDIR/dmeventd")
 	AC_DEFINE_UNQUOTED(DMEVENTD_PATH, ["$DMEVENTD_PATH"],
 			   [Path to dmeventd binary.])
-fi
+	AC_DEFINE_UNQUOTED(DEFAULT_DMEVENTD_EXIT_ON_PATH, ["$DEFAULT_DMEVENTD_EXIT_ON_PATH"],
+			   [Path to exit-on dmeventd file.])
+])
 
 ################################################################################
 dnl -- various defaults
@@ -1748,28 +1810,28 @@ AC_DEFINE_UNQUOTED(DEFAULT_SYS_DIR, ["$DEFAULT_SYS_DIR"],
 AC_ARG_WITH(default-profile-subdir,
 	    AS_HELP_STRING([--with-default-profile-subdir=SUBDIR],
 			   [default configuration profile subdir [profile]]),
-	    DEFAULT_PROFILE_SUBDIR=$withval, DEFAULT_PROFILE_SUBDIR=profile)
+	    DEFAULT_PROFILE_SUBDIR=$withval, DEFAULT_PROFILE_SUBDIR="profile")
 AC_DEFINE_UNQUOTED(DEFAULT_PROFILE_SUBDIR, ["$DEFAULT_PROFILE_SUBDIR"],
 		   [Name of default configuration profile subdirectory.])
 
 AC_ARG_WITH(default-archive-subdir,
 	    AS_HELP_STRING([--with-default-archive-subdir=SUBDIR],
 			   [default metadata archive subdir [archive]]),
-	    DEFAULT_ARCHIVE_SUBDIR=$withval, DEFAULT_ARCHIVE_SUBDIR=archive)
+	    DEFAULT_ARCHIVE_SUBDIR=$withval, DEFAULT_ARCHIVE_SUBDIR="archive")
 AC_DEFINE_UNQUOTED(DEFAULT_ARCHIVE_SUBDIR, ["$DEFAULT_ARCHIVE_SUBDIR"],
 		   [Name of default metadata archive subdirectory.])
 
 AC_ARG_WITH(default-backup-subdir,
 	    AS_HELP_STRING([--with-default-backup-subdir=SUBDIR],
 			   [default metadata backup subdir [backup]]),
-	    DEFAULT_BACKUP_SUBDIR=$withval, DEFAULT_BACKUP_SUBDIR=backup)
+	    DEFAULT_BACKUP_SUBDIR=$withval, DEFAULT_BACKUP_SUBDIR="backup")
 AC_DEFINE_UNQUOTED(DEFAULT_BACKUP_SUBDIR, ["$DEFAULT_BACKUP_SUBDIR"],
                    [Name of default metadata backup subdirectory.])
 
 AC_ARG_WITH(default-cache-subdir,
 	    AS_HELP_STRING([--with-default-cache-subdir=SUBDIR],
 			   [default metadata cache subdir [cache]]),
-	    DEFAULT_CACHE_SUBDIR=$withval, DEFAULT_CACHE_SUBDIR=cache)
+	    DEFAULT_CACHE_SUBDIR=$withval, DEFAULT_CACHE_SUBDIR="cache")
 AC_DEFINE_UNQUOTED(DEFAULT_CACHE_SUBDIR, ["$DEFAULT_CACHE_SUBDIR"],
 		   [Name of default metadata cache subdirectory.])
 
@@ -1778,72 +1840,80 @@ DEFAULT_SYS_LOCK_DIR="$RUN_DIR/lock"
 test -d "$DEFAULT_SYS_LOCK_DIR" || DEFAULT_SYS_LOCK_DIR="/var/lock"
 
 # Support configurable locking subdir for lvm
+AC_MSG_CHECKING([for default lock directory])
 AC_ARG_WITH(default-locking-dir,
 	    AS_HELP_STRING([--with-default-locking-dir=DIR],
 			   [default locking directory [autodetect_lock_dir/lvm]]),
-	    DEFAULT_LOCK_DIR=$withval,
-	    [AC_MSG_CHECKING(for default lock directory)
-	     DEFAULT_LOCK_DIR="$DEFAULT_SYS_LOCK_DIR/lvm"
-	     AC_MSG_RESULT($DEFAULT_LOCK_DIR)])
+	    [DEFAULT_LOCK_DIR=$withval], [DEFAULT_LOCK_DIR="$DEFAULT_SYS_LOCK_DIR/lvm"])
+AC_MSG_RESULT([$DEFAULT_LOCK_DIR])
 AC_DEFINE_UNQUOTED(DEFAULT_LOCK_DIR, ["$DEFAULT_LOCK_DIR"],
 		   [Name of default locking directory.])
 
+# No --with configure setting, but store in the main configure.h
+AC_DEFINE_UNQUOTED(DEFAULT_PROC_DIR, ["/proc"], [Path to /proc.])
+
 ################################################################################
 dnl -- which kernel interface to use (ioctl only)
-AC_MSG_CHECKING(for kernel interface choice)
+AC_MSG_CHECKING([for kernel interface choice])
 AC_ARG_WITH(interface,
 	    AS_HELP_STRING([--with-interface=IFACE],
 			   [choose kernel interface (ioctl) [ioctl]]),
-	    interface=$withval, interface=ioctl)
-test "$interface" != ioctl && AC_MSG_ERROR([--with-interface=ioctl required. fs no longer supported.])
-AC_MSG_RESULT($interface)
+	    interface=$withval, interface="ioctl")
+AS_IF([test "$interface" != "ioctl"],
+      [AC_MSG_ERROR([--with-interface=ioctl required. fs no longer supported.])])
+AC_MSG_RESULT([$interface])
 
 ################################################################################
-read DM_LIB_VERSION < "$srcdir"/VERSION_DM 2>/dev/null || DM_LIB_VERSION=Unknown
+read DM_LIB_VERSION < "$srcdir"/VERSION_DM 2>/dev/null || DM_LIB_VERSION="Unknown"
 AC_DEFINE_UNQUOTED(DM_LIB_VERSION, "$DM_LIB_VERSION", [Library version])
 
-DM_LIB_PATCHLEVEL=`cat "$srcdir"/VERSION_DM | $AWK -F '[[-. ]]' '{printf "%s.%s.%s",$1,$2,$3}'`
+DM_LIB_PATCHLEVEL=$($AWK -F '[[-. ]]' '{printf "%s.%s.%s",$1,$2,$3}' "$srcdir"/VERSION_DM)
 
 read VER < "$srcdir"/VERSION 2>/dev/null || VER=Unknown
 
 LVM_VERSION=\"$VER\"
-LVM_RELEASE_DATE="\"`echo $VER | $SED 's/.* (//;s/).*//'`\""
-VER=`echo "$VER" | $AWK '{print $1}'`
-LVM_RELEASE="\"`echo "$VER" | $AWK -F '-' '{print $2}'`\""
-VER=`echo "$VER" | $AWK -F '-' '{print $1}'`
-LVM_MAJOR=`echo "$VER" | $AWK -F '.' '{print $1}'`
-LVM_MINOR=`echo "$VER" | $AWK -F '.' '{print $2}'`
-LVM_PATCHLEVEL=`echo "$VER" | $AWK -F '[[(.]]' '{print $3}'`
-LVM_LIBAPI=`echo "$VER" | $AWK -F '[[()]]' '{print $2}'`
+LVM_RELEASE_DATE="\"$(echo $VER | $SED 's/.* (//;s/).*//')\""
+VER=$(echo "$VER" | $AWK '{print $1}')
+LVM_RELEASE="\"$(echo "$VER" | $AWK -F '-' '{print $2}')\""
+VER=$(echo "$VER" | $AWK -F '-' '{print $1}')
+LVM_MAJOR=$(echo "$VER" | $AWK -F '.' '{print $1}')
+LVM_MINOR=$(echo "$VER" | $AWK -F '.' '{print $2}')
+LVM_PATCHLEVEL=$(echo "$VER" | $AWK -F '[[(.]]' '{print $3}')
+LVM_LIBAPI=$(echo "$VER" | $AWK -F '[[()]]' '{print $2}')
 
 AC_DEFINE_UNQUOTED(LVM_CONFIGURE_LINE, "$CONFIGURE_LINE", [configure command line used])
 
-AC_ARG_VAR([BLKID_CFLAGS], [C compiler flags for blkid])
-AC_ARG_VAR([BLKID_LIBS], [linker flags for blkid])
-AC_ARG_VAR([CPG_CFLAGS], [C compiler flags for cpg])
-AC_ARG_VAR([CPG_LIBS], [linker flags for cpg])
-AC_ARG_VAR([EDITLINE_CFLAGS], [C compiler flags for editline])
-AC_ARG_VAR([EDITLINE_LIBS], [linker flags for editline])
+################################################################################
+# Allow users to override default location for libaio
+# there seems to be no pkg-config support available
+AIO_CFLAGS=${AIO_CFLAGS:-}
+AIO_LIBS=${AIO_LIBS:--laio}
+AC_ARG_VAR([AIO_CFLAGS], [C compiler flags for AIO])
+AC_ARG_VAR([AIO_LIBS], [linker flags for AIO])
+
 AC_ARG_VAR([READLINE_CFLAGS], [C compiler flags for readline])
 AC_ARG_VAR([READLINE_LIBS], [linker flags for readline])
-AC_ARG_VAR([SYSTEMD_CFLAGS], [C compiler flags for systemd])
-AC_ARG_VAR([SYSTEMD_LIBS], [linker flags for systemd])
-AC_ARG_VAR([UDEV_CFLAGS], [C compiler flags for udev])
-AC_ARG_VAR([UDEV_LIBS], [linker flags for udev])
 
 ################################################################################
 AC_SUBST(AWK)
+AC_SUBST(BLKDEACTIVATE)
 AC_SUBST(BLKID_PC)
+AC_SUBST(BLKID_STATIC_LIBS)
 AC_SUBST(BUILD_CMIRRORD)
 AC_SUBST(BUILD_DMEVENTD)
-AC_SUBST(BUILD_LVMDBUSD)
-AC_SUBST(BUILD_LVMPOLLD)
-AC_SUBST(BUILD_LVMLOCKD)
-AC_SUBST(BUILD_LOCKDSANLOCK)
+AC_SUBST(BUILD_DMFILEMAPD)
 AC_SUBST(BUILD_LOCKDDLM)
 AC_SUBST(BUILD_LOCKDDLM_CONTROL)
-AC_SUBST(BUILD_DMFILEMAPD)
+AC_SUBST(BUILD_LOCKDIDM)
+AC_SUBST(BUILD_LOCKDSANLOCK)
+AC_SUBST(BUILD_LVMDBUSD)
+AC_SUBST(BUILD_LVMLOCKD)
+AC_SUBST(BUILD_LVMPOLLD)
 AC_SUBST(CACHE)
+AC_SUBST(CACHE_CHECK_CMD)
+AC_SUBST(CACHE_DUMP_CMD)
+AC_SUBST(CACHE_REPAIR_CMD)
+AC_SUBST(CACHE_RESTORE_CMD)
 AC_SUBST(CFLAGS)
 AC_SUBST(CFLOW_CMD)
 AC_SUBST(CHMOD)
@@ -1851,19 +1921,22 @@ AC_SUBST(CLDFLAGS)
 AC_SUBST(CLDNOWHOLEARCHIVE)
 AC_SUBST(CLDWHOLEARCHIVE)
 AC_SUBST(CMDLIB)
-AC_SUBST(CONFDB_CFLAGS)
-AC_SUBST(CONFDB_LIBS)
+AC_SUBST(CMIRRORD_PIDFILE)
 AC_SUBST(CONFDIR)
 AC_SUBST(COPTIMISE_FLAG)
+AC_SUBST(CPPFLAGS)
 AC_SUBST(CSCOPE_CMD)
 AC_SUBST(DEBUG)
 AC_SUBST(DEFAULT_ARCHIVE_SUBDIR)
 AC_SUBST(DEFAULT_BACKUP_SUBDIR)
 AC_SUBST(DEFAULT_CACHE_SUBDIR)
 AC_SUBST(DEFAULT_DM_RUN_DIR)
+AC_SUBST(DEFAULT_DMEVENTD_EXIT_ON_PATH)
+AC_SUBST(DEFAULT_EVENT_ACTIVATION)
 AC_SUBST(DEFAULT_LOCK_DIR)
 AC_SUBST(DEFAULT_MIRROR_SEGTYPE)
 AC_SUBST(DEFAULT_PID_DIR)
+AC_SUBST(DEFAULT_PROC_DIR)
 AC_SUBST(DEFAULT_PROFILE_SUBDIR)
 AC_SUBST(DEFAULT_RAID10_SEGTYPE)
 AC_SUBST(DEFAULT_RUN_DIR)
@@ -1871,28 +1944,29 @@ AC_SUBST(DEFAULT_SPARSE_SEGTYPE)
 AC_SUBST(DEFAULT_SYS_DIR)
 AC_SUBST(DEFAULT_SYS_LOCK_DIR)
 AC_SUBST(DEFAULT_USE_BLKID_WIPING)
-AC_SUBST(DEFAULT_USE_LVMPOLLD)
+AC_SUBST(DEFAULT_USE_DEVICES_FILE)
 AC_SUBST(DEFAULT_USE_LVMLOCKD)
+AC_SUBST(DEFAULT_USE_LVMPOLLD)
 AC_SUBST(DEVMAPPER)
-AC_SUBST(DLM_CFLAGS)
-AC_SUBST(DLM_LIBS)
 AC_SUBST(DL_LIBS)
 AC_SUBST(DMEVENTD_PATH)
+AC_SUBST(DMEVENTD_PIDFILE)
 AC_SUBST(DM_LIB_PATCHLEVEL)
 AC_SUBST(ELDFLAGS)
 AC_SUBST(FSADM)
 AC_SUBST(FSADM_PATH)
-AC_SUBST(BLKDEACTIVATE)
-AC_SUBST(HAVE_LIBDL)
-AC_SUBST(HAVE_REALTIME)
-AC_SUBST(HAVE_VALGRIND)
 AC_SUBST(INTEGRITY)
 AC_SUBST(INTL)
 AC_SUBST(JOBS)
 AC_SUBST(LDDEPS)
 AC_SUBST(LIBS)
 AC_SUBST(LIB_SUFFIX)
-AC_SUBST(LVM_VERSION)
+AC_SUBST(localedir)
+AC_SUBST(LVM2CMD_LIB)
+AC_SUBST(LVMIMPORTVDO)
+AC_SUBST(LVMIMPORTVDO_PATH)
+AC_SUBST(LVMLOCKD_PIDFILE)
+AC_SUBST(LVMPOLLD_PIDFILE)
 AC_SUBST(LVM_LIBAPI)
 AC_SUBST(LVM_MAJOR)
 AC_SUBST(LVM_MINOR)
@@ -1900,62 +1974,48 @@ AC_SUBST(LVM_PATCHLEVEL)
 AC_SUBST(LVM_PATH)
 AC_SUBST(LVM_RELEASE)
 AC_SUBST(LVM_RELEASE_DATE)
-AC_SUBST(LVMIMPORTVDO)
-AC_SUBST(LVMIMPORTVDO_PATH)
-AC_SUBST(localedir)
+AC_SUBST(LVM_VERSION)
+AC_SUBST(LVRESIZE_FS_HELPER_PATH)
 AC_SUBST(MANGLING)
 AC_SUBST(MIRRORS)
 AC_SUBST(MSGFMT)
+AC_SUBST(M_LIBS)
 AC_SUBST(OCF)
 AC_SUBST(OCFDIR)
 AC_SUBST(ODIRECT)
 AC_SUBST(PKGCONFIG)
-AC_SUBST(M_LIBS)
 AC_SUBST(PTHREAD_LIBS)
 AC_SUBST(PYTHON2)
-AC_SUBST(PYTHON3)
-AC_SUBST(PYTHON_BINDINGS)
-AC_SUBST(PYTHON2_BINDINGS)
-AC_SUBST(PYTHON3_BINDINGS)
-AC_SUBST(PYTHON2_INCDIRS)
-AC_SUBST(PYTHON3_INCDIRS)
-AC_SUBST(PYTHON2_LIBDIRS)
-AC_SUBST(PYTHON3_LIBDIRS)
 AC_SUBST(PYTHON2DIR)
+AC_SUBST(PYTHON3)
 AC_SUBST(PYTHON3DIR)
-AC_SUBST(QUORUM_CFLAGS)
-AC_SUBST(QUORUM_LIBS)
 AC_SUBST(RT_LIBS)
-AC_SUBST(REPLICATORS)
-AC_SUBST(SACKPT_CFLAGS)
-AC_SUBST(SACKPT_LIBS)
-AC_SUBST(SALCK_CFLAGS)
-AC_SUBST(SALCK_LIBS)
 AC_SUBST(SBINDIR)
+AC_SUBST(SD_NOTIFY_SUPPORT)
 AC_SUBST(SELINUX_LIBS)
 AC_SUBST(SELINUX_PC)
-AC_SUBST(SYSCONFDIR)
+AC_SUBST(SELINUX_STATIC_LIBS)
+AC_SUBST(SHARED_LINK)
+AC_SUBST(SILENT_RULES)
 AC_SUBST(SNAPSHOTS)
 AC_SUBST(STATICDIR)
+AC_SUBST(STATIC_LDFLAGS)
 AC_SUBST(STATIC_LINK)
+AC_SUBST(SYSCONFDIR)
+AC_SUBST(SYSTEMD_RUN_CMD)
 AC_SUBST(TESTSUITE_DATA)
 AC_SUBST(THIN)
 AC_SUBST(THIN_CHECK_CMD)
 AC_SUBST(THIN_DUMP_CMD)
 AC_SUBST(THIN_REPAIR_CMD)
 AC_SUBST(THIN_RESTORE_CMD)
-AC_SUBST(CACHE_CHECK_CMD)
-AC_SUBST(CACHE_DUMP_CMD)
-AC_SUBST(CACHE_REPAIR_CMD)
-AC_SUBST(CACHE_RESTORE_CMD)
+AC_SUBST(UDEV_HAS_BUILTIN_BLKID)
 AC_SUBST(UDEV_PC)
 AC_SUBST(UDEV_RULES)
-AC_SUBST(UDEV_SYNC)
-AC_SUBST(UDEV_SYSTEMD_BACKGROUND_JOBS)
 AC_SUBST(UDEV_RULE_EXEC_DETECTION)
-AC_SUBST(UDEV_HAS_BUILTIN_BLKID)
+AC_SUBST(UDEV_STATIC_LIBS)
+AC_SUBST(UDEV_SYNC)
 AC_SUBST(USE_TRACKING)
-AC_SUBST(SILENT_RULES)
 AC_SUBST(USRSBINDIR)
 AC_SUBST(VALGRIND_POOL)
 AC_SUBST(VDO)
@@ -1964,20 +2024,18 @@ AC_SUBST(VDO_INCLUDE)
 AC_SUBST(VDO_LIB)
 AC_SUBST(WRITECACHE)
 AC_SUBST(WRITE_INSTALL)
-AC_SUBST(DMEVENTD_PIDFILE)
-AC_SUBST(LVMPOLLD_PIDFILE)
-AC_SUBST(LVMLOCKD_PIDFILE)
-AC_SUBST(CMIRRORD_PIDFILE)
 AC_SUBST(interface)
 AC_SUBST(kerneldir)
-AC_SUBST(missingkernel)
 AC_SUBST(kernelvsn)
-AC_SUBST(tmpdir)
-AC_SUBST(udev_prefix)
-AC_SUBST(udevdir)
+AC_SUBST(libexecdir)
+AC_SUBST(missingkernel)
+AC_SUBST(modulesdir)
 AC_SUBST(systemdsystemunitdir)
 AC_SUBST(systemdutildir)
+AC_SUBST(tmpdir)
 AC_SUBST(tmpfilesdir)
+AC_SUBST(udevdir)
+AC_SUBST(udev_prefix)
 AC_SUBST(usrlibdir)
 AC_SUBST(usrsbindir)
 
@@ -2066,5 +2124,11 @@ AS_IF([test -n "$VDO_CONFIGURE_WARN"],
 AS_IF([test -n "$LVM_NEEDS_LIBAIO_WARN"],
       [AC_MSG_WARN([Only libdm part can be build without libaio:  make [[install_]]device-mapper])])
 
-AS_IF([test "$ODIRECT" != yes],
+AS_IF([test "$ODIRECT" != "yes"],
       [AC_MSG_WARN([O_DIRECT disabled: low-memory pvmove may lock up])])
+
+AS_IF([test "$BUILD_LVMDBUSD" = "yes" && test "$NOTIFYDBUS_SUPPORT" = "no"],
+      [AC_MSG_WARN([Building D-Bus support without D-Bus notifications!])])
+
+AS_IF([test "$BUILD_LVMLOCKD" = "yes" && test "$SD_NOTIFY_SUPPORT" = "no"],
+      [AC_MSG_WARN([Building lvmlockd without sd-notify support may block!])])

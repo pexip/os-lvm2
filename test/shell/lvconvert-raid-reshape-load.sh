@@ -15,6 +15,10 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
+case "$(uname -r)" in
+5.19*) skip "Skippen test that kills this kernel" ;;
+esac
+
 # Test reshaping under io load
 
 which mkfs.ext4 || skip
@@ -41,8 +45,8 @@ lvcreate --yes --type raid5_ls --stripes 13 -L4 -n$lv1 $vg
 check lv_first_seg_field $vg/$lv1 segtype "raid5_ls"
 check lv_first_seg_field $vg/$lv1 data_stripes 13
 check lv_first_seg_field $vg/$lv1 stripes 14
-wipefs -a /dev/$vg/$lv1
-mkfs -t ext4 /dev/$vg/$lv1
+wipefs -a "$DM_DEV_DIR/$vg/$lv1"
+mkfs -t ext4 "$DM_DEV_DIR/$vg/$lv1"
 aux wait_for_sync $vg $lv1
 
 mkdir -p $mount_dir

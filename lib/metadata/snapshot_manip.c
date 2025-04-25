@@ -20,6 +20,7 @@
 #include "lib/commands/toolcontext.h"
 #include "lib/metadata/lv_alloc.h"
 #include "lib/activate/activate.h"
+#include "lib/display/display.h"
 
 #define SNAPSHOT_MIN_CHUNKS	3       /* Minimum number of chunks in snapshot */
 
@@ -330,7 +331,7 @@ int vg_remove_snapshot(struct logical_volume *cow)
 		clear_snapshot_merge(origin);
 		/*
 		 * preload origin IFF "snapshot-merge" target is active
-		 * - IMPORTANT: avoids preload if inactivate merge is pending
+		 * - IMPORTANT: avoids preload if inactive merge is pending
 		 */
 	}
 
@@ -391,6 +392,14 @@ int validate_snapshot_origin(const struct logical_volume *origin_lv)
 {
 	const char *err = NULL; /* For error string */
 
+	if (lv_is_cache(origin_lv) || lv_is_writecache(origin_lv)) {
+		struct logical_volume *lv = seg_lv(first_seg(origin_lv), 0);
+		if (lv_is_raid(lv) && lv_raid_has_integrity(lv)) {
+			err = "raid with integrity";
+			goto out;
+		}
+	}
+
 	if (lv_is_cow(origin_lv))
 		err = "snapshots";
 	else if (lv_is_locked(origin_lv))
@@ -415,10 +424,9 @@ int validate_snapshot_origin(const struct logical_volume *origin_lv)
 		}
 	} else if (lv_is_raid_type(origin_lv) && !lv_is_raid(origin_lv)) {
 		err = "raid subvolumes";
-	} else if (lv_is_raid(origin_lv) && lv_raid_has_integrity((struct logical_volume *)origin_lv)) {
-		err = "raid with integrity";
 	}
 
+ out:
 	if (err) {
 		log_error("Snapshots of %s are not supported.", err);
 		return 0;

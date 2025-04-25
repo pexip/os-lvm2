@@ -119,7 +119,8 @@ int process_each_vg(struct cmd_context *cmd,
 		    struct processing_handle *handle,
 		    process_single_vg_fn_t process_single_vg);
 
-int process_each_pv(struct cmd_context *cmd, int argc, char **argv, const char *vg_name,
+int process_each_pv(struct cmd_context *cmd, int argc, char **argv,
+		    const char *only_this_vgname,
 		    int all_is_set, uint32_t read_flags,
 		    struct processing_handle *handle,
 		    process_single_pv_fn_t process_single_pv);
@@ -152,14 +153,14 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 
 int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
-			  struct dm_list *arg_lvnames, const struct dm_list *tagsl,
+			  struct dm_list *arg_lvnames, const struct dm_list *tags_in,
 			  int stop_on_error, struct processing_handle *handle,
 			  check_single_lv_fn_t check_single_lv,
 			  process_single_lv_fn_t process_single_lv);
 
 struct processing_handle *init_processing_handle(struct cmd_context *cmd, struct processing_handle *parent_handle);
 int init_selection_handle(struct cmd_context *cmd, struct processing_handle *handle,
-			  report_type_t initial_report_type);
+			  unsigned initial_report_type);
 void destroy_processing_handle(struct cmd_context *cmd, struct processing_handle *handle);
 
 int select_match_vg(struct cmd_context *cmd, struct processing_handle *handle,
@@ -173,10 +174,10 @@ const char *extract_vgname(struct cmd_context *cmd, const char *lv_name);
 const char *skip_dev_dir(struct cmd_context *cmd, const char *vg_name,
 			 unsigned *dev_dir_found);
 
-int opt_in_list_is_set(struct cmd_context *cmd, int *opts, int count,
+int opt_in_list_is_set(struct cmd_context *cmd, const uint16_t *opts, int count,
 		       int *match_count, int *unmatch_count);
 
-void opt_array_to_str(struct cmd_context *cmd, int *opts, int count,
+void opt_array_to_str(struct cmd_context *cmd, const uint16_t *opts, int count,
 		      char *buf, int len);
 
 int pvcreate_params_from_args(struct cmd_context *cmd, struct pvcreate_params *pp);
@@ -200,6 +201,7 @@ int get_activation_monitoring_mode(struct cmd_context *cmd,
 
 int get_pool_params(struct cmd_context *cmd,
 		    const struct segment_type *segtype,
+		    int *pool_data_vdo,
 		    uint64_t *pool_metadata_size,
 		    int *pool_metadata_spare,
 		    uint32_t *chunk_size,
@@ -226,6 +228,8 @@ int get_vdo_settings(struct cmd_context *cmd,
 int get_writecache_settings(struct cmd_context *cmd, struct writecache_settings *settings,
                             uint32_t *block_size_sectors);
 
+int get_integrity_settings(struct cmd_context *cmd, struct integrity_settings *settings);
+
 int change_tag(struct cmd_context *cmd, struct volume_group *vg,
 	       struct logical_volume *lv, struct physical_volume *pv, int arg);
 
@@ -242,5 +246,7 @@ int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
                     struct processing_handle *handle __attribute__((unused)));
 
 int get_lvt_enum(struct logical_volume *lv);
+
+int get_rootvg_dev_uuid(struct cmd_context *cmd, char **dm_uuid_out);
 
 #endif

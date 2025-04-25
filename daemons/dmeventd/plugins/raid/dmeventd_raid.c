@@ -17,7 +17,7 @@
 #include "daemons/dmeventd/libdevmapper-event.h"
 #include "lib/config/defaults.h"
 
-/* Hold enough elements for the mximum number of RAID images */
+/* Hold enough elements for the maximum number of RAID images */
 #define	RAID_DEVS_ELEMS	((DEFAULT_RAID_MAX_IMAGES + 63) / 64)
 
 struct dso_state {
@@ -114,7 +114,7 @@ out:
 }
 
 void process_event(struct dm_task *dmt,
-		   enum dm_event_mask event __attribute__((unused)),
+		   enum dm_event_mask evmask __attribute__((unused)),
 		   void **user)
 {
 	struct dso_state *state = *user;

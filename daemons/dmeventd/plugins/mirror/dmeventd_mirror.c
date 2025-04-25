@@ -38,7 +38,7 @@ static void _process_status_code(dm_status_mirror_health_t health,
 	 *    A => Alive - No failures
 	 *    D => Dead - A write failure occurred leaving mirror out-of-sync
 	 *    F => Flush failed.
-	 *    S => Sync - A sychronization failure occurred, mirror out-of-sync
+	 *    S => Sync - A synchronization failure occurred, mirror out-of-sync
 	 *    R => Read - A read failure occurred, mirror data unaffected
 	 *    U => Unclassified failure (bug)
 	 */ 
@@ -112,7 +112,7 @@ static int _remove_failed_devices(const char *cmd_lvconvert, const char *device)
 }
 
 void process_event(struct dm_task *dmt,
-		   enum dm_event_mask event __attribute__((unused)),
+		   enum dm_event_mask evmask __attribute__((unused)),
 		   void **user)
 {
 	struct dso_state *state = *user;

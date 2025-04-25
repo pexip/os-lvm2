@@ -17,10 +17,8 @@
 #include "lib/commands/toolcontext.h"
 #include "lib/metadata/segtype.h"
 #include "lib/format_text/text_export.h"
-#include "lib/config/config.h"
 
-static int _unknown_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
-				struct dm_hash_table *pv_hash)
+static int _unknown_text_import(struct lv_segment *seg, const struct dm_config_node *sn)
 {
 	struct dm_config_node *new, *last = NULL, *head = NULL;
 	const struct dm_config_node *current;
@@ -54,7 +52,7 @@ static void _unknown_destroy(struct segment_type *segtype)
 	free(segtype);
 }
 
-static struct segtype_handler _unknown_ops = {
+static const struct segtype_handler _unknown_ops = {
 	.text_import = _unknown_text_import,
 	.text_export = _unknown_text_export,
 	.destroy = _unknown_destroy,

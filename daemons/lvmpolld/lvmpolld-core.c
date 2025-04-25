@@ -15,8 +15,8 @@
 #include "lvmpolld-common.h"
 
 #include "lvm-version.h"
-#include "daemon-server.h"
-#include "daemon-log.h"
+#include "libdaemon/server/daemon-server.h"
+#include "libdaemon/server/daemon-log.h"
 
 #include <getopt.h>
 #include <poll.h>
@@ -52,7 +52,7 @@ static pthread_key_t key;
 
 static const char *_strerror_r(int errnum, struct lvmpolld_thread_data *data)
 {
-#ifdef _GNU_SOURCE
+#if defined(_GNU_SOURCE) && defined(STRERROR_R_CHAR_P)
 	return strerror_r(errnum, data->buf, sizeof(data->buf)); /* never returns NULL */
 #elif (_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600)
 	return strerror_r(errnum, data->buf, sizeof(data->buf)) ? "" : data->buf;
@@ -75,7 +75,7 @@ static void _usage(const char *prog, FILE *file)
 		"   -p|--pidfile     Set path to the pidfile\n"
 		"   -s|--socket      Set path to the communication socket\n"
 		"   -B|--binary      Path to lvm2 binary\n"
-		"   -t|--timeout     Time to wait in seconds before shutdown on idle (missing or 0 = inifinite)\n\n", prog, prog);
+		"   -t|--timeout     Time to wait in seconds before shutdown on idle (missing or 0 = infinite)\n\n", prog, prog);
 }
 
 static int _init(struct daemon_state *s)
@@ -387,6 +387,11 @@ static void *fork_and_poll(void *args)
 
 	if (!data) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to initialize per-thread data");
+		goto err;
+	}
+
+	if (!pdlv->cmdargv || !*(pdlv->cmdargv)) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Missing command");
 		goto err;
 	}
 
@@ -781,7 +786,7 @@ struct log_line_baton {
 	const char *prefix;
 };
 
-daemon_handle _lvmpolld = { .error = 0 };
+static daemon_handle _lvmpolld = { .error = 0 };
 
 static daemon_handle _lvmpolld_open(const char *socket)
 {
@@ -867,14 +872,14 @@ enum action_index {
 	ACTION_MAX /* keep at the end */
 };
 
-static const action_fn_t actions[ACTION_MAX] = { [ACTION_DUMP] = action_dump };
-
 static int _make_action(enum action_index idx, void *args)
 {
-	return idx < ACTION_MAX ? actions[idx](args) : 0;
+	static const action_fn_t _actions[ACTION_MAX] = { [ACTION_DUMP] = action_dump };
+
+	return idx < ACTION_MAX ? _actions[idx](args) : 0;
 }
 
-static int _lvmpolld_client(const char *socket, unsigned action)
+static int _lvmpolld_client(const char *socket, enum action_index action)
 {
 	int r;
 
@@ -892,10 +897,9 @@ static int _lvmpolld_client(const char *socket, unsigned action)
 	return r ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-static int action_idx = ACTION_MAX;
-static struct option long_options[] = {
+static const struct option _long_options[] = {
 	/* Have actions always at the beginning of the array. */
-	{"dump",	no_argument,		&action_idx,	ACTION_DUMP }, /* or an option_index ? */
+	{"dump",	no_argument,		0,		ACTION_DUMP }, /* or an option_index ? */
 
 	/* other options */
 	{"binary",	required_argument,	0,		'B' },
@@ -914,7 +918,7 @@ int main(int argc, char *argv[])
 	int opt;
 	int option_index = 0;
 	int client = 0, server = 0;
-	unsigned action = ACTION_MAX;
+	enum action_index action = ACTION_MAX;
 	struct timespec timeout;
 	daemon_idle di = { .ptimeout = &timeout };
 	struct lvmpolld_state ls = { .log_config = "" };
@@ -930,16 +934,16 @@ int main(int argc, char *argv[])
 		.socket_path = getenv("LVM_LVMPOLLD_SOCKET") ?: LVMPOLLD_SOCKET,
 	};
 
-	while ((opt = getopt_long(argc, argv, "fhVl:p:s:B:t:", long_options, &option_index)) != -1) {
+	while ((opt = getopt_long(argc, argv, "fhVl:p:s:B:t:", _long_options, &option_index)) != -1) {
 		switch (opt) {
 		case 0 :
-			if (action < ACTION_MAX) {
+			if (action != ACTION_MAX) {
 				fprintf(stderr, "Can't perform more actions. Action already requested: %s\n",
-					long_options[action].name);
+					_long_options[action].name);
 				_usage(argv[0], stderr);
 				exit(EXIT_FAILURE);
 			}
-			action = action_idx;
+			action = ACTION_DUMP;
 			client = 1;
 			break;
 		case '?':
