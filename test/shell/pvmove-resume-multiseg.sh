@@ -30,7 +30,7 @@ test_pvmove_resume() {
 	# Create multisegment LV
 	lvcreate -an -Zn -l50 -n $lv1 $vg "$dev1"
 	lvextend -l+50 $vg/$lv1 "$dev2"
-	# next LV on same VG and differetnt PV (we want to test 2 pvmoves per VG)
+	# next LV on same VG and different PV (we want to test 2 pvmoves per VG)
 	lvcreate -an -Zn -l50 -n $lv2 $vg "$dev3"
 
 	aux delay_dev "$dev4" 0 30 "$(get first_extent_sector "$dev4"):"
@@ -140,8 +140,7 @@ pvmove_fg() {
 
 	# disable delay device
 	# fg pvmove would take ages to complete otherwise
-	aux enable_dev "$dev4"
-	aux enable_dev "$dev5"
+	aux enable_dev "$dev4" "$dev5"
 
 	LVM_TEST_TAG="kill_me_$PREFIX" pvmove
 }
@@ -185,8 +184,7 @@ pvmove_fg_single() {
 
 	# disable delay device
 	# fg pvmove would take ages to complete otherwise
-	aux enable_dev "$dev4"
-	aux enable_dev "$dev5"
+	aux enable_dev "$dev4" "$dev5"
 
 	LVM_TEST_TAG="kill_me_$PREFIX" pvmove "$dev1"
 	LVM_TEST_TAG="kill_me_$PREFIX" pvmove "$dev3"

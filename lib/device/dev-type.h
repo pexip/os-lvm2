@@ -16,8 +16,10 @@
 #define _LVM_DEV_TYPE_H
 
 #include "lib/device/device.h"
-#include "lib/display/display.h"
+#include "lib/metadata/metadata-exported.h"
 #include "lib/label/label.h"
+
+struct fs_info;
 
 #define NUMBER_OF_MAJORS 4096
 
@@ -37,15 +39,15 @@ struct dev_type_def {
 };
 
 struct dev_types {
-	int md_major;
-	int blkext_major;
-	int drbd_major;
-	int device_mapper_major;
-	int emcpower_major;
-	int vxdmp_major;
-	int power2_major;
-	int dasd_major;
-	int loop_major;
+	unsigned md_major;
+	unsigned blkext_major;
+	unsigned drbd_major;
+	unsigned device_mapper_major;
+	unsigned emcpower_major;
+	unsigned vxdmp_major;
+	unsigned power2_major;
+	unsigned dasd_major;
+	unsigned loop_major;
 	struct dev_type_def dev_type_array[NUMBER_OF_MAJORS];
 };
 
@@ -57,10 +59,10 @@ const char *dev_subsystem_name(struct dev_types *dt, struct device *dev);
 int major_is_scsi_device(struct dev_types *dt, int major);
 
 /* Signature/superblock recognition with position returned where found. */
-int dev_is_md_component(struct cmd_context *cmd, struct device *dev, uint64_t *sb, int full);
-int dev_is_mpath_component(struct cmd_context *cmd, struct device *dev, dev_t *mpath_devno);
-int dev_is_swap(struct cmd_context *cmd, struct device *dev, uint64_t *signature, int full);
-int dev_is_luks(struct cmd_context *cmd, struct device *dev, uint64_t *signature, int full);
+int dev_is_md_component(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
+int dev_is_mpath_component(struct cmd_context *cmd, struct device *dev, dev_t *holder_devno);
+int dev_is_swap(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
+int dev_is_luks(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
 int dasd_is_cdl_formatted(struct device *dev);
 
 const char *dev_mpath_component_wwid(struct cmd_context *cmd, struct device *dev);
@@ -97,11 +99,13 @@ int dev_is_rotational(struct dev_types *dt, struct device *dev);
 
 int dev_is_pmem(struct dev_types *dt, struct device *dev);
 
-int dev_is_nvme(struct dev_types *dt, struct device *dev);
+int dev_is_nvme(struct device *dev);
 
-int dev_is_lv(struct device *dev);
+int dev_is_lv(struct cmd_context *cmd, struct device *dev);
 
-int get_fs_block_size(const char *pathname, uint32_t *fs_block_size);
+#define FSTYPE_MAX 16
+int fs_block_size_and_type(const char *pathname, uint32_t *fs_block_size_bytes, char *fstype, int *nofs);
+int fs_get_blkid(const char *pathname, struct fs_info *fsi);
 
 int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *used_by_lv_count,
 			     char **used_by_dm_name, char **used_by_vg_uuid, char **used_by_lv_uuid);

@@ -27,10 +27,6 @@
 #include <sys/resource.h>
 #include <malloc.h>
 
-#ifdef HAVE_VALGRIND
-#include <valgrind.h>
-#endif
-
 #ifndef DEVMAPPER_SUPPORT
 
 void memlock_inc_daemon(struct cmd_context *cmd)
@@ -81,7 +77,7 @@ int memlock_count_daemon(void)
 
 static size_t _size_stack;
 static size_t _size_malloc_tmp;
-static size_t _size_malloc = 2000000;
+static const size_t _size_malloc = 2000000;
 
 static void *_malloc_mem = NULL;
 static int _mem_locked = 0;
@@ -92,8 +88,8 @@ static int _memlock_count_daemon = 0;
 static int _priority;
 static int _default_priority;
 
-/* list of maps, that are unconditionaly ignored */
-static const char * const _ignore_maps[] = {
+/* list of maps, that are unconditionally ignored */
+static const char _ignore_maps[][16] = {
 	"[vdso]",
 	"[vsyscall]",
 	"[vectors]",
@@ -105,13 +101,13 @@ static const char * const _blacklist_maps[] = {
 	"/LC_MESSAGES/",
 	"gconv/gconv-modules.cache",
 	"/ld-2.",		/* not using dlopen,dlsym during mlock */
-	"/libaio.so.",		/* not using aio during mlock */
 	"/libattr.so.",		/* not using during mlock (udev) */
 	"/libblkid.so.",	/* not using blkid during mlock (udev) */
 	"/libbz2.so.",		/* not using during mlock (udev) */
 	"/libcap.so.",		/* not using during mlock (systemd) */
 	"/libdl-",		/* not using dlopen,dlsym during mlock */
 	"/libdw-",		/* not using during mlock (udev) */
+	"/libedit.so.",		/* not using editline during mlock */
 	"/libelf-",		/* not using during mlock (udev) */
 	"/libgcrypt.so.",	/* not using during mlock (systemd) */
 	"/libgpg-error.so.",	/* not using gpg-error during mlock (systemd) */
@@ -122,7 +118,6 @@ static const char * const _blacklist_maps[] = {
 	"/libpcre.so.",		/* not using pcre during mlock (selinux) */
 	"/libpcre2-",		/* not using pcre during mlock (selinux) */
 	"/libreadline.so.",	/* not using readline during mlock */
-	"/libedit.so.",		/* not using editline during mlock */
 	"/libresolv-",		/* not using during mlock (udev) */
 	"/libselinux.so.",	/* not using selinux during mlock */
 	"/libsepol.so.",	/* not using sepol during mlock */
@@ -131,6 +126,11 @@ static const char * const _blacklist_maps[] = {
 	"/libudev.so.",		/* not using udev during mlock */
 	"/libuuid.so.",		/* not using uuid during mlock (blkid) */
 	"/libz.so.",		/* not using during mlock (udev) */
+	"/libzstd.so.",		/* not using zstd during mlock (systemd) */
+	"/libjson-c.so.",	/* not using json during mlock (systemd) */
+	"/libkeyutils.so.",	/* not using keyutils during mlock (systemd) */
+	"/libcrypto.so.",	/* not using crypto during mlock (systemd) */
+	"/libnvme.so.",		/* not using nvme during mlock */
 	"/etc/selinux",		/* not using selinux during mlock */
 	/* "/libdevmapper-event.so" */
 };
@@ -160,10 +160,16 @@ static void _touch_memory(void *mem, size_t size)
 
 static void _allocate_memory(void)
 {
-#ifndef VALGRIND_POOL
+#if defined(__GLIBC__)
+	/* Memory allocation is currently only tested with glibc
+	 * for different C libraries, some other mechanisms might be needed
+	 * meanwhile let users use lvm2 code without memory preallocation.
+	 * Compilation for VALGRIND tracing also goes without preallocation.
+	 */
 	void *stack_mem;
 	struct rlimit limit;
-	int i, area = 0, missing = _size_malloc_tmp, max_areas = 32, hblks;
+	int i, area = 0, missing = _size_malloc_tmp, max_areas = 32;
+	size_t hblks;
 	char *areas[max_areas];
 
 	/* Check if we could preallocate requested stack */
@@ -176,24 +182,30 @@ static void _allocate_memory(void)
 	}
 	/* FIXME else warn user setting got ignored */
 
-        /*
-         *  When a brk() fails due to fragmented address space (which sometimes
-         *  happens when we try to grab 8M or so), glibc will make a new
-         *  arena. In this arena, the rules for using “direct” mmap are relaxed,
-         *  circumventing the MAX_MMAPs and MMAP_THRESHOLD settings. We can,
-         *  however, detect when this happens with mallinfo() and try to co-opt
-         *  malloc into using MMAP as a MORECORE substitute instead of returning
-         *  MMAP'd memory directly. Since MMAP-as-MORECORE does not munmap the
-         *  memory on free(), this is good enough for our purposes.
-         */
+#ifdef HAVE_MALLINFO2
+        /* Prefer mallinfo2 call when available with newer glibc */
+#define MALLINFO mallinfo2
+#else
+#define MALLINFO mallinfo
+#endif
+	/*
+	 *  When a brk() fails due to fragmented address space (which sometimes
+	 *  happens when we try to grab 8M or so), glibc will make a new
+	 *  arena. In this arena, the rules for using "direct" mmap are relaxed,
+	 *  circumventing the MAX_MMAPs and MMAP_THRESHOLD settings. We can,
+	 *  however, detect when this happens with mallinfo() and try to co-opt
+	 *  malloc into using MMAP as a MORECORE substitute instead of returning
+	 *  MMAP'd memory directly. Since MMAP-as-MORECORE does not munmap the
+	 *  memory on free(), this is good enough for our purposes.
+	 */
 	while (missing > 0) {
-		struct mallinfo inf = mallinfo();
+		struct MALLINFO inf = MALLINFO();
 		hblks = inf.hblks;
 
 		if ((areas[area] = malloc(_size_malloc_tmp)))
 			_touch_memory(areas[area], _size_malloc_tmp);
 
-		inf = mallinfo();
+		inf = MALLINFO();
 
 		if (hblks < inf.hblks) {
 			/* malloc cheated and used mmap, even though we told it
@@ -245,7 +257,7 @@ static int _maps_line(const struct dm_config_node *cn, lvmlock_t lock,
 
 	if (sscanf(line, "%lx-%lx %c%c%c%c%n",
 		   &from, &to, &fr, &fw, &fx, &fp, &pos) != 6) {
-		log_error("Failed to parse maps line: %s", line);
+		log_debug_mem("Failed to parse maps line: %s", line);
 		return 0;
 	}
 
@@ -284,17 +296,6 @@ static int _maps_line(const struct dm_config_node *cn, lvmlock_t lock,
 		}
 	}
 
-#ifdef HAVE_VALGRIND
-	/*
-	 * Valgrind is continually eating memory while executing code
-	 * so we need to deactivate check of locked memory size
-	 */
-#ifndef VALGRIND_POOL
-	if (RUNNING_ON_VALGRIND)
-#endif
-		sz -= sz; /* = 0, but avoids getting warning about dead assigment */
-
-#endif
 	*mstats += sz;
 	log_debug_mem("%s %10ldKiB %12lx - %12lx %c%c%c%c%s", lock_str,
 		      ((long)sz + 1023) / 1024, from, to, fr, fw, fx, fp, line + pos);
@@ -322,16 +323,22 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 	ssize_t n;
 	int ret = 1;
 
+	if (cmd->running_on_valgrind) {
+		log_debug_mem("Skipping %slocking of memory maps (running in VALGRIND).",
+			      (lock == LVM_MLOCK) ? "" : "un") ;
+		return 1;
+	}
+
 	if (_use_mlockall) {
 #ifdef MCL_CURRENT
 		if (lock == LVM_MLOCK) {
 			if (mlockall(MCL_CURRENT | MCL_FUTURE)) {
-				log_sys_error("mlockall", "");
+				log_sys_debug("mlockall", "");
 				return 0;
 			}
 		} else {
 			if (munlockall()) {
-				log_sys_error("munlockall", "");
+				log_sys_debug("munlockall", "");
 				return 0;
 			}
 		}
@@ -350,8 +357,8 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 		if (!_maps_buffer || len >= _maps_len) {
 			if (_maps_buffer)
 				_maps_len *= 2;
-			if (!(line = realloc(_maps_buffer, _maps_len))) {
-				log_error("Allocation of maps buffer failed.");
+			if (!_maps_len || !(line = realloc(_maps_buffer, _maps_len))) {
+				log_debug_mem("Allocation of maps buffer failed.");
 				return 0;
 			}
 			_maps_buffer = line;
@@ -361,8 +368,8 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 		for (len = 0 ; len < _maps_len; len += n) {
 			if (!(n = read(_maps_fd, _maps_buffer + len, _maps_len - len)))
 				break; /* EOF */
-			if (n == -1) {
-				log_sys_error("read", _procselfmaps);
+			if ((n < 0) || (len >= (size_t)(SSIZE_MAX - n))) {
+				log_sys_debug("read", _procselfmaps);
 				return 0;
 			}
 		}
@@ -514,14 +521,22 @@ static void _restore_priority_if_possible(struct cmd_context *cmd)
 /* Stop memory getting swapped out */
 static void _lock_mem(struct cmd_context *cmd)
 {
-	_allocate_memory();
+	if (!_size_stack || !_size_malloc_tmp) {
+		log_debug_mem("Skipping memory locking (reserved memory: "
+			      FMTsize_t "  stack: " FMTsize_t ").",
+			      _size_malloc_tmp, _size_stack);
+		return;
+	}
+
+	if (!cmd->running_on_valgrind)
+		 _allocate_memory();
 	(void)strerror(0);		/* Force libc.mo load */
 	(void)dm_udev_get_sync_support(); /* udev is initialized */
 	log_very_verbose("Locking memory");
 
 	/*
 	 * For daemon we need to use mlockall()
-	 * so even future adition of thread which may not even use lvm lib
+	 * so even future addition of thread which may not even use lvm lib
 	 * will not block memory locked thread
 	 * Note: assuming _memlock_count_daemon is updated before _memlock_count
 	 */
@@ -532,12 +547,12 @@ static void _lock_mem(struct cmd_context *cmd)
 		if (!*_procselfmaps &&
 		    dm_snprintf(_procselfmaps, sizeof(_procselfmaps),
 				"%s" SELF_MAPS, cmd->proc_dir) < 0) {
-			log_error("proc_dir too long");
+			log_debug_mem("proc_dir too long");
 			return;
 		}
 
 		if (!(_maps_fd = open(_procselfmaps, O_RDONLY))) {
-			log_sys_error("open", _procselfmaps);
+			log_sys_debug("open", _procselfmaps);
 			return;
 		}
 
@@ -553,6 +568,13 @@ static void _unlock_mem(struct cmd_context *cmd)
 {
 	size_t unlock_mstats = 0;
 
+	if (!_size_stack || !_size_malloc_tmp) {
+		log_debug_mem("Skipping memory unlocking (reserved memory: "
+			      FMTsize_t "  stack: " FMTsize_t ").",
+			      _size_malloc_tmp, _size_stack);
+		return;
+	}
+
 	log_very_verbose("Unlocking memory");
 
 	if (!_memlock_maps(cmd, LVM_MUNLOCK, &unlock_mstats))
@@ -566,9 +588,9 @@ static void _unlock_mem(struct cmd_context *cmd)
 		_maps_buffer = NULL;
 		if (_mstats < unlock_mstats) {
 			if ((_mstats + lvm_getpagesize()) < unlock_mstats)
-				log_error(INTERNAL_ERROR
-					  "Reserved memory (%ld) not enough: used %ld. Increase activation/reserved_memory?",
-					  (long)_mstats, (long)unlock_mstats);
+				log_warn(INTERNAL_ERROR
+					 "Reserved memory (%ld) not enough: used %ld. Increase activation/reserved_memory?",
+					 (long)_mstats, (long)unlock_mstats);
 			else
 				/* FIXME Believed due to incorrect use of yes_no_prompt while locks held */
 				log_debug_mem("Suppressed internal error: Maps lock %ld < unlock %ld, a one-page difference.",
@@ -610,7 +632,7 @@ static void _unlock_mem_if_possible(struct cmd_context *cmd)
  * remains fast.
  *
  * Memory stays locked until 'memlock_unlock()' is called so when possible
- * it may stay locked across multiple crictical section entrances.
+ * it may stay locked across multiple critical section entrances.
  */
 void critical_section_inc(struct cmd_context *cmd, const char *reason)
 {
@@ -665,7 +687,7 @@ void memlock_inc_daemon(struct cmd_context *cmd)
 {
 	++_memlock_count_daemon;
 	if (_memlock_count_daemon == 1 && _critical_section > 0)
-		log_error(INTERNAL_ERROR "_memlock_inc_daemon used in critical section.");
+		log_debug_mem(INTERNAL_ERROR "_memlock_inc_daemon used in critical section.");
 	log_debug_mem("memlock_count_daemon inc to %d", _memlock_count_daemon);
 	_lock_mem_if_needed(cmd);
 	_raise_priority(cmd);
@@ -674,7 +696,7 @@ void memlock_inc_daemon(struct cmd_context *cmd)
 void memlock_dec_daemon(struct cmd_context *cmd)
 {
 	if (!_memlock_count_daemon)
-		log_error(INTERNAL_ERROR "_memlock_count_daemon has dropped below 0.");
+		log_debug_mem(INTERNAL_ERROR "_memlock_count_daemon has dropped below 0.");
 	--_memlock_count_daemon;
 	log_debug_mem("memlock_count_daemon dec to %d", _memlock_count_daemon);
 	_unlock_mem_if_possible(cmd);

@@ -141,6 +141,7 @@ static int _remove_sibling_pvs_from_trim_list(struct logical_volume *lv,
 	char *idx, *suffix;
 	const char *sibling;
 	char sublv_name[NAME_LEN];
+	char idx_buf[16];
 	struct logical_volume *sublv;
 	struct dm_list untrim_list, *pvh1, *pvh2;
 	struct pv_list *pvl1, *pvl2;
@@ -154,7 +155,7 @@ static int _remove_sibling_pvs_from_trim_list(struct logical_volume *lv,
 
 	dm_list_init(&untrim_list);
 
-	if (!dm_strncpy(sublv_name, lv_name, sizeof(sublv_name))) {
+	if (!_dm_strncpy(sublv_name, lv_name, sizeof(sublv_name))) {
 		log_error(INTERNAL_ERROR "LV name %s is too long.", lv_name);
 		return 0;
 	}
@@ -174,9 +175,15 @@ static int _remove_sibling_pvs_from_trim_list(struct logical_volume *lv,
 	}
 	idx++;
 
+        /* Copy idx to local buffer */
+	if (!_dm_strncpy(idx_buf, idx, sizeof(idx_buf))) {
+		log_error(INTERNAL_ERROR "Unexpected LV index %s.", idx);
+		return 0;
+	}
+
 	/* Create the siblings name (e.g. "raidlv_rmeta_N" -> "raidlv_rimage_N" */
 	if (dm_snprintf(suffix + 2, sizeof(sublv_name) - 2 - (suffix - sublv_name),
-			"%s_%s", sibling, idx) < 0) {
+			"%s_%s", sibling, idx_buf) < 0) {
 		log_error("Raid sublv for name %s too long.", lv_name);
 		return 0;
 	}
@@ -483,7 +490,7 @@ static struct logical_volume *_set_up_pvmove_lv(struct cmd_context *cmd,
 				lv_skipped = 1;
 				log_print_unless_silent("Skipping LV %s which is not locally exclusive%s.",
 							display_lvname(lv),
-							/* Report missing cmirrord cases that matterd.
+							/* Report missing cmirrord cases that mattered.
 							 * With exclusive LV types cmirrord would not help. */
 							(*exclusive &&
 							 !lv_is_origin(holder) &&
@@ -620,6 +627,11 @@ static int _pvmove_setup_single(struct cmd_context *cmd,
 	unsigned exclusive;
 	int r = ECMD_FAILED;
 
+	if (!vg) {
+		log_error(INTERNAL_ERROR "Missing volume group.");
+		return r;
+	}
+
 	pp->found_pv = 1;
 	pp->setup_result = ECMD_FAILED;
 
@@ -644,6 +656,14 @@ static int _pvmove_setup_single(struct cmd_context *cmd,
 		if (lv_is_raid(lv) && lv_raid_has_integrity(lv)) {
 			log_error("pvmove not allowed on raid LV with integrity.");
 			return ECMD_FAILED;
+		}
+
+		if (lv_is_cache(lv) || lv_is_writecache(lv)) {
+			struct logical_volume *lv_orig = seg_lv(first_seg(lv), 0);
+			if (lv_is_raid(lv_orig) && lv_raid_has_integrity(lv_orig)) {
+				log_error("pvmove not allowed on raid LV with integrity.");
+				return ECMD_FAILED;
+			}
 		}
 	}
 
@@ -746,6 +766,11 @@ static int _pvmove_read_single(struct cmd_context *cmd,
 	struct logical_volume *lv;
 	int ret = ECMD_FAILED;
 
+	if (!vg) {
+		log_error(INTERNAL_ERROR "Missing volume group.");
+		return ret;
+	}
+
 	pp->found_pv = 1;
 
 	if (!(lv = find_pvmove_lv(vg, pv_dev(pv), PVMOVE))) {
@@ -761,7 +786,7 @@ static int _pvmove_read_single(struct cmd_context *cmd,
 	return ret;
 }
 
-static struct poll_functions _pvmove_fns = {
+static const struct poll_functions _pvmove_fns = {
 	.get_copy_name_from_lv = get_pvmove_pvname_from_lv_mirr,
 	.poll_progress = poll_mirror_progress,
 	.update_metadata = pvmove_update_metadata,

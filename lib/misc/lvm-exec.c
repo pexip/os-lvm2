@@ -77,6 +77,7 @@ int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 
 	if (!pid) {
 		/* Child */
+		init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL), 0);
 		reset_locking();
 		/* FIXME Fix effect of reset_locking on cache then include this */
 		/* destroy_toolcontext(cmd); */
@@ -123,7 +124,7 @@ static int _reopen_fd_to_null(int fd)
 		return 0;
 	}
 
-	if (close(fd)) {
+	if ((null_fd != fd) && close(fd)) {
 		log_sys_error("close", "");
 		goto out;
 	}
@@ -164,7 +165,11 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 	log_verbose("Piping:%s", _verbose_args(argv, buf, sizeof(buf)));
 
 	if ((pdata->pid = fork()) == -1) {
-		log_sys_error("pipe", "");
+		log_sys_error("fork", "");
+		if (close(pipefd[0]))
+			log_sys_debug("close", "STDOUT");
+		if (close(pipefd[1]))
+			log_sys_debug("close", "STDIN");
 		return 0;
 	}
 
@@ -190,6 +195,8 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 	/* Parent -> reader */
 	if (close(pipefd[1 /*write*/])) {
 		log_sys_error("close", "STDOUT");
+		if (close(pipefd[0 /*read*/]))
+			log_sys_debug("close", "pipe[0]");
 		return NULL;
 	}
 
@@ -216,4 +223,35 @@ int pipe_close(struct pipe_data *pdata)
 	}
 
 	return (status == 0) ? 1 : 0;
+}
+
+int prepare_exec_args(struct cmd_context *cmd,
+		      const char *argv[], int *argc, int options_id)
+{
+	const struct dm_config_value *cv;
+	const struct dm_config_node *cn;
+
+	if (!(cn = find_config_tree_array(cmd, options_id, NULL))) {
+		log_error(INTERNAL_ERROR "Unable to find configuration for %s options.",
+			  argv[0]);
+		return 0;
+	}
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (*argc >= DEFAULT_MAX_EXEC_ARGS) {
+			log_error("Too many options for %s command.", argv[0]);
+			return 0;
+		}
+
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Invalid string in config file: "
+				  "global/%s_options.", argv[0]);
+			return 0;
+		}
+
+		if (cv->v.str[0])
+			argv[++(*argc)] = cv->v.str;
+	}
+
+	return 1;
 }

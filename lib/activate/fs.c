@@ -112,7 +112,7 @@ static void _rm_blks(const char *dir)
 			if (!S_ISBLK(buf.st_mode))
 				continue;
 			log_very_verbose("Removing %s", path);
-			if (unlink(path) < 0)
+			if (unlink(path) && (errno != ENOENT))
 				log_sys_debug("unlink", path);
 		}
 	}
@@ -168,7 +168,7 @@ static int _mk_link(const char *dev_dir, const char *vg_name,
 			_rm_blks(vg_path);
 
 			log_very_verbose("Removing %s", lvm1_group_path);
-			if (unlink(lvm1_group_path) < 0)
+			if (unlink(lvm1_group_path) && (errno != ENOENT))
 				log_sys_debug("unlink", lvm1_group_path);
 		}
 	}
@@ -200,7 +200,7 @@ static int _mk_link(const char *dev_dir, const char *vg_name,
 		}
 
 		log_very_verbose("Removing %s", lv_path);
-		if (unlink(lv_path) < 0) {
+		if (unlink(lv_path) && (errno != ENOENT)) {
 			log_sys_error("unlink", lv_path);
 			return 0;
 		}
@@ -252,7 +252,7 @@ static int _rm_link(const char *dev_dir, const char *vg_name,
 	}
 
 	log_very_verbose("Removing link %s", lv_path);
-	if (unlink(lv_path) < 0) {
+	if (unlink(lv_path) && (errno != ENOENT)) {
 		log_sys_error("unlink", lv_path);
 		return 0;
 	}
@@ -318,9 +318,10 @@ struct fs_op_parms {
 
 static void _store_str(char **pos, char **ptr, const char *str)
 {
-	strcpy(*pos, str);
+	size_t len = strlen(str) + 1;
+	memcpy(*pos, str, len);
 	*ptr = *pos;
-	*pos += strlen(*ptr) + 1;
+	*pos += len;
 }
 
 static void _del_fs_op(struct fs_op_parms *fsp)

@@ -16,6 +16,8 @@
 #ifndef _LVM_WRAPPERS_H
 #define _LVM_WRAPPERS_H
 
+#include <stddef.h>
+
 int udev_init_library_context(void);
 void *udev_get_library_context(void);
 void udev_fin_library_context(void);
@@ -33,8 +35,6 @@ int read_urandom(void *buf, size_t len);
  */
 unsigned lvm_even_rand(unsigned *seed, unsigned max);
 
-int clvmd_is_running(void);
 int cmirrord_is_running(void);
-
 
 #endif

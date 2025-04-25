@@ -55,15 +55,15 @@ static struct labeller_i *_alloc_li(const char *name, struct labeller *l)
 	struct labeller_i *li;
 	size_t len;
 
-	len = sizeof(*li) + strlen(name) + 1;
+	len = strlen(name);
 
-	if (!(li = malloc(len))) {
+	if (!(li = malloc(sizeof(*li) + len + 1))) {
 		log_error("Couldn't allocate memory for labeller list object.");
 		return NULL;
 	}
 
 	li->l = l;
-	strcpy(li->name, name);
+	memcpy(li->name, name, len + 1);
 
 	return li;
 }
@@ -240,7 +240,7 @@ struct label *label_create(struct labeller *labeller)
 	struct label *label;
 
 	if (!(label = zalloc(sizeof(*label)))) {
-		log_error("label allocaction failed");
+		log_error("label allocation failed");
 		return NULL;
 	}
 
@@ -253,7 +253,8 @@ struct label *label_create(struct labeller *labeller)
 
 
 /* global variable for accessing the bcache populated by label scan */
-struct bcache *scan_bcache;
+/* FIXME/TODO convert to cmd_context */
+static struct bcache *scan_bcache;
 
 #define BCACHE_BLOCK_SIZE_IN_SECTORS 256 /* 256*512 = 128K */
 
@@ -266,7 +267,7 @@ static bool _in_bcache(struct device *dev)
 
 static struct labeller *_find_lvm_header(struct device *dev,
 				   char *headers_buf,
-				   int headers_buf_size,
+				   size_t headers_buf_size,
 				   uint64_t *label_sector,
 				   uint64_t block_sector,
 				   uint64_t start_sector)
@@ -341,7 +342,7 @@ static struct labeller *_find_lvm_header(struct device *dev,
  * are performed in the processing functions to get that data.
  */
 static int _process_block(struct cmd_context *cmd, struct dev_filter *f,
-			  struct device *dev, char *headers_buf, int headers_buf_size,
+			  struct device *dev, char *headers_buf, size_t headers_buf_size,
 			  uint64_t block_sector, uint64_t start_sector,
 			  int *is_lvm_device)
 {
@@ -372,7 +373,7 @@ static int _process_block(struct cmd_context *cmd, struct dev_filter *f,
 			 * that now.  It's unlikely this is actually needed.
 			 */
 			if (dev->pvid[0]) {
-				log_print("Clear pvid and info for filtered dev %s", dev_name(dev));
+				log_print_unless_silent("Clear pvid and info for filtered dev %s.", dev_name(dev));
 				lvmcache_del_dev(dev);
 				memset(dev->pvid, 0, sizeof(dev->pvid));
 			}
@@ -399,7 +400,7 @@ static int _process_block(struct cmd_context *cmd, struct dev_filter *f,
 
 		/* See comment above */
 		if (dev->pvid[0]) {
-			log_print("Clear pvid and info for no lvm header %s", dev_name(dev));
+			log_print_unless_silent("Clear pvid and info for no lvm header %s", dev_name(dev));
 			lvmcache_del_dev(dev);
 			memset(dev->pvid, 0, sizeof(dev->pvid));
 		}
@@ -493,8 +494,8 @@ static int _scan_dev_open(struct device *dev)
 	 * dm_list_first() returns NULL if the list is empty.
 	 */
 	if (!(name_list = dm_list_first(&dev->aliases))) {
-		log_error("Device open %d:%d has no path names.",
-			  (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+		log_error("Device open %u:%u has no path names.",
+			  MAJOR(dev->dev), MINOR(dev->dev));
 		return 0;
 	}
 	name_sl = dm_list_item(name_list, struct dm_str_list);
@@ -534,8 +535,8 @@ static int _scan_dev_open(struct device *dev)
 			 * drop any other invalid aliases before retrying open with
 			 * any remaining valid paths.
 			 */
-			log_debug("Drop alias for %d:%d failed open %s (%d)",
-				  (int)MAJOR(dev->dev), (int)MINOR(dev->dev), name, errno);
+			log_debug("Drop alias for %u:%u failed open %s (%d).",
+				  MAJOR(dev->dev), MINOR(dev->dev), name, errno);
 			dev_cache_failed_path(dev, name);
 			dev_cache_verify_aliases(dev);
 			goto next_name;
@@ -544,8 +545,8 @@ static int _scan_dev_open(struct device *dev)
 
 	/* Verify that major:minor from the path still match dev. */
 	if ((fstat(fd, &sbuf) < 0) || (sbuf.st_rdev != dev->dev)) {
-		log_warn("Invalid path %s for device %d:%d, trying different path.",
-			 name, (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+		log_warn("Invalid path %s for device %u:%u, trying different path.",
+			 name, MAJOR(dev->dev), MINOR(dev->dev));
 		(void)close(fd);
 		dev_cache_failed_path(dev, name);
 		dev_cache_verify_aliases(dev);
@@ -659,8 +660,8 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 
 		if (!_in_bcache(devl->dev)) {
 			if (!_scan_dev_open(devl->dev)) {
-				log_debug_devs("Scan failed to open %d:%d %s.",
-					       (int)MAJOR(devl->dev->dev), (int)MINOR(devl->dev->dev), dev_name(devl->dev));
+				log_debug_devs("Scan failed to open %u:%u %s.",
+					       MAJOR(devl->dev->dev), MINOR(devl->dev->dev), dev_name(devl->dev));
 				dm_list_del(&devl->list);
 				devl->dev->flags |= DEV_SCAN_NOT_READ;
 				continue;
@@ -710,10 +711,9 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 			 */
 			bcache_put(bb);
 
-			log_debug_devs("Processing data from device %s %d:%d di %d",
+			log_debug_devs("Processing data from device %s %u:%u di %d.",
 				       dev_name(devl->dev),
-				       (int)MAJOR(devl->dev->dev),
-				       (int)MINOR(devl->dev->dev),
+				       MAJOR(devl->dev->dev), MINOR(devl->dev->dev),
 				       devl->dev->bcache_di);
 
 			ret = _process_block(cmd, f, devl->dev, headers_buf, sizeof(headers_buf), 0, 0, &is_lvm_device);
@@ -769,12 +769,15 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 #define MIN_BCACHE_BLOCKS 32    /* 4MB (32 * 128KB) */
 #define MAX_BCACHE_BLOCKS 4096  /* 512MB (4096 * 128KB) */
 
-static int _setup_bcache(void)
+int label_scan_setup_bcache(void)
 {
 	struct io_engine *ioe = NULL;
 	int iomem_kb = io_memory_size();
 	int block_size_kb = (BCACHE_BLOCK_SIZE_IN_SECTORS * 512) / 1024;
 	int cache_blocks;
+
+	if (scan_bcache)
+		return 1;
 
 	cache_blocks = iomem_kb / block_size_kb;
 
@@ -801,7 +804,7 @@ static int _setup_bcache(void)
 	}
 
 	if (!(scan_bcache = bcache_create(BCACHE_BLOCK_SIZE_IN_SECTORS, cache_blocks, ioe))) {
-		log_error("Failed to create bcache with %d cache blocks.", cache_blocks);
+		log_error("Failed to set up io layer with %d blocks.", cache_blocks);
 		return 0;
 	}
 
@@ -872,7 +875,6 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 	char buf[LABEL_SIZE] __attribute__((aligned(8)));
 	struct dm_list devs;
 	struct dev_iter *iter;
-	struct device_list *devl, *devl2;
 	struct device *dev;
 	struct pv_header *pvh;
 	int ret = 0;
@@ -888,6 +890,9 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		return 0;
 	}
 
+	if (!label_scan_setup_bcache())
+		return_0;
+
 	/*
 	 * Iterating over all available devices with cmd->filter filters
 	 * devices; those returned from dev_iter_get are the devs that
@@ -899,25 +904,10 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		return 0;
 	}
 
-	log_debug_devs("Filtering devices to scan");
-
-	while ((dev = dev_iter_get(cmd, iter))) {
-		if (!(devl = zalloc(sizeof(*devl))))
-			continue;
-		devl->dev = dev;
-		dm_list_add(&devs, &devl->list);
-	};
-	dev_iter_destroy(iter);
-
-	if (!scan_bcache) {
-		if (!_setup_bcache())
-			goto_out;
-	}
 
 	log_debug_devs("Reading labels for pvid");
 
-	dm_list_iterate_items(devl, &devs) {
-		dev = devl->dev;
+	while ((dev = dev_iter_get(cmd, iter))) {
 
 		memset(buf, 0, sizeof(buf));
 
@@ -932,7 +922,7 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		pvh = (struct pv_header *)(buf + 32);
 
 		if (!memcmp(pvh->pv_uuid, pvid, ID_LEN)) {
-			*dev_out = devl->dev;
+			*dev_out = dev;
 			_scan_dev_close(dev);
 			break;
 		}
@@ -941,10 +931,8 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 	}
 	ret = 1;
  out:
-	dm_list_iterate_items_safe(devl, devl2, &devs) {
-		dm_list_del(&devl->list);
-		free(devl);
-	}
+	dev_iter_destroy(iter);
+
 	return ret;
 }
 
@@ -993,7 +981,7 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 	struct pv_online *po;
 	struct device_list *devl, *devl2;
 	int relax_deviceid_filter = 0;
-	int metadata_pv_count;
+	unsigned metadata_pv_count;
 	int try_dev_scan = 0;
 
 	dm_list_init(&pvs_online);
@@ -1034,8 +1022,8 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 	 */
 	dm_list_iterate_items(po, &pvs_online) {
 		if (!(po->dev = setup_dev_in_dev_cache(cmd, po->devno, po->devname[0] ? po->devname : NULL))) {
-			log_debug("No device found for quick mapping of online PV %d:%d %s PVID %s",
-				  (int)MAJOR(po->devno), (int)MINOR(po->devno), po->devname, po->pvid);
+			log_debug("No device found for quick mapping of online PV %u:%u %s PVID %s.",
+				  MAJOR(po->devno), MINOR(po->devno), po->devname, po->pvid);
 			try_dev_scan = 1;
 			continue;
 		}
@@ -1059,8 +1047,8 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 			if (po->dev)
 				continue;
 			if (!(po->dev = dev_cache_get_by_devt(cmd, po->devno))) {
-				log_error("No device found for %d:%d PVID %s",
-					  (int)MAJOR(po->devno), (int)MINOR(po->devno), po->pvid);
+				log_error("No device found for %u:%u PVID %s.",
+					  MAJOR(po->devno), MINOR(po->devno), po->pvid);
 				goto bad;
 			}
 			if (!(devl = dm_pool_zalloc(cmd->mem, sizeof(*devl))))
@@ -1092,19 +1080,31 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 	if (cmd->enable_devices_list)
 		device_ids_match_device_list(cmd);
 
-	if (cmd->enable_devices_file && device_ids_use_devname(cmd)) {
+	if (cmd->enable_devices_file &&
+	    (device_ids_use_devname(cmd) || cmd->device_ids_refresh_trigger)) {
 		relax_deviceid_filter = 1;
 		cmd->filter_deviceid_skip = 1;
 		/* PVIDs read from devs matched to devices file below instead. */
-		log_debug("Skipping device_id filtering due to devname ids.");
+		log_debug("Skipping device_id filtering");
 	}
+
+	/*
+	 * See corresponding code in pvscan.  This function is used during
+	 * startup autoactivation when udev has not created all symlinks, so
+	 * regex filter containing symlinks doesn't work.  pvscan has code
+	 * to properly check devs against the filter using DEVLINKS.  The
+	 * pvscan will only create pvs_online files for devs that pass the
+	 * filter.  We get devs from the pvs_online files, so we inherit the
+	 * regex filtering from pvscan and don't have to do it ourself.
+	 */
+	cmd->filter_regex_skip = 1;
 
 	cmd->filter_nodata_only = 1;
 
 	dm_list_iterate_items_safe(devl, devl2, &devs) {
 		if (!cmd->filter->passes_filter(cmd, cmd->filter, devl->dev, NULL)) {
-			log_print("%s excluded: %s.",
-				  dev_name(devl->dev), dev_filtered_reason(devl->dev));
+			log_print_unless_silent("%s excluded: %s.",
+						dev_name(devl->dev), dev_filtered_reason(devl->dev));
 			dm_list_del(&devl->list);
 			dm_list_add(&devs_drop, &devl->list);
 		}
@@ -1135,7 +1135,7 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 		int has_pvid;
 
 		if (!label_read_pvid(devl->dev, &has_pvid)) {
-			log_print("%s cannot read label.", dev_name(devl->dev));
+			log_print_unless_silent("%s cannot read label.", dev_name(devl->dev));
 			dm_list_del(&devl->list);
 			dm_list_add(&devs_drop, &devl->list);
 			continue;
@@ -1143,7 +1143,7 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 
 		if (!has_pvid) {
 			/* Not an lvm device */
-			log_print("%s not an lvm device.", dev_name(devl->dev));
+			log_print_unless_silent("%s not an lvm device.", dev_name(devl->dev));
 			dm_list_del(&devl->list);
 			dm_list_add(&devs_drop, &devl->list);
 			continue;
@@ -1155,8 +1155,8 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 		 */
 		if (relax_deviceid_filter) {
 			if (!(du = get_du_for_pvid(cmd, devl->dev->pvid))) {
-				log_print("%s excluded by devices file (checking PVID).",
-					  dev_name(devl->dev));
+				log_print_unless_silent("%s excluded by devices file (checking PVID).",
+							dev_name(devl->dev));
 				dm_list_del(&devl->list);
 				dm_list_add(&devs_drop, &devl->list);
 				continue;
@@ -1169,8 +1169,8 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 
 		/* Applies all filters, including those that need data from dev. */
 		if (!cmd->filter->passes_filter(cmd, cmd->filter, devl->dev, NULL)) {
-			log_print("%s excluded: %s.",
-				  dev_name(devl->dev), dev_filtered_reason(devl->dev));
+			log_print_unless_silent("%s excluded: %s.",
+						dev_name(devl->dev), dev_filtered_reason(devl->dev));
 			dm_list_del(&devl->list);
 			dm_list_add(&devs_drop, &devl->list);
 		}
@@ -1178,6 +1178,8 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 
 	if (relax_deviceid_filter)
 		cmd->filter_deviceid_skip = 0;
+
+	cmd->filter_regex_skip = 0;
 
 	free_po_list(&pvs_online);
 
@@ -1242,7 +1244,6 @@ int label_scan(struct cmd_context *cmd)
 	struct device_list *devl, *devl2;
 	struct device *dev;
 	uint64_t max_metadata_size_bytes;
-	int device_ids_invalid = 0;
 	int using_hints;
 	int create_hints = 0; /* NEWHINTS_NONE */
 
@@ -1253,10 +1254,17 @@ int label_scan(struct cmd_context *cmd)
 	dm_list_init(&scan_devs);
 	dm_list_init(&hints_list);
 
-	if (!scan_bcache) {
-		if (!_setup_bcache())
-			return_0;
-	}
+	if (!label_scan_setup_bcache())
+		return_0;
+
+	/*
+	 * Initialize cache of dm device uuids, which uses a special dm kernel
+	 * feature for efficiently querying many dm devs together.  (It's done
+	 * here, before processing the hints file, so that the dm uuid checks
+	 * in hint processing can benefit from the dm uuid cache.)
+	 */
+	if (!dm_devs_cache_update())
+		return_0;
 
 	/*
 	 * Creates a list of available devices, does not open or read any,
@@ -1292,7 +1300,7 @@ int label_scan(struct cmd_context *cmd)
 	 * data to invalidate.)
 	 */
 	if (!(iter = dev_iter_create(NULL, 0))) {
-		log_error("Scanning failed to get devices.");
+		log_error("Failed to get device list.");
 		return 0;
 	}
 	while ((dev = dev_iter_get(cmd, iter))) {
@@ -1332,7 +1340,8 @@ int label_scan(struct cmd_context *cmd)
 			dm_list_add(&filtered_devs, &devl->list);
 
 			if (dev->pvid[0]) {
-				log_print("Clear pvid and info for filtered dev %s", dev_name(dev));
+				log_print_unless_silent("Clear pvid and info for filtered dev %s.",
+							dev_name(dev));
 				lvmcache_del_dev(dev);
 				memset(dev->pvid, 0, sizeof(dev->pvid));
 			}
@@ -1394,9 +1403,9 @@ int label_scan(struct cmd_context *cmd)
 	 *
 	 * If there was an error during scan, we could recreate bcache here
 	 * with a larger size and then restart label_scan.  But, this does not
-	 * address the problem of writing new metadata that excedes the bcache
+	 * address the problem of writing new metadata that exceeds the bcache
 	 * size and failing, which would often be hit first, i.e. we'll fail
-	 * to write new metadata exceding the max size before we have a chance
+	 * to write new metadata exceeding the max size before we have a chance
 	 * to read any metadata with that size, unless we find an existing vg
 	 * that has been previously created with the larger size.
 	 *
@@ -1443,7 +1452,7 @@ int label_scan(struct cmd_context *cmd)
 	 * Check if the devices_file content is up to date and
 	 * if not update it.
 	 */
-	device_ids_validate(cmd, &scan_devs, &device_ids_invalid, 0);
+	device_ids_validate(cmd, &scan_devs, using_hints, 0, NULL);
 
 	dm_list_iterate_items_safe(devl, devl2, &all_devs) {
 		dm_list_del(&devl->list);
@@ -1479,7 +1488,7 @@ int label_scan(struct cmd_context *cmd)
 	 * (create_hints variable has NEWHINTS_X value which indicates
 	 * the reason for creating the new hints.)
 	 */
-	if (create_hints && !device_ids_invalid)
+	if (create_hints && !cmd->device_ids_invalid)
 		write_hint_file(cmd, create_hints);
 
 	return 1;
@@ -1491,11 +1500,9 @@ int label_scan(struct cmd_context *cmd)
  */
 int label_read_pvid(struct device *dev, int *has_pvid)
 {
-	char buf[4096] __attribute__((aligned(8)));
+	char buf[4096] __attribute__((aligned(8))) = { 0 };
 	struct label_header *lh;
 	struct pv_header *pvh;
-
-	memset(buf, 0, sizeof(buf));
 
 	if (!label_scan_open(dev))
 		return_0;
@@ -1566,10 +1573,8 @@ int label_scan_devs(struct cmd_context *cmd, struct dev_filter *f, struct dm_lis
 {
 	struct device_list *devl;
 
-	if (!scan_bcache) {
-		if (!_setup_bcache())
-			return 0;
-	}
+	if (!label_scan_setup_bcache())
+		return_0;
 
 	dm_list_iterate_items(devl, devs) {
 		if (_in_bcache(devl->dev))
@@ -1585,10 +1590,8 @@ int label_scan_devs_rw(struct cmd_context *cmd, struct dev_filter *f, struct dm_
 {
 	struct device_list *devl;
 
-	if (!scan_bcache) {
-		if (!_setup_bcache())
-			return 0;
-	}
+	if (!label_scan_setup_bcache())
+		return_0;
 
 	dm_list_iterate_items(devl, devs) {
 		if (_in_bcache(devl->dev))
@@ -1643,6 +1646,9 @@ void label_scan_invalidate_lv(struct cmd_context *cmd, struct logical_volume *lv
 	struct device *dev;
 	dev_t devt;
 
+	/* FIXME: use dev_cache_get_existing() with the lv name,
+	   which allow us to skip the getting devno from lv_info. */
+
 	if (lv_info(cmd, lv, 0, &lvinfo, 0, 0) && lvinfo.exists) {
 		/* FIXME: Still unclear what is it supposed to find */
 		devt = MKDEV(lvinfo.major, lvinfo.minor);
@@ -1653,12 +1659,7 @@ void label_scan_invalidate_lv(struct cmd_context *cmd, struct logical_volume *lv
 
 void label_scan_invalidate_lvs(struct cmd_context *cmd, struct dm_list *lvs)
 {
-	struct dm_list *devs;
-	struct dm_active_device *dm_dev;
-	unsigned devs_features = 0;
-	struct device *dev;
 	struct lv_list *lvl;
-	dev_t devt;
 
 	/*
 	 * This is only needed when the command sees PVs stacked on LVs which
@@ -1666,32 +1667,15 @@ void label_scan_invalidate_lvs(struct cmd_context *cmd, struct dm_list *lvs)
 	 */
 	if (!cmd->scan_lvs)
 		return;
-	log_debug("invalidating devs for any pvs on lvs");
 
-	if (get_device_list(NULL, &devs, &devs_features)) {
-		if (devs_features & DM_DEVICE_LIST_HAS_UUID) {
-			dm_list_iterate_items(dm_dev, devs)
-				if (dm_dev->uuid &&
-				    strncmp(dm_dev->uuid, UUID_PREFIX, sizeof(UUID_PREFIX) - 1) == 0) {
-					devt = MKDEV(dm_dev->major, dm_dev->minor);
-					if ((dev = dev_cache_get_by_devt(cmd, devt)))
-						label_scan_invalidate(dev);
-				}
-			/* ATM no further caching for any lvconvert command
-			 * TODO: any other command to be skipped ??
-			 */
-			if (strcmp(cmd->name, "lvconvert")) {
-				dm_device_list_destroy(&cmd->cache_dm_devs);
-				cmd->cache_dm_devs = devs; /* cache to avoid unneeded checks */
-				devs = NULL;
-			}
-		}
-		dm_device_list_destroy(&devs);
-	}
+	log_debug("Invalidating devs for any PVs on LVs.");
 
-	if (!(devs_features & DM_DEVICE_LIST_HAS_UUID))
+	if (dm_devs_cache_use())
+		dm_devs_cache_label_invalidate(cmd);
+	else {
 		dm_list_iterate_items(lvl, lvs)
 			label_scan_invalidate_lv(cmd, lvl->lv);
+	}
 }
 
 /*
@@ -1762,16 +1746,6 @@ int label_scan_dev(struct cmd_context *cmd, struct device *dev)
 	return 1;
 }
 
-int label_scan_setup_bcache(void)
-{
-	if (!scan_bcache) {
-		if (!_setup_bcache())
-			return 0;
-	}
-
-	return 1;
-}
-
 /*
  * This is needed to write to a new non-lvm device.
  * Scanning that dev would not keep it open or in
@@ -1817,15 +1791,15 @@ int label_scan_reopen_rw(struct device *dev)
 	int fd;
 
 	if (dm_list_empty(&dev->aliases)) {
-		log_error("Cannot reopen rw device %d:%d with no valid paths di %d fd %d.",
-			  (int)MAJOR(dev->dev), (int)MINOR(dev->dev), dev->bcache_di, dev->bcache_fd);
+		log_error("Cannot reopen rw device %u:%u with no valid paths di %d fd %d.",
+			  MAJOR(dev->dev), MINOR(dev->dev), dev->bcache_di, dev->bcache_fd);
 		return 0;
 	}
 
 	name = dev_name(dev);
 	if (!name || name[0] != '/') {
-		log_error("Cannot reopen rw device %d:%d with no valid name di %d fd %d.",
-			  (int)MAJOR(dev->dev), (int)MINOR(dev->dev), dev->bcache_di, dev->bcache_fd);
+		log_error("Cannot reopen rw device %u:%u with no valid name di %d fd %d.",
+			  MAJOR(dev->dev), MINOR(dev->dev), dev->bcache_di, dev->bcache_fd);
 		return 0;
 	}
 

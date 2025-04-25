@@ -175,12 +175,11 @@ struct dm_names {
 
 struct dm_active_device {
 	struct dm_list list;
-	int major;
-	int minor;
-	char *name;	/* device name */
+	dev_t devno;
+	const char *name;	/* device name */
 
 	uint32_t event_nr; /* valid when DM_DEVICE_LIST_HAS_EVENT_NR is set */
-	char *uuid;	/* valid uuid when DM_DEVICE_LIST_HAS_UUID is set */
+	const char *uuid;	/* valid uuid when DM_DEVICE_LIST_HAS_UUID is set */
 };
 
 struct dm_versions {
@@ -192,7 +191,7 @@ struct dm_versions {
 
 int dm_get_library_version(char *version, size_t size);
 int dm_task_get_driver_version(struct dm_task *dmt, char *version, size_t size);
-int dm_task_get_info(struct dm_task *dmt, struct dm_info *dmi);
+int dm_task_get_info(struct dm_task *dmt, struct dm_info *info);
 
 /*
  * This function returns dm device's UUID based on the value
@@ -230,13 +229,6 @@ struct dm_names *dm_task_get_names(struct dm_task *dmt);
 #define DM_DEVICE_LIST_HAS_UUID		2
 int dm_task_get_device_list(struct dm_task *dmt, struct dm_list **devs_list,
 			    unsigned *devs_features);
-/*
- * -1: no idea about uuid (not provided by DM_DEVICE_LIST ioctl)
- *  0: uuid not present
- *  1: listed and dm_active_device will be set for not NULL pointer
- */
-int dm_device_list_find_by_uuid(struct dm_list *devs_list, const char *uuid,
-				const struct dm_active_device **dev);
 /* Release all associated memory with list of active DM devices */
 void dm_device_list_destroy(struct dm_list **devs_list);
 
@@ -312,15 +304,15 @@ int dm_task_add_target(struct dm_task *dmt,
 #define DM_FORMAT_DEV_BUFSIZE	13	/* Minimum bufsize to handle worst case. */
 int dm_format_dev(char *buf, int bufsize, uint32_t dev_major, uint32_t dev_minor);
 
-/* Use this to retrive target information returned from a STATUS call */
+/* Use this to retrieve target information returned from a STATUS call */
 void *dm_get_next_target(struct dm_task *dmt,
 			 void *next, uint64_t *start, uint64_t *length,
 			 char **target_type, char **params);
 
 /*
- * Following dm_get_status_* functions will allocate approriate status structure
+ * Following dm_get_status_* functions will allocate appropriate status structure
  * from passed mempool together with the necessary character arrays.
- * Destroying the mempool will release all asociated allocation.
+ * Destroying the mempool will release all associated allocation.
  */
 
 /* Parse params from STATUS call for mirror target */
@@ -549,7 +541,7 @@ const char *dm_sysfs_dir(void);
 
 /*
  * Configure default UUID prefix string.
- * Conventionally this is a short capitalised prefix indicating the subsystem
+ * Conventionally this is a short capitalized prefix indicating the subsystem
  * that is managing the devices, e.g. "LVM-" or "MPATH-".
  * To support stacks of devices from different subsystems, recursive functions
  * stop recursing if they reach a device with a different prefix.
@@ -592,7 +584,7 @@ int dm_device_has_mounted_fs(uint32_t major, uint32_t minor);
 
 
 /*
- * Callback is invoked for individal mountinfo lines,
+ * Callback is invoked for individual mountinfo lines,
  * minor, major and mount target are parsed and unmangled.
  */
 typedef int (*dm_mountinfo_line_callback_fn) (char *line, unsigned maj, unsigned min,
@@ -706,7 +698,7 @@ void *dm_tree_node_get_context(const struct dm_tree_node *node);
 /*
  * Returns  0 when node size and its children is unchanged.
  * Returns  1 when node or any of its children has increased size.
- * Rerurns -1 when node or any of its children has reduced size.
+ * Returns -1 when node or any of its children has reduced size.
  */
 int dm_tree_node_size_changed(const struct dm_tree_node *dnode);
 
@@ -893,7 +885,7 @@ struct dm_tree_node_raid_params {
 };
 
 /*
- * Version 2 of above node raid params struct to keeep API compatibility.
+ * Version 2 of above node raid params struct to keep API compatibility.
  *
  * Extended for more than 64 legs (max 253 in the MD kernel runtime!),
  * delta_disks for disk add/remove reshaping,
@@ -916,7 +908,7 @@ struct dm_tree_node_raid_params_v2 {
 	 * 'rebuilds' and 'writemostly' are bitfields that signify
 	 * which devices in the array are to be rebuilt or marked
 	 * writemostly.  The kernel supports up to 253 legs.
-	 * We limit ourselvs by choosing a lower value
+	 * We limit ourselves by choosing a lower value
 	 * for DEFAULT_RAID_MAX_IMAGES.
 	 */
 	uint64_t rebuilds[RAID_BITMAP_SIZE];
@@ -953,7 +945,7 @@ struct dm_config_node;
  *
  * policy_settings {
  *    migration_threshold=2048
- *    sequention_threashold=100
+ *    sequential_threshold=100
  *    ...
  * }
  *
@@ -982,7 +974,9 @@ struct writecache_settings {
 	uint32_t fua;
 	uint32_t nofua;
 	uint32_t cleaner;
-	uint32_t max_age;
+	uint32_t max_age;         /* in milliseconds */
+	uint32_t metadata_only;
+	uint32_t pause_writeback; /* in milliseconds */
 
 	/*
 	 * Allow an unrecognized key and its val to be passed to the kernel for
@@ -1004,6 +998,8 @@ struct writecache_settings {
 	unsigned nofua_set:1;
 	unsigned cleaner_set:1;
 	unsigned max_age_set:1;
+	unsigned metadata_only_set:1;
+	unsigned pause_writeback_set:1;
 };
 
 int dm_tree_node_add_writecache_target(struct dm_tree_node *node,
@@ -1027,6 +1023,7 @@ struct integrity_settings {
 	uint32_t commit_time;
 	uint32_t bitmap_flush_interval;
 	uint64_t sectors_per_bit;
+	uint32_t allow_discards;
 
 	unsigned journal_sectors_set:1;
 	unsigned interleave_sectors_set:1;
@@ -1035,6 +1032,7 @@ struct integrity_settings {
 	unsigned commit_time_set:1;
 	unsigned bitmap_flush_interval_set:1;
 	unsigned sectors_per_bit_set:1;
+	unsigned allow_discards_set:1;
 };
 
 int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
@@ -1049,10 +1047,11 @@ int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
  */
 int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
 				uint64_t size,
+				uint32_t vdo_version,
 				const char *vdo_pool_name,
 				const char *data_uuid,
 				uint64_t data_size,
-				const struct dm_vdo_target_params *param);
+				const struct dm_vdo_target_params *vtp);
 
 /*
  * FIXME Add individual cache policy pairs  <key> = value, like:
@@ -1095,7 +1094,7 @@ int dm_tree_node_add_replicator_dev_target(struct dm_tree_node *node,
 /* End of Replicator API */
 
 /*
- * FIXME: Defines bellow are based on kernel's dm-thin.c defines
+ * FIXME: Defines below are based on kernel's dm-thin.c defines
  * DATA_DEV_BLOCK_SIZE_MIN_SECTORS (64 * 1024 >> SECTOR_SHIFT)
  * DATA_DEV_BLOCK_SIZE_MAX_SECTORS (1024 * 1024 * 1024 >> SECTOR_SHIFT)
  */
@@ -1161,7 +1160,7 @@ int dm_tree_node_set_thin_pool_error_if_no_space(struct dm_tree_node *node,
 int dm_tree_node_set_thin_pool_read_only(struct dm_tree_node *node,
 					 unsigned read_only);
 /*
- * FIXME: Defines bellow are based on kernel's dm-thin.c defines
+ * FIXME: Defines below are based on kernel's dm-thin.c defines
  * MAX_DEV_ID ((1 << 24) - 1)
  */
 #define DM_THIN_MAX_DEVICE_ID (UINT32_C((1 << 24) - 1))
@@ -1179,9 +1178,9 @@ void dm_tree_node_set_presuspend_node(struct dm_tree_node *node,
 				      struct dm_tree_node *presuspend_node);
 
 int dm_tree_node_add_target_area(struct dm_tree_node *node,
-				    const char *dev_name,
-				    const char *dlid,
-				    uint64_t offset);
+				 const char *dev_name,
+				 const char *uuid,
+				 uint64_t offset);
 
 /*
  * Only for temporarily-missing raid devices where changes are tracked.
@@ -1591,9 +1590,9 @@ int dm_fclose(FILE *stream);
  * Pointer to the buffer is stored in *buf.
  * Returns -1 on failure leaving buf undefined.
  */
-int dm_asprintf(char **buf, const char *format, ...)
+int dm_asprintf(char **result, const char *format, ...)
     __attribute__ ((format(printf, 2, 3)));
-int dm_vasprintf(char **buf, const char *format, va_list ap)
+int dm_vasprintf(char **result, const char *format, va_list aq)
     __attribute__ ((format(printf, 2, 0)));
 
 /*
@@ -1870,6 +1869,7 @@ const void *dm_report_value_cache_get(struct dm_report *rh, const char *name);
 #define DM_REPORT_OUTPUT_FIELD_UNQUOTED		0x00000010
 #define DM_REPORT_OUTPUT_COLUMNS_AS_ROWS	0x00000020
 #define DM_REPORT_OUTPUT_MULTIPLE_TIMES		0x00000040
+#define DM_REPORT_OUTPUT_FIELD_IDS_IN_HEADINGS	0x00000080
 
 struct dm_report *dm_report_init(uint32_t *report_types,
 				 const struct dm_report_object_type *types,
@@ -1941,7 +1941,7 @@ void dm_report_free(struct dm_report *rh);
  * Prefix added to each field name with DM_REPORT_OUTPUT_FIELD_NAME_PREFIX
  */
 int dm_report_set_output_field_name_prefix(struct dm_report *rh,
-					   const char *report_prefix);
+					   const char *output_field_name_prefix);
 
 int dm_report_set_selection(struct dm_report *rh, const char *selection);
 
@@ -1982,7 +1982,8 @@ struct dm_report_group;
 typedef enum {
 	DM_REPORT_GROUP_SINGLE,
 	DM_REPORT_GROUP_BASIC,
-	DM_REPORT_GROUP_JSON
+	DM_REPORT_GROUP_JSON,
+	DM_REPORT_GROUP_JSON_STD
 } dm_report_group_type_t;
 
 struct dm_report_group *dm_report_group_create(dm_report_group_type_t type, void *data);
@@ -2033,6 +2034,7 @@ struct dm_config_tree *dm_config_create(void);
 struct dm_config_tree *dm_config_from_string(const char *config_settings);
 int dm_config_parse(struct dm_config_tree *cft, const char *start, const char *end);
 int dm_config_parse_without_dup_node_check(struct dm_config_tree *cft, const char *start, const char *end);
+int dm_config_parse_only_section(struct dm_config_tree *cft, const char *start, const char *end, const char *section);
 
 void *dm_config_get_custom(struct dm_config_tree *cft);
 void dm_config_set_custom(struct dm_config_tree *cft, void *custom);
@@ -2057,7 +2059,7 @@ void dm_config_destroy(struct dm_config_tree *cft);
 
 /* Simple output line by line. */
 typedef int (*dm_putline_fn)(const char *line, void *baton);
-/* More advaced output with config node reference. */
+/* More advanced output with config node reference. */
 typedef int (*dm_config_node_out_fn)(const struct dm_config_node *cn, const char *line, void *baton);
 
 /*
@@ -2079,7 +2081,7 @@ int dm_config_write_one_node_out(const struct dm_config_node *cn, const struct d
 
 struct dm_config_node *dm_config_find_node(const struct dm_config_node *cn, const char *path);
 int dm_config_has_node(const struct dm_config_node *cn, const char *path);
-int dm_config_remove_node(struct dm_config_node *parent, struct dm_config_node *remove);
+int dm_config_remove_node(struct dm_config_node *parent, struct dm_config_node *rem_node);
 const char *dm_config_find_str(const struct dm_config_node *cn, const char *path, const char *fail);
 const char *dm_config_find_str_allow_empty(const struct dm_config_node *cn, const char *path, const char *fail);
 int dm_config_find_int(const struct dm_config_node *cn, const char *path, int fail);
@@ -2111,7 +2113,7 @@ unsigned dm_config_maybe_section(const char *str, unsigned len);
 
 const char *dm_config_parent_name(const struct dm_config_node *n);
 
-struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const struct dm_config_node *node, int siblings);
+struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const struct dm_config_node *cn, int siblings);
 struct dm_config_node *dm_config_create_node(struct dm_config_tree *cft, const char *key);
 struct dm_config_value *dm_config_create_value(struct dm_config_tree *cft);
 struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *cn, int siblings);
@@ -2120,7 +2122,7 @@ struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const st
  * Common formatting flags applicable to all config node types (lower 16 bits).
  */
 #define DM_CONFIG_VALUE_FMT_COMMON_ARRAY             0x00000001 /* value is array */
-#define DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES      0x00000002 /* add spaces in "key = value" pairs in constrast to "key=value" for better readability */
+#define DM_CONFIG_VALUE_FMT_COMMON_EXTRA_SPACES      0x00000002 /* add spaces in "key = value" pairs in contrast to "key=value" for better readability */
 
 /*
  * Type-related config node formatting flags (higher 16 bits).
@@ -2166,7 +2168,7 @@ struct dm_pool *dm_config_memory(struct dm_config_tree *cft);
  */
 #define DM_UDEV_DISABLE_DM_RULES_FLAG 0x0001
 /*
- * DM_UDEV_DISABLE_SUBSYTEM_RULES_FLAG is set in case we need to disable
+ * DM_UDEV_DISABLE_SUBSYSTEM_RULES_FLAG is set in case we need to disable
  * subsystem udev rules, but still we need the general DM udev rules to
  * be applied (to create the nodes and symlinks under /dev and /dev/disk).
  */
@@ -2237,7 +2239,7 @@ struct dm_pool *dm_config_memory(struct dm_config_tree *cft);
 int dm_cookie_supported(void);
 
 /*
- * Udev synchronisation functions.
+ * Udev synchronization functions.
  */
 void dm_udev_set_sync_support(int sync_with_udev);
 int dm_udev_get_sync_support(void);

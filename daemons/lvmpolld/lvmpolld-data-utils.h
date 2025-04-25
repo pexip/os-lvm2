@@ -15,7 +15,10 @@
 #ifndef _LVM_LVMPOLLD_DATA_UTILS_H
 #define _LVM_LVMPOLLD_DATA_UTILS_H
 
+#include "base/data-struct/hash.h"
+
 #include <pthread.h>
+#include <stdio.h>
 
 struct buffer;
 struct lvmpolld_state;
@@ -45,18 +48,18 @@ struct lvmpolld_lv {
 	 * accessing following vars doesn't
 	 * require struct lvmpolld_lv lock
 	 */
-	struct lvmpolld_state *const ls;
-	const enum poll_type type;
-	const char *const lvid;
-	const char *const lvmpolld_id;
-	const char *const devicesfile;
-	const char *const lvname; /* full vg/lv name */
-	const unsigned pdtimeout; /* in seconds */
-	const char *const sinterval;
-	const char *const lvm_system_dir_env;
-	struct lvmpolld_store *const pdst;
-	const char *const *cmdargv;
-	const char *const *cmdenvp;
+	struct lvmpolld_state *ls;
+	enum poll_type type;
+	const char *lvid;
+	const char *lvmpolld_id;
+	const char *devicesfile;
+	const char *lvname; /* full vg/lv name */
+	unsigned pdtimeout; /* in seconds */
+	const char *sinterval;
+	const char *lvm_system_dir_env;
+	struct lvmpolld_store *pdst;
+	const char **cmdargv;
+	const char **cmdenvp;
 
 	/* only used by write */
 	pid_t cmd_pid;
@@ -66,9 +69,9 @@ struct lvmpolld_lv {
 
 	/* block of shared variables protected by lock */
 	struct lvmpolld_cmd_stat cmd_state;
-	unsigned init_rq_count; /* for debuging purposes only */
+	unsigned init_rq_count; /* for debugging purposes only */
 	unsigned polling_finished:1; /* no more updates */
-	unsigned error:1; /* unrecoverable error occured in lvmpolld */
+	unsigned error:1; /* unrecoverable error occurred in lvmpolld */
 };
 
 typedef void (*lvmpolld_parse_output_fn_t) (struct lvmpolld_lv *pdlv, const char *line);
@@ -93,7 +96,7 @@ struct lvmpolld_thread_data {
 	struct lvmpolld_lv *pdlv;
 };
 
-char *construct_id(const char *sysdir, const char *lvid);
+char *construct_id(const char *sysdir, const char *uuid);
 
 /* LVMPOLLD_LV_T section */
 

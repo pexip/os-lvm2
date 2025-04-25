@@ -17,6 +17,9 @@ SKIP_WITH_LVMLOCKD=1
 
 . lib/inittest
 
+# FIXME: currently test relies on several system properties to be
+# explicitly configure and directly modifies their state
+
 #
 # $ cat /tmp/devs
 # /dev/sdb
@@ -29,11 +32,15 @@ SKIP_WITH_LVMLOCKD=1
 # This test will wipe these devices.
 #
 
-if [ -z ${LVM_TEST_DEVICE_LIST+x} ]; then echo "LVM_TEST_DEVICE_LIST is unset" && skip; else echo "LVM_TEST_DEVICE_LIST is set to '$LVM_TEST_DEVICE_LIST'"; fi
+if [ -z ${LVM_TEST_DEVICE_LIST+x} ]; then
+	skip "LVM_TEST_DEVICE_LIST is unset"
+else
+	echo "LVM_TEST_DEVICE_LIST is set to '$LVM_TEST_DEVICE_LIST'"
+fi
 
 test -e "$LVM_TEST_DEVICE_LIST" || skip
 
-num_devs=$(cat $LVM_TEST_DEVICE_LIST | wc -l)
+num_devs=$(wc -l < "$LVM_TEST_DEVICE_LIST")
 
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
@@ -56,39 +63,44 @@ _clear_online_files
 
 aux prepare_real_devs
 
-aux lvmconf 'devices/dir = "/dev"'
-aux lvmconf 'devices/use_devicesfile = 1'
+aux lvmconf 'devices/dir = "/dev"' \
+	    'devices/use_devicesfile = 1'
 DFDIR="$LVM_SYSTEM_DIR/devices"
 DF="$DFDIR/system.devices"
-mkdir $DFDIR || true
-not ls $DF
+mkdir "$DFDIR" || true
+not ls "$DF"
 
 get_real_devs
 
 wipe_all() {
 	for dev in "${REAL_DEVICES[@]}"; do
-		wipefs -a $dev
+		wipefs -a "$dev"
 	done
 }
 
 wait_lvm_activate() {
 	local vgw=$1
 	local wait=0
+	rm status || true
 
-	while systemctl status lvm-activate-$vgw > /dev/null && test "$wait" -le 30; do
-		sleep .2
-		wait=$(( wait + 1 ))
+	# time for service to be started
+	sleep 1
+
+ 	while systemctl status lvm-activate-$vgw |tee status && test "$wait" -le 30; do
+ 		sleep .2
+ 		wait=$(( wait + 1 ))
 	done
+	cat status || true
 }
 
 # Test requires 3 devs
-test $num_devs -gt 2 || skip
+test "$num_devs" -gt 2 || skip
 BDEV1=$(basename "$dev1")
 BDEV2=$(basename "$dev2")
 BDEV3=$(basename "$dev3")
 
 wipe_all
-touch $DF
+touch "$DF"
 for dev in "${REAL_DEVICES[@]}"; do
 	pvcreate $dev
 done
@@ -101,12 +113,12 @@ lvcreate -l1 -an -n $lv1 $vg1 "$dev1"
 PVID1=$(pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}')
 
 _clear_online_files
-udevadm trigger --settle -c add /sys/block/$BDEV1
+udevadm trigger --settle -c add "/sys/block/$BDEV1"
 
 wait_lvm_activate $vg1
 
-ls "$RUNDIR/lvm/pvs_online/$PVID1"
-ls "$RUNDIR/lvm/vgs_online/$vg1"
+ls "$RUNDIR/lvm/pvs_online/$PVID1" || true
+ls "$RUNDIR/lvm/vgs_online/$vg1" || true
 journalctl -u lvm-activate-$vg1 | tee out || true
 grep "now active" out
 check lv_field $vg1/$lv1 lv_active "active"
@@ -126,7 +138,7 @@ PVID2=$(pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}')
 
 _clear_online_files
 
-udevadm trigger --settle -c add /sys/block/$BDEV1
+udevadm trigger --settle -c add "/sys/block/$BDEV1"
 ls "$RUNDIR/lvm/pvs_online/$PVID1"
 not ls "$RUNDIR/lvm/vgs_online/$vg2"
 journalctl -u lvm-activate-$vg2 | tee out || true
@@ -134,7 +146,7 @@ not grep "now active" out
 check lv_field $vg2/$lv1 lv_active ""
 check lv_field $vg2/$lv2 lv_active ""
 
-udevadm trigger --settle -c add /sys/block/$BDEV2
+udevadm trigger --settle -c add "/sys/block/$BDEV2"
 ls "$RUNDIR/lvm/pvs_online/$PVID2"
 ls "$RUNDIR/lvm/vgs_online/$vg2"
 
@@ -165,17 +177,19 @@ PVID3=$(pvs "$dev3" --noheading -o uuid | tr -d - | awk '{print $1}')
 
 _clear_online_files
 
-udevadm trigger -c add /sys/block/$BDEV1 &
-udevadm trigger -c add /sys/block/$BDEV2 &
-udevadm trigger -c add /sys/block/$BDEV3
+udevadm trigger -c add "/sys/block/$BDEV1" &
+udevadm trigger -c add "/sys/block/$BDEV2" &
+udevadm trigger -c add "/sys/block/$BDEV3"
 
 aux udev_wait
 wait_lvm_activate $vg3
 
+find "$RUNDIR/lvm"
 ls "$RUNDIR/lvm/pvs_online/$PVID1"
 ls "$RUNDIR/lvm/pvs_online/$PVID2"
 ls "$RUNDIR/lvm/pvs_online/$PVID3"
 ls "$RUNDIR/lvm/vgs_online/$vg3"
+
 journalctl -u lvm-activate-$vg3 | tee out || true
 grep "now active" out
 check lv_field $vg3/$lv1 lv_active "active"
@@ -208,9 +222,9 @@ PVID3=$(pvs "$dev3" --noheading -o uuid | tr -d - | awk '{print $1}')
 
 _clear_online_files
 
-udevadm trigger -c add /sys/block/$BDEV1 &
-udevadm trigger -c add /sys/block/$BDEV2 &
-udevadm trigger -c add /sys/block/$BDEV3
+udevadm trigger -c add "/sys/block/$BDEV1" &
+udevadm trigger -c add "/sys/block/$BDEV2" &
+udevadm trigger -c add "/sys/block/$BDEV3"
 
 aux udev_wait
 wait_lvm_activate $vg4
@@ -235,8 +249,8 @@ vgremove -y $vg4
 # 3 devs, 3 vgs, 2 lvs in each vg, concurrent pvscans
 
 wipe_all
-rm $DF
-touch $DF
+rm "$DF"
+touch "$DF"
 
 vgcreate $vg5 "$dev1"
 vgcreate $vg6 "$dev2"
@@ -250,9 +264,9 @@ lvcreate -l1 -an -n $lv2 $vg7
 
 _clear_online_files
 
-udevadm trigger -c add /sys/block/$BDEV1 &
-udevadm trigger -c add /sys/block/$BDEV2 &
-udevadm trigger -c add /sys/block/$BDEV3
+udevadm trigger -c add "/sys/block/$BDEV1" &
+udevadm trigger -c add "/sys/block/$BDEV2" &
+udevadm trigger -c add "/sys/block/$BDEV3"
 
 aux udev_wait
 wait_lvm_activate $vg5
@@ -285,8 +299,8 @@ vgremove -y $vg7
 # 3 devs, 1 vg, 1000 LVs
 
 wipe_all
-rm $DF
-touch $DF
+rm "$DF"
+touch "$DF"
 pvcreate --metadatacopies 0 "$dev1"
 pvcreate "$dev2"
 pvcreate "$dev3"
@@ -325,9 +339,9 @@ vgcfgrestore -f data_new $vg8
 
 _clear_online_files
 
-udevadm trigger -c add /sys/block/$BDEV1 &
-udevadm trigger -c add /sys/block/$BDEV2 &
-udevadm trigger -c add /sys/block/$BDEV3
+udevadm trigger -c add "/sys/block/$BDEV1" &
+udevadm trigger -c add "/sys/block/$BDEV2" &
+udevadm trigger -c add "/sys/block/$BDEV3"
 
 aux udev_wait
 wait_lvm_activate $vg8
@@ -336,9 +350,9 @@ ls "$RUNDIR/lvm/vgs_online/$vg8"
 journalctl -u lvm-activate-$vg8 | tee out || true
 grep "now active" out
 
-num_active=$(lvs $vg8 --noheading -o active | grep active | wc -l)
+num_active=$(lvs $vg8 --noheading -o active | grep -c active)
 
-test $num_active -eq $TEST_DEVS
+test "$num_active" -eq "$TEST_DEVS"
 
 vgchange -an $vg8
 vgremove -y $vg8
@@ -363,27 +377,26 @@ wait_md_create() {
 test -f /proc/mdstat && grep -q raid1 /proc/mdstat || \
        modprobe raid1 || skip
 
-mddev="/dev/md33"
-not grep $mddev /proc/mdstat || skip
-
 wipe_all
-rm $DF
-touch $DF
+rm "$DF"
+touch "$DF"
 
-mdadm --create --metadata=1.0 "$mddev" --level 1 --chunk=64 --raid-devices=2 "$dev1" "$dev2"
+aux mdadm_create --metadata=1.0 --level 1 --chunk=64 --raid-devices=2 "$dev1" "$dev2"
+mddev=$(< MD_DEV)
+
 wait_md_create "$mddev"
 vgcreate $vg9 "$mddev"
 lvmdevices --adddev "$mddev" || true
 
-PVIDMD=`pvs $mddev --noheading -o uuid | tr -d - | awk '{print $1}'`
-BDEVMD=$(basename "$mddev")
+PVIDMD="$(pvs "$mddev" --noheading -o uuid | tr -d - | awk '{print $1}')"
+BDEVMD="$(basename "$mddev")"
 
 lvcreate -l1 -an -n $lv1 $vg9
 lvcreate -l1 -an -n $lv2 $vg9
 
 mdadm --stop "$mddev"
 _clear_online_files
-mdadm --assemble "$mddev" "$dev1" "$dev2"
+aux mdadm_assemble "$mddev" "$dev1" "$dev2"
 
 # this trigger might be redundant because the mdadm --assemble
 # probably triggers an add uevent
@@ -419,18 +432,18 @@ lvcreate -l1 -an -n $lv1 $vg10 "$dev1"
 
 PVID1=$(pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}')
 # PVID with dashes
-OPVID1=`pvs "$dev1" --noheading -o uuid | awk '{print $1}'`
+OPVID1=$(pvs "$dev1" --noheading -o uuid | awk '{print $1}')
 
-udevadm trigger --settle -c add /sys/block/$BDEV1
+udevadm trigger --settle -c add "/sys/block/$BDEV1"
 
 # uevent from the trigger should create this symlink
-ls /dev/disk/by-id/lvm-pv-uuid-$OPVID1
+ls "/dev/disk/by-id/lvm-pv-uuid-$OPVID1"
 
 vgchange -an $vg10
 _clear_online_files
 
-aux lvmconf "devices/filter = [ \"a|/dev/disk/by-id/lvm-pv-uuid-$OPVID1|\", \"r|.*|\" ]"
-aux lvmconf 'devices/global_filter = [ "a|.*|" ]'
+aux lvmconf "devices/filter = [ \"a|/dev/disk/by-id/lvm-pv-uuid-$OPVID1|\", \"r|.*|\" ]" \
+	    'devices/global_filter = [ "a|.*|" ]'
 
 pvscan --cache -aay "$dev1"
 
@@ -439,8 +452,8 @@ check lv_field $vg10/$lv1 lv_active "active"
 vgchange -an $vg10
 _clear_online_files
 
-aux lvmconf 'devices/filter = [ "a|lvm-pv-uuid|", "r|.*|" ]'
-aux lvmconf 'devices/global_filter = [ "a|.*|" ]'
+aux lvmconf 'devices/filter = [ "a|lvm-pv-uuid|", "r|.*|" ]' \
+	    'devices/global_filter = [ "a|.*|" ]'
 
 pvscan --cache -aay "$dev1"
 
@@ -448,5 +461,81 @@ check lv_field $vg10/$lv1 lv_active "active"
 
 vgchange -an $vg10
 vgremove -y $vg10
+wipe_all
+
+aux lvmconf 'devices/filter = [ "a|.*|" ]' \
+	    'devices/global_filter = [ "a|.*|" ]'
+
+#
+# system.devices contains different product_uuid and incorrect device IDs
+#
+
+SYS_DIR="$PWD/test/sys"
+
+aux lvmconf 'devices/use_devicesfile = 1' \
+	    'devices/device_id_sysfs_dir = \"$SYS_DIR/\"'
+
+WWID1="naa.111"
+WWID2="naa.222"
+PRODUCT_UUID1="11111111-2222-3333-4444-555555555555"
+PRODUCT_UUID2="11111111-2222-3333-4444-666666666666"
+
+vgcreate $vg11 "$dev1"
+lvcreate -l1 -an -n $lv1 $vg11 "$dev1"
+
+eval "$(pvs --noheading --nameprefixes -o major,minor,uuid "$dev1")"
+MAJOR1=$LVM2_PV_MAJOR
+MINOR1=$LVM2_PV_MINOR
+OPVID1=$LVM2_PV_UUID
+PVID1=${OPVID1//-/}
+
+mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
+echo "$WWID1" > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+mkdir -p "$SYS_DIR/devices/virtual/dmi/id/"
+echo "$PRODUCT_UUID1" > "$SYS_DIR/devices/virtual/dmi/id/product_uuid"
+
+vgimportdevices $vg11
+
+grep $PRODUCT_UUID1 "$DF"
+grep $PVID1 "$DF"
+grep $WWID1 "$DF"
+grep "$dev1" "$DF"
+
+# change wwid for dev1 and product_uuid for host
+
+echo "$WWID2" > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+echo "$PRODUCT_UUID2" > "$SYS_DIR/devices/virtual/dmi/id/product_uuid"
+
+_clear_online_files
+
+udevadm trigger --settle -c add "/sys/block/$BDEV1"
+
+wait_lvm_activate $vg11
+
+ls "$RUNDIR/lvm/vgs_online/$vg11"
+journalctl -u lvm-activate-$vg11 | tee out || true
+grep "now active" out
+
+# Run ordinary command that will refresh device ID in system.devices
+pvs -o+uuid | tee out
+grep "$dev1" out
+grep "$OPVID1" out
+
+# check new wwid for dev1 and new product_uuid for host
+cat "$DF"
+grep $PRODUCT_UUID2 "$DF"
+not grep $PRODUCT_UUID1 "$DF"
+grep $PVID1 "$DF"
+grep $WWID2 "$DF"
+not grep $WWID1 "$DF"
+grep "$dev1" "$DF"
+
+check lv_field $vg11/$lv1 lv_active "active"
+
+vgchange -an $vg11
+vgremove -y $vg11
+
+rm -rf "$SYS_DIR"
+
 wipe_all
 

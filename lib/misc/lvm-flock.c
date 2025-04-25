@@ -49,7 +49,7 @@ static void _undo_flock(const char *file, int fd)
 	    !stat(file, &buf1) &&
 	    !fstat(fd, &buf2) &&
 	    is_same_inode(buf1, buf2))
-		if (unlink(file))
+		if (unlink(file) && (errno != ENOENT))
 			log_sys_debug("unlink", file);
 
 	if (close(fd) < 0)
@@ -159,10 +159,9 @@ static int _do_flock(const char *file, int *fd, int operation, uint32_t nonblock
 static int _do_write_priority_flock(const char *file, int *fd, int operation, uint32_t nonblock)
 {
 	int r, fd_aux = -1;
-	char *file_aux = alloca(strlen(file) + sizeof(AUX_LOCK_SUFFIX));
+	char file_aux[PATH_MAX];
 
-	strcpy(file_aux, file);
-	strcat(file_aux, AUX_LOCK_SUFFIX);
+	snprintf(file_aux, sizeof(file_aux), "%s%s", file, AUX_LOCK_SUFFIX);
 
 	if ((r = _do_flock(file_aux, &fd_aux, LOCK_EX, nonblock))) {
 		if (operation == LOCK_EX) {

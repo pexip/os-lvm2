@@ -40,7 +40,8 @@ _clear_online_files() {
 aux lvmconf "devices/md_component_detection = 1" \
 	"devices/hints = \"none\"" \
 	"devices/obtain_device_list_from_udev = 0" \
-	"devices/search_for_devnames = \"none\""
+	"devices/search_for_devnames = \"none\"" \
+	"global/event_activation = 1"
 
 aux extend_filter_md "a|/dev/md|"
 
@@ -53,8 +54,12 @@ for level in 1 0 ; do
 #
 # When a raid0 md array is stopped, the components will not look like
 # duplicate PVs as they do with raid1.
-
-aux mdadm_create --metadata=1.0 --level=$level --chunk=64 --raid-devices=2 "$dev1" "$dev2"
+# mdadm does not seem to like --chunk=64 with raid1
+case "$level" in
+0) CHUNK="--chunk=64" ;;
+*) CHUNK="" ;;
+esac
+aux mdadm_create --metadata=1.0 --level=$level $CHUNK --raid-devices=2 "$dev1" "$dev2"
 mddev=$(< MD_DEV)
 
 vgcreate $vg "$mddev"
@@ -156,9 +161,7 @@ vgchange -an $vg
 vgremove -f $vg
 
 aux cleanup_md_dev
-aux wipefs_a "$dev1"
-aux wipefs_a "$dev2"
-aux udev_wait
+aux wipefs_a "$dev1" "$dev2"
 
 done
 

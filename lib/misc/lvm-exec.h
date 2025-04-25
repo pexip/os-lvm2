@@ -21,7 +21,7 @@
 struct cmd_context;
 
 /**
- * Execute command with paramaters and return status
+ * Execute command with parameters and return status
  *
  * \param rstatus
  * Returns command's exit status code.
@@ -66,5 +66,9 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 		int sync_needed, struct pipe_data *pdata);
 
 int pipe_close(struct pipe_data *pdata);
+
+/* Prepare argv options list */
+int prepare_exec_args(struct cmd_context *cmd,
+		      const char *argv[], int *argc, int options_id);
 
 #endif

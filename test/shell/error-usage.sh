@@ -13,6 +13,7 @@
 # Basic usage of zero target
 
 
+SKIP_WITH_LVMLOCKD=1
 SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
@@ -39,8 +40,10 @@ lvextend -L+1 --type striped $vg/$lv1
 lvextend -L+1 --type error $vg/$lv1
 
 # 4 segments:  error 3m, zero 1m, linear 2m, error 1m
-lvs -o+segtype,seg_size $vg
+lvs -o+segtype,seg_size,layout,role $vg
 check lv_field $vg/$lv1 seg_count "4"
 check lv_field $vg/$lv1 size "7.00m"
+check lv_field $vg/$lv1 layout "linear,error,zero"
+check lv_field $vg/$lv1 role "public"
 
 vgremove -ff $vg

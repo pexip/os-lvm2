@@ -45,6 +45,12 @@
 #include <systemd/sd-id128.h>
 #endif
 
+#ifdef HAVE_VALGRIND
+#include <valgrind.h>
+#else
+#define RUNNING_ON_VALGRIND 0
+#endif
+
 #ifdef __linux__
 #  include <malloc.h>
 #endif
@@ -252,7 +258,7 @@ static void _get_sysfs_dir(struct cmd_context *cmd, char *buf, size_t buf_size)
 		return;
 	}
 
-	(void) dm_strncpy(buf, sys_mnt, buf_size);
+	dm_strncpy(buf, sys_mnt, buf_size);
 }
 
 static uint32_t _parse_debug_fields(struct cmd_context *cmd, int cfg, const char *cfgname)
@@ -500,10 +506,10 @@ static int _check_config(struct cmd_context *cmd)
 static const char *_set_time_format(struct cmd_context *cmd)
 {
 	/* Compared to strftime, we do not allow "newline" character - the %n in format. */
-	static const char *allowed_format_chars = "aAbBcCdDeFGghHIjklmMpPrRsStTuUVwWxXyYzZ%";
-	static const char *allowed_alternative_format_chars_e = "cCxXyY";
-	static const char *allowed_alternative_format_chars_o = "deHImMSuUVwWy";
-	static const char *chars_to_check;
+	static const char _allowed_format_chars[] = "aAbBcCdDeFGghHIjklmMpPrRsStTuUVwWxXyYzZ%";
+	static const char _allowed_alternative_format_chars_e[] = "cCxXyY";
+	static const char _allowed_alternative_format_chars_o[] = "deHImMSuUVwWy";
+	const char *chars_to_check;
 	const char *tf = find_config_tree_str(cmd, report_time_format_CFG, NULL);
 	const char *p_fmt;
 	size_t i;
@@ -519,12 +525,12 @@ static const char *_set_time_format(struct cmd_context *cmd)
 				c = *++p_fmt;
 				if (c == 'E') {
 					c = *++p_fmt;
-					chars_to_check = allowed_alternative_format_chars_e;
+					chars_to_check = _allowed_alternative_format_chars_e;
 				} else if (c == 'O') {
 					c = *++p_fmt;
-					chars_to_check = allowed_alternative_format_chars_o;
+					chars_to_check = _allowed_alternative_format_chars_o;
 				} else
-					chars_to_check = allowed_format_chars;
+					chars_to_check = _allowed_format_chars;
 
 				for (i = 0; chars_to_check[i]; i++) {
 					if (c == chars_to_check[i])
@@ -608,11 +614,51 @@ static int _init_system_id(struct cmd_context *cmd)
 	return 1;
 }
 
+static void _init_device_ids_refresh(struct cmd_context *cmd)
+{
+	const struct dm_config_node *cn;
+	const struct dm_config_value *cv;
+	int check_product_uuid = 0;
+	int check_hostname = 0;
+	char path[PATH_MAX];
+	char uuid[128] = { 0 };
+
+	cmd->device_ids_check_product_uuid = 0;
+	cmd->device_ids_check_hostname = 0;
+
+	if (!find_config_tree_bool(cmd, devices_device_ids_refresh_CFG, NULL))
+		return;
+	if (!(cn = find_config_tree_array(cmd, devices_device_ids_refresh_checks_CFG, NULL)))
+		return;
+
+	for (cv = cn->v; cv; cv = cv->next) {
+		if (cv->type != DM_CFG_STRING)
+			continue;
+		if (!strcmp(cv->v.str, "product_uuid"))
+			check_product_uuid = 1;
+		if (!strcmp(cv->v.str, "hostname"))
+			check_hostname = 1;
+	}
+
+	if (check_product_uuid) {
+		const char *sysfs_dir = cmd->device_id_sysfs_dir ?: dm_sysfs_dir();
+		if (dm_snprintf(path, sizeof(path), "%sdevices/virtual/dmi/id/product_uuid", sysfs_dir) < 0)
+			return;
+		if (get_sysfs_value(path, uuid, sizeof(uuid), 0) && uuid[0])
+			cmd->product_uuid = dm_pool_strdup(cmd->libmem, uuid);;
+		if (cmd->product_uuid)
+			cmd->device_ids_check_product_uuid = 1;
+	}
+
+	if (check_hostname && cmd->hostname)
+		cmd->device_ids_check_hostname = 1;
+}
+
 static int _process_config(struct cmd_context *cmd)
 {
 	mode_t old_umask;
 	const char *dev_ext_info_src = NULL;
-	const char *read_ahead;
+	const char *read_ahead, *validate_metadata;
 	struct stat st;
 	const struct dm_config_node *cn;
 	const struct dm_config_value *cv;
@@ -643,6 +689,7 @@ static int _process_config(struct cmd_context *cmd)
 	if (!dm_set_uuid_prefix(UUID_PREFIX))
 		return_0;
 #endif
+	cmd->device_id_sysfs_dir = find_config_tree_str(cmd, devices_device_id_sysfs_dir_CFG, NULL);
 
 	dev_ext_info_src = find_config_tree_str(cmd, devices_external_device_info_source_CFG, NULL);
 
@@ -695,6 +742,15 @@ static int _process_config(struct cmd_context *cmd)
 	else {
 		log_error("Invalid readahead specification");
 		return 0;
+	}
+
+	cmd->vg_write_validates_vg = 1;
+	if ((validate_metadata = find_config_tree_str(cmd, config_validate_metadata_CFG, NULL))) {
+		if (!strcasecmp(validate_metadata, "none"))
+			cmd->vg_write_validates_vg = 0;
+		else if (strcasecmp(validate_metadata, "full"))
+			log_warn("WARNING: Ignoring unknown validate_metadata setting: %s.",
+				 validate_metadata);
 	}
 
 	/*
@@ -777,6 +833,8 @@ static int _process_config(struct cmd_context *cmd)
 
 	if (!_init_system_id(cmd))
 		return_0;
+
+	_init_device_ids_refresh(cmd);
 
 	init_io_memory_size(find_config_tree_int(cmd, global_io_memory_size_CFG, NULL));
 
@@ -1179,16 +1237,16 @@ static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 	 * sysfs filter. Only available on 2.6 kernels.  Non-critical.
 	 * Eliminates unavailable devices.
 	 * TODO: this may be unnecessary now with device ids
-	 * (currently not used for devs match to device id using syfs)
+	 * (currently not used for devs match to device id using sysfs)
 	 */
 	if (find_config_tree_bool(cmd, devices_sysfs_scan_CFG, NULL)) {
-		if ((filters[nr_filt] = sysfs_filter_create()))
+		if ((filters[nr_filt] = sysfs_filter_create(dm_sysfs_dir())))
 			nr_filt++;
 	}
 
 	/* usable device filter. Required. */
-	if (!(filters[nr_filt] = usable_filter_create(cmd, cmd->dev_types, FILTER_MODE_NO_LVMETAD))) {
-		log_error("Failed to create usabled device filter");
+	if (!(filters[nr_filt] = usable_filter_create(cmd, cmd->dev_types))) {
+		log_error("Failed to create usable device filter");
 		goto bad;
 	}
 	nr_filt++;
@@ -1263,7 +1321,7 @@ int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
 	init_ignore_lvm_mirrors(find_config_tree_bool(cmd, devices_ignore_lvm_mirrors_CFG, NULL));
 
 	/*
-	 * persisent filter is a cache of the previous result real filter result.
+	 * persistent filter is a cache of the previous result real filter result.
 	 * If a dev is found in persistent filter, the pass/fail result saved by
 	 * the pfilter is used.  If a dev does not existing in the persistent
 	 * filter, the dev is passed on to the real filter, and when the result
@@ -1379,8 +1437,8 @@ static int _init_segtypes(struct cmd_context *cmd)
 	struct segment_type *segtype;
 	struct segtype_library seglib = { .cmd = cmd, .lib = NULL };
 	struct segment_type *(*init_segtype_array[])(struct cmd_context *cmd) = {
-		init_linear_segtype,
 		init_striped_segtype,
+		init_linear_segtype,
 		init_zero_segtype,
 		init_error_segtype,
 		/* disabled until needed init_free_segtype, */
@@ -1505,7 +1563,7 @@ static void _init_rand(struct cmd_context *cmd)
 		return;
 	}
 
-	cmd->rand_seed = (unsigned) time(NULL) + (unsigned) getpid();
+	cmd->rand_seed = (unsigned) ((time(NULL) + getpid()) & 0xffffffff);
 	reset_lvm_errno(1);
 }
 
@@ -1567,62 +1625,6 @@ void destroy_config_context(struct cmd_context *cmd)
 	free(cmd);
 }
 
-/*
- * A "config context" is a very light weight toolcontext that
- * is only used for reading config settings from lvm.conf.
- *
- * FIXME: this needs to go back to parametrized create_toolcontext()
- */
-struct cmd_context *create_config_context(void)
-{
-	struct cmd_context *cmd;
-
-	if (!(cmd = zalloc(sizeof(*cmd))))
-		goto_out;
-
-	strcpy(cmd->system_dir, DEFAULT_SYS_DIR);
-
-	if (!_get_env_vars(cmd))
-		goto_out;
-
-	if (!(cmd->libmem = dm_pool_create("library", 4 * 1024)))
-		goto_out;
-
-	if (!(cmd->mem = dm_pool_create("command", 4 * 1024)))
-		goto out;
-
-	if (!(cmd->pending_delete_mem = dm_pool_create("pending_delete", 1024)))
-		goto_out;
-
-	dm_list_init(&cmd->config_files);
-	dm_list_init(&cmd->tags);
-
-	if (!_init_lvm_conf(cmd))
-		goto_out;
-
-	if (!_init_hostname(cmd))
-		goto_out;
-
-	if (!_init_tags(cmd, cmd->cft))
-		goto_out;
-
-	/* Load lvmlocal.conf */
-	if (*cmd->system_dir && !_load_config_file(cmd, "", 1))
-		goto_out;
-
-	if (!_init_tag_configs(cmd))
-		goto_out;
-
-	if (!(cmd->cft = _merge_config_files(cmd, cmd->cft)))
-		goto_out;
-
-	return cmd;
-out:
-	if (cmd)
-		destroy_config_context(cmd);
-	return NULL;
-}
-
 /* Entry point */
 struct cmd_context *create_toolcontext(unsigned is_clvmd,
 				       const char *system_dir,
@@ -1632,7 +1634,6 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 				       unsigned set_filters)
 {
 	struct cmd_context *cmd;
-	int flags;
 
 #ifdef M_MMAP_MAX
 	mallopt(M_MMAP_MAX, 0);
@@ -1656,6 +1657,8 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	cmd->handles_unknown_segments = 0;
 	cmd->hosttags = 0;
 	cmd->check_devs_used = 1;
+	cmd->running_on_valgrind = RUNNING_ON_VALGRIND;
+
 	dm_list_init(&cmd->arg_value_groups);
 	dm_list_init(&cmd->formats);
 	dm_list_init(&cmd->segtypes);
@@ -1666,15 +1669,17 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	/* FIXME Make this configurable? */
 	reset_lvm_errno(1);
 
-#ifndef VALGRIND_POOL
 	/* Set in/out stream buffering before glibc */
 	if (set_buffering
+	    && !cmd->running_on_valgrind /* Skipping within valgrind execution. */
 #ifdef SYS_gettid
 	    /* For threaded programs no changes of streams */
             /* On linux gettid() is implemented only via syscall */
 	    && (syscall(SYS_gettid) == getpid())
 #endif
 	   ) {
+		int flags;
+
 		/* Allocate 2 buffers */
 		if (!(cmd->linebuffer = malloc(2 * _linebuffer_size))) {
 			log_error("Failed to allocate line buffer.");
@@ -1708,14 +1713,12 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	} else if (!set_buffering)
 		/* Without buffering, must not use stdin/stdout */
 		init_silent(1);
-#endif
+
 	/*
 	 * Environment variable LVM_SYSTEM_DIR overrides this below.
 	 */
-        if (system_dir)
-		strncpy(cmd->system_dir, system_dir, sizeof(cmd->system_dir) - 1);
-	else
-		strcpy(cmd->system_dir, DEFAULT_SYS_DIR);
+	strncpy(cmd->system_dir, (system_dir) ? system_dir : DEFAULT_SYS_DIR,
+		sizeof(cmd->system_dir) - 1);
 
 	if (!_get_env_vars(cmd))
 		goto_out;
@@ -1905,7 +1908,6 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	_destroy_segtypes(&cmd->segtypes);
 	_destroy_formats(cmd, &cmd->formats);
 
-	devices_file_exit(cmd);
 	if (!dev_cache_exit())
 		stack;
 	_destroy_dev_types(cmd);
@@ -1927,6 +1929,8 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	cmd->hosttags = 0;
 
 	cmd->lib_dir = NULL;
+
+	cmd->lvcreate_vcp = NULL;
 
 	if (!_init_lvm_conf(cmd))
 		return_0;
@@ -2023,7 +2027,6 @@ int refresh_toolcontext(struct cmd_context *cmd)
 void destroy_toolcontext(struct cmd_context *cmd)
 {
 	struct dm_config_tree *cft_cmdline;
-	int flags;
 
 	archive_exit(cmd);
 	backup_exit(cmd);
@@ -2034,7 +2037,6 @@ void destroy_toolcontext(struct cmd_context *cmd)
 	_destroy_segtypes(&cmd->segtypes);
 	_destroy_formats(cmd, &cmd->formats);
 	_destroy_filters(cmd);
-	devices_file_exit(cmd);
 	dev_cache_exit();
 	_destroy_dev_types(cmd);
 	_destroy_tags(cmd);
@@ -2045,9 +2047,8 @@ void destroy_toolcontext(struct cmd_context *cmd)
 	if (cmd->cft_def_hash)
 		dm_hash_destroy(cmd->cft_def_hash);
 
-	dm_device_list_destroy(&cmd->cache_dm_devs);
-#ifndef VALGRIND_POOL
-	if (cmd->linebuffer) {
+	if (!cmd->running_on_valgrind && cmd->linebuffer) {
+		int flags;
 		/* Reset stream buffering to defaults */
 		if (is_valid_fd(STDIN_FILENO) &&
 		    ((flags = fcntl(STDIN_FILENO, F_GETFL)) > 0) &&
@@ -2069,7 +2070,7 @@ void destroy_toolcontext(struct cmd_context *cmd)
 
 		free(cmd->linebuffer);
 	}
-#endif
+
 	destroy_config_context(cmd);
 
 	lvmpolld_disconnect();

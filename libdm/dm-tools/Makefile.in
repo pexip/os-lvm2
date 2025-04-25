@@ -19,13 +19,15 @@ top_builddir = @top_builddir@
 all: device-mapper
 
 SOURCES2 = dmsetup.c
-TARGETS_DM = dmsetup
 
 CFLOW_SOURCES = $(addprefix $(srcdir)/, $(SOURCES2))
 CFLOW_TARGET := $(TARGETS_DM)
 -include $(top_builddir)/libdm/libdevmapper.cflow
 
-install_device-mapper: install_dmsetup_dynamic
+ifeq ("@SHARED_LINK@", "yes")
+  TARGETS_DM += dmsetup
+  install_device-mapper: install_dmsetup_dynamic
+endif
 
 ifeq ("@STATIC_LINK@", "yes")
   TARGETS_DM += dmsetup.static
@@ -35,8 +37,11 @@ endif
 # dmfilemapd support
 ifeq ("@BUILD_DMFILEMAPD@", "yes")
   SOURCES2 += dmfilemapd.c
-  TARGETS_DM += dmfilemapd
-  install_dmfilemapd: install_dmfilemapd_dynamic
+
+  ifeq ("@SHARED_LINK@", "yes")
+     TARGETS_DM += dmfilemapd
+     install_dmfilemapd: install_dmfilemapd_dynamic
+  endif
 
   ifeq ("@STATIC_LINK@", "yes")
     TARGETS_DM += dmfilemapd.static
@@ -57,42 +62,42 @@ LIBDM_SHARED = $(interfacebuilddir)/libdevmapper.so
 LIBDM_STATIC = $(interfacebuilddir)/libdevmapper.a
 
 dmsetup: dmsetup.o $(LIBDM_SHARED)
-	@echo "    [CC] $@"
+	$(SHOW) "    [CC] $@"
 	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS) \
 	      -o $@ $< $(LIBDM_LIBS) $(LIBS)
 
 dmsetup.static: dmsetup.o $(LIBDM_STATIC)
-	@echo "    [CC] $@"
-	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) -static \
+	$(SHOW) "    [CC] $@"
+	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $(STATIC_LDFLAGS) -static \
 	      -o $@ $< $(LIBDM_LIBS) $(LIBS) $(STATIC_LIBS)
 
 install_dmsetup_dynamic: dmsetup
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
 	$(Q) $(LN_S) -f $(<F) $(sbindir)/dmstats
 
 install_dmsetup_static: dmsetup.static
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(staticdir)/$(<F)
 	$(Q) $(LN_S) -f $(<F) $(staticdir)/dmstats.static
 
 
 dmfilemapd: dmfilemapd.o $(LIBDM_SHARED)
-	@echo "    [CC] $@"
+	$(SHOW) "    [CC] $@"
 	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $(EXTRA_EXEC_LDFLAGS) $(ELDFLAGS) \
 	      -o $@ $< $(LIBDM_LIBS) $(LIBS)
 
 dmfilemapd.static: dmfilemapd.o $(LIBDM_STATIC)
-	@echo "    [CC] $@"
-	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) -static \
+	$(SHOW) "    [CC] $@"
+	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $(STATIC_LDFLAGS) -static \
 	      -o $@ $< $(LIBDM_LIBS) $(LIBS) $(STATIC_LIBS)
 
 install_dmfilemapd_dynamic: dmfilemapd
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(sbindir)/$(<F)
 
 install_dmfilemapd_static: dmfilemapd.static
-	@echo "    [INSTALL] $<"
+	$(SHOW) "    [INSTALL] $<"
 	$(Q) $(INSTALL_PROGRAM) -D $< $(staticdir)/$(<F)
 
 

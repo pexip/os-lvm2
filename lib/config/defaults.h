@@ -33,6 +33,7 @@
 
 #define DEFAULT_ARCHIVE_ENABLED 1
 #define DEFAULT_BACKUP_ENABLED 1
+#define DEFAULT_VALIDATE_METADATA "full"    /* full | none */
 
 #define DEFAULT_CACHE_FILE_PREFIX ""
 
@@ -40,7 +41,6 @@
 #define DEFAULT_ARCHIVE_NUMBER 10
 
 #define DEFAULT_DEV_DIR "/dev"
-#define DEFAULT_PROC_DIR "/proc"
 #define DEFAULT_SYSTEM_ID_SOURCE "none"
 #define DEFAULT_OBTAIN_DEVICE_LIST_FROM_UDEV 0
 #define DEFAULT_EXTERNAL_DEVICE_INFO_SOURCE "none"
@@ -73,6 +73,7 @@
 #define DEFAULT_USE_AIO 1
 
 #define DEFAULT_SANLOCK_LV_EXTEND_MB 256
+#define DEFAULT_SANLOCK_ALIGN_SIZE 8 /* in MiB, applies to 4K disks only */
 
 #define DEFAULT_MIRRORLOG MIRROR_LOG_DISK
 #define DEFAULT_MIRROR_LOG_FAULT_POLICY "allocate"
@@ -105,6 +106,8 @@
 #  define DEFAULT_DMEVENTD_PATH DMEVENTD_PATH
 #endif
 
+#define DEFAULT_MAX_EXEC_ARGS	15	/* Max number of accepted options args */
+
 #ifdef THIN_CHECK_NEEDS_CHECK
 #  define DEFAULT_THIN_CHECK_OPTION1 "-q"
 #  define DEFAULT_THIN_CHECK_OPTION2 "--clear-needs-check-flag"
@@ -117,6 +120,8 @@
 
 #define DEFAULT_THIN_REPAIR_OPTION1 ""
 #define DEFAULT_THIN_REPAIR_OPTIONS_CONFIG "#S" DEFAULT_THIN_REPAIR_OPTION1
+#define DEFAULT_THIN_RESTORE_OPTION1 ""
+#define DEFAULT_THIN_RESTORE_OPTIONS_CONFIG "#S" DEFAULT_THIN_RESTORE_OPTION1
 #define DEFAULT_THIN_POOL_METADATA_REQUIRE_SEPARATE_PVS 0
 #define DEFAULT_THIN_POOL_CROP_METADATA 0
 #define DEFAULT_THIN_POOL_MAX_METADATA_SIZE_V1_KB (UINT64_C(255) * ((1 << 14) - 64) * 4)  /* KB */ /* 0x3f8040 blocks */
@@ -145,6 +150,8 @@
 
 #define DEFAULT_CACHE_REPAIR_OPTION1 ""
 #define DEFAULT_CACHE_REPAIR_OPTIONS_CONFIG "#S" DEFAULT_CACHE_REPAIR_OPTION1
+#define DEFAULT_CACHE_RESTORE_OPTION1 ""
+#define DEFAULT_CACHE_RESTORE_OPTIONS_CONFIG "#S" DEFAULT_CACHE_RESTORE_OPTION1
 #define DEFAULT_CACHE_POOL_METADATA_REQUIRE_SEPARATE_PVS 0
 #define DEFAULT_CACHE_POOL_CHUNK_SIZE 64 /* KB */
 #define DEFAULT_CACHE_POOL_MAX_CHUNKS 1000000
@@ -178,7 +185,7 @@
 
 #define DEFAULT_VDO_FORMAT_OPTIONS_CONFIG "#S" ""
 /*
- * VDO pool will reverve some sectors in the front and the back of pool device to avoid
+ * VDO pool will reserve some sectors in the front and the back of pool device to avoid
  * seeing same device twice in the system.
  */
 #define DEFAULT_VDO_POOL_HEADER_SIZE_KB  (512)
@@ -324,12 +331,18 @@
 
 #define DEFAULT_DEVICES_FILE "system.devices"
 
-#define DEFAULT_SEARCH_FOR_DEVNAMES "auto"
+#define DEFAULT_SEARCH_FOR_DEVNAMES "all"
 
 #define DEFAULT_WWIDS_FILE "/etc/multipath/wwids"
 
 #define PVS_ONLINE_DIR DEFAULT_RUN_DIR "/pvs_online"
 #define VGS_ONLINE_DIR DEFAULT_RUN_DIR "/vgs_online"
 #define PVS_LOOKUP_DIR DEFAULT_RUN_DIR "/pvs_lookup"
+
+#define DEVICES_IMPORT_PATH DEFAULT_RUN_DIR "/lvm-devices-import"
+
+#define DEFAULT_DEVICE_ID_SYSFS_DIR "/sys/"  /* trailing / to match dm_sysfs_dir() */
+
+#define DEFAULT_DEVICESFILE_BACKUP_LIMIT 50
 
 #endif				/* _LVM_DEFAULTS_H */

@@ -29,19 +29,22 @@
  */
 
 enum dm_event_mask {
-	DM_EVENT_SETTINGS_MASK  = 0x0000FF,
 	DM_EVENT_SINGLE		= 0x000001, /* Report multiple errors just once. */
 	DM_EVENT_MULTI		= 0x000002, /* Report all of them. */
+	DM_EVENT_SETTINGS_MASK  = 0x0000FF,
 
-	DM_EVENT_ERROR_MASK     = 0x00FF00,
 	DM_EVENT_SECTOR_ERROR	= 0x000100, /* Failure on a particular sector. */
 	DM_EVENT_DEVICE_ERROR	= 0x000200, /* Device failure. */
 	DM_EVENT_PATH_ERROR	= 0x000400, /* Failure on an io path. */
 	DM_EVENT_ADAPTOR_ERROR	= 0x000800, /* Failure of a host adaptor. */
+	DM_EVENT_ERROR_MASK     = 0x00FF00,
+
+	DM_EVENT_SYNC_STATUS	= 0x010000, /* Mirror synchronization completed/failed. */
+	DM_EVENT_TIMEOUT	= 0x020000, /* Timeout has occurred */
+
+	DM_EVENT_ERROR_AND_TIMEOUT_MASK = 0x02FF00,
 
 	DM_EVENT_STATUS_MASK    = 0xFF0000,
-	DM_EVENT_SYNC_STATUS	= 0x010000, /* Mirror synchronization completed/failed. */
-	DM_EVENT_TIMEOUT	= 0x020000, /* Timeout has occured */
 
 	DM_EVENT_REGISTRATION_PENDING = 0x1000000, /* Monitor thread is setting-up/shutting-down */
 };
@@ -70,10 +73,10 @@ int dm_event_handler_set_dso(struct dm_event_handler *dmevh, const char *path);
 int dm_event_handler_set_dmeventd_path(struct dm_event_handler *dmevh, const char *dmeventd_path);
 
 /*
- * Identify the device to monitor by exactly one of device_name, uuid or
+ * Identify the device to monitor by exactly one of dev_name, uuid or
  * device number. String arguments are duplicated, see above.
  */
-int dm_event_handler_set_dev_name(struct dm_event_handler *dmevh, const char *device_name);
+int dm_event_handler_set_dev_name(struct dm_event_handler *dmevh, const char *dev_name);
 
 int dm_event_handler_set_uuid(struct dm_event_handler *dmevh, const char *uuid);
 
@@ -109,7 +112,7 @@ int dm_event_unregister_handler(const struct dm_event_handler *dmevh);
 /* Set debug level for logging, and whether to log on stdout/stderr or syslog */
 void dm_event_log_set(int debug_log_level, int use_syslog);
 
-/* Log messages acroding to current debug level  */
+/* Log messages according to current debug level  */
 __attribute__((format(printf, 6, 0)))
 void dm_event_log(const char *subsys, int level, const char *file,
 		  int line, int dm_errno_or_class,

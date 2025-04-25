@@ -50,9 +50,10 @@ static char *_list_cmds(const char *text, int state)
 		len = strlen(text);
 	}
 
-	while (i < _cmdline->num_command_names)
-		if (!strncmp(text, _cmdline->command_names[i++].name, len))
-			return strdup(_cmdline->command_names[i - 1].name);
+	for (;i < _cmdline->num_command_names;++i)
+		if (!strncmp(text, _cmdline->command_names[i].name, len))
+			/* increase position for next iteration */
+			return strdup(_cmdline->command_names[i++].name);
 
 	return NULL;
 }
@@ -62,7 +63,8 @@ static char *_list_args(const char *text, int state)
 {
 	static int match_no = 0;
 	static size_t len = 0;
-	static struct command_name *cname;
+	static const struct command_name *cname;
+	static const struct command_name_args *cna;
 
 	/* Initialise if this is a new completion attempt */
 	if (!state) {
@@ -71,6 +73,7 @@ static char *_list_args(const char *text, int state)
 
 		match_no = 0;
 		cname = NULL;
+		cna = NULL;
 		len = strlen(text);
 
 		/* Find start of first word in line buffer */
@@ -89,6 +92,7 @@ static char *_list_args(const char *text, int state)
 			}
 			if ((!*p) && *q == ' ') {
 				cname = _cmdline->command_names + j;
+				cna = _cmdline->command_names_args + j;
 				break;
 			}
 		}
@@ -99,27 +103,25 @@ static char *_list_args(const char *text, int state)
 
 	/* Short form arguments */
 	if (len < 3) {
-		while (match_no < cname->num_args) {
+		while (match_no < cna->num_args) {
 			char s[3];
-			char c;
-			if (!(c = (_cmdline->opt_names +
-				   cname->valid_args[match_no++])->short_opt))
-				continue;
-
-			sprintf(s, "-%c", c);
-			if (!strncmp(text, s, len))
-				return strdup(s);
+			/* increase position for next iteration */
+			char c = _cmdline->opt_names[cna->valid_args[match_no++]].short_opt;
+			if (c) {
+				sprintf(s, "-%c", c);
+				if (!strncmp(text, s, len))
+					return strdup(s);
+			}
 		}
 	}
 
 	/* Long form arguments */
-	if (match_no < cname->num_args)
-		match_no = cname->num_args;
+	if (match_no < cna->num_args)
+		match_no = cna->num_args;
 
-	while (match_no - cname->num_args < cname->num_args) {
-		const char *l;
-		l = (_cmdline->opt_names +
-		     cname->valid_args[match_no++ - cname->num_args])->long_opt;
+	while ((match_no - cna->num_args) < cna->num_args) {
+		/* increase position for next iteration */
+		const char *l = _cmdline->opt_names[cna->valid_args[match_no++ - cna->num_args]].long_opt;
 		if (*(l + 2) && !strncmp(text, l, len))
 			return strdup(l);
 	}
@@ -154,7 +156,7 @@ static int _hist_file(char *buffer, size_t size)
 {
 	char *e = getenv("HOME");
 
-	if (dm_snprintf(buffer, size, "%s/.lvm_history", e) < 0) {
+	if (dm_snprintf(buffer, size, "%s%s.lvm_history", e ? :"", e ? "/" : "") < 0) {
 		log_error("$HOME/.lvm_history: path too long");
 		return 0;
 	}
@@ -231,9 +233,19 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 
 	orig_command_log_selection = dm_pool_strdup(cmd->libmem, find_config_tree_str(cmd, log_command_log_selection_CFG, NULL));
 	log_set_report_context(LOG_REPORT_CONTEXT_SHELL);
-	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_CMD);
+	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_PRE_CMD);
 
 	while (1) {
+		/*
+		 * Note: If we need to output the log report before we get to the dm_report_group_output_and_pop_all
+		 * at the end of this loop, like hitting a failure situation before we execute the command itself,
+		 * don't forget to directly call dm_report_group_output_and_pop_all, otherwise no log message will
+		 * appear on output (for output formats other than 'basic').
+		 *
+		 * Obviously, you can't output the 'log report' if the error is in initializing or setting
+		 * the report itself. In this case, we can only return an error code, but no message.
+		 */
+
 		report_reset_cmdlog_seqnum();
 		if (cmd->cmd_report.log_rh) {
 			/*
@@ -245,6 +257,7 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 				log_error("Failed to reset log report selection.");
 		}
 
+		log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_PRE_CMD);
 		log_set_report(cmd->cmd_report.log_rh);
 		log_set_report_object_name_and_id(NULL, NULL);
 
@@ -265,6 +278,8 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 			continue;
 		}
 
+		log_set_report_object_name_and_id(input, NULL);
+
 		add_history(input);
 
 		for (i = 0; i < MAX_ARGS; i++)
@@ -275,7 +290,7 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 		if (lvm_split(input, &argc, argv, MAX_ARGS) == MAX_ARGS) {
 			_discard_log_report_content(cmd);
 			log_error("Too many arguments, sorry.");
-			continue;
+			goto report_log;
 		}
 
 		if (!argc) {
@@ -293,6 +308,7 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 			continue;
 		}
 
+		log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_CMD);
 		log_set_report_object_name_and_id(argv[0], NULL);
 
 		is_lastlog_cmd = !strcmp(argv[0], "lastlog");
@@ -320,7 +336,7 @@ int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline)
 
 		if (!is_lastlog_cmd)
 			_log_shell_command_status(cmd, ret);
-
+report_log:
 		log_set_report(NULL);
 		dm_report_group_output_and_pop_all(cmd->cmd_report.report_group);
 

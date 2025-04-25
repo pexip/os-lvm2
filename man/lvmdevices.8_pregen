@@ -9,9 +9,8 @@ lvmdevices \(em Manage the devices file
 \fBlvmdevices\fP \fIoption_args\fP
 .br
     [ \fIoption_args\fP ]
-.br
 .P
-.ad l
+.na
     \fB--adddev\fP \fIPV\fP
 .br
     \fB--addpvid\fP \fIString\fP
@@ -25,6 +24,8 @@ lvmdevices \(em Manage the devices file
  \fB-d\fP|\fB--debug\fP
 .br
     \fB--deldev\fP \fIString\fP
+.br
+    \fB--delnotfound\fP
 .br
     \fB--delpvid\fP \fIString\fP
 .br
@@ -52,6 +53,8 @@ lvmdevices \(em Manage the devices file
 .br
  \fB-q\fP|\fB--quiet\fP
 .br
+    \fB--refresh\fP
+.br
  \fB-t\fP|\fB--test\fP
 .br
     \fB--update\fP
@@ -61,7 +64,7 @@ lvmdevices \(em Manage the devices file
     \fB--version\fP
 .br
  \fB-y\fP|\fB--yes\fP
-.ad b
+.ad
 .
 .SH DESCRIPTION
 .
@@ -95,13 +98,13 @@ will scan devices outside the devices file to locate PVs on renamed
 devices.  A config setting search_for_devnames can be used to control the
 scanning for renamed devname entries.
 .P
-Related to the devices file, the new command option --devices <devnames>
+Related to the devices file, the command option --devices <devnames>
 allows a list of devices to be specified for the command to use,
 overriding the devices file.  The listed devices act as a sort of devices
 file in terms of limiting which devices lvm will see and use.  Devices
 that are not listed will appear to be missing to the lvm command.
 .P
-Multiple devices files can be kept \fI#DEFAULT_SYS_DIR#/devices\fP, which
+Multiple devices files can be kept in \fI#DEFAULT_SYS_DIR#/devices\fP, which
 allows lvm to be used with different sets of devices.  For example, system
 devices do not need to be exposed to a specific application, and the
 application can use lvm on its own devices that are not exposed to the
@@ -137,12 +140,20 @@ Possible device ID types are:
 .br
 .IP \[bu] 2
 .B sys_wwid
-uses the wwid reported by sysfs.  This is the first choice for non-virtual
-devices.
+uses the wwid reported by the wwid sysfs file. This is the first choice.
+.IP \[bu] 2
+.B wwid_naa
+uses the naa wwid decoded from the vpd_pg83 sysfs file.
+.IP \[bu] 2
+.B wwid_eui
+uses the eui wwid decoded from the vpd_pg83 sysfs file.
+.IP \[bu] 2
+.B wwid_t10
+uses the t10 wwid decoded from the vpd_pg83 sysfs file.
 .IP \[bu] 2
 .B sys_serial
-uses the serial number reported by sysfs.  This is the second choice for
-non-virtual devices.
+uses the serial number reported by the serial sysfs file or the vpd_pg80
+file. A serial number is used if no wwid is available.
 .IP \[bu] 2
 .B mpath_uuid
 is used for dm multipath devices, reported by sysfs.
@@ -157,16 +168,37 @@ is used for md devices, reported by sysfs.
 is used if a PV is placed on top of an lvm LV, reported by sysfs.
 .IP \[bu] 2
 .B loop_file
-is used for loop devices, the backing file name repored by sysfs.
+is used for loop devices, the backing file name reported by sysfs.
 .IP \[bu] 2
 .B devname
 the device name is used if no other type applies.
 .P
-
-The default choice for device ID type can be overriden using lvmdevices
+The default choice for device ID type can be overridden using lvmdevices
 --addev --deviceidtype <type>.  If the specified type is available for the
 device it will be used, otherwise the device will be added using the type
 that would otherwise be chosen.
+.P
+LVM commands run by dmeventd will use the devices file
+\fI#DEFAULT_SYS_DIR#/devices/dmeventd.devices\fP if it exists,
+otherwise system.devices is used.  VGs that require the dmeventd
+service should be included in system.devices, even if they are
+included in dmeventd.devices.
+.
+.SS Device ID refresh
+.
+A machine identifier is saved in the devices file, and is used to detect
+when the devices file has been created by a different machine. If the
+devices file was created by a different machine, it indicates that PVs may
+have been copied or restored onto new devices on a new machine. In this
+case, lvm will search for the PVs listed in system.devices on new devices.
+If found, the device IDs will be updated in system.devices for the
+existing PVIDs (assuming the original device IDs are also no longer
+found.)
+.P
+The machine identifier used in system.devices will be either the DMI
+product_uuid from /sys/devices/virtual/dmi/id/product_uuid, or the
+hostname from uname(2). See lvm.conf device_ids_refresh_checks to
+configure this.
 .
 .SH USAGE
 .
@@ -176,9 +208,9 @@ Print devices in the devices file.
 \fBlvmdevices\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -189,9 +221,11 @@ Check the devices file and report incorrect values.
 \fBlvmdevices\fP \fB--check\fP
 .br
 .RS 4
-.ad l
+.na
+[    \fB--refresh\fP ]
+.br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -202,9 +236,13 @@ Update the devices file to fix incorrect values.
 \fBlvmdevices\fP \fB--update\fP
 .br
 .RS 4
-.ad l
+.na
+[    \fB--delnotfound\fP ]
+.br
+[    \fB--refresh\fP ]
+.br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -215,11 +253,11 @@ Add a device to the devices file.
 \fBlvmdevices\fP \fB--adddev\fP \fIPV\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--deviceidtype\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -230,11 +268,11 @@ Remove a device from the devices file.
 \fBlvmdevices\fP \fB--deldev\fP \fIString\fP|\fIPV\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--deviceidtype\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -245,11 +283,11 @@ Find the device with the given PVID and add it to the devices file.
 \fBlvmdevices\fP \fB--addpvid\fP \fIString\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--deviceidtype\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -260,9 +298,9 @@ Remove the devices file entry for the given PVID.
 \fBlvmdevices\fP \fB--delpvid\fP \fIString\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -270,7 +308,7 @@ Remove the devices file entry for the given PVID.
 Common options for lvm:
 .
 .RS 4
-.ad l
+.na
 [ \fB-d\fP|\fB--debug\fP ]
 .br
 [ \fB-h\fP|\fB--help\fP ]
@@ -306,7 +344,7 @@ Common options for lvm:
 [    \fB--profile\fP \fIString\fP ]
 .br
 [    \fB--version\fP ]
-.ad b
+.ad
 .RE
 .
 .SH OPTIONS
@@ -354,6 +392,11 @@ messages sent to the log file and/or syslog (if configured).
 Remove a device from the devices file.
 When used alone, --deldev specifies a device name.
 When used with --deviceidtype, --deldev specifies a device id.
+.
+.HP
+\fB--delnotfound\fP
+.br
+Remove devices file entries with no matching device.
 .
 .HP
 \fB--delpvid\fP \fIString\fP
@@ -442,6 +485,19 @@ Suppress output and log messages. Overrides --debug and --verbose.
 Repeat once to also suppress any prompts with answer 'no'.
 .
 .HP
+\fB--refresh\fP
+.br
+Search for missing PVs on new devices, and update the devices file
+with new device IDs for the PVs if they are found on new devices.
+This is useful if PVs have been moved to new devices with new WWIDs,
+for example. The device ID type and name may both change for a PV.
+WARNING: if a PV is detached from the system, but a device containing a
+clone or snapshot of that PV is present, then refresh would replace the
+correct device ID with the clone/snapshot device ID, and lvm would begin
+using the wrong device for the PV. Use deldev/adddev to safely change
+a PV device ID in this scenario.
+.
+.HP
 \fB-t\fP|\fB--test\fP
 .br
 Run in test mode. Commands will not update metadata.
@@ -501,10 +557,11 @@ is TiB,
 is PiB,
 .BR e | E
 is EiB.
-(This should not be confused with the output control --units, where
-capital letters mean multiple of 1000.)
+(This should not be confused with the output control --units,
+where capital letters mean multiple of 1000.)
 .
 .SH ENVIRONMENT VARIABLES
 .
 See \fBlvm\fP(8) for information about environment variables used by lvm.
-For example, LVM_VG_NAME can generally be substituted for a required VG parameter.
+For example, LVM_VG_NAME can generally be substituted
+for a required VG parameter.

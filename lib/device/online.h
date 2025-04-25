@@ -15,6 +15,9 @@
 #ifndef _ONLINE_H
 #define _ONLINE_H
 
+#include "lib/commands/toolcontext.h"
+#include "lib/device/device.h"
+
 struct pv_online {
 	struct dm_list list;
 	struct device *dev;
@@ -32,9 +35,9 @@ struct pv_online {
 #define log_print_pvscan(cmd, fmt, args...) \
 do \
 	if (cmd->udevoutput) \
-		log_print(fmt, ##args); \
+		log_print_unless_silent(fmt, ##args); \
 	else \
-		log_print("pvscan[%d] " fmt, getpid(), ##args); \
+		log_print_unless_silent("pvscan[%d] " fmt, getpid(), ##args); \
 while (0)
 
 #define log_error_pvscan(cmd, fmt, args...) \
@@ -45,7 +48,7 @@ do \
 		log_error("pvscan[%d] " fmt, getpid(), ##args); \
 while (0)
 
-int online_pvid_file_read(char *path, int *major, int *minor, char *vgname, char *devname);
+int online_pvid_file_read(char *path, unsigned *major, unsigned *minor, char *vgname, char *devname);
 int online_vg_file_create(struct cmd_context *cmd, const char *vgname);
 void online_vg_file_remove(const char *vgname);
 int online_pvid_file_create(struct cmd_context *cmd, struct device *dev, const char *vgname);
@@ -54,5 +57,7 @@ void online_dir_setup(struct cmd_context *cmd);
 int get_pvs_online(struct dm_list *pvs_online, const char *vgname);
 int get_pvs_lookup(struct dm_list *pvs_online, const char *vgname);
 void free_po_list(struct dm_list *list);
+void online_lookup_file_remove(const char *vgname);
+void online_vgremove(struct volume_group *vg);
 
 #endif

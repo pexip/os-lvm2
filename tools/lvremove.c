@@ -17,6 +17,12 @@
 
 int lvremove(struct cmd_context *cmd, int argc, char **argv)
 {
+	struct processing_handle *handle = NULL;
+	struct lvremove_params lp = {
+		.removed_uuids = DM_LIST_HEAD_INIT(lp.removed_uuids),
+	};
+	int ret;
+
 	if (!argc && !arg_is_set(cmd, select_ARG)) {
 		log_error("Please enter one or more logical volume paths "
 			  "or use --select for selection.");
@@ -26,6 +32,20 @@ int lvremove(struct cmd_context *cmd, int argc, char **argv)
 	cmd->handles_missing_pvs = 1;
 	cmd->include_historical_lvs = 1;
 
-	return process_each_lv(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE, NULL,
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	handle->custom_handle = &lp;
+
+	ret = process_each_lv(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE, handle,
 			       NULL, &lvremove_single);
+
+	if (cmd->scan_lvs && cmd->enable_devices_file)
+		device_id_lvremove(cmd, &lp.removed_uuids);
+
+	destroy_processing_handle(cmd, handle);
+
+	return ret;
 }

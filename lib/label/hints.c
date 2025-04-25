@@ -141,12 +141,10 @@
 #include "lib/misc/crc.h"
 #include "lib/cache/lvmcache.h"
 #include "lib/device/bcache.h"
-#include "lib/commands/toolcontext.h"
 #include "lib/activate/activate.h"
 #include "lib/label/hints.h"
 #include "lib/device/dev-type.h"
 #include "lib/device/device_id.h"
-#include "lib/device/online.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -157,9 +155,9 @@
 #include <sys/file.h>
 #include <sys/sysmacros.h>
 
-static const char *_hints_file = DEFAULT_RUN_DIR "/hints";
-static const char *_nohints_file = DEFAULT_RUN_DIR "/nohints";
-static const char *_newhints_file = DEFAULT_RUN_DIR "/newhints";
+static const char _hints_file[] = DEFAULT_RUN_DIR "/hints";
+static const char _nohints_file[] = DEFAULT_RUN_DIR "/nohints";
+static const char _newhints_file[] = DEFAULT_RUN_DIR "/newhints";
 
 /*
  * Format of hints file.  Increase the major number when
@@ -446,7 +444,7 @@ static int _dev_in_hint_hash(struct cmd_context *cmd, struct device *dev)
 		return 0;
 
 	/* exclude LVs from hint accounting when scan_lvs is 0 */
-	if (!cmd->scan_lvs && dm_is_dm_major(MAJOR(dev->dev)) && dev_is_lv(dev))
+	if (!cmd->scan_lvs && dm_is_dm_major(MAJOR(dev->dev)) && dev_is_lv(cmd, dev))
 		return 0;
 
 	if (!dev_get_size(dev, &devsize) || !devsize)
@@ -469,6 +467,7 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 	struct hint *hint;
 	struct dev_iter *iter;
 	struct device *dev;
+	int valid_hints = 0;
 	int ret = 1;
 
 	/* No commands are using hints. */
@@ -478,6 +477,8 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 	/* This command does not use hints. */
 	if (!cmd->use_hints && !cmd->pvscan_recreate_hints)
 		return 0;
+
+	log_debug("Validating hints");
 
 	if (lvmcache_has_duplicate_devs()) {
 		log_debug("Hints not used with duplicate pvs");
@@ -528,6 +529,8 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 				  dev->pvid, hint->pvid);
 			ret = 0;
 		}
+
+		valid_hints++;
 	}
 	dev_iter_destroy(iter);
 
@@ -575,6 +578,14 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 			ret = 0;
 			continue;
 		}
+	}
+
+	/*
+	 * hints considered invalid if none are used.
+	 */
+	if (!valid_hints) {
+		log_debug("Invalid hints: none used.");
+		ret = 0;
 	}
 
 out:
@@ -682,8 +693,9 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 	char devpath[PATH_MAX];
 	FILE *fp;
 	struct dev_iter *iter;
+	struct dev_use *du;
 	struct hint hint;
-	struct hint *alloc_hint;
+	struct hint *alloc_hint, *hp;
 	struct device *dev;
 	char *split[HINT_LINE_WORDS];
 	char *name, *pvid, *devn, *vgname, *p, *filter_str = NULL;
@@ -724,7 +736,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		 *   list of devs used by this cmd
 		 */
 
-		keylen = strlen("hints_version:");
+		keylen = sizeof("hints_version:") - 1;
 		if (!strncmp(_hint_line, "hints_version:", keylen)) {
 			if (sscanf(_hint_line + keylen, "%d.%d", &hv_major, &hv_minor) != 2) {
 				log_debug("ignore hints with unknown version %d.%d", hv_major, hv_minor);
@@ -741,7 +753,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("global_filter:");
+		keylen = sizeof("global_filter:") - 1;
 		if (!strncmp(_hint_line, "global_filter:", keylen)) {
 			_filter_to_str(cmd, devices_global_filter_CFG, &filter_str);
 			if (!filter_str || strcmp(filter_str, _hint_line + keylen)) {
@@ -754,7 +766,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("filter:");
+		keylen = sizeof("filter:") - 1;
 		if (!strncmp(_hint_line, "filter:", keylen)) {
 			_filter_to_str(cmd, devices_filter_CFG, &filter_str);
 			if (!filter_str || strcmp(filter_str, _hint_line + keylen)) {
@@ -767,7 +779,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("scan_lvs:");
+		keylen = sizeof("scan_lvs:") - 1;
 		if (!strncmp(_hint_line, "scan_lvs:", keylen)) {
 			unsigned scan_lvs = 0;
 			if ((sscanf(_hint_line + keylen, "%u", &scan_lvs) != 1) ||
@@ -779,7 +791,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("devices_file:");
+		keylen = sizeof("devices_file:") - 1;
 		if (!strncmp(_hint_line, "devices_file:", keylen)) {
 			const char *df_hint = _hint_line + keylen;
 			const char *df_config = find_config_tree_str(cmd, devices_devicesfile_CFG, NULL);
@@ -798,7 +810,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("devs_hash:");
+		keylen = sizeof("devs_hash:") - 1;
 		if (!strncmp(_hint_line, "devs_hash:", keylen)) {
 			if (sscanf(_hint_line + keylen, "%u %u", &read_hash, &read_count) != 2) {
 				log_debug("ignore hints with invalid devs_hash");
@@ -811,7 +823,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		/*
 		 * Ignore any other line prefixes that we don't recognize.
 		 */
-		keylen = strlen("scan:");
+		keylen = sizeof("scan:") - 1;
 		if (strncmp(_hint_line, "scan:", keylen))
 			continue;
 
@@ -824,18 +836,18 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		vgname = split[3];
 
 		if (name && !strncmp(name, "scan:", 5))
-			if (!dm_strncpy(hint.name, name + 5, sizeof(hint.name)))
+			if (!_dm_strncpy(hint.name, name + 5, sizeof(hint.name)))
 				continue;
 
 		if (pvid && !strncmp(pvid, "pvid:", 5))
-			if (!dm_strncpy(hint.pvid, pvid + 5, sizeof(hint.pvid)))
+			if (!_dm_strncpy(hint.pvid, pvid + 5, sizeof(hint.pvid)))
 				continue;
 
 		if (devn && sscanf(devn, "devn:%d:%d", &major, &minor) == 2)
 			hint.devt = makedev(major, minor);
 
 		if (vgname && (strlen(vgname) > 3) && (vgname[4] != '-'))
-			if (!dm_strncpy(hint.vgname, vgname + 3, sizeof(hint.vgname)))
+			if (!_dm_strncpy(hint.vgname, vgname + 3, sizeof(hint.vgname)))
 				continue;
 
 		if (!(alloc_hint = zalloc(sizeof(struct hint)))) {
@@ -873,7 +885,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		if (!_dev_in_hint_hash(cmd, dev))
 			continue;
 
-		(void) dm_strncpy(devpath, dev_name(dev), sizeof(devpath));
+		dm_strncpy(devpath, dev_name(dev), sizeof(devpath));
 		calc_hash = calc_crc(calc_hash, (const uint8_t *)devpath, strlen(devpath));
 		calc_count++;
 	}
@@ -885,6 +897,32 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			  read_hash, read_count, calc_hash, calc_count);
 		*needs_refresh = 1;
 		return 1;
+	}
+
+	/*
+	 * Check that the dev in each hint is a dev that's matched to a
+	 * devices file entry.
+	 */
+	if (cmd->enable_devices_file) {
+		dm_list_iterate_items(hp, hints) {
+			if (!(du = get_du_for_devname(cmd, hp->name))) {
+				log_debug("ignore hints: no devices file entry for %s", hp->name);
+				*needs_refresh = 1;
+				return 1;
+			}
+			if (!du->dev) {
+				log_debug("ignore hints: no device matches devices file entry for %s", hp->name);
+				*needs_refresh = 1;
+				return 1;
+			}
+			if (hp->devt != du->dev->dev) {
+				log_debug("ignore hints: devno %u:%u does not match %u:%u for %s",
+					  MAJOR(hp->devt), MINOR(hp->devt),
+					  MAJOR(du->dev->dev), MINOR(du->dev->dev), hp->name);
+				*needs_refresh = 1;
+				return 1;
+			}
+		}
 	}
 
 	log_debug("accept hints found %d", dm_list_size(hints));
@@ -1038,7 +1076,7 @@ int write_hint_file(struct cmd_context *cmd, int newhints)
 		 * detect when the devices on the system change, which
 		 * invalidates the existing hints.
 		 */
-		(void) dm_strncpy(devpath, dev_name(dev), sizeof(devpath));
+		dm_strncpy(devpath, dev_name(dev), sizeof(devpath));
 		hash = calc_crc(hash, (const uint8_t *)devpath, strlen(devpath));
 		count++;
 
@@ -1416,7 +1454,7 @@ int get_hints(struct cmd_context *cmd, struct dm_list *hints_out, int *newhints,
 		/*
 		 * This is not related to hints, and is probably unnecessary,
 		 * but it could possibly help.  When hints become invalid it's
-		 * usually becaues devs on the system have changed, and that
+		 * usually because devs on the system have changed, and that
 		 * also means that a missing devices file entry might be found
 		 * by searching devices again.  (the searched_devnames
 		 * mechanism should eventually be replaced)

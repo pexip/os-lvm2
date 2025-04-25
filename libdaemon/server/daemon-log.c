@@ -57,7 +57,7 @@ static void _log_stderr(log_state *s, void **state, int type, const char *messag
 	fprintf(stderr, "%s%s\n", prefix, message);
 }
 
-struct backend backend[] = {
+static const struct backend _backend[] = {
 	{ DAEMON_LOG_OUTLET_SYSLOG, _log_syslog },
 	{ DAEMON_LOG_OUTLET_STDERR, _log_stderr },
 	{ 0, 0 }
@@ -65,29 +65,29 @@ struct backend backend[] = {
 
 void daemon_log(log_state *s, int type, const char *message) {
 	int i = 0;
-	while ( backend[i].id ) {
-		if ((int)(s->log_config[type] & backend[i].id) == backend[i].id )
-			backend[i].log( s, &s->backend_state[i], type, message );
+	while ( _backend[i].id ) {
+		if ((int)(s->log_config[type] & _backend[i].id) == _backend[i].id )
+			_backend[i].log( s, &s->backend_state[i], type, message );
 		++ i;
 	}
 }
 
 static int _type_interesting(log_state *s, int type) {
 	int i = 0;
-	while ( backend[i].id ) {
-		if ((int)(s->log_config[type] & backend[i].id) == backend[i].id )
+	while ( _backend[i].id ) {
+		if ((int)(s->log_config[type] & _backend[i].id) == _backend[i].id )
 			return 1;
 		++ i;
 	}
 	return 0;
 }
 
-void daemon_logf(log_state *s, int type, const char *fmt, ...) {
+void daemon_logf(log_state *s, int type, const char *format, ...) {
 	char *buf;
 	va_list ap;
 
-	va_start(ap, fmt);
-	if (dm_vasprintf(&buf, fmt, ap) >= 0) {
+	va_start(ap, format);
+	if (dm_vasprintf(&buf, format, ap) >= 0) {
 		daemon_log(s, type, buf);
 		free(buf);
 	} /* else return_0 */
@@ -116,7 +116,7 @@ void daemon_log_cft(log_state *s, int type, const char *prefix, const struct dm_
 	(void) dm_config_write_node(n, &_log_line, &b);
 }
 
-void daemon_log_multi(log_state *s, int type, const char *prefix, const char *msg)
+void daemon_log_multi(log_state *s, int type, const char *prefix, const char *message)
 {
 	struct log_line_baton b = { .s = s, .type = type, .prefix = prefix };
 	char *buf;
@@ -125,7 +125,7 @@ void daemon_log_multi(log_state *s, int type, const char *prefix, const char *ms
 	if (!_type_interesting(s, type))
 		return;
 
-	buf = strdup(msg);
+	buf = strdup(message);
 	pos = buf;
 
 	if (!buf)

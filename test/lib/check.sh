@@ -405,10 +405,11 @@ pvlv_counts() {
 	local num_pvs=$2
 	local num_lvs=$3
 	local num_snaps=$4
-	lvs -o+devices "$local_vg"
-	vg_field "$local_vg" pv_count "$num_pvs"
-	vg_field "$local_vg" lv_count "$num_lvs"
-	vg_field "$local_vg" snap_count "$num_snaps"
+	eval "$(vgs --noheadings --nameprefixes -o pv_count,lv_count,snap_count "$local_vg")"
+	[ "$LVM2_PV_COUNT" = "$num_pvs" ] && [ "$LVM2_LV_COUNT" = "$num_lvs" ] && [ "$LVM2_SNAP_COUNT" = "$num_snaps" ] ||
+		die "vg_fields: vg=\"$local_vg\", field=\"pv_count,lv_count,snap_count\","\
+			"actual=\"$LVM2_PV_COUNT $LVM2_LV_COUNT $LVM2_SNAP_COUNT\", "\
+			"expected=\"$num_pvs $num_lvs $num_snaps\""
 }
 
 # Compare md5 check generated from get dev_md5sum
@@ -437,11 +438,13 @@ raid_leg_status() {
 	local st
 	local val
 
-	# Ignore inconsisten raid status 0/xxxxx idle
+	# Ignore inconsistent raid status 0/xxxxx idle
 	for i in {100..0} ; do
-		st=( $(dmsetup status "$1-$2") ) || die "Unable to get status of $vg/$lv1"
-		b=( $(echo "${st[6]}" | sed s:/:' ':) )
-		[ "${b[0]}" = "0" ] || {
+		st=( $(dmsetup status --noflush "$1-$2") ) || die "Unable to get status of $vg/$lv1"
+		case "${st[7]}" in
+			"resync"|"recover") [ "${st[5]}" = "$3" ] && return 0 ;;
+		esac
+		[ "${st[6]%%/*}" = "0" ] || {
 			test "${st[5]}" = "$3" || break
 			return 0
 		}

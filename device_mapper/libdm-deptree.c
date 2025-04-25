@@ -152,14 +152,16 @@ struct thin_message {
 struct load_segment {
 	struct dm_list list;
 
-	unsigned type;
-
 	uint64_t size;
+
+	unsigned type;
 
 	unsigned area_count;		/* Linear + Striped + Mirrored + Crypt */
 	struct dm_list areas;		/* Linear + Striped + Mirrored + Crypt */
 
 	uint32_t stripe_size;		/* Striped + raid */
+
+	uint32_t region_size;		/* Mirror + raid */
 
 	int persistent;			/* Snapshot */
 	uint32_t chunk_size;		/* Snapshot */
@@ -168,10 +170,9 @@ struct load_segment {
 	struct dm_tree_node *merge;	/* Snapshot */
 
 	struct dm_tree_node *log;	/* Mirror */
-	uint32_t region_size;		/* Mirror + raid */
 	unsigned clustered;		/* Mirror */
 	unsigned mirror_area_count;	/* Mirror */
-	uint32_t flags;			/* Mirror + raid + Cache */
+	uint64_t flags;			/* Mirror + Raid + Cache */
 	char *uuid;			/* Clustered mirror log */
 
 	const char *policy_name;	/* Cache */
@@ -214,6 +215,7 @@ struct load_segment {
 	uint32_t device_id;		/* Thin */
 
 	// VDO params
+	uint32_t vdo_version;		/* VDO - version of target table line */
 	struct dm_tree_node *vdo_data;  /* VDO */
 	struct dm_vdo_target_params vdo_params; /* VDO */
 	const char *vdo_name;           /* VDO - device name is ALSO passed as table arg */
@@ -264,7 +266,7 @@ struct load_properties {
 	/*
 	 * Preload tree normally only loads and not resume, but there is
 	 * automatic resume when target is extended, as it's believed
-	 * there can be no i/o flying to this 'new' extedend space
+	 * there can be no i/o flying to this 'new' extended space
 	 * from any device above. Reason is that preloaded target above
 	 * may actually need to see its bigger subdevice before it
 	 * gets suspended. As long as devices are simple linears
@@ -276,7 +278,7 @@ struct load_properties {
 
 	/*
 	 * When comparing table lines to decide if a reload is
-	 * needed, ignore any differences betwen the lvm device
+	 * needed, ignore any differences between the lvm device
 	 * params and the kernel-reported device params.
 	 * dm-integrity reports many internal parameters on the
 	 * table line when lvm does not explicitly set them,
@@ -287,12 +289,16 @@ struct load_properties {
 	/*
 	 * Call node_send_messages(), set to 2 if there are messages
 	 * When != 0, it validates matching transaction id, thus thin-pools
-	 * where transation_id is passed as 0 are never validated, this
-	 * allows external managment of thin-pool TID.
+	 * where transaction_id is passed as 0 are never validated, this
+	 * allows external management of thin-pool TID.
 	 */
 	unsigned send_messages;
 	/* Skip suspending node's children, used when sending messages to thin-pool */
 	int skip_suspend;
+
+	/* Suspend and Resume siblings after node activation with udev flags*/
+	unsigned reactivate_siblings;
+	uint16_t reactivate_udev_flags;
 };
 
 /* Two of these used to join two nodes with uses and used_by. */
@@ -343,7 +349,7 @@ struct dm_tree {
 	int retry_remove;		/* 1 retries remove if not successful */
 	uint32_t cookie;
 	char buf[DM_NAME_LEN + 32];	/* print buffer for device_name (major:minor) */
-	const char **optional_uuid_suffixes;	/* uuid suffixes ignored when matching */
+	const char * const *optional_uuid_suffixes;	/* uuid suffixes ignored when matching */
 };
 
 /*
@@ -535,7 +541,8 @@ static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
 	struct dm_tree_node *node;
 	dev_t dev;
 
-	if (!(node = dm_pool_zalloc(dtree->mem, sizeof(*node))) ||
+	if (!dtree || !dtree->mem ||
+	    !(node = dm_pool_zalloc(dtree->mem, sizeof(*node))) ||
 	    !(node->name = dm_pool_strdup(dtree->mem, name)) ||
 	    !(node->uuid = dm_pool_strdup(dtree->mem, uuid))) {
 		log_error("_create_dm_tree_node alloc failed.");
@@ -585,6 +592,7 @@ void dm_tree_set_optional_uuid_suffixes(struct dm_tree *dtree, const char **opti
 	dtree->optional_uuid_suffixes = optional_uuid_suffixes;
 }
 
+static const char *_node_name(struct dm_tree_node *dnode);
 static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 						       const char *uuid)
 {
@@ -592,28 +600,26 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 	const char *default_uuid_prefix;
 	size_t default_uuid_prefix_len;
 	const char *suffix, *suffix_position;
-	char uuid_without_suffix[DM_UUID_LEN];
+	char uuid_without_suffix[DM_UUID_LEN + 1];
 	unsigned i = 0;
-	const char **suffix_list = dtree->optional_uuid_suffixes;
+	const char * const *suffix_list = dtree->optional_uuid_suffixes;
 
 	if ((node = dm_hash_lookup(dtree->uuids, uuid))) {
-		log_debug("Matched uuid %s in deptree.", uuid);
+		log_debug_activation("Matched uuid %s %s in deptree.", uuid, _node_name(node));
 		return node;
 	}
-
-	default_uuid_prefix = dm_uuid_prefix();
-	default_uuid_prefix_len = strlen(default_uuid_prefix);
 
 	if (suffix_list && (suffix_position = strrchr(uuid, '-'))) {
 		while ((suffix = suffix_list[i++])) {
 			if (strcmp(suffix_position + 1, suffix))
 				continue;
 
-			(void) strncpy(uuid_without_suffix, uuid, sizeof(uuid_without_suffix));
+			dm_strncpy(uuid_without_suffix, uuid, sizeof(uuid_without_suffix));
 			uuid_without_suffix[suffix_position - uuid] = '\0';
 
 			if ((node = dm_hash_lookup(dtree->uuids, uuid_without_suffix))) {
-				log_debug("Matched uuid %s (missing suffix -%s) in deptree.", uuid_without_suffix, suffix);
+				log_debug_activation("Matched uuid %s %s (missing suffix -%s) in deptree.",
+						     uuid_without_suffix, _node_name(node), suffix);
 				return node;
 			}
 
@@ -621,15 +627,17 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 		};
 	}
 	
-	if (strncmp(uuid, default_uuid_prefix, default_uuid_prefix_len))
-		return NULL;
+	default_uuid_prefix = dm_uuid_prefix();
+	default_uuid_prefix_len = strlen(default_uuid_prefix);
 
-	if ((node = dm_hash_lookup(dtree->uuids, uuid + default_uuid_prefix_len))) {
-		log_debug("Matched uuid %s (missing prefix) in deptree.", uuid + default_uuid_prefix_len);
+	if ((strncmp(uuid, default_uuid_prefix, default_uuid_prefix_len) == 0) &&
+	    (node = dm_hash_lookup(dtree->uuids, uuid + default_uuid_prefix_len))) {
+		log_debug_activation("Matched uuid %s %s (missing prefix) in deptree.",
+				     uuid + default_uuid_prefix_len, _node_name(node));
 		return node;
 	}
 
-	log_debug("Not matched uuid %s in deptree.", uuid);
+	log_debug_activation("Not matched uuid %s in deptree.", uuid);
 	return NULL;
 }
 
@@ -962,7 +970,7 @@ static int _check_device_not_in_use(const char *name, struct dm_info *info)
 	} else if (dm_device_has_holders(info->major, info->minor))
 		reason = "is used by another device";
 	else if (dm_device_has_mounted_fs(info->major, info->minor))
-		reason = "constains a filesystem in use";
+		reason = "contains a filesystem in use";
 	else
 		return 1;
 
@@ -1810,7 +1818,7 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 
 		if (info.open_count) {
 			/* Skip internal non-toplevel opened nodes */
-			/* On some old udev systems without corrrect udev rules
+			/* On some old udev systems without correct udev rules
 			 * this hack avoids 'leaking' active _mimageX legs after
 			 * deactivation of mirror LV. Other suffixes are not added
 			 * since it's expected newer systems with wider range of
@@ -2029,6 +2037,68 @@ static int _rename_conflict_exists(struct dm_tree_node *parent,
 	return 0;
 }
 
+/*
+ * Reactivation of sibling nodes
+ *
+ * Function is used when activating origin and its thick snapshots
+ * to ensure udev is processing first the origin LV and all the
+ * snapshot LVs are processed afterwards.
+ */
+static int _reactivate_siblings(struct dm_tree_node *dnode,
+				const char *uuid_prefix,
+				size_t uuid_prefix_len)
+{
+	struct dm_tree_node *child;
+	const char *uuid;
+	void *handle = NULL;
+	int r = 1;
+
+	/* Wait for udev before reactivating siblings */
+	if (!dm_udev_wait(dm_tree_get_cookie(dnode)))
+		stack;
+
+	dm_tree_set_cookie(dnode, 0);
+
+	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
+		if (child->props.reactivate_siblings) {
+			/* Skip 'leading' device in this group, marked with flag */
+			child->props.reactivate_siblings = 0;
+			continue;
+		}
+
+		if (!(uuid = dm_tree_node_get_uuid(child))) {
+			stack;
+			continue;
+		}
+
+		if (!_uuid_prefix_matches(uuid, uuid_prefix, uuid_prefix_len))
+			continue;
+
+		if (!_suspend_node(child->name, child->info.major, child->info.minor,
+				   child->dtree->skip_lockfs,
+				   child->dtree->no_flush, &child->info)) {
+			log_error("Unable to suspend %s (" FMTu32
+				  ":" FMTu32 ")", child->name,
+				  child->info.major, child->info.minor);
+			r = 0;
+			continue;
+		}
+		if (!_resume_node(child->name, child->info.major, child->info.minor,
+				  child->props.read_ahead, child->props.read_ahead_flags,
+				  &child->info, &child->dtree->cookie,
+				  child->props.reactivate_udev_flags, // use these flags
+				  child->info.suspended)) {
+			log_error("Failed to suspend %s (" FMTu32
+				  ":" FMTu32 ")", child->name,
+				  child->info.major, child->info.minor);
+			r = 0;
+			continue;
+		}
+	}
+
+	return r;
+}
+
 int dm_tree_activate_children(struct dm_tree_node *dnode,
 				 const char *uuid_prefix,
 				 size_t uuid_prefix_len)
@@ -2039,7 +2109,7 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 	struct dm_tree_node *child = dnode;
 	const char *name;
 	const char *uuid;
-	int priority;
+	int priority, next_priority;
 
 	/* Activate children first */
 	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
@@ -2057,12 +2127,16 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 	}
 
 	handle = NULL;
-
 	for (priority = 0; priority < 3; priority++) {
 		awaiting_peer_rename = 0;
+		next_priority = 0;
 		while ((child = dm_tree_next_child(&handle, dnode, 0))) {
-			if (priority != child->activation_priority)
+			if (priority != child->activation_priority) {
+				if ((next_priority < child->activation_priority) &&
+				    (child->activation_priority > priority))
+					next_priority = child->activation_priority;
 				continue;
+			}
 
 			if (!(uuid = dm_tree_node_get_uuid(child))) {
 				stack;
@@ -2110,16 +2184,23 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 			/*
 			 * FIXME: Implement delayed error reporting
 			 * activation should be stopped only in the case,
-			 * the submission of transation_id message fails,
+			 * the submission of transaction_id message fails,
 			 * resume should continue further, just whole command
 			 * has to report failure.
 			 */
 			if (r && (child->props.send_messages > 1) &&
 			    !(r = _node_send_messages(child, uuid_prefix, uuid_prefix_len, 1)))
 				stack;
+
+			/* Reactivate only for fresh activated origin */
+			if (r && child->props.reactivate_siblings &&
+			    (!(r = _reactivate_siblings(dnode, uuid_prefix, uuid_prefix_len))))
+				stack;
 		}
 		if (awaiting_peer_rename)
 			priority--; /* redo priority level */
+		else if (!next_priority)
+			break;  /* no more work, higher priority was not found in the chain */
 	}
 
 	return r;
@@ -2195,7 +2276,7 @@ static int _build_dev_string(char *devbuf, size_t bufsize, struct dm_tree_node *
 	return 1;
 }
 
-/* simplify string emiting code */
+/* simplify string emitting code */
 #define EMIT_PARAMS(p, str...)\
 do {\
 	int w;\
@@ -2678,6 +2759,10 @@ static int _writecache_emit_segment_line(struct dm_task *dmt,
 		count += 1;
 	if (seg->writecache_settings.max_age_set)
 		count += 2;
+	if (seg->writecache_settings.metadata_only_set)
+		count += 1;
+	if (seg->writecache_settings.pause_writeback_set)
+		count += 2;
 	if (seg->writecache_settings.new_key)
 		count += 2;
 
@@ -2729,6 +2814,14 @@ static int _writecache_emit_segment_line(struct dm_task *dmt,
 		EMIT_PARAMS(pos, " max_age %u", seg->writecache_settings.max_age);
 	}
 
+	if (seg->writecache_settings.metadata_only_set) {
+		EMIT_PARAMS(pos, " metadata_only");
+	}
+
+	if (seg->writecache_settings.pause_writeback_set) {
+		EMIT_PARAMS(pos, " pause_writeback %u", seg->writecache_settings.pause_writeback);
+	}
+
 	if (seg->writecache_settings.new_key) {
 		EMIT_PARAMS(pos, " %s %s",
 			seg->writecache_settings.new_key,
@@ -2777,6 +2870,8 @@ static int _integrity_emit_segment_line(struct dm_task *dmt,
 		count++;
 	if (set->sectors_per_bit_set)
 		count++;
+	if (set->allow_discards_set && set->allow_discards)
+		count++;
 
 	EMIT_PARAMS(pos, "%s 0 %u %s %d fix_padding block_size:%u internal_hash:%s",
 		    origin_dev,
@@ -2796,7 +2891,7 @@ static int _integrity_emit_segment_line(struct dm_task *dmt,
 		EMIT_PARAMS(pos, " journal_sectors:%u", set->journal_sectors);
 
 	if (set->interleave_sectors_set)
-		EMIT_PARAMS(pos, " ineterleave_sectors:%u", set->interleave_sectors);
+		EMIT_PARAMS(pos, " interleave_sectors:%u", set->interleave_sectors);
 
 	if (set->buffer_sectors_set)
 		EMIT_PARAMS(pos, " buffer_sectors:%u", set->buffer_sectors);
@@ -2812,6 +2907,9 @@ static int _integrity_emit_segment_line(struct dm_task *dmt,
 
 	if (set->sectors_per_bit_set)
 		EMIT_PARAMS(pos, " sectors_per_bit:%llu", (unsigned long long)set->sectors_per_bit);
+
+	if (set->allow_discards_set && set->allow_discards)
+		EMIT_PARAMS(pos, " allow_discards");
 
 	if (!dm_task_secure_data(dmt))
 		stack;
@@ -2849,13 +2947,18 @@ static int _thin_pool_emit_segment_line(struct dm_task *dmt,
 	return 1;
 }
 
-static int _vdo_emit_segment_line(struct dm_task *dmt,
+static int _vdo_emit_segment_line(struct dm_task *dmt, uint32_t major, uint32_t minor,
 				  struct load_segment *seg,
 				  char *params, size_t paramsize)
 {
 	int pos = 0;
 	char data[DM_FORMAT_DEV_BUFSIZE];
 	char data_dev[128]; // for /dev/dm-XXXX
+	uint64_t logical_blocks;
+	struct dm_task *vdo_dmt;
+	uint64_t start, length = 0;
+	char *type = NULL;
+	char *vdo_params = NULL;
 
 	if (!_build_dev_string(data, sizeof(data), seg->vdo_data))
 		return_0;
@@ -2865,18 +2968,59 @@ static int _vdo_emit_segment_line(struct dm_task *dmt,
 		return 0;
 	}
 
-	EMIT_PARAMS(pos, "V2 %s " FMTu64 " %u " FMTu64 " %u %s %s %s "
-		    "maxDiscard %u ack %u bio %u bioRotationInterval %u cpu %u hash %u logical %u physical %u",
-		    data_dev,
-		    seg->vdo_data_size / 8, // this parameter is in 4K units
-		    seg->vdo_params.minimum_io_size * UINT32_C(512), //  sector to byte units
-		    seg->vdo_params.block_map_cache_size_mb * UINT64_C(256),	// 1MiB -> 4KiB units
-		    seg->vdo_params.block_map_era_length,
-		    seg->vdo_params.use_metadata_hints ? "on" : "off" ,
-		    (seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_SYNC) ? "sync" :
-			(seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_ASYNC) ? "async" :
-			(seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_ASYNC_UNSAFE) ? "async-unsafe" : "auto", // policy
-		    seg->vdo_name,
+	/*
+	 * If there is already running VDO target, read 'existing' virtual size out of table line
+	 * and avoid reading it them from VDO metadata device
+	 *
+	 * NOTE: ATM VDO virtual size can be ONLY extended thus it's simple to recognize 'right' size.
+	 * However if there would be supported also reduction, this check would need to check range.
+	 */
+	if ((vdo_dmt = dm_task_create(DM_DEVICE_TABLE))) {
+		if (dm_task_set_major(vdo_dmt, major) &&
+		    dm_task_set_minor(vdo_dmt, minor) &&
+		    dm_task_run(vdo_dmt)) {
+			(void) dm_get_next_target(vdo_dmt, NULL, &start, &length, &type, &vdo_params);
+			if (!type || strcmp(type, "vdo"))
+				length = 0;
+		}
+
+		dm_task_destroy(vdo_dmt);
+	}
+
+	if (!length && dm_vdo_parse_logical_size(data_dev, &logical_blocks))
+		length = logical_blocks * 8;
+
+	if (seg->size < length) {
+		log_debug_activation("Correcting VDO virtual volume size from " FMTu64  " to " FMTu64 ".",
+				     seg->size, length);
+		seg->size = length;
+	}
+
+	if (seg->vdo_version < 4) {
+		EMIT_PARAMS(pos, "V2 %s " FMTu64 " %u " FMTu64 " %u %s %s %s ",
+			    data_dev,
+			    seg->vdo_data_size / 8, // this parameter is in 4K units
+			    seg->vdo_params.minimum_io_size * UINT32_C(512), //  sector to byte units
+			    seg->vdo_params.block_map_cache_size_mb * UINT64_C(256),	// 1MiB -> 4KiB units
+			    seg->vdo_params.block_map_era_length,
+			    seg->vdo_params.use_metadata_hints ? "on" : "off" ,
+			    (seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_SYNC) ? "sync" :
+			    (seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_ASYNC) ? "async" :
+			    (seg->vdo_params.write_policy == DM_VDO_WRITE_POLICY_ASYNC_UNSAFE) ? "async-unsafe" : "auto", // policy
+			    seg->vdo_name);
+	} else {
+		EMIT_PARAMS(pos, "V4 %s " FMTu64 " %u " FMTu64 " %u "
+			    "deduplication %s compression %s ",
+			    data_dev,
+			    seg->vdo_data_size / 8, // this parameter is in 4K units
+			    seg->vdo_params.minimum_io_size * UINT32_C(512), //  sector to byte units
+			    seg->vdo_params.block_map_cache_size_mb * UINT64_C(256),	// 1MiB -> 4KiB units
+			    seg->vdo_params.block_map_era_length,
+			    seg->vdo_params.use_deduplication ? "on" : "off",
+			    seg->vdo_params.use_compression ? "on" : "off");
+	}
+
+	EMIT_PARAMS(pos, "maxDiscard %u ack %u bio %u bioRotationInterval %u cpu %u hash %u logical %u physical %u",
 		    seg->vdo_params.max_discard,
 		    seg->vdo_params.ack_threads,
 		    seg->vdo_params.bio_threads,
@@ -2951,7 +3095,7 @@ static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
 		EMIT_PARAMS(pos, "%u %u ", seg->area_count, seg->stripe_size);
 		break;
 	case SEG_VDO:
-		if (!_vdo_emit_segment_line(dmt, seg, params, paramsize))
+		if (!_vdo_emit_segment_line(dmt, major, minor, seg, params, paramsize))
 		      return_0;
 		break;
 	case SEG_CRYPT:
@@ -3240,7 +3384,7 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 		if (!child->info.exists && !(node_created = _create_node(child, dnode)))
 			return_0;
 
-		/* Propagate delayed resume from exteded child node */
+		/* Propagate delayed resume from extended child node */
 		if (child->props.delay_resume_if_extended)
 			dnode->props.delay_resume_if_extended = 1;
 
@@ -3390,6 +3534,10 @@ int dm_tree_node_add_snapshot_origin_target(struct dm_tree_node *dnode,
 	/* Resume snapshot origins after new snapshots */
 	dnode->activation_priority = 1;
 
+	if (!dnode->info.exists)
+		/* Reactivate siblings for this origin after being resumed */
+		dnode->props.reactivate_siblings = 1;
+
 	/*
 	 * Don't resume the origin immediately in case it is a non-trivial 
 	 * target that must not be active more than once concurrently!
@@ -3452,6 +3600,20 @@ static int _add_snapshot_target(struct dm_tree_node *node,
 			/* Resume merging snapshot after snapshot-merge */
 			seg->merge->activation_priority = 2;
 		}
+	} else if (!origin_node->info.exists) {
+		/* Keep original udev_flags for reactivation. */
+		node->props.reactivate_udev_flags = node->udev_flags;
+
+		/* Reactivation is needed if the origin's -real device is not in DM table.
+		 * For this case after the resume of its origin LV we resume its snapshots
+		 * with updated udev_flags to completely avoid udev scanning for the first resume.
+		 * Reactivation then resumes snapshots with original udev_flags.
+		 */
+		node->udev_flags |= DM_SUBSYSTEM_UDEV_FLAG0 |
+			DM_UDEV_DISABLE_DISK_RULES_FLAG |
+			DM_UDEV_DISABLE_OTHER_RULES_FLAG;
+		log_debug_activation("Using udev_flags 0x%x for activation of %s.",
+				     node->udev_flags, node->name);
 	}
 
 	return 1;
@@ -3658,7 +3820,7 @@ int dm_tree_node_add_raid_target(struct dm_tree_node *node,
  * - maximum 253 legs in a raid set (MD kernel limitation)
  * - delta_disks for disk add/remove reshaping
  * - data_offset for out-of-place reshaping
- * - data_copies to cope witth odd numbers of raid10 disks
+ * - data_copies to cope with odd numbers of raid10 disks
  */
 int dm_tree_node_add_raid_target_with_params_v2(struct dm_tree_node *node,
 					        uint64_t size,
@@ -3709,7 +3871,7 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 {
 	struct dm_config_node *cn;
 	struct load_segment *seg;
-	static const uint64_t _modemask =
+	const uint64_t modemask =
 		DM_CACHE_FEATURE_PASSTHROUGH |
 		DM_CACHE_FEATURE_WRITETHROUGH |
 		DM_CACHE_FEATURE_WRITEBACK;
@@ -3721,12 +3883,12 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 		return 0;
 	}
 
-	switch (feature_flags & _modemask) {
+	switch (feature_flags & modemask) {
 	case DM_CACHE_FEATURE_PASSTHROUGH:
 	case DM_CACHE_FEATURE_WRITEBACK:
 		if (strcmp(policy_name, "cleaner") == 0) {
 			/* Enforce writethrough mode for cleaner policy */
-			feature_flags = ~_modemask;
+			feature_flags = ~modemask;
 			feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
 		}
                 /* Fall through */
@@ -3922,7 +4084,7 @@ int dm_tree_node_add_replicator_dev_target(struct dm_tree_node *node,
 					   uint32_t slog_flags,
 					   uint32_t slog_region_size)
 {
-	log_error("Replicator targer is unsupported.");
+	log_error("Replicator target is unsupported.");
 	return 0;
 }
 
@@ -4209,6 +4371,12 @@ int dm_tree_node_set_thin_external_origin(struct dm_tree_node *node,
 
 	seg->external = external;
 
+	if (!external->info.minor) {
+		log_debug_activation("Delaying resume for new external origin %s.",
+				     external->name);
+		external->props.delay_resume_if_new = 1;
+	}
+
 	return 1;
 }
 
@@ -4323,6 +4491,7 @@ void dm_tree_node_set_callback(struct dm_tree_node *dnode,
 
 int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
 				uint64_t size,
+				uint32_t vdo_version,
 				const char *vdo_pool_name,
 				const char *data_uuid,
 				uint64_t data_size,
@@ -4344,11 +4513,13 @@ int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
 	if (!_link_tree_nodes(node, seg->vdo_data))
 		return_0;
 
+	seg->vdo_version = vdo_version;
 	seg->vdo_params = *vtp;
 	seg->vdo_name = vdo_pool_name;
 	seg->vdo_data_size = data_size;
 
-	node->props.send_messages = 2;
+	if (seg->vdo_version < 4)
+		node->props.send_messages = 2;
 
 	return 1;
 }

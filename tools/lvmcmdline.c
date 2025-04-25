@@ -21,6 +21,8 @@
 #include "lvm-version.h"
 #include "lib/locking/lvmlockd.h"
 #include "lib/datastruct/str_list.h"
+#include "lib/mm/memlock.h"
+#include "libdaemon/server/daemon-stray.h"
 
 /* coverity[unnecessary_header] */
 #include "stub.h"
@@ -33,10 +35,6 @@
 #include <paths.h>
 #include <locale.h>
 #include <langinfo.h>
-
-#ifdef HAVE_VALGRIND
-#include <valgrind.h>
-#endif
 
 #ifdef HAVE_GETOPTLONG
 #  include <getopt.h>
@@ -53,35 +51,16 @@ extern char *optarg;
 
 
 /*
- * Table of valid --option values.
- */
-extern struct val_name val_names[VAL_COUNT + 1];
-
-/*
- * Table of valid --option's
- */
-extern struct opt_name opt_names[ARG_COUNT + 1];
-
-/*
- * Table of LV properties
- */
-extern struct lv_prop lv_props[LVP_COUNT + 1];
-
-/*
- * Table of LV types
- */
-extern struct lv_type lv_types[LVT_COUNT + 1];
-
-/*
  * Table of command names
  */
 extern struct command_name command_names[];
+extern struct command_name_args command_names_args[];
 
 /*
  * Table of commands (as defined in command-lines.in)
  */
 struct command commands[COMMAND_COUNT];
-struct command *commands_idx[COMMAND_COUNT];
+static struct command *commands_idx[COMMAND_COUNT];
 
 static struct cmdline_context _cmdline;
 
@@ -93,6 +72,7 @@ static struct cmdline_context _cmdline;
  * For now, any command id not included here uses the old command fn.
  */
 static const struct command_function _command_functions[CMD_COUNT] = {
+	{ CMD_NONE, NULL },
 	{ lvmconfig_general_CMD, lvmconfig },
 	{ lvchange_properties_CMD, lvchange_properties_cmd },
 	{ lvchange_resync_CMD, lvchange_resync_cmd },
@@ -108,6 +88,21 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	{ vgchange_lockstart_CMD, vgchange_lock_start_stop_cmd },
 	{ vgchange_lockstop_CMD, vgchange_lock_start_stop_cmd },
 	{ vgchange_systemid_CMD, vgchange_systemid_cmd },
+
+	/* lvdisplay variants */
+	{ lvdisplay_columns_CMD,	lvdisplay_columns_cmd },
+	{ lvdisplay_colon_CMD,		lvdisplay_colon_cmd },
+	{ lvdisplay_general_CMD,	lvdisplay_general_cmd },
+
+	/* pvdisplay variants */
+	{ pvdisplay_columns_CMD,	pvdisplay_columns_cmd },
+	{ pvdisplay_colon_CMD,		pvdisplay_cmd },
+	{ pvdisplay_general_CMD,	pvdisplay_cmd },
+
+	/* vgdisplay variants */
+	{ vgdisplay_columns_CMD,	vgdisplay_columns_cmd },
+	{ vgdisplay_colon_CMD,		vgdisplay_colon_cmd },
+	{ vgdisplay_general_CMD,	vgdisplay_general_cmd },
 
 	/* lvconvert utilities related to repair. */
 	{ lvconvert_repair_CMD,	lvconvert_repair_cmd },
@@ -126,6 +121,7 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	{ lvconvert_to_thinpool_CMD,			lvconvert_to_pool_cmd },
 	{ lvconvert_to_cachepool_CMD,			lvconvert_to_pool_cmd },
 	{ lvconvert_to_thin_with_external_CMD,		lvconvert_to_thin_with_external_cmd },
+	{ lvconvert_to_thin_with_data_CMD,		lvconvert_to_thin_with_data_cmd },
 	{ lvconvert_to_cache_with_cachevol_CMD,		lvconvert_to_cache_with_cachevol_cmd },
 	{ lvconvert_to_cache_with_device_CMD,		lvconvert_to_cache_with_cachevol_cmd },
 	{ lvconvert_to_cache_with_cachepool_CMD,	lvconvert_to_cache_with_cachepool_cmd },
@@ -165,10 +161,33 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 
 	{ pvscan_display_CMD, pvscan_display_cmd },
 	{ pvscan_cache_CMD, pvscan_cache_cmd },
+
+	/* lvextend/lvreduce/lvresize */
+	{ lvextend_policy_CMD,		lvextend_policy_cmd },
+	{ lvextend_pool_metadata_CMD,	lvresize_cmd },
+	{ lvresize_pool_metadata_CMD,	lvresize_cmd },
+	{ lvextend_pv_CMD,		lvresize_cmd },
+	{ lvresize_pv_CMD,		lvresize_cmd },
+	{ lvextend_size_CMD,		lvresize_cmd },
+	{ lvreduce_size_CMD,		lvresize_cmd },
+	{ lvresize_size_CMD,		lvresize_cmd },
 };
 
 
 /* Command line args */
+int arg_is_valid_for_command(const struct cmd_context *cmd, int a)
+{
+	const struct command_name_args *cna = &command_names_args[cmd->cname->lvm_command_enum];
+	int i;
+
+	for (i = 0; i < cna->num_args; i++) {
+		if (cna->valid_args[i] == a)
+			return 1;
+	}
+
+	return 0;
+}
+
 unsigned arg_count(const struct cmd_context *cmd, int a)
 {
 	return cmd->opt_arg_values ? cmd->opt_arg_values[a].count : 0;
@@ -566,7 +585,7 @@ static int _size_arg(struct cmd_context *cmd __attribute__((unused)),
 {
 	char *ptr;
 	int i;
-	static const char *suffixes = "kmgtpebs";
+	static const char _suffixes[] = "kmgtpebs";
 	char *val;
 	double v;
 	uint64_t v_tmp, adjustment;
@@ -626,8 +645,8 @@ static int _size_arg(struct cmd_context *cmd __attribute__((unused)),
 			return 0;
 		}
 	} else if (*ptr) {
-		for (i = strlen(suffixes) - 1; i >= 0; i--)
-			if (suffixes[i] == tolower((int) *ptr))
+		for (i = sizeof(_suffixes) - 1; i >= 0; --i)
+			if (_suffixes[i] == tolower((int) *ptr))
 				break;
 
 		if (i < 0) {
@@ -663,10 +682,10 @@ static int _size_arg(struct cmd_context *cmd __attribute__((unused)),
 		return 0;
 	}
 
-	av->i_value = (v < INT32_MAX) ? (int32_t) v : INT32_MAX;
-	av->ui_value = (v < UINT32_MAX) ? (uint32_t) v : UINT32_MAX;
-	av->i64_value = (v < INT64_MAX) ? (int64_t) v : INT64_MAX;
-	av->ui64_value = (v < UINT64_MAX) ? (uint64_t) v : UINT64_MAX;
+	av->i_value = ((int32_t) v < INT32_MAX) ? (int32_t) v : INT32_MAX;
+	av->ui_value = ((uint32_t) v < UINT32_MAX) ? (uint32_t) v : UINT32_MAX;
+	av->i64_value = ((int64_t) v < INT64_MAX) ? (int64_t) v : INT64_MAX;
+	av->ui64_value = ((uint64_t) v < UINT64_MAX) ? (uint64_t) v : UINT64_MAX;
 
 	return 1;
 }
@@ -1058,7 +1077,8 @@ int syncaction_arg(struct cmd_context *cmd, struct arg_values *av)
 int reportformat_arg(struct cmd_context *cmd, struct arg_values *av)
 {
 	if (!strcmp(av->value, "basic") ||
-	    !strcmp(av->value, "json"))
+	    !strcmp(av->value, "json") ||
+	    !strcmp(av->value, "json_std"))
 		return 1;
 	return 0;
 }
@@ -1110,6 +1130,11 @@ int dumptype_arg(struct cmd_context *cmd, struct arg_values *av)
 	    !strcmp(av->value, "backup_to_raw"))
 		return 1;
 	return 0;
+}
+
+int headings_arg(struct cmd_context *cmd, struct arg_values *av)
+{
+	return report_headings_str_to_type(av->value) != REPORT_HEADINGS_UNKNOWN;
 }
 
 /*
@@ -1203,7 +1228,7 @@ static int _opt_synonym_to_standard(const char *cmd_name, int opt)
 	return 0;
 }
 
-static void _add_getopt_arg(int arg_enum, char **optstrp, struct option **longoptsp);
+static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longoptsp);
 
 /*
  * The valid args for a command name in general is a union of
@@ -1262,18 +1287,18 @@ static void _set_valid_args_for_command_name(int ci)
 		if (all_args[i]) {
 			opt_enum = _cmdline.opt_names[i].opt_enum;
 
-			command_names[ci].valid_args[num_args] = opt_enum;
+			command_names_args[ci].valid_args[num_args] = opt_enum;
 			num_args++;
 
 			/* Automatically recognize --extents in addition to --size. */
 			if (opt_enum == size_ARG) {
-				command_names[ci].valid_args[num_args] = extents_ARG;
+				command_names_args[ci].valid_args[num_args] = extents_ARG;
 				num_args++;
 			}
 
 			/* Recognize synonyms */
 			if ((opt_syn = _opt_standard_to_synonym(command_names[ci].name, opt_enum))) {
-				command_names[ci].valid_args[num_args] = opt_syn;
+				command_names_args[ci].valid_args[num_args] = opt_syn;
 				num_args++;
 			}
 
@@ -1284,26 +1309,23 @@ static void _set_valid_args_for_command_name(int ci)
 			 * so just add allocation whenever either is seen.
 			 */
 			if ((opt_enum == allocatable_ARG) || (opt_enum == resizeable_ARG)) {
-				command_names[ci].valid_args[num_args] = allocation_ARG;
+				command_names_args[ci].valid_args[num_args] = allocation_ARG;
 				num_args++;
 			}
 		}
 	}
 
-	command_names[ci].num_args = num_args;
+	command_names_args[ci].num_args = num_args;
 }
 
-static const struct command_function *_find_command_id_function(int command_enum)
+static command_fn _find_command_id_function(int command_enum)
 {
-	int i;
+	unsigned i;
 
-	if (!command_enum)
-		return NULL;
-
-	for (i = 0; i < CMD_COUNT; i++) {
+	for (i = 0; i < CMD_COUNT; i++)
 		if (_command_functions[i].command_enum == command_enum)
-			return &_command_functions[i];
-	}
+			return _command_functions[i].fn;
+
 	return NULL;
 }
 
@@ -1312,8 +1334,8 @@ static void _unregister_commands(void)
 	_cmdline.commands = NULL;
 	_cmdline.num_commands = 0;
 	_cmdline.command_names = NULL;
+	_cmdline.command_names_args = NULL;
 	_cmdline.num_command_names = 0;
-	memset(&commands, 0, sizeof(commands));
 }
 
 static int _command_name_compare(const void *on1, const void *on2)
@@ -1332,8 +1354,6 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 	if (_cmdline.commands)
 		return 1;
 
-	memset(&commands, 0, sizeof(commands));
-
 	/*
 	 * populate commands[] array with command definitions
 	 * by parsing command-lines.in/command-lines-input.h
@@ -1349,50 +1369,19 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 	for (i = 0; i < COMMAND_COUNT; i++) {
 		commands_idx[i] = &commands[i];
 		commands[i].command_index = i;
-		commands[i].command_enum = command_id_to_enum(commands[i].command_id);
-
-		if (!commands[i].command_enum) {
-			log_error(INTERNAL_ERROR "Failed to find command id %s.", commands[i].command_id);
-			_cmdline.commands = NULL;
-			_cmdline.num_commands = 0;
-			return 0;
-		}
-
-		/* new style */
-		commands[i].functions = _find_command_id_function(commands[i].command_enum);
-
-		/* old style */
-		if (!commands[i].functions) {
-			struct command_name *cname = find_command_name(commands[i].name);
-			if (cname)
-				commands[i].fn = cname->fn;
-		}
 	}
 
 	/* Sort all commands by its name for quick binary search */
 	qsort(commands_idx, COMMAND_COUNT, sizeof(long), _command_name_compare);
 
-	for (i = 0; command_names[i].name; i++)
+	for (i = 0; i < LVM_COMMAND_COUNT; ++i)
 		_set_valid_args_for_command_name(i);
 
 	_cmdline.num_command_names = i; /* Also counted how many command entries we have */
 	_cmdline.command_names = command_names;
+	_cmdline.command_names_args = command_names_args;
 
 	return 1;
-}
-
-struct lv_prop *get_lv_prop(int lvp_enum)
-{
-	if (!lvp_enum)
-		return NULL;
-	return &lv_props[lvp_enum];
-}
-
-struct lv_type *get_lv_type(int lvt_enum)
-{
-	if (!lvt_enum)
-		return NULL;
-	return &lv_types[lvt_enum];
 }
 
 struct command *get_command(int cmd_enum)
@@ -1432,7 +1421,7 @@ static int _command_optional_opt_matches(struct cmd_context *cmd, int ci, int oo
 	}
 
 	if (val_bit_is_set(commands[ci].optional_opt_args[oo].def.val_bits, constnum_VAL)) {
-		if (commands[ci].optional_opt_args[oo].def.num == arg_int_value(cmd, opt_enum, 0))
+		if (commands[ci].optional_opt_args[oo].def.num == arg_uint64_value(cmd, opt_enum, 0))
 			return 1;
 		return 0;
 	}
@@ -1451,7 +1440,7 @@ static int _command_ignore_opt_matches(struct cmd_context *cmd, int ci, int io)
 	}
 
 	if (val_bit_is_set(commands[ci].ignore_opt_args[io].def.val_bits, constnum_VAL)) {
-		if (commands[ci].ignore_opt_args[io].def.num == arg_int_value(cmd, opt_enum, 0))
+		if (commands[ci].ignore_opt_args[io].def.num == arg_uint64_value(cmd, opt_enum, 0))
 			return 1;
 		return 0;
 	}
@@ -1467,11 +1456,11 @@ static int _command_required_opt_matches(struct cmd_context *cmd, int ci, int ro
 		goto check_val;
 
 	/*
-	 * For some commands, --size and --extents are interchangable,
+	 * For some commands, --size and --extents are interchangeable,
 	 * but command[] definitions use only --size.
 	 */
 	if ((opt_enum == size_ARG) && arg_is_set(cmd, extents_ARG) &&
-	    command_has_alternate_extents(commands[ci].name))
+	    command_has_alternate_extents(&command_names[commands[ci].lvm_command_enum]))
 		goto check_val;
 
 	return 0;
@@ -1495,7 +1484,7 @@ check_val:
 	}
 
 	if (val_bit_is_set(commands[ci].required_opt_args[ro].def.val_bits, constnum_VAL)) {
-		if (commands[ci].required_opt_args[ro].def.num == arg_int_value(cmd, opt_enum, 0))
+		if (commands[ci].required_opt_args[ro].def.num == arg_uint64_value(cmd, opt_enum, 0))
 			return 1;
 		return 0;
 	}
@@ -1505,7 +1494,7 @@ check_val:
 
 static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp, char **argv)
 {
-	const char *name;
+	unsigned i;
 
 	/*
 	 * rp is the index in required_pos_args[] of the required positional arg.
@@ -1536,33 +1525,21 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 	 */
 	if (!strcmp(cmd->name, "lvcreate") &&
 	    (rp == 0) &&
-	    val_bit_is_set(commands[ci].required_pos_args[rp].def.val_bits, vg_VAL) &&
-	    (arg_is_set(cmd, name_ARG) ||
-	     arg_is_set(cmd, thinpool_ARG) ||
-	     arg_is_set(cmd, cachepool_ARG) ||
-	     arg_is_set(cmd, vdopool_ARG) ||
-	     getenv("LVM_VG_NAME"))) {
+	    val_bit_is_set(commands[ci].required_pos_args[rp].def.val_bits, vg_VAL)) {
+		const char *names[] = {
+			arg_str_value(cmd, name_ARG, NULL),
+			arg_str_value(cmd, thinpool_ARG, NULL),
+			arg_str_value(cmd, cachepool_ARG, NULL),
+			arg_str_value(cmd, vdopool_ARG, NULL),
+		};
 
 		if (getenv("LVM_VG_NAME"))
 			return 1;
 
-		if ((name = arg_str_value(cmd, name_ARG, NULL))) {
-			if (strstr(name, "/"))
+		for (i = 0; i < DM_ARRAY_SIZE(names); ++i)
+			/* Check whether LV name has VG name separated by '/' */
+			if (names[i] && (strstr(names[i], "/")))
 				return 1;
-		}
-
-		if ((name = arg_str_value(cmd, thinpool_ARG, NULL))) {
-			if (strstr(name, "/"))
-				return 1;
-		}
-
-		if ((name = arg_str_value(cmd, cachepool_ARG, NULL))) {
-			if (strstr(name, "/"))
-				return 1;
-		}
-
-		if ((name = arg_str_value(cmd, vdopool_ARG, NULL)) && strstr(name, "/"))
-			return 1;
 	}
 
 	return 0;
@@ -1674,21 +1651,20 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 	int opt_enum, opt_i;
 	int accepted, count;
 	int variants = 0;
+	uint16_t lvm_command_enum = (cmd->cname) ? cmd->cname->lvm_command_enum : LVM_COMMAND_COUNT;
 
 	name = last_path_component(path);
 
 	/* factor_common_options() is only for usage, so cname->variants is not set. */
-	for (i = 0; i < COMMAND_COUNT; i++) {
-		if (strcmp(name, commands[i].name))
-			continue;
-		variants++;
-	}
+	for (i = 0; i < COMMAND_COUNT; i++)
+		if (lvm_command_enum == commands[i].lvm_command_enum)
+			variants++;
 
 	if (arg_is_set(cmd, type_ARG))
 		type_arg = arg_str_value(cmd, type_ARG, "");
 
 	for (i = 0; i < COMMAND_COUNT; i++) {
-		if (strcmp(name, commands[i].name))
+		if (lvm_command_enum != commands[i].lvm_command_enum)
 			continue;
 
 		if (variants == 1)
@@ -1927,7 +1903,7 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 
 	/*
 	 * If the user provided a positional arg that is not accepted by
-	 * the mached command, then fail.
+	 * the matched command, then fail.
 	 *
 	 * If the last required_pos_arg or the last optional_pos_arg may repeat,
 	 * then there won't be unused positional args.
@@ -2015,9 +1991,9 @@ out:
 	}
 
 	log_debug("Recognised command %s (id %d / enum %d).",
-		  commands[best_i].command_id, best_i, commands[best_i].command_enum);
+		  command_enum(commands[best_i].command_enum), best_i, commands[best_i].command_enum);
 
-	log_command(cmd->cmd_line, commands[best_i].name, commands[best_i].command_id);
+	log_command(cmd->cmd_line, commands[best_i].name, command_enum(commands[best_i].command_enum));
 
 	return &commands[best_i];
 }
@@ -2029,7 +2005,8 @@ static void _short_usage(const char *name)
 
 static int _usage(const char *name, int longhelp, int skip_notes)
 {
-	struct command_name *cname = find_command_name(name);
+	const struct command_name *cname = find_command_name(name);
+	const struct command_name_args *cna = cname ? &command_names_args[cname->lvm_command_enum] : NULL;
 	struct command *cmd = NULL;
 	int show_full = longhelp;
 	int i;
@@ -2038,8 +2015,6 @@ static int _usage(const char *name, int longhelp, int skip_notes)
 		log_print("%s: no such command.", name);
 		return 0;
 	}
-
-	configure_command_option_values(name);
 
 	/*
 	 * Looks at all variants of each command name and figures out
@@ -2051,7 +2026,7 @@ static int _usage(const char *name, int longhelp, int skip_notes)
 
 	/* Reduce the default output when there are several variants. */
 
-	if (cname->variants < 3)
+	if (cna->variants < 3)
 		show_full = 1;
 
 	for (i = 0; i < COMMAND_COUNT; i++) {
@@ -2067,7 +2042,7 @@ static int _usage(const char *name, int longhelp, int skip_notes)
 		log_very_verbose("Command definition index %d enum %d id %s",
 			         _cmdline.commands[i].command_index,
 			         _cmdline.commands[i].command_enum,
-			         _cmdline.commands[i].command_id);
+			         command_enum(_cmdline.commands[i].command_enum));
 
 		print_usage(&_cmdline.commands[i], 1, 1);
 		cmd = &_cmdline.commands[i];
@@ -2097,7 +2072,7 @@ static void _usage_all(void)
 {
 	int i;
 
-	for (i = 0; command_names[i].name; i++)
+	for (i = 0; i < LVM_COMMAND_COUNT; ++i)
 		_usage(command_names[i].name, 1, 1);
 
 	print_usage_notes(NULL);
@@ -2131,7 +2106,7 @@ static void _usage_all(void)
 
 static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longoptsp)
 {
-	struct opt_name *a = _cmdline.opt_names + opt_enum;
+	const struct opt_name *a = _cmdline.opt_names + opt_enum;
 
 	if (a->short_opt) {
 		*(*optstrp)++ = a->short_opt;
@@ -2186,15 +2161,18 @@ static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longop
 
 static int _find_arg(const char *cmd_name, int goval)
 {
-	struct command_name *cname;
+	const struct command_name *cname;
+	const struct command_name_args *cna;
 	int arg_enum;
 	int i;
 
 	if (!(cname = find_command_name(cmd_name)))
 		return -1;
 
-	for (i = 0; i < cname->num_args; i++) {
-		arg_enum = cname->valid_args[i];
+	cna = &command_names_args[cname->lvm_command_enum];
+
+	for (i = 0; i < cna->num_args; i++) {
+		arg_enum = cna->valid_args[i];
 
 		/* assert arg_enum == _cmdline.opt_names[arg_enum].arg_enum */
 
@@ -2214,10 +2192,11 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 {
 	char str[((ARG_COUNT + 1) * 2) + 1], *ptr = str;
 	struct option opts[ARG_COUNT + 1], *o = opts;
-	struct opt_name *a;
+	const struct opt_name *a;
 	struct arg_values *av;
 	struct arg_value_group_list *current_group = NULL;
 	int arg_enum; /* e.g. foo_ARG */
+	int val_enum;
 	int goval;    /* the number returned from getopt_long identifying what it found */
 	int i;
 
@@ -2231,9 +2210,11 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 	 * array (opts) to pass to the getopt_long() function.  IOW we generate
 	 * the arguments to pass to getopt_long() from the opt_names data.
 	 */
-	if (cmd->cname)
-		for (i = 0; i < cmd->cname->num_args; i++)
-			_add_getopt_arg(cmd->cname->valid_args[i], &ptr, &o);
+	if (cmd->cname) {
+		struct command_name_args *cna = &command_names_args[cmd->cname->lvm_command_enum];
+		for (i = 0; i < cna->num_args; i++)
+			_add_getopt_arg(cna->valid_args[i], &ptr, &o);
+	}
 
 	*ptr = '\0';
 	memset(o, 0, sizeof(*o));
@@ -2259,6 +2240,15 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 		a = _cmdline.opt_names + arg_enum;
 
 		av = &cmd->opt_arg_values[arg_enum];
+
+		if (a->flags & ARG_NONINTERACTIVE && cmd->is_interactive) {
+			log_error("Argument%s%c%s%s cannot be used in interactive mode.",
+				  a->short_opt ? " -" : "",
+				  a->short_opt ? : ' ',
+				  (a->short_opt && a->long_opt[0]) ?
+				  "/" : "", a->long_opt[0] ? a->long_opt : "");
+			return 0;
+		}
 
 		if (a->flags & ARG_GROUPABLE) {
 			/*
@@ -2288,8 +2278,8 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 			log_error("Option%s%c%s%s may not be repeated.",
 				  a->short_opt ? " -" : "",
 				  a->short_opt ? : ' ',
-				  (a->short_opt && a->long_opt) ?
-				  "/" : "", a->long_opt ? : "");
+				  (a->short_opt && a->long_opt[0]) ?
+				  "/" : "", a->long_opt[0] ? a->long_opt : "");
 			return 0;
 		}
 
@@ -2300,8 +2290,8 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 			}
 
 			av->value = optarg;
-
-			if (!val_names[a->val_enum].fn(cmd, av)) {
+			val_enum = configure_command_option_values(cmd->cname, arg_enum, a->val_enum);
+			if (!get_val_name(val_enum)->fn(cmd, av)) {
 				log_error("Invalid argument for %s: %s", a->long_opt, optarg);
 				return 0;
 			}
@@ -2587,7 +2577,7 @@ static int _get_current_settings(struct cmd_context *cmd)
 		if (!strcmp(search_mode, "none") || !strcmp(search_mode, "auto") || !strcmp(search_mode, "all"))
 			cmd->search_for_devnames = search_mode;
 		else {
-			log_warn("Ignoring unknown search_for_devnames setting, using %s.", DEFAULT_SEARCH_FOR_DEVNAMES);
+			log_warn("WARNING: Ignoring unknown search_for_devnames setting, using %s.", DEFAULT_SEARCH_FOR_DEVNAMES);
 			cmd->search_for_devnames = DEFAULT_SEARCH_FOR_DEVNAMES;
 		}
 	}
@@ -2671,7 +2661,7 @@ static int _process_common_commands(struct cmd_context *cmd)
 	if (arg_is_set(cmd, help_ARG) ||
 	    arg_is_set(cmd, longhelp_ARG) ||
 	    arg_is_set(cmd, help2_ARG)) {
-		_usage(cmd->name, arg_is_set(cmd, longhelp_ARG), 0);
+		_usage(cmd->name, arg_count(cmd, longhelp_ARG), 0);
 		return ECMD_PROCESSED;
 	}
 
@@ -2692,7 +2682,7 @@ static void _display_help(void)
 	log_error(" ");
 
 	for (i = 0; i < _cmdline.num_command_names; i++) {
-		struct command_name *cname = _cmdline.command_names + i;
+		const struct command_name *cname = _cmdline.command_names + i;
 
 		log_error("%-16.16s%s", cname->name, cname->desc);
 	}
@@ -2720,6 +2710,7 @@ static void _apply_current_settings(struct cmd_context *cmd)
 {
 	_apply_current_output_settings(cmd);
 
+	memlock_init(cmd);
 	init_test(cmd->current_settings.test);
 	init_mirror_in_sync(0);
 	init_dmeventd_monitor(DEFAULT_DMEVENTD_MONITOR);
@@ -2969,19 +2960,14 @@ static int _init_lvmlockd(struct cmd_context *cmd)
 	}
 
 	if (use_lvmlockd && arg_is_set(cmd, lockopt_ARG)) {
-		const char *opts = arg_str_value(cmd, lockopt_ARG, "");
-		if (strstr(opts, "skiplv")) {
-			log_warn("WARNING: skipping LV lock in lvmlockd.");
+		lockd_lockopt_get_flags(arg_str_value(cmd, lockopt_ARG, ""), &cmd->lockopt);
+
+		if (cmd->lockopt & LOCKOPT_SKIPLV)
 			cmd->lockd_lv_disable = 1;
-		}
-		if (strstr(opts, "skipvg")) {
-			log_warn("WARNING: skipping VG lock in lvmlockd.");
+		if (cmd->lockopt & LOCKOPT_SKIPVG)
 			cmd->lockd_vg_disable = 1;
-		}
-		if (strstr(opts, "skipgl")) {
-			log_warn("WARNING: skipping global lock in lvmlockd.");
+		if (cmd->lockopt & LOCKOPT_SKIPGL)
 			cmd->lockd_gl_disable = 1;
-		}
 	}
 
 	lvmlockd_disconnect(); /* start over when tool context is refreshed */
@@ -3030,7 +3016,7 @@ static void _init_md_checks(struct cmd_context *cmd)
 	         !strcmp(md_check, "full"))
 		cmd->md_component_checks = md_check;
 	else {
-		log_warn("Ignoring unknown md_component_checks setting, using auto.");
+		log_warn("WARNING: Ignoring unknown md_component_checks setting, using auto.");
 		cmd->md_component_checks = "auto";
 	}
 
@@ -3061,9 +3047,10 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	int skip_hyphens;
 	int refresh_done = 0;
 	int io;
+	command_fn fn;
 
 	/* Avoid excessive access to /etc/localtime and set TZ variable for glibc
-	 * so it does not need to check /etc/localtime everytime that needs that info */
+	 * so it does not need to check /etc/localtime every time that needs that info */
 	if (!getenv("TZ"))
 		setenv("TZ", ":/etc/localtime", 0);
 
@@ -3080,8 +3067,6 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	set_cmd_name(cmd->name);
 
 	init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL), 0);
-
-	configure_command_option_values(cmd->name);
 
 	/* eliminate '-' from all options starting with -- */
 	for (i = 1; i < argc; i++) {
@@ -3124,6 +3109,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	if (!(cmd->cname = find_command_name(cmd->name)))
 		return ENO_SUCH_CMD;
 
+	cmd->get_vgname_from_options = (cmd->cname->flags & GET_VGNAME_FROM_OPTIONS) ? 1 : 0;
+
 	if (!_process_command_line(cmd, &argc, &argv)) {
 		log_error("Error during parsing of command line.");
 		return EINVALID_CMD_LINE;
@@ -3142,6 +3129,9 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 
 	if (!(cmd->command = _find_command(cmd, cmd->name, &argc, argv)))
 		return EINVALID_CMD_LINE;
+
+	/* avoid this by letting lib code use cmd->command */
+	cmd->command_enum = cmd->command->command_enum;
 
 	/*
 	 * If option --foo is set which is listed in IO (ignore option) in
@@ -3170,7 +3160,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		}
 
 	if (arg_is_set(cmd, config_ARG) || !cmd->initialized.config || config_files_changed(cmd)) {
-		/* Reinitialise various settings inc. logging, filters */
+		/* Reinitialize various settings inc. logging, filters */
 		if (!refresh_toolcontext(cmd)) {
 			if ((config_string_cft = remove_config_tree_by_source(cmd, CONFIG_STRING)))
 				dm_config_destroy(config_string_cft);
@@ -3286,12 +3276,12 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 		goto_out;
 	}
 
-	if (cmd->command->functions)
-		/* A command-line-specific function is used */
-		ret = cmd->command->functions->fn(cmd, argc, argv);
-	else
+	/* A command-line-specific function is used */
+	if (!(fn = _find_command_id_function(cmd->command->command_enum)))
 		/* The old style command-name function is used */
-		ret = cmd->command->fn(cmd, argc, argv);
+		fn = command_names[cmd->command->lvm_command_enum].fn;
+
+	ret = fn(cmd, argc, argv);
 
 	lvmlockd_disconnect();
 	fin_locking(cmd);
@@ -3305,6 +3295,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	hints_exit(cmd);
 	lvmcache_destroy(cmd, 1, 1);
 	label_scan_destroy(cmd);
+	devices_file_exit(cmd);
 
 	if ((config_string_cft = remove_config_tree_by_source(cmd, CONFIG_STRING)))
 		dm_config_destroy(config_string_cft);
@@ -3458,137 +3449,6 @@ static int _get_custom_fds(struct custom_fds *custom_fds)
 	       _do_get_custom_fd(LVM_REPORT_FD_ENV_VAR_NAME, &custom_fds->report);
 }
 
-static const char *_get_cmdline(pid_t pid)
-{
-	static char _proc_cmdline[32];
-	char buf[256];
-	int fd, n = 0;
-
-	snprintf(buf, sizeof(buf), DEFAULT_PROC_DIR "/%u/cmdline", pid);
-	/* FIXME Use generic read code. */
-	if ((fd = open(buf, O_RDONLY)) >= 0) {
-		if ((n = read(fd, _proc_cmdline, sizeof(_proc_cmdline) - 1)) < 0) {
-			log_sys_error("read", buf);
-			n = 0;
-		}
-		if (close(fd))
-			log_sys_error("close", buf);
-	}
-	_proc_cmdline[n] = '\0';
-
-	return _proc_cmdline;
-}
-
-static const char *_get_filename(int fd)
-{
-	static char filename[PATH_MAX];
-	char buf[32];	/* Assumes short DEFAULT_PROC_DIR */
-	int size;
-
-	snprintf(buf, sizeof(buf), DEFAULT_PROC_DIR "/self/fd/%u", fd);
-
-	if ((size = readlink(buf, filename, sizeof(filename) - 1)) == -1)
-		filename[0] = '\0';
-	else
-		filename[size] = '\0';
-
-	return filename;
-}
-
-static void _close_descriptor(int fd, unsigned suppress_warnings,
-			      const char *command, pid_t ppid,
-			      const char *parent_cmdline)
-{
-	int r;
-	const char *filename;
-
-	/* Ignore bad file descriptors */
-	if (!is_valid_fd(fd))
-		return;
-
-	if (!suppress_warnings)
-		filename = _get_filename(fd);
-
-	r = close(fd);
-	if (suppress_warnings)
-		return;
-
-	if (!r)
-		fprintf(stderr, "File descriptor %d (%s) leaked on "
-			"%s invocation.", fd, filename, command);
-	else if (errno == EBADF)
-		return;
-	else
-		fprintf(stderr, "Close failed on stray file descriptor "
-			"%d (%s): %s", fd, filename, strerror(errno));
-
-	fprintf(stderr, " Parent PID %" PRIpid_t ": %s\n", ppid, parent_cmdline);
-}
-
-static int _close_stray_fds(const char *command, struct custom_fds *custom_fds)
-{
-#ifndef VALGRIND_POOL
-	struct rlimit rlim;
-	int fd;
-	unsigned suppress_warnings = 0;
-	pid_t ppid = getppid();
-	const char *parent_cmdline = _get_cmdline(ppid);
-	static const char _fd_dir[] = DEFAULT_PROC_DIR "/self/fd";
-	struct dirent *dirent;
-	DIR *d;
-
-#ifdef HAVE_VALGRIND
-	if (RUNNING_ON_VALGRIND) {
-		log_debug("Skipping close of descriptors within valgrind execution.");
-		return 1;
-	}
-#endif
-
-	if (getenv("LVM_SUPPRESS_FD_WARNINGS"))
-		suppress_warnings = 1;
-
-	if (!(d = opendir(_fd_dir))) {
-		if (errno != ENOENT) {
-			log_sys_error("opendir", _fd_dir);
-			return 0; /* broken system */
-		}
-
-		/* Path does not exist, use the old way */
-		if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {
-			log_sys_error("getrlimit", "RLIMIT_NOFILE");
-			return 1;
-		}
-
-		for (fd = 3; fd < (int)rlim.rlim_cur; fd++) {
-			if ((fd != custom_fds->out) &&
-			    (fd != custom_fds->err) &&
-			    (fd != custom_fds->report)) {
-				_close_descriptor(fd, suppress_warnings, command, ppid,
-						  parent_cmdline);
-			}
-		}
-		return 1;
-	}
-
-	while ((dirent = readdir(d))) {
-		fd = atoi(dirent->d_name);
-		if ((fd > 2) &&
-		    (fd != dirfd(d)) &&
-		    (fd != custom_fds->out) &&
-		    (fd != custom_fds->err) &&
-		    (fd != custom_fds->report)) {
-			_close_descriptor(fd, suppress_warnings,
-					  command, ppid, parent_cmdline);
-		}
-	}
-
-	if (closedir(d))
-		log_sys_debug("closedir", _fd_dir);
-#endif
-
-	return 1;
-}
-
 struct cmd_context *init_lvm(unsigned set_connections,
 			     unsigned set_filters,
 			     unsigned threaded)
@@ -3606,7 +3466,7 @@ struct cmd_context *init_lvm(unsigned set_connections,
 		return_NULL;
 	}
 
-	_cmdline.opt_names = &opt_names[0];
+	_cmdline.opt_names = get_opt_name(0);
 
 	if (stored_errno()) {
 		destroy_toolcontext(cmd);
@@ -3692,6 +3552,7 @@ static void _nonroot_warning(void)
 		log_warn("WARNING: Running as a non-root user. Functionality may be unavailable.");
 }
 
+/* coverity[-tainted_data_sink:arg-1] */
 int lvm2_main(int argc, char **argv)
 {
 	const char *base;
@@ -3717,7 +3578,8 @@ int lvm2_main(int argc, char **argv)
 	if (!_get_custom_fds(&custom_fds))
 		return EINIT_FAILED;
 
-	if (!_close_stray_fds(base, &custom_fds))
+	if (!daemon_close_stray_fds(base, getenv("LVM_SUPPRESS_FD_WARNINGS") ? 1 : 0,
+				    STDERR_FILENO, &custom_fds))
 		return EINIT_FAILED;
 
 	if (!init_custom_log_streams(&custom_fds))
@@ -3758,7 +3620,7 @@ int lvm2_main(int argc, char **argv)
 	if (!(cmd = init_lvm(0, 0, 0)))
 		return EINIT_FAILED;
 
-	/* Store original argv location so we may customise it if we become a daemon */
+	/* Store original argv location so we may customize it if we become a daemon */
 	cmd->argv = argv;
 
 	/*

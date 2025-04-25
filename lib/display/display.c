@@ -32,7 +32,7 @@ static const struct {
 	{
 	ALLOC_CONTIGUOUS, "contiguous", 'c'}, {
 	ALLOC_CLING, "cling", 'l'}, {
-	ALLOC_CLING_BY_TAGS, "cling_by_tags", 't'}, {	/* Only used in log mesgs */
+	ALLOC_CLING_BY_TAGS, "cling_by_tags", 't'}, {	/* Only used in log messages */
 	ALLOC_NORMAL, "normal", 'n'}, {
 	ALLOC_ANYWHERE, "anywhere", 'a'}, {
 	ALLOC_INHERIT, "inherit", 'i'}
@@ -65,14 +65,16 @@ const char *get_alloc_string(alloc_policy_t alloc)
 alloc_policy_t get_alloc_from_string(const char *str)
 {
 	int i;
-
-	/* cling_by_tags is part of cling */
-	if (!strcmp("cling_by_tags", str))
-		return ALLOC_CLING;
+	alloc_policy_t alloc;
 
 	for (i = 0; i < _num_policies; i++)
-		if (!strcmp(_policies[i].str, str))
-			return _policies[i].alloc;
+		if (!strcmp(_policies[i].str, str)) {
+			alloc = _policies[i].alloc;
+			/* cling_by_tags is part of cling */
+			if (alloc == ALLOC_CLING_BY_TAGS)
+				alloc = ALLOC_CLING;
+			return alloc;
+		}
 
 	/* Special case for old metadata */
 	if (!strcmp("next free", str))
@@ -118,10 +120,10 @@ lock_type_t get_lock_type_from_string(const char *str)
 	return LOCK_TYPE_INVALID;
 }
 
-static const char *_percent_types[7] = { "NONE", "VG", "FREE", "LV", "PVS", "ORIGIN" };
-
 const char *get_percent_string(percent_type_t def)
 {
+	static const char _percent_types[][8] = { "NONE", "VG", "FREE", "LV", "PVS", "ORIGIN" };
+
 	return _percent_types[def];
 }
 
@@ -383,7 +385,7 @@ static int _lvdisplay_historical_full(struct cmd_context *cmd,
 	log_print("--- Historical Logical volume ---");
 
 	if (lvm1compat)
-		/* /dev/vgname/lvname doen't actually exist for historical devices */
+		/* /dev/vgname/lvname doesn't actually exist for historical devices */
 		log_print("LV Name                %s%s/%s",
 			  hlv->vg->cmd->dev_dir, hlv->vg->name, hlv->name);
 	else
@@ -439,7 +441,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 	lvm1compat = find_config_tree_bool(cmd, global_lvdisplay_shows_full_device_path_CFG, NULL);
 
 	if (lvm1compat)
-		/* /dev/vgname/lvname doen't actually exist for internal devices */
+		/* /dev/vgname/lvname doesn't actually exist for internal devices */
 		log_print("LV Name                %s%s/%s",
 			  lv->vg->cmd->dev_dir, lv->vg->name, lv->name);
 	else if (lv_is_visible(lv)) {
@@ -932,12 +934,13 @@ void display_name_error(name_error_t name_error)
 char yes_no_prompt(const char *prompt, ...)
 {
 	/* Lowercase Yes/No strings */
-	static const char _yes[] = "yes";
-	static const char _no[] = "no";
+	char buf[12] = { 0 };
+	static const char _yes[sizeof(buf)] = "yes";
+	static const char _no[sizeof(buf)] = "no";
 	const char *answer = NULL;
 	int c = silent_mode() ? EOF : 0;
-	int i = 0, ret = 0, sig = 0;
-	char buf[12];
+	int ret = 0, sig = 0;
+	unsigned i = 0;
 	va_list ap;
 
 	sigint_allow();
@@ -998,7 +1001,8 @@ char yes_no_prompt(const char *prompt, ...)
 			answer = _no + 1;	/* Expecting 'No' */
 		} else if (!ret && isspace(c)) {
 			/* Ignore any whitespace before */
-			--i;
+			if (i > 0)
+				i--;
 			goto nextchar;
 		} else if ((ret > 0) && answer && isspace(c)) {
 			/* Ignore any whitespace after */

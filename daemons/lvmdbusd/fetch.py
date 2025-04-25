@@ -6,16 +6,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
+import errno
 
 from .pv import load_pvs
 from .vg import load_vgs
 from .lv import load_lvs
 from . import cfg
-from .utils import MThreadRunner, log_debug, log_error
+from .utils import MThreadRunner, log_debug, log_error, LvmBug, extract_stack_trace
 import threading
 import queue
 import time
-import traceback
 
 
 def _main_thread_load(refresh=True, emit_signal=True):
@@ -120,89 +120,125 @@ class StateUpdate(object):
 	@staticmethod
 	def update_thread(obj):
 		exception_count = 0
-
 		queued_requests = []
+
+		def set_results(val):
+			nonlocal queued_requests
+			for idx in queued_requests:
+				idx.set_result(val)
+				# Only clear out the requests after we have given them a result
+				# otherwise we can orphan the waiting threads, and they never
+				# wake up if we get an exception
+				queued_requests = []
+
+		def bailing(rv):
+			set_results(rv)
+			try:
+				while True:
+					item = obj.queue.get(False)
+					item.set_result(rv)
+			except queue.Empty:
+				pass
+
+		def _load_args(requests):
+			"""
+			If we have multiple requests in the queue, they might not all have the same options.  If any of the requests
+			have an option set we need to honor it.
+			"""
+			refresh = any([r.refresh for r in requests])
+			emit_signal = any([r.emit_signal for r in requests])
+			cache_refresh = any([r.cache_refresh for r in requests])
+			log = any([r.log for r in requests])
+			need_main_thread = any([r.need_main_thread for r in requests])
+
+			return refresh, emit_signal, cache_refresh, log, need_main_thread
+
+		def _drain_queue(queued, incoming):
+			try:
+				while True:
+					queued.append(incoming.get(block=False))
+			except queue.Empty:
+				pass
+
+		def _handle_error():
+			nonlocal exception_count
+			exception_count += 1
+
+			if exception_count >= 5:
+				log_error("Too many errors in update_thread, exiting daemon")
+				cfg.debug.dump()
+				cfg.flightrecorder.dump()
+				bailing(errno.EFAULT)
+				cfg.exit_daemon()
+			else:
+				# Slow things down when encountering errors
+				cfg.lvmdebug.complete()
+				time.sleep(1)
+
 		while cfg.run.value != 0:
 			# noinspection PyBroadException
 			try:
-				refresh = True
-				emit_signal = True
-				cache_refresh = True
-				log = True
-				need_main_thread = True
-
 				with obj.lock:
 					wait = not obj.deferred
 					obj.deferred = False
 
 				if len(queued_requests) == 0 and wait:
-					queued_requests.append(obj.queue.get(True, 2))
+					# Note: If we don't have anything for N seconds we will
+					# get a queue.Empty exception raised here
+					queued_requests.append(obj.queue.get(block=True, timeout=cfg.G_LOOP_TMO))
 
 				# Ok we have one or the deferred queue has some,
-				# check if any others
-				try:
-					while True:
-						queued_requests.append(obj.queue.get(False))
-
-				except queue.Empty:
-					pass
+				# check if any others and grab them too
+				_drain_queue(queued_requests, obj.queue)
 
 				if len(queued_requests) > 1:
 					log_debug("Processing %d updates!" % len(queued_requests),
 							'bg_black', 'fg_light_green')
 
-				# We have what we can, run the update with the needed options
-				for i in queued_requests:
-					if not i.refresh:
-						refresh = False
-					if not i.emit_signal:
-						emit_signal = False
-					if not i.cache_refresh:
-						cache_refresh = False
-					if not i.log:
-						log = False
-					if not i.need_main_thread:
-						need_main_thread = False
-
-				num_changes = load(refresh, emit_signal, cache_refresh, log,
-									need_main_thread)
+				num_changes = load(*_load_args(queued_requests))
 				# Update is done, let everyone know!
-				for i in queued_requests:
-					i.set_result(num_changes)
-
-				# Only clear out the requests after we have given them a result
-				# otherwise we can orphan the waiting threads and they never
-				# wake up if we get an exception
-				queued_requests = []
+				set_results(num_changes)
 
 				# We retrieved OK, clear exception count
 				exception_count = 0
 
 			except queue.Empty:
 				pass
+			except SystemExit:
+				break
+			except LvmBug as bug:
+				# If a lvm bug occurred, we will dump the lvm debug data if
+				# we have it.
+				cfg.lvmdebug.dump()
+				log_error(str(bug))
+				_handle_error()
 			except Exception as e:
-				st = traceback.format_exc()
-				log_error("update_thread exception: \n%s" % st)
-				cfg.blackbox.dump()
-				exception_count += 1
-				if exception_count >= 5:
-					for i in queued_requests:
-						i.set_result(e)
+				log_error("update_thread: \n%s" % extract_stack_trace(e))
+				_handle_error()
+			finally:
+				cfg.lvmdebug.complete()
 
-					log_error("Too many errors in update_thread, exiting daemon")
-					cfg.exit_daemon()
-
-				else:
-					# Slow things down when encountering errors
-					time.sleep(1)
+		# Make sure to unblock any that may be waiting before we exit this thread
+		# otherwise they hang forever ...
+		bailing(Exception("update thread exiting"))
+		log_debug("update thread exiting!")
 
 	def __init__(self):
 		self.lock = threading.RLock()
 		self.queue = queue.Queue()
 		self.deferred = False
 
-		# Do initial load
-		load(refresh=False, emit_signal=False, need_main_thread=False)
+		# Do initial load, with retries.  During error injection testing we can and do fail here.
+		count = 0
+		need_refresh = False  # First attempt we are building from new, any subsequent will be true
+		while count < 5:
+			try:
+				load(refresh=need_refresh, emit_signal=False, need_main_thread=False)
+				break
+			except LvmBug as bug:
+				count += 1
+				need_refresh = True
+				log_error("We encountered an lvm bug on initial load, trying again %s" % str(bug))
 
 		self.thread = threading.Thread(target=StateUpdate.update_thread,
 										args=(self,),

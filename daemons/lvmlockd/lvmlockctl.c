@@ -38,7 +38,7 @@ static int stop_lockspaces = 0;
 static char *arg_vg_name = NULL;
 
 #define DUMP_SOCKET_NAME "lvmlockd-dump.sock"
-#define DUMP_BUF_SIZE (1024 * 1024)
+#define DUMP_BUF_SIZE (4 * 1024 * 1024)
 static char dump_buf[DUMP_BUF_SIZE+1];
 static int dump_len;
 static struct sockaddr_un dump_addr;
@@ -97,8 +97,9 @@ static void save_client_info(char *line)
 	uint32_t client_id = 0;
 	char name[MAX_NAME+1] = { 0 };
 
-	(void) sscanf(line, "info=client pid=%u fd=%d pi=%d id=%u name=%s",
-	       &pid, &fd, &pi, &client_id, name);
+	(void) sscanf(line, "info=client pid=%u fd=%d pi=%d id=%u name=%"
+		      DM_TO_STRING(MAX_NAME) "s",
+		      &pid, &fd, &pi, &client_id, name);
 
 	clients[num_clients].client_id = client_id;
 	clients[num_clients].pid = pid;
@@ -126,12 +127,14 @@ static void format_info_ls(char *line)
 	char ls_name[MAX_NAME+1] = { 0 };
 	char vg_name[MAX_NAME+1] = { 0 };
 	char vg_uuid[MAX_NAME+1] = { 0 };
-	char vg_sysid[MAX_NAME+1] = { 0 };
 	char lock_args[MAX_ARGS+1] = { 0 };
 	char lock_type[MAX_NAME+1] = { 0 };
 
-	(void) sscanf(line, "info=ls ls_name=%s vg_name=%s vg_uuid=%s vg_sysid=%s vg_args=%s lm_type=%s",
-	       ls_name, vg_name, vg_uuid, vg_sysid, lock_args, lock_type);
+	(void) sscanf(line, "info=ls ls_name=%" DM_TO_STRING(MAX_NAME) "s vg_name=%"
+		      DM_TO_STRING(MAX_NAME) "s vg_uuid=%" DM_TO_STRING(MAX_NAME)
+		      "s vg_args=%" DM_TO_STRING(MAX_NAME) "s lm_type=%"
+		      DM_TO_STRING(MAX_NAME) "s",
+		      ls_name, vg_name, vg_uuid, lock_args, lock_type);
 
 	if (!first_ls)
 		printf("\n");
@@ -151,8 +154,11 @@ static void format_info_ls_action(char *line)
 	uint32_t pid = 0;
 	char cl_name[MAX_NAME+1] = { 0 };
 
-	(void) sscanf(line, "info=ls_action client_id=%u %s %s op=%s",
-	       &client_id, flags, version, op);
+	(void) sscanf(line, "info=ls_action client_id=%u %"
+		      DM_TO_STRING(MAX_NAME) "s %"
+		      DM_TO_STRING(MAX_NAME) "s op=%"
+		      DM_TO_STRING(MAX_NAME) "s",
+		      &client_id, flags, version, op);
 
 	find_client_info(client_id, &pid, cl_name);
 
@@ -167,8 +173,10 @@ static void format_info_r(char *line, char *r_name_out, char *r_type_out)
 	char sh_count[MAX_NAME+1] = { 0 };
 	uint32_t ver = 0;
 
-	(void) sscanf(line, "info=r name=%s type=%s mode=%s %s version=%u",
-	       r_name, r_type, mode, sh_count, &ver);
+	(void) sscanf(line, "info=r name=%" DM_TO_STRING(MAX_NAME)
+		      "s type=%3s mode=%3s %"
+		      DM_TO_STRING(MAX_NAME) "s version=%u",
+		      r_name, r_type, mode, sh_count, &ver);
 
 	strcpy(r_name_out, r_name);
 	strcpy(r_type_out, r_type);
@@ -205,8 +213,9 @@ static void format_info_lk(char *line, char *r_name, char *r_type)
 		return;
 	}
 
-	(void) sscanf(line, "info=lk mode=%s version=%u %s client_id=%u",
-	       mode, &ver, flags, &client_id);
+	(void) sscanf(line, "info=lk mode=%3s version=%u %"
+		      DM_TO_STRING(MAX_NAME) "s client_id=%u",
+		      mode, &ver, flags, &client_id);
 
 	find_client_info(client_id, &pid, cl_name);
 
@@ -241,8 +250,11 @@ static void format_info_r_action(char *line, char *r_name, char *r_type)
 		return;
 	}
 
-	(void) sscanf(line, "info=r_action client_id=%u %s %s op=%s rt=%s mode=%s %s %s %s",
-	       &client_id, flags, version, op, rt, mode, lm, result, lm_rv);
+	(void) sscanf(line, "info=r_action client_id=%u %" DM_TO_STRING(MAX_NAME)
+		      "s %" DM_TO_STRING(MAX_NAME) "s op=%" DM_TO_STRING(MAX_NAME)
+		      "s rt=%3s mode=%3s %" DM_TO_STRING(MAX_NAME) "s %"
+		      DM_TO_STRING(MAX_NAME) "s %" DM_TO_STRING(MAX_NAME) "s",
+		      &client_id, flags, version, op, rt, mode, lm, result, lm_rv);
 
 	find_client_info(client_id, &pid, cl_name);
 
@@ -264,19 +276,19 @@ static void format_info_r_action(char *line, char *r_name, char *r_type)
 
 static void format_info_line(char *line, char *r_name, char *r_type)
 {
-	if (!strncmp(line, "info=structs ", strlen("info=structs "))) {
+	if (!strncmp(line, "info=structs ", sizeof("info=structs ") - 1)) {
 		/* only print this in the raw info dump */
 
-	} else if (!strncmp(line, "info=client ", strlen("info=client "))) {
+	} else if (!strncmp(line, "info=client ", sizeof("info=client ") - 1)) {
 		save_client_info(line);
 
-	} else if (!strncmp(line, "info=ls ", strlen("info=ls "))) {
+	} else if (!strncmp(line, "info=ls ", sizeof("info=ls ") - 1)) {
 		format_info_ls(line);
 
-	} else if (!strncmp(line, "info=ls_action ", strlen("info=ls_action "))) {
+	} else if (!strncmp(line, "info=ls_action ", sizeof("info=ls_action ") - 1)) {
 		format_info_ls_action(line);
 
-	} else if (!strncmp(line, "info=r ", strlen("info=r "))) {
+	} else if (!strncmp(line, "info=r ", sizeof("info=r ") - 1)) {
 		/*
 		 * r_name/r_type are reset when a new resource is found.
 		 * They are reused for the lock and action lines that
@@ -286,11 +298,11 @@ static void format_info_line(char *line, char *r_name, char *r_type)
 		memset(r_type, 0, MAX_NAME+1);
 		format_info_r(line, r_name, r_type);
 
-	} else if (!strncmp(line, "info=lk ", strlen("info=lk "))) {
+	} else if (!strncmp(line, "info=lk ", sizeof("info=lk ") - 1)) {
 		/* will use info from previous r */
 		format_info_lk(line, r_name, r_type);
 
-	} else if (!strncmp(line, "info=r_action ", strlen("info=r_action "))) {
+	} else if (!strncmp(line, "info=r_action ", sizeof("info=r_action ") - 1)) {
 		/* will use info from previous r */
 		format_info_r_action(line, r_name, r_type);
 	} else {
@@ -940,7 +952,7 @@ static int read_options(int argc, char *argv[])
 	int option_index = 0;
 	int c;
 
-	static struct option long_options[] = {
+	static const struct option _long_options[] = {
 		{"help",            no_argument,       0,  'h' },
 		{"quit",            no_argument,       0,  'q' },
 		{"info",            no_argument,       0,  'i' },
@@ -962,7 +974,7 @@ static int read_options(int argc, char *argv[])
 	}
 
 	while (1) {
-		c = getopt_long(argc, argv, "hqidE:D:w:k:r:Se", long_options, &option_index);
+		c = getopt_long(argc, argv, "hqidE:D:w:k:r:Se", _long_options, &option_index);
 		if (c == -1)
 			break;
 

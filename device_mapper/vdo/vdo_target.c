@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2018-2022 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -18,82 +18,117 @@
 #include "vdo_limits.h"
 #include "target.h"
 
+/* validate vdo target parameters and  'vdo_size' in sectors */
 bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 				   uint64_t vdo_size)
 {
 	bool valid = true;
 
 	/* 512 or 4096 bytes only ATM */
-	if ((vtp->minimum_io_size != 1) &&
-	    (vtp->minimum_io_size != 8)) {
-		log_error("VDO minimum io size %u is unsupported.",
-			  vtp->minimum_io_size);
+	if ((vtp->minimum_io_size != (512 >> SECTOR_SHIFT)) &&
+	    (vtp->minimum_io_size != (4096 >> SECTOR_SHIFT))) {
+		log_error("VDO minimum io size %u is unsupported [512, 4096].",
+			  (vtp->minimum_io_size << SECTOR_SHIFT));
 		valid = false;
 	}
 
 	if ((vtp->block_map_cache_size_mb < DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB) ||
 	    (vtp->block_map_cache_size_mb > DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB)) {
-		log_error("VDO block map cache size %u out of range.",
-			  vtp->block_map_cache_size_mb);
+		log_error("VDO block map cache size %u MiB is out of range [%u..%u].",
+			  vtp->block_map_cache_size_mb,
+			  DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB,
+			  DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB);
+		valid = false;
+	}
+
+	if ((vtp->block_map_era_length < DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM) ||
+	    (vtp->block_map_era_length > DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM)) {
+		log_error("VDO block map era length %u is out of range [%u..%u].",
+			  vtp->block_map_era_length,
+			  DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM,
+			  DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM);
 		valid = false;
 	}
 
 	if ((vtp->index_memory_size_mb < DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB) ||
 	    (vtp->index_memory_size_mb > DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB)) {
-		log_error("VDO index memory size %u out of range.",
-			  vtp->index_memory_size_mb);
+		log_error("VDO index memory size %u MiB is out of range [%u..%u].",
+			  vtp->index_memory_size_mb,
+			  DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB,
+			  DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB);
 		valid = false;
 	}
 
 	if ((vtp->slab_size_mb < DM_VDO_SLAB_SIZE_MINIMUM_MB) ||
 	    (vtp->slab_size_mb > DM_VDO_SLAB_SIZE_MAXIMUM_MB)) {
-		log_error("VDO slab size %u out of range.",
-			  vtp->slab_size_mb);
+		log_error("VDO slab size %u MiB is out of range [%u..%u].",
+			  vtp->slab_size_mb,
+			  DM_VDO_SLAB_SIZE_MINIMUM_MB,
+			  DM_VDO_SLAB_SIZE_MAXIMUM_MB);
 		valid = false;
 	}
 
 	if ((vtp->max_discard < DM_VDO_MAX_DISCARD_MINIMUM) ||
 	    (vtp->max_discard > DM_VDO_MAX_DISCARD_MAXIMUM)) {
-		log_error("VDO max discard %u out of range.",
-			  vtp->max_discard);
+		log_error("VDO max discard %u is out of range [%u..%u].",
+			  vtp->max_discard,
+			  DM_VDO_MAX_DISCARD_MINIMUM,
+			  DM_VDO_MAX_DISCARD_MAXIMUM);
 		valid = false;
 	}
 
 	if (vtp->ack_threads > DM_VDO_ACK_THREADS_MAXIMUM) {
-		log_error("VDO ack threads %u out of range.", vtp->ack_threads);
+		log_error("VDO ack threads %u is out of range [0..%u].",
+			  vtp->ack_threads,
+			  DM_VDO_ACK_THREADS_MAXIMUM);
 		valid = false;
 	}
 
 	if ((vtp->bio_threads < DM_VDO_BIO_THREADS_MINIMUM) ||
 	    (vtp->bio_threads > DM_VDO_BIO_THREADS_MAXIMUM)) {
-		log_error("VDO bio threads %u out of range.", vtp->bio_threads);
+		log_error("VDO bio threads %u is out of range [%u..%u].",
+			  vtp->bio_threads,
+			  DM_VDO_BIO_THREADS_MINIMUM,
+			  DM_VDO_BIO_THREADS_MAXIMUM);
 		valid = false;
 	}
 
 	if ((vtp->bio_rotation < DM_VDO_BIO_ROTATION_MINIMUM) ||
 	    (vtp->bio_rotation > DM_VDO_BIO_ROTATION_MAXIMUM)) {
-		log_error("VDO bio rotation %u out of range.", vtp->bio_rotation);
+		log_error("VDO bio rotation %u is out of range [%u..%u].",
+			  vtp->bio_rotation,
+			  DM_VDO_BIO_ROTATION_MINIMUM,
+			  DM_VDO_BIO_ROTATION_MAXIMUM);
 		valid = false;
 	}
 
 	if ((vtp->cpu_threads < DM_VDO_CPU_THREADS_MINIMUM) ||
 	    (vtp->cpu_threads > DM_VDO_CPU_THREADS_MAXIMUM)) {
-		log_error("VDO cpu threads %u out of range.", vtp->cpu_threads);
+		log_error("VDO cpu threads %u is out of range [%u..%u].",
+			  vtp->cpu_threads,
+			  DM_VDO_CPU_THREADS_MINIMUM,
+			  DM_VDO_CPU_THREADS_MAXIMUM);
 		valid = false;
 	}
 
 	if (vtp->hash_zone_threads > DM_VDO_HASH_ZONE_THREADS_MAXIMUM) {
-		log_error("VDO hash zone threads %u out of range.", vtp->hash_zone_threads);
+		log_error("VDO hash zone threads %u is out of range [0..%u].",
+			  vtp->hash_zone_threads,
+			  DM_VDO_HASH_ZONE_THREADS_MAXIMUM);
 		valid = false;
 	}
 
 	if (vtp->logical_threads > DM_VDO_LOGICAL_THREADS_MAXIMUM) {
-		log_error("VDO logical threads %u out of range.", vtp->logical_threads);
+		log_error("VDO logical threads %u is out of range [0..%u].",
+			  vtp->logical_threads,
+			  DM_VDO_LOGICAL_THREADS_MAXIMUM);
 		valid = false;
 	}
 
 	if (vtp->physical_threads > DM_VDO_PHYSICAL_THREADS_MAXIMUM) {
-		log_error("VDO physical threads %u out of range.", vtp->physical_threads);
+		log_error("VDO physical threads %u is out of range [0..%u].",
+			  vtp->physical_threads,
+			  DM_VDO_PHYSICAL_THREADS_MAXIMUM);
 		valid = false;
 	}
 
@@ -120,10 +155,10 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 		valid = false;
 	}
 
-	if (vdo_size >= (DM_VDO_LOGICAL_SIZE_MAXIMUM_MB * UINT64_C(1024 * 2))) {
-		log_error("VDO logical size is by " FMTu64 "KiB bigger then limit " FMTu64 "TiB.",
-			  (vdo_size - (DM_VDO_LOGICAL_SIZE_MAXIMUM_MB * UINT64_C(1024 * 2))) / 2,
-			  DM_VDO_LOGICAL_SIZE_MAXIMUM_MB / UINT64_C(1024) / UINT64_C(1024));
+	if (vdo_size > DM_VDO_LOGICAL_SIZE_MAXIMUM) {
+		log_error("VDO logical size is larger than limit " FMTu64 " TiB by " FMTu64 " KiB.",
+			  DM_VDO_LOGICAL_SIZE_MAXIMUM / (UINT64_C(1024) * 1024 * 1024 * 1024 >> SECTOR_SHIFT),
+			  (vdo_size - DM_VDO_LOGICAL_SIZE_MAXIMUM) / 2);
 		valid = false;
 	}
 

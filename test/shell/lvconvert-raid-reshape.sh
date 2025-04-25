@@ -17,8 +17,14 @@ LVM_SKIP_LARGE_TESTS=0
 
 . lib/inittest
 
+case "$(uname -r)" in
+5.19*) skip "Skippen test that kills this kernel" ;;
+esac
+
 which mkfs.ext4 || skip
 aux have_raid 1 14 0 || skip
+
+test "$(aux total_mem)" -gt 1048576 || skip "Not enough RAM for this test"
 
 if [ $LVM_SKIP_LARGE_TESTS -eq 0 ]
 then
@@ -159,12 +165,12 @@ then
 
 	# Convert raid5_ls back to 4 stripes checking
 	# conversion to striped/raid* gets rejected
-	# with existing LVs to be removed afer reshape
+	# with existing LVs to be removed after reshape
 	_reshape_layout raid5_ls 4 28 $vg $lv1 --stripes 4 --force
 else
 	# Convert raid5_ls back to 4 stripes checking
 	# conversion to striped/raid* gets rejected
-	# with existing LVs to be removed afer reshape
+	# with existing LVs to be removed after reshape
 	_reshape_layout raid5_ls 4 15 $vg $lv1 --stripes 4 --force
 fi
 

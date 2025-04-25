@@ -42,7 +42,7 @@ struct dev_manager;
 #define SEG_CACHE		(1ULL << 13)
 #define SEG_CACHE_POOL		(1ULL << 14)
 #define SEG_MIRROR		(1ULL << 15)
-#define SEG_ONLY_EXCLUSIVE	(1ULL << 16) /* In cluster only exlusive activation */
+#define SEG_ONLY_EXCLUSIVE	(1ULL << 16) /* In cluster only exclusive activation */
 #define SEG_CAN_ERROR_WHEN_FULL	(1ULL << 17)
 
 #define SEG_RAID0		(1ULL << 18)
@@ -221,6 +221,8 @@ struct dev_manager;
 #define seg_is_vdo(seg)		segtype_is_vdo((seg)->segtype)
 #define seg_is_vdo_pool(seg)	segtype_is_vdo_pool((seg)->segtype)
 #define seg_is_virtual(seg)	segtype_is_virtual((seg)->segtype)
+#define seg_is_error(seg)	segtype_is_error((seg)->segtype)
+#define seg_is_zero(seg)	segtype_is_zero((seg)->segtype)
 #define seg_unknown(seg)	segtype_is_unknown((seg)->segtype)
 #define seg_can_split(seg)	segtype_can_split((seg)->segtype)
 #define seg_cannot_be_zeroed(seg)	segtype_cannot_be_zeroed((seg)->segtype)
@@ -234,7 +236,7 @@ struct segment_type {
 	uint64_t flags;
 	uint32_t parity_devs;		/* Parity drives required by segtype */
 
-	struct segtype_handler *ops;
+	const struct segtype_handler *ops;
 	const char *name;
 	const char *dso;
 
@@ -252,8 +254,7 @@ struct segtype_handler {
 	int (*text_import_area_count) (const struct dm_config_node * sn,
 				       uint32_t *area_count);
 	int (*text_import) (struct lv_segment * seg,
-			    const struct dm_config_node * sn,
-			    struct dm_hash_table * pv_hash);
+			    const struct dm_config_node * sn);
 	int (*merge_segments) (struct lv_segment * seg1,
 			       struct lv_segment * seg2);
 	int (*add_target_line) (struct dev_manager *dm, struct dm_pool *mem,
@@ -353,6 +354,7 @@ int init_vdo_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 #endif
 
 #define VDO_FEATURE_ONLINE_RENAME		(1U << 0) /* version 6.2.3 */
+#define VDO_FEATURE_VERSION4			(1U << 1) /* version 8.2.0 */
 
 int init_writecache_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 

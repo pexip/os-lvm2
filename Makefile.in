@@ -38,7 +38,7 @@ ifeq ($(MAKECMDGOALS),distclean)
     udev po
 tools.distclean: test.distclean
 endif
-DISTCLEAN_DIRS += lcov_reports*
+DISTCLEAN_DIRS += lcov_reports* autom4te.cache
 DISTCLEAN_TARGETS += config.cache config.log config.status make.tmpl
 
 include make.tmpl
@@ -47,7 +47,7 @@ include $(top_srcdir)/base/Makefile
 include $(top_srcdir)/device_mapper/Makefile
 include $(top_srcdir)/test/unit/Makefile
 
-lib: libdaemon $(BASE_TARGET) $(DEVICE_MAPPER_TARGET)
+lib: include libdaemon $(BASE_TARGET) $(DEVICE_MAPPER_TARGET)
 daemons: lib libdaemon tools
 scripts: lib
 tools: lib libdaemon
@@ -55,7 +55,7 @@ po: tools daemons
 man: tools
 all_man: tools
 test: tools daemons
-unit-test  run-unit-test: test
+unit-test  run-unit-test: test libdm
 
 daemons.device-mapper: libdm.device-mapper
 tools.device-mapper: libdm.device-mapper
@@ -127,6 +127,7 @@ all_man:
 
 install_system_dirs:
 	$(INSTALL_DIR) $(DESTDIR)$(DEFAULT_SYS_DIR)
+	$(INSTALL_ROOT_DIR) $(DESTDIR)$(DEFAULT_SYS_DIR)/devices
 	$(INSTALL_ROOT_DIR) $(DESTDIR)$(DEFAULT_ARCHIVE_DIR)
 	$(INSTALL_ROOT_DIR) $(DESTDIR)$(DEFAULT_BACKUP_DIR)
 	$(INSTALL_ROOT_DIR) $(DESTDIR)$(DEFAULT_CACHE_DIR)
@@ -171,6 +172,7 @@ help:
 	@echo "  lcov-dated		Generate lcov with timedate suffix."
 	@echo "  lcov-reset		Reset lcov counters"
 	@echo "  man			Build man pages."
+	@echo "  print-VARIABLE		Resolve make variable."
 	@echo "  rpm			Build rpm."
 	@echo "  run-unit-test		Run unit tests."
 	@echo "  tags			Generate c/etags."
@@ -192,7 +194,8 @@ ifneq ("$(GENHTML)", "")
 lcov:
 	$(RM) -rf $(LCOV_REPORTS_DIR)
 	$(MKDIR_P) $(LCOV_REPORTS_DIR)
-	$(LCOV) --capture --directory $(top_builddir) --ignore-errors source \
+	-find . -name '*.gc[dn][ao]' ! -newer make.tmpl -delete
+	-$(LCOV) --capture --directory $(top_builddir) --ignore-errors source,negative,gcov \
 		--output-file $(LCOV_REPORTS_DIR)/out.info
 	-test ! -s $(LCOV_REPORTS_DIR)/out.info || \
 		$(GENHTML) -o $(LCOV_REPORTS_DIR) --ignore-errors source \

@@ -25,17 +25,6 @@ struct vgimportclone_params {
 	unsigned import_vg:1;
 };
 
-static struct device_list *_get_device_list(struct dm_list *list, struct device *dev)
-{
-	struct device_list *devl;
-
-	dm_list_iterate_items(devl, list) {
-		if (devl->dev == dev)
-			return devl;
-	}
-	return NULL;
-}
-
 static int _update_vg(struct cmd_context *cmd, struct volume_group *vg,
 		      struct vgimportclone_params *vp)
 {
@@ -82,7 +71,7 @@ static int _update_vg(struct cmd_context *cmd, struct volume_group *vg,
 	 */
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		if ((devl = _get_device_list(&vp->new_devs, pvl->pv->dev))) {
+		if ((devl = device_list_find_dev(&vp->new_devs, pvl->pv->dev))) {
 			dm_list_del(&devl->list);
 			dm_list_add(&tmp_devs, &devl->list);
 		} else {
@@ -162,7 +151,7 @@ static int _update_vg(struct cmd_context *cmd, struct volume_group *vg,
 	 */
 	if (vp->import_devices || cmd->enable_devices_file) {
 		dm_list_iterate_items(devl, &vp->new_devs) {
-			if (!device_id_add(cmd, devl->dev, devl->dev->pvid, NULL, NULL)) {
+			if (!device_id_add(cmd, devl->dev, devl->dev->pvid, NULL, NULL, 0)) {
 				log_error("Failed to add device id for %s.", dev_name(devl->dev));
 				goto bad;
 			}
@@ -192,7 +181,7 @@ static int _get_other_devs(struct cmd_context *cmd, struct dm_list *new_devs, st
 		return_0;
 
 	while ((dev = dev_iter_get(cmd, iter))) {
-		if (_get_device_list(new_devs, dev))
+		if (device_list_find_dev(new_devs, dev))
 			continue;
 		if (!(devl = zalloc(sizeof(*devl)))) {
 			r = 0;
@@ -214,7 +203,7 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 	struct device *dev;
 	struct device_list *devl;
 	struct dm_list other_devs;
-	struct volume_group *vg, *error_vg;
+	struct volume_group *vg, *error_vg = NULL;
 	const char *vgname;
 	char base_vgname[NAME_LEN] = { 0 };
 	char tmp_vgname[NAME_LEN] = { 0 };
@@ -333,7 +322,7 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 			goto out;
 		}
 
-		if (!(vgname = lvmcache_vgname_from_info(info))) {
+		if (!(vgname = lvmcache_vgname_from_info(info)) || is_orphan_vg(vgname)) {
 			/* The PV may not have metadata, this will be resolved in
 			   the process_each_vg/vg_read at the end. */
 			continue;
@@ -418,8 +407,19 @@ int vgimportclone(struct cmd_context *cmd, int argc, char **argv)
 			log_error("Base vg name %s is too long.", vgname);
 			goto out;
 		}
-		(void) dm_strncpy(tmp_vgname, base_vgname, NAME_LEN);
-		vgname_count = 0;
+		if (strcmp(vgname, vp.old_vgname)) {
+			dm_strncpy(tmp_vgname, base_vgname, sizeof(tmp_vgname));
+			vgname_count = 0;
+		} else {
+			/* Needed when basename matches old name, and PV is not a duplicate
+			   which means old name is not found on other devs, and is not seen
+			   in the vgnames search below, causing old and new names to match. */
+			if (dm_snprintf(tmp_vgname, sizeof(tmp_vgname), "%s1", vp.old_vgname) < 0) {
+				log_error("Temporary vg name %s1 is too long.", vp.old_vgname);
+				goto out;
+			}
+			vgname_count = 1;
+		}
 	} else {
 		if (dm_snprintf(base_vgname, sizeof(base_vgname), "%s", vp.old_vgname) < 0) {
 			log_error(INTERNAL_ERROR "Old vg name %s is too long.", vp.old_vgname);
@@ -514,6 +514,8 @@ retry_name:
 	}
 	ret = ECMD_PROCESSED;
 out:
+	if (error_vg)
+		release_vg(error_vg);
 	unlock_devices_file(cmd);
 	return ret;
 }

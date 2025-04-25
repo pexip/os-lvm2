@@ -50,7 +50,7 @@
 #define _LOG_STDERR        0x0080 /* force things to go to stderr, even if loglevel would make them go to stdout */
 #define _LOG_ONCE          0x0100 /* downgrade to NOTICE if this has been already logged */
 #define _LOG_BYPASS_REPORT 0x0200 /* do not log through report even if report available */
-#define log_level(x)  ((x) & 0x0f)			/* obtain message level */
+#define log_level(x)  ((x) & 0x07)			/* obtain message level */
 #define log_stderr(x)  ((x) & _LOG_STDERR)		/* obtain stderr bit */
 #define log_once(x)  ((x) & _LOG_ONCE)			/* obtain once bit */
 #define log_bypass_report(x)  ((x) & _LOG_BYPASS_REPORT)/* obtain bypass bit */
@@ -90,7 +90,6 @@
 #define log_debug_devs(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_DEVS, x)
 #define log_debug_activation(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_ACTIVATION, x)
 #define log_debug_alloc(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_ALLOC, x)
-#define log_debug_lvmetad(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_LVMETAD, x)
 #define log_debug_metadata(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_METADATA, x)
 #define log_debug_cache(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_CACHE, x)
 #define log_debug_locking(x...) LOG_LINE_WITH_CLASS(_LOG_DEBUG, LOG_CLASS_LOCKING, x)
@@ -129,6 +128,7 @@
 
 #define return_0	do { stack; return 0; } while (0)
 #define return_NULL	do { stack; return NULL; } while (0)
+#define return_false	do { stack; return false; } while (0)
 #define return_EINVALID_CMD_LINE \
 			do { stack; return EINVALID_CMD_LINE; } while (0)
 #define return_ECMD_FAILED do { stack; return ECMD_FAILED; } while (0)

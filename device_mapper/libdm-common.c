@@ -511,7 +511,7 @@ int unmangle_string(const char *str, const char *str_name, size_t len,
 		    char *buf, size_t buf_len, dm_string_mangling_t mode)
 {
 	int strict = mode != DM_STRING_MANGLING_NONE;
-	char str_rest[DM_NAME_LEN];
+	char str_rest[DM_NAME_LEN + 1];
 	size_t i, j;
 	unsigned int code;
 	int r = 0;
@@ -537,7 +537,8 @@ int unmangle_string(const char *str, const char *str_name, size_t len,
 		}
 
 		if (str[i] == '\\' && str[i+1] == 'x') {
-			if (!sscanf(&str[i+2], "%2x%s", &code, str_rest)) {
+			if (!sscanf(&str[i+2], "%2x%" DM_TO_STRING(DM_NAME_LEN) "s",
+				    &code, str_rest)) {
 				log_debug_activation("Hex encoding mismatch detected in %s \"%s\" "
 						     "while trying to unmangle it.", str_name, str);
 				goto out;
@@ -1060,9 +1061,8 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 		if (info.st_rdev == dev)
 			return 1;
 
-		if (unlink(path) < 0) {
-			log_error("Unable to unlink device node for '%s'",
-				  dev_name);
+		if (unlink(path) && (errno != ENOENT)) {
+			log_sys_error("unlink", path);
 			return 0;
 		}
 	} else if (_warn_if_op_needed(warn_if_udev_failed))
@@ -1106,8 +1106,8 @@ static int _rm_dev_node(const char *dev_name, int warn_if_udev_failed)
 			 "Falling back to direct node removal.", path);
 
 	/* udev may already have deleted the node. Ignore ENOENT. */
-	if (unlink(path) < 0 && errno != ENOENT) {
-		log_error("Unable to unlink device node for '%s'", dev_name);
+	if (unlink(path) && (errno != ENOENT)) {
+		log_sys_error("unlink", path);
 		return 0;
 	}
 
@@ -1451,9 +1451,10 @@ struct node_op_parms {
 
 static void _store_str(char **pos, char **ptr, const char *str)
 {
-	strcpy(*pos, str);
+	size_t len = strlen(str) + 1;
+	memcpy(*pos, str, len);
 	*ptr = *pos;
-	*pos += strlen(*ptr) + 1;
+	*pos += len;
 }
 
 static void _del_node_op(struct node_op_parms *nop)
@@ -1703,15 +1704,17 @@ const char *dm_sysfs_dir(void)
  */
 int dm_set_uuid_prefix(const char *uuid_prefix)
 {
+	size_t len;
+
 	if (!uuid_prefix)
 		return_0;
 
-	if (strlen(uuid_prefix) > DM_MAX_UUID_PREFIX_LEN) {
+	if ((len = strlen(uuid_prefix)) > DM_MAX_UUID_PREFIX_LEN) {
 		log_error("New uuid prefix %s too long.", uuid_prefix);
 		return 0;
 	}
 
-	strcpy(_default_uuid_prefix, uuid_prefix);
+	memcpy(_default_uuid_prefix, uuid_prefix, len + 1);
 
 	return 1;
 }
@@ -1739,6 +1742,9 @@ static void _unmangle_mountinfo_string(const char *src, char *buf)
 	}
 	*buf = '\0';
 }
+
+/* coverity[+tainted_string_sanitize_content:arg-0] */
+static int _sanitize_line(const char *line) { return 1; }
 
 /* Parse one line of mountinfo and unmangled target line */
 static int _mountinfo_parse_line(const char *line, unsigned *maj, unsigned *min, char *buf)
@@ -1790,7 +1796,7 @@ static int _mountinfo_parse_line(const char *line, unsigned *maj, unsigned *min,
 }
 
 /*
- * Function to operate on individal mountinfo line,
+ * Function to operate on individual mountinfo line,
  * minor, major and mount target are parsed and unmangled
  */
 int dm_mountinfo_read(dm_mountinfo_line_callback_fn read_fn, void *cb_data)
@@ -1810,7 +1816,8 @@ int dm_mountinfo_read(dm_mountinfo_line_callback_fn read_fn, void *cb_data)
 	}
 
 	while (!feof(minfo) && fgets(buffer, sizeof(buffer), minfo))
-		if (!_mountinfo_parse_line(buffer, &maj, &min, target) ||
+		if (!_sanitize_line(buffer) ||
+		    !_mountinfo_parse_line(buffer, &maj, &min, target) ||
 		    !read_fn(buffer, maj, min, target, cb_data)) {
 			stack;
 			r = 0;
@@ -1954,7 +1961,7 @@ static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, si
 				    !strcmp(name_dev, "holders") ||
 				    !strcmp(name_dev, "integrity") ||
 				    !strcmp(name_dev, "loop") ||
-				    !strcmp(name_dev, "queueu") ||
+				    !strcmp(name_dev, "queue") ||
 				    !strcmp(name_dev, "md") ||
 				    !strcmp(name_dev, "mq") ||
 				    !strcmp(name_dev, "power") ||
@@ -2311,7 +2318,7 @@ static int _check_semaphore_is_supported(void)
 
 	if (maxid < 0) {
 		log_warn("Kernel not configured for semaphores (System V IPC). "
-			 "Not using udev synchronisation code.");
+			 "Not using udev synchronization code.");
 		return 0;
 	}
 
@@ -2334,7 +2341,7 @@ static int _check_udev_is_running(void)
 
 	if (!(r = udev_queue_get_udev_is_active(udev_queue)))
 		log_debug_activation("Udev is not running. "
-				     "Not using udev synchronisation code.");
+				     "Not using udev synchronization code.");
 
 	udev_queue_unref(udev_queue);
 	udev_unref(udev);
@@ -2409,7 +2416,7 @@ static int _get_cookie_sem(uint32_t cookie, int *semid)
 			break;
 		case EACCES:
 			log_error("No permission to access "
-				  "notificaton semaphore identified "
+				  "notification semaphore identified "
 				  "by cookie value %" PRIu32 " (0x%x)",
 				  cookie, cookie);
 			break;
@@ -2430,20 +2437,20 @@ static int _udev_notify_sem_inc(uint32_t cookie, int semid)
 	int val;
 
 	if (semop(semid, &sb, 1) < 0) {
-		log_error("semid %d: semop failed for cookie 0x%" PRIx32 ": %s",
+		log_error("cookie inc: semid %d: semop failed for cookie 0x%" PRIx32 ": %s",
 			  semid, cookie, strerror(errno));
 		return 0;
 	}
 
  	if ((val = semctl(semid, 0, GETVAL)) < 0) {
-		log_error("semid %d: sem_ctl GETVAL failed for "
+		log_warn("cookie inc: semid %d: sem_ctl GETVAL failed for "
 			  "cookie 0x%" PRIx32 ": %s",
 			  semid, cookie, strerror(errno));
-		return 0;		
-	}
-
-	log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) incremented to %d",
-		  cookie, semid, val);
+		log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) incremented.",
+				      cookie, semid);
+	} else
+		log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) incremented to %d",
+				     cookie, semid, val);
 
 	return 1;
 }
@@ -2453,23 +2460,21 @@ static int _udev_notify_sem_dec(uint32_t cookie, int semid)
 	struct sembuf sb = {0, -1, IPC_NOWAIT};
 	int val;
 
- 	if ((val = semctl(semid, 0, GETVAL)) < 0) {
-		log_error("semid %d: sem_ctl GETVAL failed for "
-			  "cookie 0x%" PRIx32 ": %s",
-			  semid, cookie, strerror(errno));
-		return 0;
-	}
+ 	if ((val = semctl(semid, 0, GETVAL)) < 0)
+		log_warn("cookie dec: semid %d: sem_ctl GETVAL failed for "
+			 "cookie 0x%" PRIx32 ": %s",
+			 semid, cookie, strerror(errno));
 
 	if (semop(semid, &sb, 1) < 0) {
 		switch (errno) {
 			case EAGAIN:
-				log_error("semid %d: semop failed for cookie "
+				log_error("cookie dec: semid %d: semop failed for cookie "
 					  "0x%" PRIx32 ": "
 					  "incorrect semaphore state",
 					  semid, cookie);
 				break;
 			default:
-				log_error("semid %d: semop failed for cookie "
+				log_error("cookie dec: semid %d: semop failed for cookie "
 					  "0x%" PRIx32 ": %s",
 					  semid, cookie, strerror(errno));
 				break;
@@ -2477,9 +2482,12 @@ static int _udev_notify_sem_dec(uint32_t cookie, int semid)
 		return 0;
 	}
 
-	log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) decremented to %d",
-			     cookie, semid, val - 1);
-
+	if (val < 0)
+		log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) decremented.",
+				     cookie, semid);
+	else
+		log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) decremented to %d",
+				     cookie, semid, val - 1);
 	return 1;
 }
 
@@ -2556,7 +2564,7 @@ static int _udev_notify_sem_create(uint32_t *cookie, int *semid)
 	sem_arg.val = 1;
 
 	if (semctl(gen_semid, 0, SETVAL, sem_arg) < 0) {
-		log_error("semid %d: semctl failed: %s", gen_semid, strerror(errno));
+		log_error("cookie create: semid %d: semctl failed: %s", gen_semid, strerror(errno));
 		/* We have to destroy just created semaphore
 		 * so it won't stay in the system. */
 		(void) _udev_notify_sem_destroy(gen_cookie, gen_semid);
@@ -2564,9 +2572,10 @@ static int _udev_notify_sem_create(uint32_t *cookie, int *semid)
 	}
 
  	if ((val = semctl(gen_semid, 0, GETVAL)) < 0) {
-		log_error("semid %d: sem_ctl GETVAL failed for "
+		log_error("cookie create: semid %d: sem_ctl GETVAL failed for "
 			  "cookie 0x%" PRIx32 ": %s",
 			  gen_semid, gen_cookie, strerror(errno));
+		(void) _udev_notify_sem_destroy(gen_cookie, gen_semid);
 		goto bad;
 	}
 

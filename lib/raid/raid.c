@@ -128,8 +128,7 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 }
 
 static int _raid_text_import(struct lv_segment *seg,
-			     const struct dm_config_node *sn,
-			     struct dm_hash_table *pv_hash)
+			     const struct dm_config_node *sn)
 {
 	const struct dm_config_value *cv;
 	const struct {
@@ -300,7 +299,7 @@ bool raid_is_available(const struct logical_volume *lv)
 		    lv_is_partial(seg_lv(seg, s)))
 			missing_legs++;
 
-	/* Degradation: segtype raid1 may miss legs-1, raid0/4/5/6 may loose parity devices. */
+	/* Degradation: segtype raid1 may miss legs-1, raid0/4/5/6 may lose parity devices. */
 	return missing_legs <= (seg_is_raid1(seg) ? seg->area_count - 1 : seg->segtype->parity_devs);
 }
 
@@ -508,11 +507,11 @@ out:
 
 /* Define raid feature based on the tuple(major, minor, patchlevel) of raid target */
 struct raid_feature {
-	uint32_t maj;
-	uint32_t min;
-	uint32_t patchlevel;
-	unsigned raid_feature;
-	const char *feature;
+	uint16_t maj;
+	uint16_t min;
+	uint16_t patchlevel;
+	uint16_t raid_feature;
+	const char feature[24];
 };
 
 /* Return true if tuple(@maj, @min, @patchlevel) is greater/equal to @*feature members */
@@ -560,7 +559,7 @@ static int _raid_target_present(struct cmd_context *cmd,
 						 _features[i].feature);
 
 		/*
-		 * Seperate check for proper raid4 mapping supported
+		 * Separate check for proper raid4 mapping supported
 		 *
 		 * If we get more of these range checks, avoid them
 		 * altogether by enhancing 'struct raid_feature'
@@ -616,7 +615,7 @@ static int _raid_target_unmonitor_events(struct lv_segment *seg, int events)
 #  endif /* DMEVENTD */
 #endif /* DEVMAPPER_SUPPORT */
 
-static struct segtype_handler _raid_ops = {
+static const struct segtype_handler _raid_ops = {
 	.display = _raid_display,
 	.text_import_area_count = _raid_text_import_area_count,
 	.text_import = _raid_text_import,

@@ -20,7 +20,7 @@
 static int _is_pvmove_image_removable(struct logical_volume *mimage_lv,
 				      void *baton)
 {
-	uint32_t mimage_to_remove = *((uint32_t *)baton);
+	uint32_t mimage_to_remove = baton ? *((uint32_t *)baton) : UINT32_MAX;
 	struct lv_segment *mirror_seg;
 
 	if (!(mirror_seg = get_only_segment_using_this_lv(mimage_lv))) {
@@ -87,36 +87,51 @@ int pvmove_update_metadata(struct cmd_context *cmd, struct volume_group *vg,
 int pvmove_finish(struct cmd_context *cmd, struct volume_group *vg,
 		  struct logical_volume *lv_mirr, struct dm_list *lvs_changed)
 {
+	uint32_t visible = vg_visible_lvs(lv_mirr->vg);
+
 	if (!dm_list_empty(lvs_changed) &&
 	    (!_detach_pvmove_mirror(cmd, lv_mirr) ||
 	    !replace_lv_with_error_segment(lv_mirr))) {
-		log_error("ABORTING: Removal of temporary mirror failed");
+		log_error("ABORTING: Removal of temporary pvmove mirror %s failed.",
+			  display_lvname(lv_mirr));
 		return 0;
 	}
+
+	lv_set_visible(lv_mirr);
 
 	if (!lv_update_and_reload(lv_mirr))
 		return_0;
 
-	sync_local_dev_names(cmd);
+	if (!sync_local_dev_names(cmd))
+		stack;
 
 	/* Deactivate mirror LV */
 	if (!deactivate_lv(cmd, lv_mirr)) {
-		log_error("ABORTING: Unable to deactivate temporary logical "
-			  "volume %s.", display_lvname(lv_mirr));
+		log_error("ABORTING: Unable to deactivate temporary volume %s.",
+			  display_lvname(lv_mirr));
 		return 0;
 	}
 
-	log_verbose("Removing temporary pvmove LV");
+	log_verbose("Removing temporary pvmove LV.");
 	if (!lv_remove(lv_mirr)) {
-		log_error("ABORTING: Removal of temporary pvmove LV failed");
+		log_error("ABORTING: Removal of temporary volume %s failed.",
+			  display_lvname(lv_mirr));
 		return 0;
 	}
 
 	/* Store it on disks */
-	log_verbose("Writing out final volume group after pvmove");
+	log_verbose("Writing out final volume group after pvmove.");
 	if (!vg_write(vg) || !vg_commit(vg)) {
-		log_error("ABORTING: Failed to write new data locations "
-			  "to disk.");
+		log_error("ABORTING: Failed to write new data locations to disk.");
+		return 0;
+	}
+
+	/* Allows the pvmove operation to complete even if 'orphaned' temporary volumes
+	 * cannot be deactivated due to being held open by another process.
+	 * The user can manually remove these volumes later when they are no longer in use. */
+	if (visible < vg_visible_lvs(lv_mirr->vg)) {
+		log_error("ABORTING: Failed to remove temporary logical volume(s).");
+		log_print_unless_silent("Please remove orphan temporary logical volume(s) when possible.");
 		return 0;
 	}
 

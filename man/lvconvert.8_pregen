@@ -11,9 +11,8 @@ lvconvert \(em Change logical volume layout
     [ \fIoption_args\fP ]
 .br
     [ \fIposition_args\fP ]
-.br
 .P
-.ad l
+.na
     \fB--alloc\fP \c
 .nh
 \%\fBcontiguous\fP|\:\fBcling\fP|\:\fBcling_by_tags\fP|\:\fBnormal\fP|\:\fBanywhere\fP|\:\fBinherit\fP
@@ -65,6 +64,8 @@ lvconvert \(em Change logical volume layout
 .br
  \fB-h\fP|\fB--help\fP
 .br
+    \fB--integritysettings\fP \fIString\fP
+.br
  \fB-i\fP|\fB--interval\fP \fINumber\fP
 .br
     \fB--journal\fP \fIString\fP
@@ -97,6 +98,8 @@ lvconvert \(em Change logical volume layout
 .br
     \fB--originname\fP \fILV\fP
 .br
+    \fB--pooldatavdo\fP \fBy\fP|\fBn\fP
+.br
     \fB--poolmetadata\fP \fILV\fP
 .br
     \fB--poolmetadatasize\fP \fISize\fP[m|UNIT]
@@ -120,6 +123,8 @@ lvconvert \(em Change logical volume layout
     \fB--repair\fP
 .br
     \fB--replace\fP \fIPV\fP
+.br
+ \fB-k\fP|\fB--setactivationskip\fP \fBy\fP|\fBn\fP
 .br
  \fB-s\fP|\fB--snapshot\fP
 .br
@@ -164,10 +169,12 @@ lvconvert \(em Change logical volume layout
 .br
  \fB-V\fP|\fB--virtualsize\fP \fISize\fP[m|UNIT]
 .br
+ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP
+.br
  \fB-y\fP|\fB--yes\fP
 .br
  \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP
-.ad b
+.ad
 .
 .SH DESCRIPTION
 .
@@ -196,7 +203,7 @@ The
 type is equivalent to the
 .B striped
 type when one stripe exists.
-In that case, the types can sometimes be used interchangably.
+In that case, the types can sometimes be used interchangeably.
 .P
 In most cases, the
 .B mirror
@@ -251,9 +258,9 @@ Convert LV to linear.
 \fBlvconvert\fP \fB--type\fP \fBlinear\fP \fILV\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -267,7 +274,7 @@ Convert LV to striped.
 \fBlvconvert\fP \fB--type\fP \fBstriped\fP \fILV\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] ]
 .br
 [ \fB-R\fP|\fB--regionsize\fP \fISize\fP[m|UNIT] ]
@@ -277,7 +284,7 @@ Convert LV to striped.
 [    \fB--stripes\fP \fINumber\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -291,7 +298,7 @@ Convert LV to type mirror (also see type raid1),
 \fBlvconvert\fP \fB--type\fP \fBmirror\fP \fILV\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-m\fP|\fB--mirrors\fP [\fB+\fP|\fB-\fP]\fINumber\fP ]
 .br
 [ \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] ]
@@ -305,7 +312,7 @@ Convert LV to type mirror (also see type raid1),
 [    \fB--mirrorlog\fP \fBcore\fP|\fBdisk\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -313,7 +320,7 @@ Convert LV to type mirror (also see type raid1),
 .P
 \(em
 .P
-Convert LV to raid or change raid layout 
+Convert LV to raid or change raid layout
 .br
 (a specific raid level must be used, e.g. raid1).
 .br
@@ -321,7 +328,7 @@ Convert LV to raid or change raid layout
 \fBlvconvert\fP \fB--type\fP \fBraid\fP \fILV\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-m\fP|\fB--mirrors\fP [\fB+\fP|\fB-\fP]\fINumber\fP ]
 .br
 [ \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] ]
@@ -333,7 +340,7 @@ Convert LV to raid or change raid layout
 [    \fB--stripes\fP \fINumber\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -347,7 +354,7 @@ Convert LV to raid1 or mirror, or change number of mirror images.
 \fBlvconvert\fP \fB-m\fP|\fB--mirrors\fP [\fB+\fP|\fB-\fP]\fINumber\fP \fILV\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-R\fP|\fB--regionsize\fP \fISize\fP[m|UNIT] ]
 .br
 [ \fB-i\fP|\fB--interval\fP \fINumber\fP ]
@@ -355,7 +362,7 @@ Convert LV to raid1 or mirror, or change number of mirror images.
 [    \fB--mirrorlog\fP \fBcore\fP|\fBdisk\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -369,7 +376,7 @@ Convert raid LV to change number of stripe images.
 \fBlvconvert\fP \fB--stripes\fP \fINumber\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-i\fP|\fB--interval\fP \fINumber\fP ]
 .br
 [ \fB-R\fP|\fB--regionsize\fP \fISize\fP[m|UNIT] ]
@@ -377,7 +384,7 @@ Convert raid LV to change number of stripe images.
 [ \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -395,13 +402,13 @@ Convert raid LV to change the stripe size.
 \fBlvconvert\fP \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-i\fP|\fB--interval\fP \fINumber\fP ]
 .br
 [ \fB-R\fP|\fB--regionsize\fP \fISize\fP[m|UNIT] ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -416,9 +423,9 @@ Split images from a raid1 or mirror LV and use them to create a new LV.
 \fBlvconvert\fP \fB--splitmirrors\fP \fINumber\fP \fB-n\fP|\fB--name\fP \fILV\fP\fI_new\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -436,9 +443,9 @@ Split images from a raid1 LV and track changes to origin for later merge.
 \fBlvconvert\fP \fB--splitmirrors\fP \fINumber\fP \fB--trackchanges\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -456,9 +463,9 @@ Merge LV images that were split from a raid1 LV.
 \fBlvconvert\fP \fB--mergemirrors\fP \fIVG\fP|\fILV1\fP|\fITag\fP ...
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -473,12 +480,14 @@ Convert LV to a thin LV, using the original LV as an external origin.
 \fBlvconvert\fP \fB--type\fP \fBthin\fP \fB--thinpool\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-T\fP|\fB--thin\fP ]
+.br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -493,11 +502,52 @@ Convert LV to a thin LV, using the original LV as an external origin.
 [    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
+.RE
+.RS 4
+[ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: linear striped thin cache raid error zero
+LV1 types: linear striped cache raid thin zero error
+.RE
+.P
+\(em
+.P
+Convert LV to a thin LV, using LV as thin-pool data volume.
+.br
+.P
+\fBlvconvert\fP \fB--type\fP \fBthin\fP \fILV1\fP
+.br
+.RS 4
+.na
+[ \fB-T\fP|\fB--thin\fP ]
+.br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
+[ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
+.br
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
+.br
+[ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--poolmetadata\fP \fILV\fP ]
+.br
+[    \fB--poolmetadatasize\fP \fISize\fP[m|UNIT] ]
+.br
+[    \fB--poolmetadataspare\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--metadataprofile\fP \fIString\fP ]
+.br
+[ COMMON_OPTIONS ]
+.ad
+.RE
+.RS 4
+[ \fIPV\fP ... ]
+.RE
+.P
+.RS 4
+LV1 types: linear striped cache raid vdo writecache zero error
 .RE
 .P
 \(em
@@ -508,14 +558,16 @@ Attach a cache pool to an LV, converts the LV to type cache.
 \fBlvconvert\fP \fB--type\fP \fBcache\fP \fB--cachepool\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-H\fP|\fB--cache\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--cachemetadataformat\fP \fBauto\fP|\fB1\fP|\fB2\fP ]
 .br
@@ -534,11 +586,14 @@ Attach a cache pool to an LV, converts the LV to type cache.
 [    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
+.RE
+.RS 4
+[ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool vdo vdopool vdopooldata raid
+LV1 types: linear striped raid thin thinpool vdo vdopool vdopooldata zero error
 .RE
 .P
 \(em
@@ -549,15 +604,15 @@ Attach a writecache to an LV, converts the LV to type writecache.
 \fBlvconvert\fP \fB--type\fP \fBwritecache\fP \fB--cachevol\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--cachesettings\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -568,7 +623,7 @@ Attach a cache to an LV, converts the LV to type cache.
 \fBlvconvert\fP \fB--type\fP \fBcache\fP \fB--cachevol\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-H\fP|\fB--cache\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
@@ -586,11 +641,11 @@ Attach a cache to an LV, converts the LV to type cache.
 [    \fB--poolmetadatasize\fP \fISize\fP[m|UNIT] ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -601,17 +656,17 @@ Add a writecache to an LV, using a specified cache device.
 \fBlvconvert\fP \fB--type\fP \fBwritecache\fP \fB--cachedevice\fP \fIPV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--cachesize\fP \fISize\fP[m|UNIT] ]
 .br
 [    \fB--cachesettings\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -622,7 +677,7 @@ Add a cache to an LV, using a specified cache device.
 \fBlvconvert\fP \fB--type\fP \fBcache\fP \fB--cachedevice\fP \fIPV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [    \fB--cachesize\fP \fISize\fP[m|UNIT] ]
@@ -630,11 +685,11 @@ Add a cache to an LV, using a specified cache device.
 [    \fB--cachesettings\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -645,12 +700,14 @@ Convert LV to type thin-pool.
 \fBlvconvert\fP \fB--type\fP \fBthin-pool\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] ]
+.br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -659,6 +716,14 @@ Convert LV to type thin-pool.
 [    \fB--discards\fP \fBpassdown\fP|\fBnopassdown\fP|\fBignore\fP ]
 .br
 [    \fB--errorwhenfull\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--pooldatavdo\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--compression\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--deduplication\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--vdosettings\fP \fIString\fP ]
 .br
 [    \fB--poolmetadata\fP \fILV\fP ]
 .br
@@ -669,14 +734,14 @@ Convert LV to type thin-pool.
 [    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: linear striped cache raid error zero writecache
+LV1 types: linear striped cache raid vdo writecache zero error
 .RE
 .P
 \(em
@@ -687,12 +752,14 @@ Convert LV to type cache-pool.
 \fBlvconvert\fP \fB--type\fP \fBcache-pool\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
+.br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--cachemetadataformat\fP \fBauto\fP|\fB1\fP|\fB2\fP ]
 .br
@@ -711,14 +778,14 @@ Convert LV to type cache-pool.
 [    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: linear striped raid
+LV1 types: linear striped raid zero error
 .RE
 .P
 \(em
@@ -729,16 +796,16 @@ Convert LV to type vdopool.
 \fBlvconvert\fP \fB--type\fP \fBvdo-pool\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-n\fP|\fB--name\fP \fILV\fP\fI_new\fP ]
 .br
 [ \fB-V\fP|\fB--virtualsize\fP \fISize\fP[m|UNIT] ]
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
-[    \fB--metadataprofile\fP \fIString\fP ]
+[ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--compression\fP \fBy\fP|\fBn\fP ]
 .br
@@ -746,8 +813,10 @@ Convert LV to type vdopool.
 .br
 [    \fB--vdosettings\fP \fIString\fP ]
 .br
+[    \fB--metadataprofile\fP \fIString\fP ]
+.br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -762,15 +831,15 @@ Detach a cache from an LV.
 \fBlvconvert\fP \fB--splitcache\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--cachesettings\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: thinpool cache cachepool vdopool writecache
+LV1 types: cache cachepool thinpool vdopool writecache
 .RE
 .P
 \(em
@@ -781,9 +850,9 @@ Merge thin LV into its origin LV.
 \fBlvconvert\fP \fB--mergethin\fP \fILV1\fP ...
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -798,11 +867,11 @@ Merge COW snapshot LV into its origin.
 \fBlvconvert\fP \fB--mergesnapshot\fP \fILV1\fP ...
 .br
 .RS 4
-.ad l
+.na
 [ \fB-i\fP|\fB--interval\fP \fINumber\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -811,7 +880,7 @@ LV1 types: snapshot
 .P
 \(em
 .P
-Combine a former COW snapshot (second arg) with a former 
+Combine a former COW snapshot (second arg) with a former
 .br
 origin LV (first arg) to reverse a splitsnapshot command.
 .br
@@ -819,7 +888,7 @@ origin LV (first arg) to reverse a splitsnapshot command.
 \fBlvconvert\fP \fB--type\fP \fBsnapshot\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-s\fP|\fB--snapshot\fP ]
 .br
 [ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
@@ -827,7 +896,7 @@ origin LV (first arg) to reverse a splitsnapshot command.
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -836,9 +905,9 @@ LV1 types: linear striped
 .P
 \(em
 .P
-Replace failed PVs in a raid or mirror LV. 
+Replace failed PVs in a raid or mirror LV.
 .br
-Repair a thin pool. 
+Repair a thin pool.
 .br
 Repair a cache pool.
 .br
@@ -846,22 +915,24 @@ Repair a cache pool.
 \fBlvconvert\fP \fB--repair\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-i\fP|\fB--interval\fP \fINumber\fP ]
+.br
+[ \fB-k\fP|\fB--setactivationskip\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--usepolicies\fP ]
 .br
 [    \fB--poolmetadataspare\fP \fBy\fP|\fBn\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: thinpool cache cachepool mirror raid
+LV1 types: cache cachepool mirror raid thinpool
 .RE
 .P
 \(em
@@ -872,9 +943,9 @@ Replace specific PV(s) in a raid LV with another PV.
 \fBlvconvert\fP \fB--replace\fP \fIPV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -892,9 +963,9 @@ Poll LV to continue conversion.
 \fBlvconvert\fP \fB--startpoll\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -909,13 +980,15 @@ Add or remove data integrity checksums to raid images.
 \fBlvconvert\fP \fB--raidintegrity\fP \fBy\fP|\fBn\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--raidintegritymode\fP \fIString\fP ]
 .br
 [    \fB--raidintegrityblocksize\fP \fINumber\fP ]
 .br
+[    \fB--integritysettings\fP \fIString\fP ]
+.br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -930,7 +1003,7 @@ LV1 types: raid
 Common options for command:
 .
 .RS 4
-.ad l
+.na
 [ \fB-b\fP|\fB--background\fP ]
 .br
 [ \fB-f\fP|\fB--force\fP ]
@@ -942,13 +1015,13 @@ Common options for command:
 ]
 .br
 [    \fB--noudevsync\fP ]
-.ad b
+.ad
 .RE
 .P
 Common options for lvm:
 .
 .RS 4
-.ad l
+.na
 [ \fB-d\fP|\fB--debug\fP ]
 .br
 [ \fB-h\fP|\fB--help\fP ]
@@ -984,19 +1057,19 @@ Common options for lvm:
 [    \fB--profile\fP \fIString\fP ]
 .br
 [    \fB--version\fP ]
-.ad b
+.ad
 .RE
 .
 .SH OPTIONS
 .
 .
 .HP
-.ad l
+.ad
 \fB--alloc\fP \c
 .nh
 \%\fBcontiguous\fP|\:\fBcling\fP|\:\fBcling_by_tags\fP|\:\fBnormal\fP|\:\fBanywhere\fP|\:\fBinherit\fP
 .hy
-.ad b
+.ad
 .br
 Determines the allocation policy when a command needs to allocate
 Physical Extents (PEs) from the VG. Each VG and LV has an allocation policy
@@ -1091,14 +1164,14 @@ The name of a cache volume.
 \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT]
 .br
 The size of chunks in a snapshot, cache pool or thin pool.
-For snapshots, the value must be a power of 2 between 4KiB and 512KiB
+For snapshots, the value must be a power of 2 between 4 KiB and 512 KiB
 and the default value is 4.
-For a cache pool the value must be between 32KiB and 1GiB
+For a cache pool the value must be between 32 KiB and 1 GiB
 and the default value is 64.
-For a thin pool the value must be between 64KiB and 1GiB
+For a thin pool the value must be between 64 KiB and 1 GiB
 and the default value starts with 64 and scales up to fit the
-pool metadata size within 128MiB, if the pool metadata size is not specified.
-The value must be a multiple of 64KiB.
+pool metadata size within 128 MiB, if the pool metadata size is not specified.
+The value must be a multiple of 64 KiB.
 See \fBlvmthin\fP(7) and \fBlvmcache\fP(7) for more information.
 .
 .HP
@@ -1190,6 +1263,12 @@ Use with extreme caution.
 \fB-h\fP|\fB--help\fP
 .br
 Display help text.
+.
+.HP
+\fB--integritysettings\fP \fIString\fP
+.br
+Specifies tunable kernel options for dm-integrity.
+See \fBlvmraid\fP(7) for more information.
 .
 .HP
 \fB-i\fP|\fB--interval\fP \fINumber\fP
@@ -1315,7 +1394,7 @@ incorrect results.
 .HP
 \fB--noudevsync\fP
 .br
-Disables udev synchronisation. The process will not wait for notification
+Disables udev synchronization. The process will not wait for notification
 from udev. It will continue irrespective of any possible udev processing
 in the background. Only use this if udev is not running or has rules that
 ignore the devices LVM creates.
@@ -1326,6 +1405,11 @@ ignore the devices LVM creates.
 Specifies the name to use for the external origin LV when converting an LV
 to a thin LV. The LV being converted becomes a read-only external origin
 with this name.
+.
+.HP
+\fB--pooldatavdo\fP \fBy\fP|\fBn\fP
+.br
+Use VDO type volume for pool data volume.
 .
 .HP
 \fB--poolmetadata\fP \fILV\fP
@@ -1375,8 +1459,9 @@ Possible values: 512, 1024, 2048, 4096.
 \fB--raidintegritymode\fP \fIString\fP
 .br
 Use a journal (default) or bitmap for keeping integrity checksums consistent
-in case of a crash. The bitmap areas are recalculated after a crash, so corruption
-in those areas would not be detected. A journal does not have this problem.
+in case of a crash. The bitmap areas are recalculated after a crash,
+so corruption in those areas would not be detected.
+A journal does not have this problem.
 The journal mode doubles writes to storage, but can improve performance for
 scattered writes packed into a single journal write.
 bitmap mode can in theory achieve full write throughput of the device,
@@ -1411,6 +1496,16 @@ Replace a specific PV in a raid LV with another PV.
 The new PV to use can be optionally specified after the LV.
 Multiple PVs can be replaced by repeating this option.
 See \fBlvmraid\fP(7) for more information.
+.
+.HP
+\fB-k\fP|\fB--setactivationskip\fP \fBy\fP|\fBn\fP
+.br
+Persistently sets (yes) or clears (no) the "activation skip" flag on an LV.
+An LV with this flag set is not activated unless the
+--ignoreactivationskip option is used by the activation command.
+This flag is set by default on new thin snapshot LVs.
+The flag is not applied to deactivation.
+The current value of the flag is indicated in the lvs lv_attr bits.
 .
 .HP
 \fB-s\fP|\fB--snapshot\fP
@@ -1504,23 +1599,26 @@ merging the split image (see --mergemirrors) or permanently splitting
 the image (see --splitmirrors with --name.
 .
 .HP
-.ad l
+.ad
 \fB--type\fP \c
 .nh
 \%\fBlinear\fP|\:\fBstriped\fP|\:\fBsnapshot\fP|\:\fBraid\fP|\:\fBmirror\fP|\:\fBthin\fP|\:\fBthin-pool\fP|\:\fBvdo\fP|\:\fBvdo-pool\fP|\:\fBcache\fP|\:\fBcache-pool\fP|\:\fBwritecache\fP
 .hy
-.ad b
+.ad
 .br
 The LV type, also known as "segment type" or "segtype".
 See usage descriptions for the specific ways to use these types.
-For more information about redundancy and performance (\fBraid\fP<N>, \fBmirror\fP, \fBstriped\fP, \fBlinear\fP) see \fBlvmraid\fP(7).
+For more information about redundancy and performance
+(\fBraid\fP<N>, \fBmirror\fP, \fBstriped\fP, \fBlinear\fP)
+see \fBlvmraid\fP(7).
 For thin provisioning (\fBthin\fP, \fBthin-pool\fP) see \fBlvmthin\fP(7).
 For performance caching (\fBcache\fP, \fBcache-pool\fP) see \fBlvmcache\fP(7).
 For copy-on-write snapshots (\fBsnapshot\fP) see usage definitions.
 For VDO (\fBvdo\fP) see \fBlvmvdo\fP(7).
 Several commands omit an explicit type option because the type
 is inferred from other options or shortcuts
-(e.g. --stripes, --mirrors, --snapshot, --virtualsize, --thin, --cache, --vdo).
+(e.g. --stripes, --mirrors, --snapshot, --virtualsize,
+--thin, --cache, --vdo).
 Use inferred types with care because it can lead to unexpected results.
 .
 .HP
@@ -1580,6 +1678,23 @@ Snapshots are less efficient than thin provisioning when creating
 large sparse LVs (GiB).
 .
 .HP
+\fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP
+.br
+Controls detection and subsequent wiping of signatures on new LVs.
+There is a prompt for each signature detected to confirm its wiping
+(unless --yes is used to override confirmations.)
+When not specified, signatures are wiped whenever zeroing is done
+(see --zero). This behaviour can be configured with
+\fBlvm.conf\fP(5) \fBallocation/wipe_signatures_when_zeroing_new_lvs\fP.
+If blkid wiping is used (\fBlvm.conf\fP(5) \fBallocation/use_blkid_wiping\fP)
+and LVM is compiled with blkid wiping support, then the blkid(8)
+library is used to detect the signatures (use blkid -k to list the
+signatures that are recognized).
+Otherwise, native LVM code is used to detect signatures
+(only MD RAID, swap and LUKS signatures are detected in this case.)
+The LV is not wiped if the read only flag is set.
+.
+.HP
 \fB-y\fP|\fB--yes\fP
 .br
 Do not prompt for confirmation interactively but always assume the
@@ -1589,7 +1704,7 @@ answer yes. Use with extreme caution.
 .HP
 \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP
 .br
-For snapshots, this controls zeroing of the first 4KiB of data in the
+For snapshots, this controls zeroing of the first 4 KiB of data in the
 snapshot. If the LV is read-only, the snapshot will not be zeroed.
 For thin pools, this controls zeroing of provisioned blocks.
 Provisioning of large zeroed chunks negatively impacts performance.
@@ -1612,8 +1727,10 @@ For commands managing physical extents, a PV positional arg
 generally accepts a suffix indicating a range (or multiple ranges)
 of physical extents (PEs). When the first PE is omitted, it defaults
 to the start of the device, and when the last PE is omitted it defaults to end.
-Start and end range (inclusive): \fIPV\fP[\fB:\fP\fIPE\fP\fB-\fP\fIPE\fP]...
-Start and length range (counting from 0): \fIPV\fP[\fB:\fP\fIPE\fP\fB+\fP\fIPE\fP]...
+Start and end range (inclusive):
+\fIPV\fP[\fB:\fP\fIPE\fP\fB-\fP\fIPE\fP]...
+Start and length range (counting from 0):
+\fIPV\fP[\fB:\fP\fIPE\fP\fB+\fP\fIPE\fP]...
 .TP
 .I Tag
 Tag name.  See \fBlvm\fP(8) for information about tag names and using tags
@@ -1644,17 +1761,19 @@ is TiB,
 is PiB,
 .BR e | E
 is EiB.
-(This should not be confused with the output control --units, where
-capital letters mean multiple of 1000.)
+(This should not be confused with the output control --units,
+where capital letters mean multiple of 1000.)
 .
 .SH ENVIRONMENT VARIABLES
 .
 See \fBlvm\fP(8) for information about environment variables used by lvm.
-For example, LVM_VG_NAME can generally be substituted for a required VG parameter.
+For example, LVM_VG_NAME can generally be substituted
+for a required VG parameter.
 .
 .SH ADVANCED USAGE
 .
-Alternate command forms, advanced command usage, and listing of all valid syntax for completeness.
+Alternate command forms, advanced command usage,
+and listing of all valid syntax for completeness.
 .P
 Change the region size of an LV.
 .br
@@ -1662,9 +1781,9 @@ Change the region size of an LV.
 \fBlvconvert\fP \fB-R\fP|\fB--regionsize\fP \fISize\fP[m|UNIT] \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -1679,9 +1798,9 @@ Change the type of mirror log used by a mirror LV.
 \fBlvconvert\fP \fB--mirrorlog\fP \fBcore\fP|\fBdisk\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIPV\fP ... ]
@@ -1699,13 +1818,14 @@ Convert LV to a thin LV, using the original LV as an external origin.
 \fBlvconvert\fP \fB-T\fP|\fB--thin\fP \fB--thinpool\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB--type thin\fP ] (implied)
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -1720,11 +1840,52 @@ Convert LV to a thin LV, using the original LV as an external origin.
 [    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
+.RE
+.RS 4
+[ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: linear striped thin cache raid error zero
+LV1 types: linear striped cache raid thin zero error
+.RE
+.P
+\(em
+.P
+Convert LV to a thin LV, using LV as thin-pool data volume.
+.br
+.P
+\fBlvconvert\fP \fB-T\fP|\fB--thin\fP \fILV1\fP
+.br
+.RS 4
+.na
+[ \fB--type thin\fP ] (implied)
+.br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
+[ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
+.br
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
+.br
+[ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--poolmetadata\fP \fILV\fP ]
+.br
+[    \fB--poolmetadatasize\fP \fISize\fP[m|UNIT] ]
+.br
+[    \fB--poolmetadataspare\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--metadataprofile\fP \fIString\fP ]
+.br
+[ COMMON_OPTIONS ]
+.ad
+.RE
+.RS 4
+[ \fIPV\fP ... ]
+.RE
+.P
+.RS 4
+LV1 types: linear striped cache raid vdo writecache zero error
 .RE
 .P
 \(em
@@ -1735,15 +1896,16 @@ Attach a cache pool to an LV.
 \fBlvconvert\fP \fB-H\fP|\fB--cache\fP \fB--cachepool\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB--type cache\fP ] (implied)
-.br
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--cachemetadataformat\fP \fBauto\fP|\fB1\fP|\fB2\fP ]
 .br
@@ -1762,11 +1924,14 @@ Attach a cache pool to an LV.
 [    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
+.RE
+.RS 4
+[ \fIPV\fP ... ]
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool vdo vdopool vdopooldata raid
+LV1 types: linear striped raid thin thinpool vdo vdopool vdopooldata zero error
 .RE
 .P
 \(em
@@ -1777,7 +1942,7 @@ Attach a cache to an LV, converts the LV to type cache.
 \fBlvconvert\fP \fB-H\fP|\fB--cache\fP \fB--cachevol\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
@@ -1793,11 +1958,11 @@ Attach a cache to an LV, converts the LV to type cache.
 [    \fB--poolmetadatasize\fP \fISize\fP[m|UNIT] ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -1808,11 +1973,12 @@ Convert LV to type vdopool.
 \fBlvconvert\fP \fB--vdopool\fP \fILV\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB--type vdo-pool\fP ] (implied)
 .br
-.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
+.br
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -1820,16 +1986,16 @@ Convert LV to type vdopool.
 .br
 [ \fB-V\fP|\fB--virtualsize\fP \fISize\fP[m|UNIT] ]
 .br
-[    \fB--metadataprofile\fP \fIString\fP ]
-.br
 [    \fB--compression\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--deduplication\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--vdosettings\fP \fIString\fP ]
 .br
+[    \fB--metadataprofile\fP \fIString\fP ]
+.br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -1840,15 +2006,15 @@ Detach and delete a cache from an LV.
 \fBlvconvert\fP \fB--uncache\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [    \fB--cachesettings\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: thinpool cache vdopool writecache
+LV1 types: cache thinpool vdopool writecache
 .RE
 .P
 \(em
@@ -1859,22 +2025,22 @@ Swap metadata LV in a thin pool or cache pool (for repair only).
 \fBlvconvert\fP \fB--swapmetadata\fP \fB--poolmetadata\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: thinpool cachepool
+LV1 types: cachepool thinpool
 .RE
 .P
 \(em
 .P
-Merge LV that was split from a mirror (variant, use --mergemirrors). 
+Merge LV that was split from a mirror (variant, use --mergemirrors).
 .br
-Merge thin LV into its origin LV (variant, use --mergethin). 
+Merge thin LV into its origin LV (variant, use --mergethin).
 .br
 Merge COW snapshot LV into its origin (variant, use --mergesnapshot).
 .br
@@ -1882,15 +2048,15 @@ Merge COW snapshot LV into its origin (variant, use --mergesnapshot).
 \fBlvconvert\fP \fB--merge\fP \fIVG\fP|\fILV1\fP|\fITag\fP ...
 .br
 .RS 4
-.ad l
+.na
 [ \fB-i\fP|\fB--interval\fP \fINumber\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
-LV1 types: linear striped snapshot thin raid
+LV1 types: linear striped snapshot raid thin
 .RE
 .P
 \(em
@@ -1901,9 +2067,9 @@ Separate a COW snapshot from its origin LV.
 \fBlvconvert\fP \fB--splitsnapshot\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -1912,7 +2078,7 @@ LV1 types: snapshot
 .P
 \(em
 .P
-Combine a former COW snapshot (second arg) with a former 
+Combine a former COW snapshot (second arg) with a former
 .br
 origin LV (first arg) to reverse a splitsnapshot command.
 .br
@@ -1920,16 +2086,15 @@ origin LV (first arg) to reverse a splitsnapshot command.
 \fBlvconvert\fP \fB-s\fP|\fB--snapshot\fP \fILV\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB--type snapshot\fP ] (implied)
-.br
 .br
 [ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -1938,7 +2103,7 @@ LV1 types: linear striped
 .P
 \(em
 .P
-Poll LV to continue conversion (also see --startpoll) 
+Poll LV to continue conversion (also see --startpoll)
 .br
 or waits till conversion/mirror syncing is finished
 .br
@@ -1946,9 +2111,9 @@ or waits till conversion/mirror syncing is finished
 \fBlvconvert\fP \fILV1\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 .RS 4
@@ -1956,4 +2121,3 @@ LV1 types: mirror raid
 .RE
 .P
 \(em
-.P

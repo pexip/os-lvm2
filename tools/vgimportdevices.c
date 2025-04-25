@@ -15,9 +15,15 @@
 #include "tools.h"
 #include "lib/cache/lvmcache.h"
 #include "lib/device/device_id.h"
+#include "lib/activate/activate.h"
+/* coverity[unnecessary_header] needed for MuslC */
+#include <sys/file.h>
 
 struct vgimportdevices_params {
 	uint32_t added_devices;
+	int root_vg_found;
+	char *root_dm_uuid;
+	char *root_vg_name;
 };
 
 static int _vgimportdevices_single(struct cmd_context *cmd,
@@ -33,12 +39,19 @@ static int _vgimportdevices_single(struct cmd_context *cmd,
 	int updated_pvs = 0;
 	const char *idtypestr = NULL; /* deviceidtype_ARG ? */
 
+	if (vp->root_dm_uuid) {
+		if (memcmp(vp->root_dm_uuid + 4, &vg->id, ID_LEN))
+			return ECMD_PROCESSED;
+		vp->root_vg_found = 1;
+		vp->root_vg_name = dm_pool_strdup(cmd->mem, vg_name);
+	}
+
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		if (is_missing_pv(pvl->pv) || !pvl->pv->dev) {
 			memcpy(pvid, &pvl->pv->id.uuid, ID_LEN);
-			log_error("Not importing devices for VG %s with missing PV %s.",
-				 vg->name, pvid);
-			goto bad;
+			log_print("Not importing devices for VG %s with missing PV %s.",
+				  vg->name, pvid);
+			return ECMD_PROCESSED;
 		}
 	}
 
@@ -60,7 +73,7 @@ static int _vgimportdevices_single(struct cmd_context *cmd,
 		idtypestr = pv->device_id_type;
 
 		memcpy(pvid, &pvl->pv->id.uuid, ID_LEN);
-		device_id_add(cmd, pv->dev, pvid, idtypestr, NULL);
+		device_id_add(cmd, pv->dev, pvid, idtypestr, NULL, 0);
 		vp->added_devices++;
 
 		/* We could skip update if the device_id has not changed. */
@@ -71,14 +84,69 @@ static int _vgimportdevices_single(struct cmd_context *cmd,
 		updated_pvs++;
 	}
 
+	/*
+	 * Writes the device_id of each PV into the vg metadata.
+	 * This is not a critical step and should not influence
+	 * the result of the command.
+	 */
 	if (updated_pvs) {
 		if (!vg_write(vg) || !vg_commit(vg))
-			goto_bad;
+			log_print("Failed to write device ids in VG metadata.");
 	}
 
 	return ECMD_PROCESSED;
-bad:
-	return ECMD_FAILED;
+}
+
+static int _get_rootvg_dev(struct cmd_context *cmd, char **dm_uuid_out, int *skip)
+{
+	char path[PATH_MAX];
+	struct stat info; 
+
+	/*
+	 * When --auto is set, the command does nothing
+	 * if /etc/lvm/devices/system.devices exists, or
+	 * if /etc/lvm/devices/auto-import-rootvg does not exist.
+	 */
+	if (arg_is_set(cmd, auto_ARG)) {
+		if (devices_file_exists(cmd)) {
+			*skip = 1;
+			return 1;
+		}
+
+		if (dm_snprintf(path, sizeof(path), "%s/devices/auto-import-rootvg", cmd->system_dir) < 0)
+			return_0;
+
+		if (stat(path, &info) < 0) {
+			*skip = 1;
+			return 1;
+		}
+
+		/*
+		 * This flag is just used in device_ids_write to enable
+		 * an extra comment in system.devices indicating that
+		 * the file was auto generated for the root vg.
+		 */
+		cmd->device_ids_auto_import = 1;
+	}
+
+	if (!get_rootvg_dev_uuid(cmd, dm_uuid_out))
+		return_0;
+
+	return 1;
+}
+
+static void _clear_rootvg_auto(struct cmd_context *cmd)
+{
+	char path[PATH_MAX];
+
+	if (dm_snprintf(path, sizeof(path), "%s/devices/auto-import-rootvg", cmd->system_dir) < 0)
+		return;
+
+	if (unlink(path) < 0)
+		log_debug("Failed to unlink %s", path);
+
+	if (unlink(DEVICES_IMPORT_PATH) < 0)
+		log_debug("Failed to unlink %s", DEVICES_IMPORT_PATH);
 }
 
 /*
@@ -107,13 +175,14 @@ bad:
  * If there are duplicate PVIDs related to VG it will do nothing,
  * the user would need to add the PVs they want with lvmdevices --add.
  *
- * vgimportdevices -a (no vg arg) will import all accesible VGs.
+ * vgimportdevices -a (no vg arg) will import all accessible VGs.
  */
 
 int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct vgimportdevices_params vp = { 0 };
 	struct processing_handle *handle;
+	int created_file = 0;
 	int ret = ECMD_FAILED;
 
 	if (arg_is_set(cmd, foreign_ARG))
@@ -124,12 +193,27 @@ int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 	/* So that we can warn about this. */
 	cmd->handles_missing_pvs = 1;
 
-	if (!lock_global(cmd, "ex"))
+	/* Import devices for the root VG. */
+	if (arg_is_set(cmd, rootvg_ARG)) {
+		int skip = 0;
+		if (!_get_rootvg_dev(cmd, &vp.root_dm_uuid, &skip)) {
+			log_error("Failed to find root VG.");
+			return ECMD_FAILED;
+		}
+		if (skip) {
+			log_print("Root VG auto import is not enabled.");
+			return ECMD_PROCESSED;
+		}
+	}
+
+	if (!lockf_global(cmd, "ex"))
 		return ECMD_FAILED;
 
 	/*
-	 * Prepare devices file preemptively because the error path for this
-	 * case from process_each is not as clean.
+	 * Prepare/create devices file preemptively because the error path for
+	 * this case from process_each/setup_devices is not as clean.
+	 * This means that when setup_devices is called, it the devices
+	 * file steps will be redundant, and need to handle being repeated.
 	 */
 	if (!setup_devices_file(cmd)) {
 		log_error("Failed to set up devices file.");
@@ -139,9 +223,16 @@ int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 		log_error("Devices file not enabled.");
 		return ECMD_FAILED;
 	}
-	if (!devices_file_exists(cmd) && !devices_file_touch(cmd)) {
-		log_error("Failed to create devices file.");
+	if (!lock_devices_file(cmd, LOCK_EX)) {
+		log_error("Failed to lock the devices file.");
 		return ECMD_FAILED;
+	}
+	if (!devices_file_exists(cmd)) {
+	       	if (!devices_file_touch(cmd)) {
+			log_error("Failed to create devices file.");
+			return ECMD_FAILED;
+		}
+		created_file = 1;
 	}
 
 	/*
@@ -163,7 +254,7 @@ int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 	 * new devs to add to it, but we do want devices file entries on
 	 * use_devices so we can update and write out that list.
 	 *
-	 * Ususally when devices file is enabled, we use filter-deviceid and
+	 * Usually when devices file is enabled, we use filter-deviceid and
 	 * skip filter-regex.  In this import case it's reversed, and we skip
 	 * filter-deviceid and use filter-regex.
 	 */
@@ -195,22 +286,37 @@ int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 	 */
 	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE,
 			      0, handle, _vgimportdevices_single);
-	if (ret == ECMD_FAILED)
-		goto out;
-
-	if (!vp.added_devices) {
-		log_print("No devices to add.");
-		goto out;
+	if (ret == ECMD_FAILED) {
+		/*
+		 * Error from setting up devices file or label_scan,
+		 * _vgimportdevices_single does not return an error.
+		 */
+		goto_out;
 	}
 
-	if (!device_ids_write(cmd)) {
-		log_print("Failed to update devices file.");
+	if (!vp.added_devices) {
+		log_error("No devices to add.");
 		ret = ECMD_FAILED;
 		goto out;
 	}
 
-	log_print("Added %u devices to devices file.", vp.added_devices);
+	if (!device_ids_write(cmd)) {
+		log_error("Failed to write the devices file.");
+		ret = ECMD_FAILED;
+		goto out;
+	}
+
+	if (vp.root_vg_found)
+		log_print("Added %u devices to devices file for root VG %s.", vp.added_devices, vp.root_vg_name);
+	else
+		log_print("Added %u devices to devices file.", vp.added_devices);
+
+	if (vp.root_vg_found && arg_is_set(cmd, auto_ARG))
+		_clear_rootvg_auto(cmd);
 out:
+	if ((ret == ECMD_FAILED) && created_file)
+		if (unlink(cmd->devices_file_path) < 0)
+			log_sys_debug("unlink", cmd->devices_file_path);
 	destroy_processing_handle(cmd, handle);
 	return ret;
 }

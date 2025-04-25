@@ -84,7 +84,10 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 
 	cmd->create_edit_devices_file = 1;
 
-	lvmcache_label_scan(cmd);
+	if (!lvmcache_label_scan(cmd)) {
+		unlock_vg(cmd, NULL, vp_new.vg_name);
+		return_ECMD_FAILED;
+	}
 
 	if (lvmcache_vginfo_from_vgname(vp_new.vg_name, NULL)) {
 		unlock_vg(cmd, NULL, vp_new.vg_name);
@@ -178,24 +181,20 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	 * read without locks until the lockspace is done starting.)
 	 */
 	if (vg_is_shared(vg)) {
-		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
-
-		if (!lockd_start_vg(cmd, vg, 1, NULL)) {
+		if (!lockd_start_vg(cmd, vg, NULL)) {
 			log_error("Failed to start locking");
 			goto out;
 		}
 
-		lock_global(cmd, "un");
+		(void) lock_global(cmd, "un");
 
-		if (!start_opt || !strcmp(start_opt, "wait")) {
+		if (cmd->lockopt & LOCKOPT_NOWAIT) {
+			log_print_unless_silent("Starting locking.  VG is read-only until locks are ready.");
+		} else {
 			/* It is OK if the user does Ctrl-C to cancel the wait. */
 			log_print_unless_silent("Starting locking.  Waiting until locks are ready...");
 			lockd_start_wait(cmd);
-
-		} else if (!strcmp(start_opt, "nowait")) {
-			log_print_unless_silent("Starting locking.  VG is read-only until locks are ready.");
 		}
-
 	}
 out:
 	release_vg(vg);

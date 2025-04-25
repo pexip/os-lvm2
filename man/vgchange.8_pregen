@@ -11,9 +11,8 @@ vgchange \(em Change volume group attributes
     [ \fIoption_args\fP ]
 .br
     [ \fIposition_args\fP ]
-.br
 .P
-.ad l
+.na
  \fB-a\fP|\fB--activate\fP \fBy\fP|\fBn\fP|\fBay\fP
 .br
     \fB--activationmode\fP \fBpartial\fP|\fBdegraded\fP|\fBcomplete\fP
@@ -69,6 +68,8 @@ vgchange \(em Change volume group attributes
 .br
     \fB--longhelp\fP
 .br
+    \fB--majoritypvs\fP
+.br
  \fB-p\fP|\fB--maxphysicalvolumes\fP \fINumber\fP
 .br
     \fB--metadataprofile\fP \fIString\fP
@@ -97,7 +98,7 @@ vgchange \(em Change volume group attributes
 .br
     \fB--refresh\fP
 .br
-    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP
+    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP
 .br
  \fB-x\fP|\fB--resizeable\fP \fBy\fP|\fBn\fP
 .br
@@ -120,7 +121,7 @@ vgchange \(em Change volume group attributes
     \fB--\fP[\fBvg\fP]\fBmetadatacopies\fP \fBall\fP|\fBunmanaged\fP|\fINumber\fP
 .br
  \fB-y\fP|\fB--yes\fP
-.ad b
+.ad
 .
 .SH DESCRIPTION
 .
@@ -129,9 +130,9 @@ includes other utilities for VG maintenance.
 .
 .SH USAGE
 .
-Change a general VG attribute. 
+Change a general VG attribute.
 .br
-For options listed in parentheses, any one is 
+For options listed in parentheses, any one is
 .br
 required, after which the others are optional.
 .br
@@ -171,7 +172,7 @@ required, after which the others are optional.
 .RE
 .br
 .RS 4
-.ad l
+.na
 [ \fB-A\fP|\fB--autobackup\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-S\fP|\fB--select\fP \fIString\fP ]
@@ -184,10 +185,10 @@ required, after which the others are optional.
 .br
 [    \fB--noudevsync\fP ]
 .br
-[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP ]
+[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -201,7 +202,7 @@ Start or stop monitoring LVs from dmeventd.
 \fBvgchange\fP \fB--monitor\fP \fBy\fP|\fBn\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-A\fP|\fB--autobackup\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-S\fP|\fB--select\fP \fIString\fP ]
@@ -218,10 +219,10 @@ Start or stop monitoring LVs from dmeventd.
 .br
 [    \fB--noudevsync\fP ]
 .br
-[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP ]
+[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -235,7 +236,7 @@ Start or stop processing LV conversions.
 \fBvgchange\fP \fB--poll\fP \fBy\fP|\fBn\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-A\fP|\fB--autobackup\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-S\fP|\fB--select\fP \fIString\fP ]
@@ -248,10 +249,10 @@ Start or stop processing LV conversions.
 .br
 [    \fB--noudevsync\fP ]
 .br
-[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP ]
+[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -265,7 +266,7 @@ Activate or deactivate LVs.
 \fBvgchange\fP \fB-a\fP|\fB--activate\fP \fBy\fP|\fBn\fP|\fBay\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-K\fP|\fB--ignoreactivationskip\fP ]
 .br
 [ \fB-P\fP|\fB--partial\fP ]
@@ -294,10 +295,10 @@ Activate or deactivate LVs.
 .br
 [    \fB--noudevsync\fP ]
 .br
-[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP ]
+[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -311,7 +312,7 @@ Reactivate LVs using the latest metadata.
 \fBvgchange\fP \fB--refresh\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-A\fP|\fB--autobackup\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-S\fP|\fB--select\fP \fIString\fP ]
@@ -328,10 +329,10 @@ Reactivate LVs using the latest metadata.
 .br
 [    \fB--noudevsync\fP ]
 .br
-[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP ]
+[    \fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -342,12 +343,16 @@ Reactivate LVs using the latest metadata.
 Change the system ID of a VG.
 .br
 .P
-\fBvgchange\fP \fB--systemid\fP \fIString\fP \fIVG\fP
+\fBvgchange\fP \fB--systemid\fP \fIString\fP \fIVG\fP|\fITag\fP|\fISelect\fP
 .br
 .RS 4
-.ad l
+.na
+[ \fB-S\fP|\fB--select\fP \fIString\fP ]
+.br
+[    \fB--majoritypvs\fP ]
+.br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -358,11 +363,11 @@ Start the lockspace of a shared VG in lvmlockd.
 \fBvgchange\fP \fB--lockstart\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-S\fP|\fB--select\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -376,11 +381,11 @@ Stop the lockspace of a shared VG in lvmlockd.
 \fBvgchange\fP \fB--lockstop\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-S\fP|\fB--select\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .RS 4
 [ \fIVG\fP|\fITag\fP|\fISelect\fP ... ]
@@ -394,9 +399,9 @@ Change the lock type for a shared VG.
 \fBvgchange\fP \fB--locktype\fP \fBsanlock\fP|\fBdlm\fP|\fBnone\fP \fIVG\fP
 .br
 .RS 4
-.ad l
+.na
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 \(em
@@ -404,7 +409,7 @@ Change the lock type for a shared VG.
 Common options for lvm:
 .
 .RS 4
-.ad l
+.na
 [ \fB-d\fP|\fB--debug\fP ]
 .br
 [ \fB-h\fP|\fB--help\fP ]
@@ -440,7 +445,7 @@ Common options for lvm:
 [    \fB--profile\fP \fIString\fP ]
 .br
 [    \fB--version\fP ]
-.ad b
+.ad
 .RE
 .
 .SH OPTIONS
@@ -456,13 +461,14 @@ allowing data on the LV to be accessed.
 \fBn\fP makes LVs inactive, or unavailable.
 The block device for the LV is added or removed from the system
 using device-mapper in the kernel.
-A symbolic link /dev/VGName/LVName pointing to the device node is also added/removed.
+A symbolic link /dev/VGName/LVName pointing to the device node
+is also added/removed.
 All software and scripts should access the device through the symbolic
 link and present this as the name of the device.
 The location and name of the underlying device node may depend on
 the distribution, configuration (e.g. udev), or release version.
 \fBay\fP specifies autoactivation, which is used by system-generated
-activation commands.  By default, LVs are autoactivated.
+activation commands. By default, LVs are autoactivated.
 An autoactivation property can be set on a VG or LV to disable autoactivation,
 see --setautoactivation y|n in vgchange, lvchange, vgcreate, and lvcreate.
 Display the property with vgs or lvs "-o autoactivation".
@@ -472,7 +478,8 @@ When auto_activation_volume_list is undefined (the default), it has no effect.
 If auto_activation_volume_list is defined and empty, no LVs are autoactivated.
 Items included by auto_activation_volume_list will not be autoactivated if
 the autoactivation property has been disabled.
-See \fBlvmlockd\fP(8) for more information about activation options \fBey\fP and \fBsy\fP for shared VGs.
+See \fBlvmlockd\fP(8) for more information about activation options
+\fBey\fP and \fBsy\fP for shared VGs.
 .
 .HP
 \fB--activationmode\fP \fBpartial\fP|\fBdegraded\fP|\fBcomplete\fP
@@ -495,12 +502,12 @@ Adds a tag to a PV, VG or LV. This option can be repeated to add
 multiple tags at once. See \fBlvm\fP(8) for information about tags.
 .
 .HP
-.ad l
+.ad
 \fB--alloc\fP \c
 .nh
 \%\fBcontiguous\fP|\:\fBcling\fP|\:\fBcling_by_tags\fP|\:\fBnormal\fP|\:\fBanywhere\fP|\:\fBinherit\fP
 .hy
-.ad b
+.ad
 .br
 Determines the allocation policy when a command needs to allocate
 Physical Extents (PEs) from the VG. Each VG and LV has an allocation policy
@@ -531,7 +538,8 @@ using pvs_online files created by event-based pvscans.
 \fB-A\fP|\fB--autobackup\fP \fBy\fP|\fBn\fP
 .br
 Specifies if metadata should be backed up automatically after a change.
-Enabling this is strongly advised! See \fBvgcfgbackup\fP(8) for more information.
+Enabling this is strongly advised!
+See \fBvgcfgbackup\fP(8) for more information.
 .
 .HP
 \fB--commandprofile\fP \fIString\fP
@@ -664,6 +672,12 @@ Sets the maximum number of LVs allowed in a VG.
 Display long help text.
 .
 .HP
+\fB--majoritypvs\fP
+.br
+Change the VG system ID if the majority of PVs in the VG
+are present (one more than half).
+.
+.HP
 \fB-p\fP|\fB--maxphysicalvolumes\fP \fINumber\fP
 .br
 Sets the maximum number of PVs that can belong to the VG.
@@ -682,7 +696,7 @@ See \fBlvm.conf\fP(5) for more information about profiles.
 .br
 Start (yes) or stop (no) monitoring an LV with dmeventd.
 dmeventd monitors kernel events for an LV, and performs
-automated maintenance for the LV in reponse to specific events.
+automated maintenance for the LV in response to specific events.
 See \fBdmeventd\fP(8) for more information.
 .
 .HP
@@ -701,7 +715,7 @@ incorrect results.
 .HP
 \fB--noudevsync\fP
 .br
-Disables udev synchronisation. The process will not wait for notification
+Disables udev synchronization. The process will not wait for notification
 from udev. It will continue irrespective of any possible udev processing
 in the background. Only use this if udev is not running or has rules that
 ignore the devices LVM creates.
@@ -720,12 +734,13 @@ Metadata may not be changed with this option.
 Sets the physical extent size of PVs in the VG.
 The value must be either a power of 2 of at least 1 sector
 (where the sector size is the largest sector size of the PVs
-currently used in the VG), or at least 128KiB.
+currently used in the VG), or at least 128 KiB.
 Once this value has been set, it is difficult to change
 without recreating the VG, unless no extents need moving.
 Before increasing the physical extent size, you might need to use lvresize,
 pvresize and/or pvmove so that everything fits. For example, every
-contiguous range of extents used in a LV must start and end on an extent boundary.
+contiguous range of extents used in a LV must start
+and end on an extent boundary.
 .
 .HP
 \fB--poll\fP \fBy\fP|\fBn\fP
@@ -764,30 +779,31 @@ Repeat once to also suppress any prompts with answer 'no'.
 .HP
 \fB--readonly\fP
 .br
-Run the command in a special read-only mode which will read on-disk
-metadata without needing to take any locks. This can be used to peek
-inside metadata used by a virtual machine image while the virtual
-machine is running. No attempt will be made to communicate with the
-device-mapper kernel driver, so this option is unable to report whether
-or not LVs are actually in use.
+Prevent the command from making changes, including activation and
+metadata updates.  (See --permission r for read only LVs.)
 .
 .HP
 \fB--refresh\fP
 .br
 If the LV is active, reload its metadata.
-This is not necessary in normal operation, but may be useful
-if something has gone wrong, or if some form of manual LV
-sharing is being used.
+In an environment where udev is used to manage the /dev content,
+usage of this option is highly recommended. This is because refresh
+also regenerates udev events for an LV based on which existing udev
+rules are applied to set the /dev content and permissions.
+Also, this operation may be useful if something has gone wrong,
+or if some form of manual LV sharing is being used.
 .
 .HP
-\fB--reportformat\fP \fBbasic\fP|\fBjson\fP
+\fB--reportformat\fP \fBbasic\fP|\fBjson\fP|\fBjson_std\fP
 .br
 Overrides current output format for reports which is defined globally by
 the report/output_format setting in \fBlvm.conf\fP(5).
 \fBbasic\fP is the original format with columns and rows.
 If there is more than one report per command, each report is prefixed
 with the report name for identification. \fBjson\fP produces report
-output in JSON format. See \fBlvmreport\fP(7) for more information.
+output in JSON format. \fBjson_std\fP produces report output in
+JSON format which is more compliant with JSON standard.
+See \fBlvmreport\fP(7) for more information.
 .
 .HP
 \fB-x\fP|\fB--resizeable\fP \fBy\fP|\fBn\fP
@@ -799,8 +815,10 @@ Enables or disables the addition or removal of PVs to/from a VG
 \fB-S\fP|\fB--select\fP \fIString\fP
 .br
 Select objects for processing and reporting based on specified criteria.
-The criteria syntax is described by \fB--select help\fP and \fBlvmreport\fP(7).
-For reporting commands, one row is displayed for each object matching the criteria.
+The criteria syntax is described by \fB--select help\fP
+and \fBlvmreport\fP(7).
+For reporting commands, one row is displayed
+for each object matching the criteria.
 See \fB--options help\fP for selectable object fields.
 Rows can be displayed with an additional "selected" field (-o selected)
 showing 1 if the row matches the selection and 0 otherwise.
@@ -823,7 +841,8 @@ for individual LVs.
 .HP
 \fB--sysinit\fP
 .br
-Indicates that vgchange/lvchange is being invoked from early system initialisation
+Indicates that vgchange/lvchange is being invoked
+from early system initialisation
 scripts (e.g. rc.sysinit or an initrd), before writable filesystems are
 available. As such, some functionality needs to be disabled and this option
 acts as a shortcut which selects an appropriate set of options. Currently,
@@ -834,7 +853,7 @@ vgchange/lvchange skip autoactivation, and defer to pvscan autoactivation.
 .HP
 \fB--systemid\fP \fIString\fP
 .br
-Changes the system ID of the VG.  Using this option requires caution
+Changes the system ID of the VG. Using this option requires caution
 because the VG may become foreign to the host running the command,
 leaving the host unable to access it.
 See \fBlvmsystemid\fP(7) for more information.
@@ -928,10 +947,11 @@ is TiB,
 is PiB,
 .BR e | E
 is EiB.
-(This should not be confused with the output control --units, where
-capital letters mean multiple of 1000.)
+(This should not be confused with the output control --units,
+where capital letters mean multiple of 1000.)
 .
 .SH ENVIRONMENT VARIABLES
 .
 See \fBlvm\fP(8) for information about environment variables used by lvm.
-For example, LVM_VG_NAME can generally be substituted for a required VG parameter.
+For example, LVM_VG_NAME can generally be substituted
+for a required VG parameter.

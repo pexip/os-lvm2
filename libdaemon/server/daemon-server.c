@@ -14,16 +14,15 @@
 
 #include "daemon-server.h"
 #include "daemon-log.h"
+#include "daemon-stray.h"
 #include "libdaemon/client/daemon-io.h"
 
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h> /* help musl C */
 #include <pthread.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/time.h>
 #include <sys/resource.h>
 #include <netinet/in.h>
 #include <sys/un.h>
@@ -250,7 +249,7 @@ static int _open_socket(daemon_state s)
 		fprintf(stderr, "setting O_NONBLOCK on socket fd %d failed: %s\n", fd, strerror(errno));
 
 	fprintf(stderr, "[D] creating %s\n", s.socket_path);
-	if (!dm_strncpy(sockaddr.sun_path, s.socket_path, sizeof(sockaddr.sun_path))) {
+	if (!_dm_strncpy(sockaddr.sun_path, s.socket_path, sizeof(sockaddr.sun_path))) {
 		fprintf(stderr, "%s: daemon socket path too long.\n", s.socket_path);
 		goto error;
 	}
@@ -324,14 +323,17 @@ static void _remove_lockfile(const char *file)
 		perror("unlink failed");
 }
 
-static void _daemonise(daemon_state s)
+static void _daemonize(daemon_state s)
 {
 	int child_status;
-	int fd, ffd;
+	int fd;
 	pid_t pid;
-	struct rlimit rlim;
 	struct timeval tval;
 	sigset_t my_sigset;
+	struct custom_fds custom_fds = {
+		/* Do not close fds preloaded by systemd! */
+		.out = (_systemd_activation) ? SD_FD_SOCKET_SERVER : -1
+	};
 
 	if ((fd = open("/dev/null", O_RDWR)) == -1) {
 		fprintf(stderr, "Unable to open /dev/null.\n");
@@ -393,20 +395,7 @@ static void _daemonise(daemon_state s)
 		exit(3);
 	}
 
-	/* Switch to sysconf(_SC_OPEN_MAX) ?? */
-	if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
-		ffd = 256; /* just have to guess */
-	else
-		ffd = rlim.rlim_cur;
-
-	for (--ffd; ffd > STDERR_FILENO; ffd--) {
-#ifdef __linux__
-		/* Do not close fds preloaded by systemd! */
-		if (_systemd_activation && ffd == SD_FD_SOCKET_SERVER)
-			continue;
-#endif
-		(void) close(ffd);
-	}
+	daemon_close_stray_fds(s.name, 0, STDERR_FILENO, &custom_fds);
 
 	setsid();
 
@@ -593,7 +582,7 @@ void daemon_start(daemon_state s)
 #endif
 
 	if (!s.foreground)
-		_daemonise(s);
+		_daemonize(s);
 
 	s.log = &_log;
 	s.log->name = s.name;
@@ -693,7 +682,7 @@ void daemon_start(daemon_state s)
 
 		/* s.idle == NULL equals no shutdown on timeout */
 		if (_is_idle(s)) {
-			DEBUGLOG(&s, "timeout occured");
+			DEBUGLOG(&s, "timeout occurred");
 			if (++timeout_count >= _get_max_timeouts(s)) {
 				INFO(&s, "Inactive for %d seconds. Exiting.", timeout_count);
 				break;

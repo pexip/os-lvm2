@@ -44,7 +44,7 @@ class WaitingClient(object):
 			self.timer_id = GLib.timeout_add_seconds(
 				tmo, WaitingClient._timeout, self)
 
-	# The job finished before the timer popped and we are being notified that
+	# The job finished before the timer popped, and we are being notified that
 	# it's done
 	def notify(self):
 		with self.rlock:
@@ -71,7 +71,7 @@ class JobState(object):
 		self._stderr = ''
 		self._waiting_clients = []
 
-		# This is an lvm command that is just taking too long and doesn't
+		# This is a lvm command that is just taking too long and doesn't
 		# support background operation
 		if self._request:
 			# Faking the percentage when we don't have one
@@ -138,7 +138,7 @@ class JobState(object):
 		# If a waiting client timer pops before the job is done we will allow
 		# the client to remove themselves from the list.  As we have a lock
 		# here and a lock in the waiting client too, and they can be obtained
-		# in different orders, a dead lock can occur.
+		# in different orders, a deadlock can occur.
 		# As this remove is really optional, we will try to acquire the lock
 		# and remove.  If we are unsuccessful it's not fatal, we just delay
 		# the time when the objects can be garbage collected by python
@@ -226,3 +226,21 @@ class Job(AutomatedProperties):
 	def Uuid(self):
 		import uuid
 		return uuid.uuid1()
+
+	# Override the property "getters" implementation for the job interface, so a user can query a job while the queue
+	# is processing items.  Originally all the property get methods were this way, but we changed this in
+	# e53454d6de07de56736303dd2157c3859f6fa848
+
+	# Properties
+	# noinspection PyUnusedLocal
+	@dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE,
+						 in_signature='ss', out_signature='v')
+	def Get(self, interface_name, property_name):
+		# Note: If we get an exception in this handler we won't know about it,
+		# only the side effect of no returned value!
+		return AutomatedProperties._get_prop(self, interface_name, property_name)
+
+	@dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE,
+						 in_signature='s', out_signature='a{sv}')
+	def GetAll(self, interface_name):
+		return AutomatedProperties._get_all_prop(self, interface_name)

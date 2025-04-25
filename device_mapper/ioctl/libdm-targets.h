@@ -16,6 +16,8 @@
 #ifndef LIB_DMTARGETS_H
 #define LIB_DMTARGETS_H
 
+#include "device_mapper/all.h"
+
 #include <inttypes.h>
 #include <sys/types.h>
 
@@ -79,7 +81,7 @@ struct dm_task {
 };
 
 struct cmd_data {
-	const char *name;
+	const char name[16];
 	const unsigned cmd;
 	const int version[3];
 };

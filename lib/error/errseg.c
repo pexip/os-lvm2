@@ -56,8 +56,8 @@ static int _errseg_target_present(struct cmd_context *cmd,
 	/* Reported truncated in older kernels */
 	if (!_errseg_checked) {
 		_errseg_checked = 1;
-		_errseg_present = target_present(cmd, TARGET_NAME_ERROR, 0) ||
-			target_present(cmd, TARGET_NAME_ERROR_OLD, 0);
+		_errseg_present = target_present(cmd, TARGET_NAME_ERROR, 1) ||
+			target_present(cmd, TARGET_NAME_ERROR_OLD, 1);
 	}
 
 	return _errseg_present;
@@ -81,7 +81,7 @@ static void _errseg_destroy(struct segment_type *segtype)
 	free(segtype);
 }
 
-static struct segtype_handler _error_ops = {
+static const struct segtype_handler _error_ops = {
 	.merge_segments = _errseg_merge_segments,
 #ifdef DEVMAPPER_SUPPORT
 	.add_target_line = _errseg_add_target_line,

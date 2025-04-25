@@ -21,7 +21,7 @@
  * compile (using outdir 'cov'):
  * cov-build --dir=cov make CC=gcc
  *
- * analyze (agressively, using 'cov')
+ * analyze (aggressively, using 'cov')
  * cov-analyze --dir cov --wait-for-license --hfa --concurrency --enable-fnptr --enable-constraint-fpp --security --all --aggressiveness-level=high --field-offset-escape --user-model-file=coverity/coverity_model.xml
  *
  * generate html output (to 'html' from 'cov'):
@@ -30,6 +30,8 @@
 
 struct lv_segment;
 struct logical_volume;
+struct cmd_context;
+struct profile;
 
 struct lv_segment *first_seg(const struct logical_volume *lv)
 {
@@ -57,7 +59,7 @@ struct logical_volume *origin_from_cow(const struct logical_volume *lv)
 */
 
 /* simple_memccpy() from glibc */
-void *memccpy(void *dest, const void *src, int c, size_t n)
+void *memccpy(void *dest, const void *src, int c, unsigned long n)
 {
 	const char *s = src;
 	char *d = dest;
@@ -70,7 +72,7 @@ void *memccpy(void *dest, const void *src, int c, size_t n)
 }
 
 /*
- * 2 lines bellow needs to be placed in coverity/config/user_nodefs.h
+ * 2 lines below needs to be placed in coverity/config/user_nodefs.h
  * Not sure about any other way.
  * Without them, coverity shows warning since x86 system header files
  * are using inline assembly to reset fdset
@@ -90,9 +92,14 @@ void model_FD_ZERO(void *fdset)
 /* Resent Coverity reports quite weird errors... */
 int *__errno_location(void)
 {
+	static int _i = 0;
+	return &_i;
 }
+
 const unsigned short **__ctype_b_loc (void)
 {
+	static const unsigned short *_a[1] = { 0 };
+	return _a;
 }
 
 

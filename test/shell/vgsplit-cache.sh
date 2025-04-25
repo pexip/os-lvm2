@@ -20,6 +20,7 @@ SKIP_WITH_LVMPOLLD=1
 aux have_cache 1 3 0 || skip
 
 aux prepare_vg 7
+vgcfgbackup -f vgb $vg
 
 lvcreate -L5 -n $lv2 $vg "$dev2"
 lvcreate -L5 -n $lv3 $vg "$dev3"
@@ -45,7 +46,7 @@ grep "must be inactive" err
 vgchange -an $vg
 
 
-# Try spliting component into separe VG
+# Try splitting component into separate VG
 fail vgsplit $vg $vg1 "$dev1" 2>&1 | tee err
 grep "Cannot split cache origin" err
 
@@ -60,7 +61,7 @@ grep "Cannot split cache origin" err
 
 fail vgsplit $vg $vg1 "$dev2" "$dev3" 2>&1 | tee err
 
-# Finaly something that should pass
+# Finally something that should pass
 vgsplit $vg $vg1 "$dev1" "$dev2" "$dev3"
 
 vgs $vg $vg1
@@ -76,9 +77,9 @@ vgremove -ff $vg
 vgremove -ff $vg1
 
 #
-# Check we handle pmspare for splitted VGs
+# Check we handle pmspare for split VGs
 #
-aux prepare_vg 7
+vgcfgrestore -f vgb $vg
 
 # Create cache-pool and pmspare on single PV1
 lvcreate -L10 --type cache-pool $vg/cpool "$dev1"
@@ -100,7 +101,7 @@ vgremove $vg
 vgremove -f $vg1
 
 
-aux prepare_vg 7
+vgcfgrestore -f vgb $vg
 
 # Again - now with handling _pmspare by vgsplit
 lvcreate -L10 --type cache-pool $vg/cpool "$dev1"

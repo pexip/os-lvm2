@@ -34,8 +34,8 @@
 #define SECTOR_SHIFT 9L
 
 #define FD_TABLE_INC 1024
-static int _fd_table_size;
-static int *_fd_table;
+static int _fd_table_size = 0;
+static int *_fd_table = NULL;
 
 
 //----------------------------------------------------------------
@@ -67,7 +67,7 @@ struct cb_set {
 	struct dm_list free;
 	struct dm_list allocated;
 	struct control_block vec[];
-} control_block_set;
+};
 
 static struct cb_set *_cb_set_create(unsigned nr)
 {
@@ -666,7 +666,7 @@ struct bcache {
 	struct block *raw_blocks;
 
 	/*
-	 * Lists that categorise the blocks.
+	 * Lists that categorize the blocks.
 	 */
 	unsigned nr_locked;
 	unsigned nr_dirty;
@@ -711,7 +711,7 @@ static struct block *_block_lookup(struct bcache *cache, int di, uint64_t i)
 	k.parts.di = di;
 	k.parts.b = i;
 
-	if (radix_tree_lookup(cache->rtree, k.bytes, k.bytes + sizeof(k.bytes), &v))
+	if (radix_tree_lookup(cache->rtree, k.bytes, sizeof(k.bytes), &v))
 		return v.ptr;
 
 	return NULL;
@@ -726,7 +726,7 @@ static bool _block_insert(struct block *b)
         k.parts.b = b->index;
         v.ptr = b;
 
-	return radix_tree_insert(b->cache->rtree, k.bytes, k.bytes + sizeof(k.bytes), v);
+	return radix_tree_insert(b->cache->rtree, k.bytes, sizeof(k.bytes), v);
 }
 
 static void _block_remove(struct block *b)
@@ -736,7 +736,7 @@ static void _block_remove(struct block *b)
         k.parts.di = b->di;
         k.parts.b = b->index;
 
-	(void) radix_tree_remove(b->cache->rtree, k.bytes, k.bytes + sizeof(k.bytes));
+	(void) radix_tree_remove(b->cache->rtree, k.bytes, sizeof(k.bytes));
 }
 
 //----------------------------------------------------------------
@@ -1181,7 +1181,6 @@ void bcache_destroy(struct bcache *cache)
 
 	if (!bcache_flush(cache))
 		stack;
-	_wait_all(cache);
 	_exit_free_list(cache);
 	radix_tree_destroy(cache->rtree);
 	cache->engine->destroy(cache->engine);
@@ -1354,7 +1353,7 @@ struct invalidate_iterator {
 };
 
 static bool _writeback_v(struct radix_tree_iterator *it,
-                         uint8_t *kb, uint8_t *ke, union radix_value v)
+                         const void *kb, size_t keylen, union radix_value v)
 {
 	struct block *b = v.ptr;
 
@@ -1365,7 +1364,7 @@ static bool _writeback_v(struct radix_tree_iterator *it,
 }
 
 static bool _invalidate_v(struct radix_tree_iterator *it,
-                          uint8_t *kb, uint8_t *ke, union radix_value v)
+                          const void *kb, size_t keylen, union radix_value v)
 {
 	struct block *b = v.ptr;
 	struct invalidate_iterator *iit = container_of(it, struct invalidate_iterator, it);
@@ -1400,16 +1399,16 @@ bool bcache_invalidate_di(struct bcache *cache, int di)
 	k.parts.di = di;
 
 	it.it.visit = _writeback_v;
-	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it.it);
+	radix_tree_iterate(cache->rtree, k.bytes, sizeof(k.parts.di), &it.it);
 
 	_wait_all(cache);
 
 	it.success = true;
 	it.it.visit = _invalidate_v;
-	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it.it);
+	radix_tree_iterate(cache->rtree, k.bytes, sizeof(k.parts.di), &it.it);
 
 	if (it.success)
-		(void) radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
+		(void) radix_tree_remove_prefix(cache->rtree, k.bytes, sizeof(k.parts.di));
 
 	return it.success;
 }
@@ -1417,7 +1416,7 @@ bool bcache_invalidate_di(struct bcache *cache, int di)
 //----------------------------------------------------------------
 
 static bool _abort_v(struct radix_tree_iterator *it,
-                     uint8_t *kb, uint8_t *ke, union radix_value v)
+                     const void *kb, size_t keylen, union radix_value v)
 {
 	struct block *b = v.ptr;
 
@@ -1443,8 +1442,8 @@ void bcache_abort_di(struct bcache *cache, int di)
 	k.parts.di = di;
 
 	it.visit = _abort_v;
-	radix_tree_iterate(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di), &it);
-	(void) radix_tree_remove_prefix(cache->rtree, k.bytes, k.bytes + sizeof(k.parts.di));
+	radix_tree_iterate(cache->rtree, k.bytes, sizeof(k.parts.di), &it);
+	(void) radix_tree_remove_prefix(cache->rtree, k.bytes, sizeof(k.parts.di));
 }
 
 //----------------------------------------------------------------
@@ -1503,7 +1502,7 @@ int bcache_set_fd(int fd)
 }
 
 /*
- * Should we check for unflushed or inprogress io on an fd
+ * Should we check for unflushed or in-progress io on an fd
  * prior to doing clear_fd or change_fd?  (To catch mistakes;
  * the caller should be smart enough to not do that.)
  */

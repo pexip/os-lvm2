@@ -9,7 +9,6 @@ lvmdiskscan \(em List devices that may be used as physical volumes
 \fBlvmdiskscan\fP
 .br
     [ \fIoption_args\fP ]
-.br
 .
 .SH DESCRIPTION
 .
@@ -25,19 +24,19 @@ This command is deprecated, use \fBpvs\fP instead.
 \fBlvmdiskscan\fP
 .br
 .RS 4
-.ad l
+.na
 [ \fB-l\fP|\fB--lvmpartition\fP ]
 .br
 [    \fB--readonly\fP ]
 .br
 [ COMMON_OPTIONS ]
-.ad b
+.ad
 .RE
 .P
 Common options for lvm:
 .
 .RS 4
-.ad l
+.na
 [ \fB-d\fP|\fB--debug\fP ]
 .br
 [ \fB-h\fP|\fB--help\fP ]
@@ -73,7 +72,7 @@ Common options for lvm:
 [    \fB--profile\fP \fIString\fP ]
 .br
 [    \fB--version\fP ]
-.ad b
+.ad
 .RE
 .
 .SH OPTIONS
@@ -181,12 +180,8 @@ Repeat once to also suppress any prompts with answer 'no'.
 .HP
 \fB--readonly\fP
 .br
-Run the command in a special read-only mode which will read on-disk
-metadata without needing to take any locks. This can be used to peek
-inside metadata used by a virtual machine image while the virtual
-machine is running. No attempt will be made to communicate with the
-device-mapper kernel driver, so this option is unable to report whether
-or not LVs are actually in use.
+Prevent the command from making changes, including activation and
+metadata updates.  (See --permission r for read only LVs.)
 .
 .HP
 \fB-t\fP|\fB--test\fP
@@ -243,10 +238,11 @@ is TiB,
 is PiB,
 .BR e | E
 is EiB.
-(This should not be confused with the output control --units, where
-capital letters mean multiple of 1000.)
+(This should not be confused with the output control --units,
+where capital letters mean multiple of 1000.)
 .
 .SH ENVIRONMENT VARIABLES
 .
 See \fBlvm\fP(8) for information about environment variables used by lvm.
-For example, LVM_VG_NAME can generally be substituted for a required VG parameter.
+For example, LVM_VG_NAME can generally be substituted
+for a required VG parameter.
