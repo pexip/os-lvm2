@@ -1,3 +1,9 @@
+lvm2 (2.03.31-2) unstable; urgency=medium
+
+  * Ask build system to install stuff writable. (closes: #1104357)
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 05 May 2025 20:14:18 +0200
+
 lvm2 (2.03.31-1) unstable; urgency=medium
 
   * New upstream release.
