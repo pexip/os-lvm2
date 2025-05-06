@@ -159,7 +159,8 @@ override_dh_installsystemd:
 	dh_installsystemd --remaining-packages
 
 execute_before_dh_python3:
-	# Debug why we get a permission error when using dh_python3
-	find debian/ -ls
+	# For some reason on AMD64 we get this without write permission sometimes
+	# which causes the rewrite of the shebang to fail
+	chmod +w debian/lvm2-dbusd/usr/sbin/lvmdbusd
 
 .NOTPARALLEL:
