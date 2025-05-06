@@ -158,4 +158,8 @@ override_dh_installsystemd:
 		lvm2-lvmpolld.socket
 	dh_installsystemd --remaining-packages
 
+execute_before_dh_python3:
+	# Debug why we get a permission error when using dh_python3
+	find debian/ -ls
+
 .NOTPARALLEL:
