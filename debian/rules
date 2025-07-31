@@ -23,6 +23,10 @@ CFLAGS_OPT_DEB = -O2
 CFLAGS_OPT_UDEB = -Os
 endif
 
+define CONFARGS
+	--enable-write_install
+endef
+
 define CONFARGS.deb
 	--prefix=/usr
 	--exec-prefix=/usr
@@ -89,11 +93,13 @@ override_dh_auto_install:   $(patsubst %,dh_auto_install.%,$(BUILDS))
 dh_auto_configure.%:
 	mkdir -p debian/build/build_$*
 	cp -al $(filter-out debian, $(wildcard *)) debian/build/build_$*/
-	dh_auto_configure --sourcedirectory=debian/build/build_$* -- $(strip $(CONFARGS.$*))
+	dh_auto_configure --sourcedirectory=debian/build/build_$* -- \
+		$(strip $(CONFARGS)) $(strip $(CONFARGS.$*))
 
 dh_auto_build.%:
 	dh_auto_build --sourcedirectory=debian/build/build_$* -- \
-		LIB_VERSION_DM=$(DEVMAPPER_ABINAME) V=1
+		V=1 \
+		LIB_VERSION_DM=$(DEVMAPPER_ABINAME)
 
 dh_auto_install.%:
 	dh_auto_install --sourcedirectory=debian/build/build_$* \
@@ -102,6 +108,7 @@ dh_auto_install.%:
 		install_systemd_generators \
 		install_systemd_units \
 		install_tmpfiles_configuration \
+		V=1 \
 		LIB_VERSION_DM=$(DEVMAPPER_ABINAME)
 
 override_dh_auto_clean:
